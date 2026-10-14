@@ -89,6 +89,12 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   inspection documents come from the Rust client unchanged. A run is owned by
   the caller that started it; the client grants no access to the product
   records a workflow touches.
+  Its optional workflow `reviewPolicy` reuses the runtime-free
+  `registry-review-protocol::PolicyBinding`, validates its ID against the
+  returned workflow and its digest against `workflowRevision`, and grants no
+  review or source authority. This is the Coordinator client's sole named
+  shared-protocol dependency exception; it reaches no Review client or provider
+  runtime/core. Thin bindings preserve the exact nullable pin.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains

@@ -79,6 +79,7 @@ impl Default for EnvelopeLimits {
 
 /// The product record the triggering change landed on.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EventSubject {
     /// The record reference, as the product addresses it.
@@ -86,24 +87,29 @@ pub struct EventSubject {
     /// The revision the triggering change produced. Revisions start at one, so
     /// a revision of zero or below is refused on both encode and decode, the
     /// same bound the delivery store enforces on a stored envelope.
+    #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
     pub record_revision: i64,
 }
 
 /// Why this event exists: the chain it belongs to and the event that caused it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Causation {
     /// The id of the first event in the chain; equals `id` for a root event.
     /// A later orchestrator correlates on this field. A UUID, like every
     /// event identity on the envelope.
+    #[cfg_attr(feature = "schema", schemars(extend("format" = "uuid")))]
     pub root: String,
     /// The id of the event whose handler proposed the change that produced
     /// this one. Absent for a root event, never spelled `null` on the wire:
     /// the decoder refuses bytes a re-encode cannot reproduce. A UUID when
     /// present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("type" = "string", "format" = "uuid")))]
     pub parent: Option<String>,
     /// 0 for a root event, parent hop + 1 otherwise.
+    #[cfg_attr(feature = "schema", schemars(range(max = 8)))]
     pub hop: u32,
 }
 
@@ -143,6 +149,7 @@ impl Causation {
 
 /// The hook envelope, one shape for every product and every destination kind.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HookEnvelope {
     /// Event identity, unique per triggering change. The idempotency key a
@@ -151,6 +158,7 @@ pub struct HookEnvelope {
     /// A UUID: the delivery store keys an envelope by a UUID event id, so an
     /// id that is not one could never be stored. Refused on both encode and
     /// decode.
+    #[cfg_attr(feature = "schema", schemars(extend("format" = "uuid")))]
     pub id: String,
     /// The hook's stable contract id.
     #[serde(rename = "type")]
@@ -166,6 +174,7 @@ pub struct HookEnvelope {
     /// normalized one. Decoding requires that wire form and refuses any other
     /// spelling, so a decoded envelope re-encodes to the bytes it arrived as.
     #[serde(with = "utc_millisecond_rfc3339")]
+    #[cfg_attr(feature = "schema", schemars(with = "String", extend("format" = "date-time")))]
     pub time: OffsetDateTime,
     /// The product record reference and revision.
     pub subject: EventSubject,

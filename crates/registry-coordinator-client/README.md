@@ -39,6 +39,13 @@ closed runtime states individually.
 
 The computed Workflow revision identifies execution semantics, including the typed input,
 graph, declared outcomes, used Operation and Function revisions, and host execution contracts.
+Workflow discovery also returns `reviewPolicy`: the exact shared Review
+`PolicyBinding` for a provider workflow, or `null` when it is not a provider.
+The client validates the policy through `registry-review-protocol`, checks its
+ID against `workflow` and its digest against `workflowRevision`, and preserves
+the returned bounded version. This metadata grants no review or source authority.
+The runtime-free wire crate is the client's sole shared-protocol exception;
+the client does not depend on a provider runtime, core or Review HTTP client.
 Presentation titles and descriptions do not change it. Exact package bytes have a separate
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
 Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned

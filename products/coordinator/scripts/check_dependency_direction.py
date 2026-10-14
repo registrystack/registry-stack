@@ -5,7 +5,8 @@ The Coordinator composes products only through their public product clients.
 Its runtime may reach product clients, product cores, `registry-record` and
 shared platform primitives, and nothing else of the workspace: never another
 product's runtime, adopter tooling, supporting service or binding. Its client
-reaches the runtime over the public HTTP contract only. No crate outside the
+reaches the runtime over the public HTTP contract only and reuses the runtime-free
+shared Review wire contract for policy pins. No crate outside the
 Coordinator depends on a Coordinator crate unless it is named below.
 
 Edges are read with every feature enabled and on every target. A package's own
@@ -38,6 +39,9 @@ COORDINATOR_CLIENTS = (
 CLIENT_SUPPORT = {
     "registry-review-protocol": "the review handoff contract registry-casework-client carries",
 }
+
+# Exact wire DTO reuse, never the Review client or a provider runtime/core.
+COORDINATOR_CLIENT_SUPPORT = frozenset({"registry-review-protocol"})
 
 # The unified Rust facade. It composes the Coordinator client for callers and
 # is never a dependency of the runtime.
@@ -111,7 +115,11 @@ def runtime_may_reach(name: str) -> bool:
 def client_may_reach(name: str) -> bool:
     if not name.startswith("registry-"):
         return True
-    return name == "registry-coordinator-client" or name.startswith("registry-platform-")
+    return (
+        name == "registry-coordinator-client"
+        or name.startswith("registry-platform-")
+        or name in COORDINATOR_CLIENT_SUPPORT
+    )
 
 
 def violations(metadata: dict) -> list[str]:
@@ -131,7 +139,7 @@ def violations(metadata: dict) -> list[str]:
             if refused:
                 failures.append(
                     f"{name} reaches package(s) other than the Coordinator client and "
-                    f"registry-platform-*: {', '.join(refused)}"
+                    f"registry-platform-* and registry-review-protocol: {', '.join(refused)}"
                 )
         elif name.startswith(COORDINATOR_PREFIX):
             failures.append(

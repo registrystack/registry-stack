@@ -50,6 +50,9 @@ pub const DEFINITION_REFUSED_PROBLEM: &str = "definition.refused";
 pub const DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM: &str = "deployment.activation-changed";
 pub const DEPLOYMENT_REFUSED_PROBLEM: &str = "deployment.refused";
 pub const EVALUATION_UNCERTAIN_PROBLEM: &str = "evaluation.uncertain";
+pub const EVENT_INVALID_PROBLEM: &str = "event.invalid";
+pub const EVENT_SOURCE_UNAVAILABLE_PROBLEM: &str = "event.source-unavailable";
+pub const EVENT_UNAUTHENTICATED_PROBLEM: &str = "event.unauthenticated";
 pub const EXECUTION_HELD_PROBLEM: &str = "execution.held";
 pub const WORKFLOW_NOT_SERVED_PROBLEM: &str = "workflow.not-served";
 pub const WORKFLOW_REVISION_MISMATCH_PROBLEM: &str = "workflow.revision-mismatch";
@@ -75,6 +78,7 @@ pub const RESTORE_LEASE_INCOMPATIBLE_PROBLEM: &str = "restore.lease-incompatible
 pub const RESTORE_REVIEW_REQUIRED_PROBLEM: &str = "restore.review-required";
 pub const RESTORE_UNRESOLVED_PROBLEM: &str = "restore.unresolved";
 pub const RETRY_REFUSED_PROBLEM: &str = "retry.refused";
+pub const REVIEW_RESULT_EXPIRED_PROBLEM: &str = "review.result-expired";
 pub const RUN_DEFINITION_INCOMPATIBLE_PROBLEM: &str = "run.definition-incompatible";
 pub const RUN_NOT_VISIBLE_PROBLEM: &str = "run.not-visible";
 pub const RUN_PAYLOAD_ERASED_PROBLEM: &str = "run.payload-erased";
@@ -94,6 +98,9 @@ pub enum ProblemCode {
     DeploymentActivationChanged,
     DeploymentRefused,
     EvaluationUncertain,
+    EventInvalid,
+    EventSourceUnavailable,
+    EventUnauthenticated,
     ExecutionHeld,
     IdempotencyKeyInvalid,
     IdempotencyKeyReused,
@@ -117,6 +124,7 @@ pub enum ProblemCode {
     RestoreReviewRequired,
     RestoreUnresolved,
     RetryRefused,
+    ReviewResultExpired,
     RunDefinitionIncompatible,
     RunNotVisible,
     RunPayloadErased,
@@ -139,6 +147,9 @@ impl ProblemCode {
         Self::DeploymentActivationChanged,
         Self::DeploymentRefused,
         Self::EvaluationUncertain,
+        Self::EventInvalid,
+        Self::EventSourceUnavailable,
+        Self::EventUnauthenticated,
         Self::ExecutionHeld,
         Self::IdempotencyKeyInvalid,
         Self::IdempotencyKeyReused,
@@ -162,6 +173,7 @@ impl ProblemCode {
         Self::RestoreReviewRequired,
         Self::RestoreUnresolved,
         Self::RetryRefused,
+        Self::ReviewResultExpired,
         Self::RunDefinitionIncompatible,
         Self::RunNotVisible,
         Self::RunPayloadErased,
@@ -184,6 +196,9 @@ impl ProblemCode {
             Self::DeploymentActivationChanged => DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM,
             Self::DeploymentRefused => DEPLOYMENT_REFUSED_PROBLEM,
             Self::EvaluationUncertain => EVALUATION_UNCERTAIN_PROBLEM,
+            Self::EventInvalid => EVENT_INVALID_PROBLEM,
+            Self::EventSourceUnavailable => EVENT_SOURCE_UNAVAILABLE_PROBLEM,
+            Self::EventUnauthenticated => EVENT_UNAUTHENTICATED_PROBLEM,
             Self::ExecutionHeld => EXECUTION_HELD_PROBLEM,
             Self::WorkflowNotServed => WORKFLOW_NOT_SERVED_PROBLEM,
             Self::WorkflowRevisionMismatch => WORKFLOW_REVISION_MISMATCH_PROBLEM,
@@ -209,6 +224,7 @@ impl ProblemCode {
             Self::RestoreReviewRequired => RESTORE_REVIEW_REQUIRED_PROBLEM,
             Self::RestoreUnresolved => RESTORE_UNRESOLVED_PROBLEM,
             Self::RetryRefused => RETRY_REFUSED_PROBLEM,
+            Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
             Self::RunDefinitionIncompatible => RUN_DEFINITION_INCOMPATIBLE_PROBLEM,
             Self::RunNotVisible => RUN_NOT_VISIBLE_PROBLEM,
             Self::RunPayloadErased => RUN_PAYLOAD_ERASED_PROBLEM,
@@ -232,13 +248,14 @@ impl ProblemCode {
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
-            Self::IdempotencyKeyInvalid
+            Self::EventInvalid
+            | Self::IdempotencyKeyInvalid
             | Self::InputInvalid
             | Self::RequestInvalid
             | Self::RequestLimitOutOfRange
             | Self::RequestReasonInvalid
             | Self::RequestRetentionInvalid => 400,
-            Self::AuthenticationRefused => 401,
+            Self::AuthenticationRefused | Self::EventUnauthenticated => 401,
             Self::OperationNotAuthorized => 403,
             Self::WorkflowNotServed | Self::RequestNotFound | Self::RunNotVisible => 404,
             Self::RequestMethodNotAllowed => 405,
@@ -264,11 +281,14 @@ impl ProblemCode {
             | Self::RetryRefused
             | Self::RunDefinitionIncompatible
             | Self::RunPayloadErased => 409,
+            Self::ReviewResultExpired => 410,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
             Self::RequestUnprocessable => 422,
             Self::RuntimeFailure => 500,
-            Self::AuditResponseUnavailable | Self::ServiceUnavailable => 503,
+            Self::AuditResponseUnavailable
+            | Self::ServiceUnavailable
+            | Self::EventSourceUnavailable => 503,
         }
     }
 
@@ -287,6 +307,9 @@ impl ProblemCode {
             Self::DeploymentActivationChanged => "Active packages changed",
             Self::DeploymentRefused => "Deployment not serving",
             Self::EvaluationUncertain => "Evaluation outcome uncertain",
+            Self::EventInvalid => "Event contract refused",
+            Self::EventSourceUnavailable => "Event source unavailable",
+            Self::EventUnauthenticated => "Event authentication refused",
             Self::ExecutionHeld => "Execution held",
             Self::WorkflowNotServed => "Workflow not served",
             Self::WorkflowRevisionMismatch => "Workflow revision mismatch",
@@ -312,6 +335,7 @@ impl ProblemCode {
             Self::RestoreReviewRequired => "Recovery review incomplete",
             Self::RestoreUnresolved => "Held work unresolved",
             Self::RetryRefused => "Retry refused",
+            Self::ReviewResultExpired => "Review result expired",
             Self::RunDefinitionIncompatible => "Run definition unsupported",
             Self::RunNotVisible => "Run not visible",
             Self::RunPayloadErased => "Run payloads erased",
@@ -354,6 +378,9 @@ impl ProblemCode {
             Self::EvaluationUncertain => {
                 "An evaluation may have completed at its provider, so the run is never evaluated again."
             }
+            Self::EventInvalid => "The signed event must satisfy the accepted canonical envelope and typed event contract.",
+            Self::EventSourceUnavailable => "Restore the configured event source signing key and its enabled secret provider before retrying delivery.",
+            Self::EventUnauthenticated => "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
             Self::ExecutionHeld => {
                 "Execution is under restore hold until an operator releases it."
             }
@@ -413,6 +440,7 @@ impl ProblemCode {
             Self::RetryRefused => {
                 "Retry-same applies only to held work before its original deadline."
             }
+            Self::ReviewResultExpired => "The pinned Review result retention or pending policy deadline has passed. Cancellation cannot renew it.",
             Self::RunDefinitionIncompatible => {
                 "This service's Coordinator version cannot interpret the run's pinned definition."
             }
@@ -452,6 +480,9 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "request.body-too-large" => ProblemCode::RequestBodyTooLarge,
         "request.content-type-invalid" => ProblemCode::RequestUnsupportedMediaType,
         "list-limit-invalid" => ProblemCode::RequestLimitOutOfRange,
+        "event-invalid" => ProblemCode::EventInvalid,
+        "event-source-unavailable" => ProblemCode::EventSourceUnavailable,
+        "event-unauthenticated" => ProblemCode::EventUnauthenticated,
         "reason-invalid" => ProblemCode::RequestReasonInvalid,
         "retention-invalid" => ProblemCode::RequestRetentionInvalid,
         "run-absent" => ProblemCode::RunNotVisible,
@@ -468,6 +499,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "restore-review-required" => ProblemCode::RestoreReviewRequired,
         "restore-unresolved" => ProblemCode::RestoreUnresolved,
         "retry-refused" => ProblemCode::RetryRefused,
+        "review-result-expired" => ProblemCode::ReviewResultExpired,
         "definition-incompatible" => ProblemCode::RunDefinitionIncompatible,
         "receipt-expired" => ProblemCode::ReceiptExpired,
         "evaluation-uncertain" => ProblemCode::EvaluationUncertain,
@@ -510,6 +542,7 @@ mod tests {
         "coordinator.command.usage",
         "coordinator.decision.configuration",
         "coordinator.external-http.configuration",
+        "coordinator.event.configuration",
         "coordinator.operation.contract-invalid",
         "database-identity-invalid",
         "database-invalid",
@@ -674,13 +707,34 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 40);
+        assert_eq!(ProblemCode::ALL.len(), 44);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
         assert_eq!(ProblemCode::from_code("authorization.refused"), None);
         assert_eq!(ProblemCode::from_code("run-absent"), None);
         assert_eq!(ProblemCode::from_code(""), None);
+        for (internal, public, status) in [
+            ("event-invalid", ProblemCode::EventInvalid, 400),
+            (
+                "event-unauthenticated",
+                ProblemCode::EventUnauthenticated,
+                401,
+            ),
+            (
+                "event-source-unavailable",
+                ProblemCode::EventSourceUnavailable,
+                503,
+            ),
+            (
+                "review-result-expired",
+                ProblemCode::ReviewResultExpired,
+                410,
+            ),
+        ] {
+            assert_eq!(for_error(internal), Some(public));
+            assert_eq!(public.http_status(), status);
+        }
     }
 
     #[test]
@@ -721,7 +775,7 @@ mod tests {
 
     #[test]
     fn every_code_pins_a_status_title_and_detail() {
-        let statuses = [400, 401, 403, 404, 405, 409, 413, 415, 422, 500, 503];
+        let statuses = [400, 401, 403, 404, 405, 409, 410, 413, 415, 422, 500, 503];
         for code in ProblemCode::ALL {
             assert!(
                 statuses.contains(&code.http_status()),

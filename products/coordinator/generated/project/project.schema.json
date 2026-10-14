@@ -67,6 +67,39 @@
       ],
       "type": "object"
     },
+    "AuthoredEventTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "dataSchema": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Exact producer data-schema identifier accepted by this trigger."
+        },
+        "event": {
+          "$ref": "#/$defs/Schema",
+          "description": "Schema for the complete authenticated event envelope before input mapping."
+        },
+        "eventType": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Exact producer event type accepted by this trigger."
+        },
+        "input": {
+          "$ref": "#/$defs/AuthoredMapping",
+          "description": "Ordinary typed Mapping from the event envelope to Workflow start input."
+        },
+        "source": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Logical producer binding declared in runtime eventSources."
+        }
+      },
+      "required": [
+        "source",
+        "eventType",
+        "dataSchema",
+        "event",
+        "input"
+      ],
+      "type": "object"
+    },
     "AuthoredFunction": {
       "additionalProperties": false,
       "properties": {
@@ -481,6 +514,18 @@
           "minimum": 1,
           "type": "integer"
         },
+        "eventTriggers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AuthoredEventTrigger"
+          },
+          "description": "Optional authenticated product-event starts keyed by stable trigger ID.",
+          "maxProperties": 16,
+          "minProperties": 0,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
         "input": {
           "$ref": "#/$defs/Schema",
           "description": "The typed Workflow start input, or a mapping supplying the called Operation input."
@@ -496,6 +541,10 @@
             "$ref": "#/$defs/LocalId"
           },
           "type": "object"
+        },
+        "review": {
+          "$ref": "#/$defs/ReviewPolicy",
+          "description": "Exposes this Workflow as an exact product-neutral Review policy."
         },
         "start": {
           "$ref": "#/$defs/LocalId",
@@ -665,7 +714,8 @@
         "breg.submit-proposal/v1",
         "breg.apply-proposal/v1",
         "breg.retry-proposal/v1",
-        "breg.cancel-proposal/v1"
+        "breg.cancel-proposal/v1",
+        "breg.read-review-context/v1"
       ],
       "type": "string"
     },
@@ -751,6 +801,65 @@
           "type": "object"
         }
       ]
+    },
+    "ReviewOutcome": {
+      "additionalProperties": false,
+      "description": "An authored terminal Workflow outcome has exactly one Review meaning.",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Authored outcome code required for rejected, changes-requested and\nanswered statuses; omit it for approved, cancelled and superseded."
+        },
+        "status": {
+          "$ref": "#/$defs/ReviewResultStatus",
+          "description": "Shared terminal Review status emitted for this completed Workflow outcome."
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ReviewPolicy": {
+      "additionalProperties": false,
+      "description": "Fixed Review meanings and result availability for this Workflow revision.",
+      "properties": {
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ReviewOutcome"
+          },
+          "description": "Map every declared Workflow outcome exactly once to its Review status\nand optional outcome code. Workflow completion alone grants no approval.",
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "resultRetentionSeconds": {
+          "default": 86400,
+          "description": "Seconds a terminal Review result remains available after completion.\nDefaults to one day; reads and cancellation never renew this window.",
+          "format": "uint32",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcomes"
+      ],
+      "type": "object"
+    },
+    "ReviewResultStatus": {
+      "enum": [
+        "approved",
+        "rejected",
+        "changes-requested",
+        "answered",
+        "cancelled",
+        "superseded"
+      ],
+      "type": "string"
     },
     "Schema": {
       "description": "A whole JSON Schema or one compile-time schema reference. Schema keywords\nretain their independently owned JSON Schema spelling.",

@@ -158,6 +158,11 @@ impl CoordinatorClient {
             || !valid_revision(&value.workflow_revision)
             || value.outcomes.is_empty()
             || value.outcomes.len() > 64
+            || value.review_policy.as_ref().is_some_and(|policy| {
+                policy.check().is_err()
+                    || policy.id != value.workflow
+                    || policy.digest.as_str() != value.workflow_revision
+            })
         {
             return Err(protocol(200, Failure::Body));
         }

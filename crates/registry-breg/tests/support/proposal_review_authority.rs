@@ -127,6 +127,10 @@ fn authenticated(headers: &HeaderMap) -> bool {
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         == Some("Bearer synthetic-loopback-review-token")
+        && headers
+            .get(registry_review_protocol::REVIEW_PROFILE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            == Some("producer")
 }
 fn response(status: StatusCode, value: Value) -> Response {
     let mut response = (status, Json(value)).into_response();

@@ -11,40 +11,55 @@ from pathlib import Path
 
 # The Coordinator composes products through their public clients. It may use
 # the Casework client and core, never the runtime, its tooling, or the BReg
-# adapter, and no Casework, review, or BReg crate may reach a Coordinator crate.
+# adapter. Only the Casework tooling's adopter tests may reach the Coordinator
+# client through the unified client; no shipped Casework, review, or BReg crate
+# may reach a Coordinator crate.
 COORDINATOR_PREFIX = "registry-coordinator"
 CASEWORK_FOR_COORDINATOR = ("registry-casework-client", "registry-casework-core")
 
 
-def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
+def package_graph(
+    metadata: dict,
+) -> tuple[dict[str, str], dict[str, set[str]], dict[str, set[str]]]:
     names = {package["id"]: package["name"] for package in metadata["packages"]}
     resolve = metadata.get("resolve")
     if not resolve:
         raise ValueError("cargo metadata did not include a resolved dependency graph")
-    edges = {
-        node["id"]: {
-            dependency["pkg"] if isinstance(dependency, dict) else dependency
-            for dependency in node.get("deps", node.get("dependencies", []))
-        }
-        for node in resolve["nodes"]
-    }
-    return names, edges
+    every: dict[str, set[str]] = {}
+    linked: dict[str, set[str]] = {}
+    for node in resolve["nodes"]:
+        every[node["id"]] = set()
+        linked[node["id"]] = set()
+        for dependency in node.get("deps", node.get("dependencies", [])):
+            package = dependency["pkg"] if isinstance(dependency, dict) else dependency
+            kinds = (
+                {kind.get("kind") for kind in dependency.get("dep_kinds", [{}])}
+                if isinstance(dependency, dict)
+                else {None}
+            )
+            every[node["id"]].add(package)
+            if kinds - {"dev"}:
+                linked[node["id"]].add(package)
+    return names, every, linked
 
 
-def closure(start: str, edges: dict[str, set[str]]) -> set[str]:
+def closure(
+    start: str, every: dict[str, set[str]], linked: dict[str, set[str]]
+) -> set[str]:
+    """Include the package's tests, but not its dependencies' tests."""
     seen: set[str] = set()
-    pending = list(edges.get(start, set()))
+    pending = list(every.get(start, set()))
     while pending:
         package = pending.pop()
         if package in seen:
             continue
         seen.add(package)
-        pending.extend(edges.get(package, set()) - seen)
+        pending.extend(linked.get(package, set()) - seen)
     return seen
 
 
 def violations(metadata: dict) -> list[str]:
-    names, edges = package_graph(metadata)
+    names, every, linked = package_graph(metadata)
     ids_by_name: dict[str, list[str]] = {}
     for package_id, name in names.items():
         ids_by_name.setdefault(name, []).append(package_id)
@@ -58,7 +73,7 @@ def violations(metadata: dict) -> list[str]:
     ):
         for package_id in ids_by_name.get(neutral_name, []):
             forbidden = sorted(
-                {names[item] for item in closure(package_id, edges) if names[item].startswith("registry-breg")}
+                {names[item] for item in closure(package_id, every, linked) if names[item].startswith("registry-breg")}
             )
             if forbidden:
                 failures.append(
@@ -70,7 +85,7 @@ def violations(metadata: dict) -> list[str]:
             forbidden = sorted(
                 {
                     names[item]
-                    for item in closure(package_id, edges)
+                    for item in closure(package_id, every, linked)
                     if names[item].startswith("registry-casework")
                 }
             )
@@ -84,7 +99,7 @@ def violations(metadata: dict) -> list[str]:
         if not breg_name.startswith("registry-breg"):
             continue
         forbidden = sorted(
-            {names[item] for item in closure(breg_id, edges) if names[item].startswith("registry-casework")}
+            {names[item] for item in closure(breg_id, every, linked) if names[item].startswith("registry-casework")}
         )
         if forbidden:
             failures.append(
@@ -92,9 +107,16 @@ def violations(metadata: dict) -> list[str]:
             )
 
     for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
-        reached = {names[item] for item in closure(package_id, edges)}
+        reached = {names[item] for item in closure(package_id, every, linked)}
         if package_name.startswith(("registry-casework", "registry-review-", "registry-breg")):
-            forbidden = sorted(item for item in reached if item.startswith(COORDINATOR_PREFIX))
+            permitted = set()
+            if package_name == "registry-caseworkctl":
+                shipped = {names[item] for item in closure(package_id, linked, linked)}
+                permitted = {"registry-coordinator-client"} - shipped
+            forbidden = sorted(
+                item for item in reached
+                if item.startswith(COORDINATOR_PREFIX) and item not in permitted
+            )
             if forbidden:
                 failures.append(
                     f"{package_name} transitively depends on Coordinator package(s): "

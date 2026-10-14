@@ -510,7 +510,7 @@ test('a configuration member outside the declared set is a configuration error',
 });
 
 test('workflow discovery is a bounded read under the exact client contract', async (context) => {
-  const contract = { workflow: 'decision-follow-up', workflowRevision: STATUS.workflowRevision, input: { type: 'object' }, outcomes: { accepted: { type: 'object' } } };
+  const contract = { workflow: 'decision-follow-up', workflowRevision: STATUS.workflowRevision, input: { type: 'object' }, outcomes: { accepted: { type: 'object' } }, reviewPolicy: null };
   const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: contract }));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
@@ -519,4 +519,18 @@ test('workflow discovery is a bounded read under the exact client contract', asy
   assert.equal(requests[0].method, 'GET');
   assert.equal(requests[0].path, '/v1/workflows/decision-follow-up');
   assert.equal(requests[0].headers['idempotency-key'], undefined);
+});
+
+test('workflow discovery retains the exact Review policy and refuses a different revision', async (context) => {
+  const contract = { workflow: 'decision-follow-up', workflowRevision: STATUS.workflowRevision, input: { type: 'object' }, outcomes: { accepted: { type: 'object' } }, reviewPolicy: { id: 'decision-follow-up', version: 'pilot-1', digest: STATUS.workflowRevision } };
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: contract }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  assert.deepEqual(await client.workflow('token', 'decision-follow-up'), { kind: 'complete', value: contract });
+  contract.reviewPolicy.digest = `sha256:${'1'.repeat(64)}`;
+  await assert.rejects(client.workflow('token', 'decision-follow-up'), (error) => {
+    assert.equal(error.kind, 'protocol');
+    return true;
+  });
+  assert.equal(requests.length, 2);
 });

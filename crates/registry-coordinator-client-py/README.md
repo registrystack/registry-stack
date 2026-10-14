@@ -38,6 +38,11 @@ revisions, deadlines, next observations, persistent floors, and count/limit. Ori
 raw product responses, prepared requests, and protected correlation values remain absent.
 The reviewed Workflow declares any terminal output projection.
 
+Workflow metadata includes `reviewPolicy: PolicyBinding | None`. A provider's
+exact policy ID matches the workflow and its digest matches `workflowRevision`;
+the canonical Rust client validates the shared pin before this thin binding
+returns it. The pin grants no review or source authority.
+
 `coordinatorctl types --project DIRECTORY --language typescript --output FILE` and the equivalent
 `--language python` export typed Workflow wrappers over the maintained public generic clients.
 Their `start`, `get`, and `cancel` methods pin the compiled revision and check returned workflow

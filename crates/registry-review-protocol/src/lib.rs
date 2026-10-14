@@ -1,4 +1,4 @@
-//! Runtime-free wire contract between review producers and Registry Casework.
+//! Runtime-free wire contract between review producers and review providers.
 //!
 //! This crate deliberately contains no policy evaluator, persistence, HTTP
 //! client, source adapter, credential, or business-operation implementation.
@@ -23,6 +23,10 @@ pub const MAXIMUM_PORTABLE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const REVIEW_REQUESTS_PATH: &str = "/v1/review-requests";
 pub const REVIEW_RESULTS_FEED_PATH: &str = "/v1/review-results";
 pub const REVIEW_COMPLETIONS_PATH: &str = "/v1/review-completions";
+pub const REVIEW_PROFILE_HEADER: &str = "registry-review-profile";
+pub const REVIEW_VALIDATION_PATH_HEADER: &str = "registry-review-validation-path";
+pub const REVIEW_VALIDATION_REASON_HEADER: &str = "registry-review-validation-reason";
+pub const REVIEW_PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-review/";
 
 #[must_use]
 pub fn review_request_path(request_id: Uuid) -> String {

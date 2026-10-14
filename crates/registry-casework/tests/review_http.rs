@@ -599,7 +599,7 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
         .method("POST")
         .uri("/v1/review-requests")
         .header(CONTENT_TYPE, "application/json")
-        .header(CASEWORK_PROFILE_HEADER, "producer")
+        .header(REVIEW_PROFILE_HEADER, "producer")
         .header("idempotency-key", "create-record-1");
     if let Some(token) = token {
         request = request.header("authorization", format!("Bearer {token}"));
@@ -700,7 +700,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
                 .method("POST")
                 .uri("/v1/review-requests")
                 .header(CONTENT_TYPE, "application/json")
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header("idempotency-key", "duplicate-policy-member")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(duplicate_key_body))
@@ -1014,7 +1014,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
             Request::builder()
                 .uri(format!("/v1/review-requests/{}/result", created.request_id))
                 .header("authorization", format!("Bearer {token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .body(Body::empty())
                 .expect("pending result request"),
         )
@@ -1027,7 +1027,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
             Request::builder()
                 .uri(format!("/v1/review-requests/{}", created.request_id))
                 .header("authorization", format!("Bearer {token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header(SOURCE_PROFILE_HEADER, "source-reader")
                 .body(Body::empty())
                 .expect("source-scoped request"),
@@ -1662,7 +1662,7 @@ async fn mixed_context_inbox_lists_submitted_and_source_tasks_together() {
                 .method("POST")
                 .uri("/v1/review-requests")
                 .header(CONTENT_TYPE, "application/json")
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header("idempotency-key", "create-mixed-answer")
                 .header("authorization", format!("Bearer {producer_token}"))
                 .body(Body::from(
@@ -1772,7 +1772,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
                 .method("POST")
                 .uri("/v1/review-requests")
                 .header("authorization", format!("Bearer {producer_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header(CONTENT_TYPE, "application/json")
                 .header("idempotency-key", "create-null-constraints")
                 .body(Body::from(
@@ -1787,7 +1787,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     assert!(
         null_constraints
             .headers()
-            .get(VALIDATION_PATH_HEADER)
+            .get(REVIEW_VALIDATION_PATH_HEADER)
             .is_none(),
         "the protocol rejects a non-object shape without structured detail"
     );
@@ -2130,7 +2130,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
             Request::builder()
                 .uri(format!("/v1/review-requests/{}/result", created.request_id))
                 .header("authorization", format!("Bearer {producer_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .body(Body::empty())
                 .expect("poll standalone answer request"),
         )
@@ -2154,7 +2154,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
             Request::builder()
                 .uri(format!("/v1/review-requests/{}/result", Uuid::new_v4()))
                 .header("authorization", format!("Bearer {producer_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .body(Body::empty())
                 .expect("unknown review result request"),
         )
@@ -2251,7 +2251,7 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
             .method("POST")
             .uri("/v1/review-requests")
             .header(CONTENT_TYPE, "application/json")
-            .header(CASEWORK_PROFILE_HEADER, "producer-alternate")
+            .header(REVIEW_PROFILE_HEADER, "producer-alternate")
             .header("idempotency-key", "create-alternate-initiator")
             .header(
                 "authorization",
@@ -2344,7 +2344,14 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
             Request::builder()
                 .uri(format!("/v1/review-requests/{request_id}/{path}"))
                 .header("authorization", format!("Bearer {own_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "initiator")
+                .header(
+                    if path == "result" {
+                        REVIEW_PROFILE_HEADER
+                    } else {
+                        CASEWORK_PROFILE_HEADER
+                    },
+                    "initiator",
+                )
                 .body(Body::empty())
                 .expect("initiator read request"),
         )
@@ -3842,7 +3849,14 @@ async fn send_strict_json(
         .method(route.method)
         .uri(&route.path)
         .header("authorization", format!("Bearer {token}"))
-        .header(CASEWORK_PROFILE_HEADER, profile)
+        .header(
+            if route.producer {
+                REVIEW_PROFILE_HEADER
+            } else {
+                CASEWORK_PROFILE_HEADER
+            },
+            profile,
+        )
         .header(CONTENT_TYPE, "application/json")
         .header("if-match", "\"1\"")
         .header("idempotency-key", "strict-json");
@@ -4111,7 +4125,7 @@ async fn a_review_request_with_a_duplicate_member_creates_nothing_and_its_twin_d
             .method("POST")
             .uri("/v1/review-requests")
             .header(CONTENT_TYPE, "application/json")
-            .header(CASEWORK_PROFILE_HEADER, "producer")
+            .header(REVIEW_PROFILE_HEADER, "producer")
             .header("idempotency-key", "strict-json-twin")
             .header("authorization", format!("Bearer {}", token(&idp)))
             .body(Body::from(body))
@@ -4209,7 +4223,14 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
                 .method(method)
                 .uri(format!("{prefix}limit={limit}"))
                 .header("authorization", format!("Bearer {token}"))
-                .header(CASEWORK_PROFILE_HEADER, profile);
+                .header(
+                    if producer {
+                        REVIEW_PROFILE_HEADER
+                    } else {
+                        CASEWORK_PROFILE_HEADER
+                    },
+                    profile,
+                );
             if source_profile {
                 request = request.header(SOURCE_PROFILE_HEADER, "reviewer-source");
             }

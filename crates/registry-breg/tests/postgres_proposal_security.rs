@@ -595,6 +595,151 @@ async fn review_context_requires_record_grant_and_current_membership() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn explicit_service_assessment_preserves_scope_actor_target_and_record_disclosure() {
+    let mut project = source(false);
+    let mut service = project["accessProfiles"][1].clone();
+    service["id"] = json!("assessment");
+    service["actorKind"] = json!("service");
+    service["requiredScopes"] = json!(["proposal:assess"]);
+    service["requiredPurposes"] = json!(["automatic-assessment"]);
+    service.as_object_mut().unwrap().remove("taskGrant");
+    service["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actions");
+    service["permissions"]["proposals"][0]["operations"] = json!(["get-review-context"]);
+    service["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("ownership");
+    let mut human = service.clone();
+    human["id"] = json!("human-review");
+    human["actorKind"] = json!("human");
+    let mut narrow = service.clone();
+    narrow["id"] = json!("narrow-assessment");
+    narrow["permissions"]["proposals"][0]["readableContextFields"] = json!(["proposedName"]);
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .extend([service, human, narrow]);
+    let fixture = client_http::ClientFixture::start(compile(project), clerk()).await;
+    let (_, target) = seed(&fixture).await;
+    let (code, draft, etag) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"Frozen requested name"}}),
+        Some("assessment-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (code, submitted, _) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
+        json!({}),
+        Some("assessment-submit"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{submitted}");
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&fixture.registry, &idp).await;
+    let claims = |scope: &str, purpose: &str, target_zone: &str, record_zone: &str| {
+        json!({"aud":"urn:example:breg","sub":"assessor","azp":"agent-client",
+            "registry_principal":"assessor","registry_actor_kind":"service",
+            "registry_purpose":purpose,"scope":scope,
+            "jurisdiction":target_zone,"recordJurisdiction":record_zone})
+    };
+    let caller = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(claims(
+                "proposal:assess",
+                "automatic-assessment",
+                "zone-a",
+                "zone-a",
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    let path = format!("/v1/proposals/{id}/review-context?accessProfile=assessment");
+    let (code, context, _) = send(&caller, Method::GET, &path, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::OK, "{context}");
+    assert_eq!(context["submissionVersion"], submitted["submissionVersion"]);
+    assert_eq!(context["effectDigest"], submitted["effectDigest"]);
+    assert_eq!(
+        context["context"]["fields"],
+        json!({"currentName":"current-name-canary","proposedName":"Frozen requested name"})
+    );
+    assert_review_contract(&fixture.registry, &context);
+    for suffix in [
+        "review-context?accessProfile=human-review",
+        "review-context?accessProfile=narrow-assessment",
+        "review-context?accessProfile=clerk",
+        "review-status?accessProfile=assessment",
+    ] {
+        let (code, concealed, _) = send(
+            &caller,
+            Method::GET,
+            &format!("/v1/proposals/{id}/{suffix}"),
+            Value::Null,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            code,
+            StatusCode::NOT_FOUND,
+            "wrong purpose/profile disclosed context: {concealed}"
+        );
+        assert!(!concealed.to_string().contains("current-name-canary"));
+    }
+    for authority in [
+        claims(
+            "proposal:manage",
+            "automatic-assessment",
+            "zone-a",
+            "zone-a",
+        ),
+        claims(
+            "proposal:assess",
+            "registry-administration",
+            "zone-a",
+            "zone-a",
+        ),
+        claims(
+            "proposal:assess",
+            "automatic-assessment",
+            "zone-b",
+            "zone-a",
+        ),
+        claims(
+            "proposal:assess",
+            "automatic-assessment",
+            "zone-a",
+            "zone-b",
+        ),
+    ] {
+        let refused = fixture
+            .client_for(auth.authenticate(&idp.mint_token(authority)).await.unwrap())
+            .await;
+        let (code, concealed, _) =
+            send(&refused, Method::GET, &path, Value::Null, None, None).await;
+        assert_eq!(
+            code,
+            StatusCode::NOT_FOUND,
+            "assessment widened current authority: {concealed}"
+        );
+        assert!(!concealed.to_string().contains("current-name-canary"));
+    }
+    drop(caller);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_audit() {
     use registry_breg::{
         audit::RegistryAudit,

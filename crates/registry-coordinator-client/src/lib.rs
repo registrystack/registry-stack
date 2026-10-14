@@ -42,4 +42,5 @@ pub use model::{
     RunListState, RunStatus, StartRunRequest, StepStatus, WaitStatus, WorkflowContract,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_review_protocol::PolicyBinding;
 pub use uuid::Uuid;

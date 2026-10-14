@@ -80,7 +80,7 @@ fn problem(status: u16, code: &str, title: &str, detail: &str) -> ResponseTempla
         .set_body_raw(
             json!({
                 "type": format!(
-                    "https://id.registrystack.org/problems/registry-casework/{}",
+                    "https://id.registrystack.org/problems/registry-review/{}",
                     code.replace('.', "/")
                 ),
                 "title": title,
@@ -182,7 +182,7 @@ async fn submit_review_request_recovers_the_accepted_request_under_the_same_key(
     Mock::given(method("POST"))
         .and(path("/v1/review-requests"))
         .and(header("authorization", "Bearer fixture-token"))
-        .and(header("registry-casework-profile", PROFILE))
+        .and(header("registry-review-profile", PROFILE))
         .and(header("idempotency-key", "review-key"))
         .and(body_json(create()))
         .respond_with(json_answer(200, accepted(&digest(PRODUCER))))
@@ -255,7 +255,7 @@ async fn cancel_review_request_counts_a_request_that_already_ended_as_done() {
         Mock::given(method("POST"))
             .and(path(format!("/v1/review-requests/{REQUEST}/cancel")))
             .and(header("authorization", "Bearer fixture-token"))
-            .and(header("registry-casework-profile", PROFILE))
+            .and(header("registry-review-profile", PROFILE))
             .and(header("idempotency-key", "cancel-key"))
             .and(body_json(
                 json!({"subject": create()["subject"], "reason": "review-timed-out"}),
@@ -495,7 +495,7 @@ async fn a_result_read_names_each_casework_answer_without_a_value() {
         Mock::given(method("GET"))
             .and(path(format!("/v1/review-requests/{REQUEST}/result")))
             .and(header("authorization", "Bearer fixture-token"))
-            .and(header("registry-casework-profile", PROFILE))
+            .and(header("registry-review-profile", PROFILE))
             .respond_with(answer)
             .expect(1)
             .mount(&fixture.casework)

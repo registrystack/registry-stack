@@ -59,13 +59,23 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(json.loads(observed["body"]), START_REQUEST)
 
     def test_workflow_discovers_one_bound_revision_without_starting(self) -> None:
-        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}}
+        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}, "reviewPolicy": None}
         self.service.script(ok(contract))
         self.assertEqual(self.client.workflow("contract-token", "nursing-notice"), {"kind": "complete", "value": contract})
         (observed,) = self.observed()
         self.assertEqual(observed["method"], "GET")
         self.assertEqual(observed["path"], "/deployment/v1/workflows/nursing-notice")
         self.assertEqual(observed["idempotency_key"], "")
+
+    def test_workflow_carries_the_exact_review_policy_and_refuses_a_different_revision(self) -> None:
+        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}, "reviewPolicy": {"id": "nursing-notice", "version": "pilot-1", "digest": START_REQUEST["workflowRevision"]}}
+        self.service.script(ok(contract))
+        self.assertEqual(self.client.workflow("contract-token", "nursing-notice"), {"kind": "complete", "value": contract})
+        contract["reviewPolicy"]["digest"] = "sha256:" + "1" * 64
+        self.service.script(ok(contract))
+        with self.assertRaises(CoordinatorClientError) as refused:
+            self.client.workflow("contract-token", "nursing-notice")
+        self.assertEqual(refused.exception.kind, "protocol")
 
     def test_status_reads_the_run_without_a_key_or_body(self) -> None:
         self.service.script(ok(STATUS))

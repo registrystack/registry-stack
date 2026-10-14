@@ -69,6 +69,9 @@
     },
     "Action": {
       "enum": [
+        "review-create",
+        "review-read",
+        "review-cancel",
         "start",
         "status",
         "inspect",
@@ -164,7 +167,7 @@
           "items": {
             "$ref": "#/$defs/Action"
           },
-          "maxItems": 12,
+          "maxItems": 15,
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
@@ -181,6 +184,9 @@
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
+        },
+        "reviewProducer": {
+          "$ref": "#/$defs/ReviewProducer"
         },
         "workflows": {
           "description": "The workflows this policy's run actions reach: start, status, inspect,\nretry-same, cancel and reconcile. Required when the policy lists a run\naction and refused when it lists none.",
@@ -647,6 +653,25 @@
       "description": "The environment secret provider. It takes no settings.",
       "type": "object"
     },
+    "EventSourceConfig": {
+      "additionalProperties": false,
+      "description": "Trusted producer binding. Event vocabulary and mapping stay in the package.",
+      "properties": {
+        "signingKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Protected reference to the raw HMAC-SHA-256 key, at least 32 bytes."
+        },
+        "source": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Exact absolute producer URI that signed event envelopes must declare."
+        }
+      },
+      "required": [
+        "source",
+        "signingKeyRef"
+      ],
+      "type": "object"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -818,6 +843,41 @@
       ],
       "type": "object"
     },
+    "ReviewProducer": {
+      "additionalProperties": false,
+      "description": "Only a verified client policy supplies producer identity and digest namespace.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Logical producer identity bound to the verified client and included in\nthe shared request submission digest."
+        },
+        "profile": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Exact Registry-Review-Profile header value this verified client must\nselect when creating, reading or cancelling its Review requests."
+        },
+        "sourceNamespace": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Exact producer namespace used to compute the submission digest. This\nnamespace is independent of the permitted subject source identifiers."
+        },
+        "sources": {
+          "description": "Subject source identifiers this producer may submit and continue to\naccess. Removing a source conceals its retained requests and results.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "sourceNamespace",
+        "profile",
+        "sources"
+      ],
+      "type": "object"
+    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -953,6 +1013,17 @@
     },
     "deployment": {
       "$ref": "#/$defs/DeploymentConfig"
+    },
+    "eventSources": {
+      "additionalProperties": false,
+      "description": "Optional trusted event producers keyed by the logical IDs used in Workflow triggers.",
+      "maxProperties": 16,
+      "patternProperties": {
+        "^[a-z][a-z0-9_-]{0,63}$": {
+          "$ref": "#/$defs/EventSourceConfig"
+        }
+      },
+      "type": "object"
     },
     "kind": {
       "const": "CoordinatorRuntimeConfig",

@@ -47,8 +47,9 @@ receives the call, which decides it under its own authorization.
   dependencies may not. Adding a dependent, or a Coordinator crate, means naming its rule
   in the gate in the same change. The Casework, Scheduling, and Messaging
   gates also refuse the Coordinator from their side.
-- `registry-coordinator-client` reaches only `registry-platform-*` and never
-  the runtime. Its Node.js and Python bindings add no Coordinator semantics;
+- `registry-coordinator-client` reaches `registry-platform-*` and the explicitly
+  allowed runtime-free `registry-review-protocol` for shared PolicyBinding DTOs,
+  never the runtime, Review client or a provider's core. Its Node.js and Python bindings add no Coordinator semantics;
   follow `crates/CLIENTS.md` when changing the client surface.
 - `scripts/check_dependency_direction.py` enforces both directions on the
   whole forward closure with every feature enabled. A package's own

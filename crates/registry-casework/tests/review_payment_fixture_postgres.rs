@@ -24,6 +24,7 @@ use registry_casework_core::{
     ReviewCreateRequest, ReviewPolicy, ReviewProducerPolicy, ReviewPurpose, ReviewRequestAccepted,
     ReviewResult, ReviewResultFeedPage, ReviewResultStatus, ReviewRetentionPolicy,
     ReviewStagePolicy, ReviewTaskPage, SubjectBinding, CASEWORK_PROFILE_HEADER,
+    REVIEW_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -611,7 +612,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let created = client
         .post(format!("{}/v1/review-requests", casework.base_url))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .header("idempotency-key", "submit-payment-over-http")
         .json(&request)
         .send()
@@ -637,7 +638,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let withdrawn = client
         .post(format!("{}/v1/review-requests", casework.base_url))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .header("idempotency-key", "submit-withdrawn-payment")
         .json(&withdrawn_request)
         .send()
@@ -654,7 +655,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
             casework.base_url, withdrawn.request_id
         ))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .header("idempotency-key", "withdraw-payment-before-review")
         .json(&registry_casework_core::ReviewCancelRequest {
             subject: withdrawn_request.subject,
@@ -670,7 +671,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
             casework.base_url, withdrawn.request_id
         ))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .send()
         .await
         .expect("read withdrawn payment result");
@@ -731,7 +732,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
             casework.base_url, created.request_id
         ))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .send()
         .await
         .expect("poll approved payment result");
@@ -876,7 +877,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let first_feed = client
         .get(format!("{}/v1/review-results?limit=1", casework.base_url))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .send()
         .await
         .expect("read first payment result feed page");
@@ -914,7 +915,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
             casework.base_url
         ))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .send()
         .await
         .expect("read expired payment feed cursor");
@@ -926,7 +927,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let restarted_feed = client
         .get(format!("{}/v1/review-results?limit=1", casework.base_url))
         .bearer_auth(&producer_token)
-        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header(REVIEW_PROFILE_HEADER, "payments")
         .send()
         .await
         .expect("restart payment result feed");

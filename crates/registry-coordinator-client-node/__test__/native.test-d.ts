@@ -5,12 +5,18 @@ import type {
   RunInspection,
   RunList,
   RunStatus,
+  WorkflowContract,
+  PolicyBinding,
 } from '../client'
 
 const client = new CoordinatorClient({
   baseUrl: 'https://coordinator.example.invalid/',
   requestTimeoutMilliseconds: 5_000,
 })
+
+declare const contract: WorkflowContract
+const reviewPolicy: PolicyBinding | null = contract.reviewPolicy
+void reviewPolicy
 
 const started: Promise<CoordinatorOutcome<RunStatus>> = client.start(
   'header.payload.signature',

@@ -165,10 +165,7 @@ fn authenticated(headers: &HeaderMap) {
         headers.get("authorization").unwrap(),
         format!("Bearer {OUTGOING_TOKEN}").as_str()
     );
-    assert_eq!(
-        headers.get("registry-casework-profile").unwrap(),
-        "producer"
-    );
+    assert_eq!(headers.get("registry-review-profile").unwrap(), "producer");
     assert!(headers.contains_key("idempotency-key"));
 }
 fn response(status: StatusCode, body: Value) -> Response {

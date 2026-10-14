@@ -5,6 +5,11 @@ producer-facing review handoff contract. It creates or recovers review
 requests, reads their bindings, retrieves terminal results, pages the
 requester result feed, and cancels unfinished requests.
 
+The producer selects an explicitly granted provider profile with
+`Registry-Review-Profile`. Failures use the shared Review problem namespace and
+bounded Review validation headers. Provider task APIs and policy evaluators
+remain outside this client.
+
 Creation requires the producer's full expected policy binding and submission
 digest, and checks both against the accepted response. Result lookup
 requires the accepted request binding and refuses a response unless its

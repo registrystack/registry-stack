@@ -42,8 +42,11 @@ writes owner-only headers for a registered teaching client. Use
 `caseworkctl dev events ./casework` for a bounded local runtime journal and
 `caseworkctl dev stop ./casework` when finished. A stop preserves the database.
 
-Each API call authenticates with `Authorization: Bearer ...` and selects one
-declared `Registry-Casework-Profile`. The producer's Requester profile is
+Each protected API call authenticates with `Authorization: Bearer ...` and selects
+one declared profile. Shared producer Review routes use `Registry-Review-Profile`;
+Casework policy inspection, human and administrative routes use
+`Registry-Casework-Profile`. The development header file includes both so the same
+registered caller can use its permitted routes. The producer's Requester profile is
 separate from the human Staff or Supervisor profile. Bootstrap a team serving
 the policy's queue through the authenticated Directory API before expecting
 reviewers to see work.

@@ -19,6 +19,7 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`breg.apply-proposal/v1`](#breg.apply-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
 | [`breg.retry-proposal/v1`](#breg.retry-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
 | [`breg.cancel-proposal/v1`](#breg.cancel-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
+| [`breg.read-review-context/v1`](#breg.read-review-context/v1) | 1 | `breg` | read | none | none | read-again | none | none |
 
 ## breg.read-record/v1
 
@@ -1073,6 +1074,71 @@ Output ([`breg.cancel-proposal.v1.output.schema.json`](breg.cancel-proposal.v1.o
 | `state` | `BRegProposalState` | yes |
 | `submissionVersion` | integer | yes |
 | `title` | string or null | no |
+
+No other members are accepted.
+
+## breg.read-review-context/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "read",
+    "id": "breg.read-review-context/v1",
+    "keyRequirement": "none",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "connectTimeoutMilliseconds": 1000,
+      "maximumResponseBytes": 65536,
+      "mutationRetries": 0,
+      "requestTimeoutMilliseconds": 2000
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.read-review-context.v1.input.schema.json`](breg.read-review-context.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `actionId` | string | yes |
+| `contract` | `BRegProposalReviewContextContract` | yes |
+| `subject` | `SubjectBinding` | yes |
+
+No other members are accepted.
+
+Output ([`breg.read-review-context.v1.output.schema.json`](breg.read-review-context.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `contract` | `BRegProposalReviewContextContract` | yes |
+| `fields` | object | yes |
+| `reference` | string | yes |
+| `subject` | `SubjectBinding` | yes |
 
 No other members are accepted.
 

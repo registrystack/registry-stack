@@ -181,7 +181,7 @@ mod tests {
     use super::ReviewValidationReason;
 
     /// The client reads the validation reason header in the spelling the
-    /// Casework runtime writes; the previous spelling is an unknown word.
+    /// review provider writes; the previous spelling is an unknown word.
     #[test]
     fn every_validation_reason_is_read_in_kebab_case_only() {
         let reasons = [

@@ -27,6 +27,46 @@ use crate::{
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
+    static REQUEST_CONTRACT: HttpContract;
+}
+
+#[derive(Clone, Copy, Default)]
+enum HttpContract {
+    #[default]
+    Casework,
+    Review,
+}
+
+impl HttpContract {
+    fn current() -> Self {
+        REQUEST_CONTRACT
+            .try_with(|contract| *contract)
+            .unwrap_or_default()
+    }
+
+    fn profile_header(self) -> &'static str {
+        match self {
+            Self::Casework => CASEWORK_PROFILE_HEADER,
+            Self::Review => REVIEW_PROFILE_HEADER,
+        }
+    }
+
+    fn problem_base(self) -> &'static str {
+        match self {
+            Self::Casework => CASEWORK_PROBLEM_TYPE_BASE,
+            Self::Review => REVIEW_PROBLEM_TYPE_BASE,
+        }
+    }
+
+    fn validation_headers(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Casework => (VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER),
+            Self::Review => (
+                REVIEW_VALIDATION_PATH_HEADER,
+                REVIEW_VALIDATION_REASON_HEADER,
+            ),
+        }
+    }
 }
 
 const MAXIMUM_PAGE_SIZE: usize = 100;
@@ -40,6 +80,18 @@ pub struct HttpState {
 }
 
 pub fn router(state: HttpState) -> Router {
+    let review = Router::new()
+        .route("/v1/review-requests", post(create_review_request))
+        .route("/v1/review-results", get(review_result_feed))
+        .route("/v1/review-requests/{request_id}", get(get_review_request))
+        .route(
+            "/v1/review-requests/{request_id}/result",
+            get(get_review_result),
+        )
+        .route(
+            "/v1/review-requests/{request_id}/cancel",
+            post(cancel_review_request),
+        );
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -47,13 +99,11 @@ pub fn router(state: HttpState) -> Router {
         .route("/.well-known/jwks.json", get(task_jwks))
         .route("/v1/task-grants/{grant_id}/assertion", post(task_assertion))
         .route("/v1/task-grants/{grant_id}/status", get(task_status))
-        .route("/v1/review-requests", post(create_review_request))
         .route("/v1/review-policies", get(review_policy_descriptions))
         .route(
             "/v1/review-policies/{policy_id}",
             get(review_policy_description),
         )
-        .route("/v1/review-results", get(review_result_feed))
         .route("/v1/review-tasks", get(review_tasks))
         .route("/v1/review-tasks/next", get(next_review_task))
         .route("/v1/review-tasks/holdings", get(review_task_holdings))
@@ -78,15 +128,6 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke",
             post(revoke_review_task_grant),
-        )
-        .route("/v1/review-requests/{request_id}", get(get_review_request))
-        .route(
-            "/v1/review-requests/{request_id}/result",
-            get(get_review_result),
-        )
-        .route(
-            "/v1/review-requests/{request_id}/cancel",
-            post(cancel_review_request),
         )
         .route("/v1/review-tasks/{task_id}/claim", post(claim_review_task))
         .route(
@@ -157,26 +198,44 @@ pub fn router(state: HttpState) -> Router {
             post(preview_caseload_move),
         )
         .route("/v1/directory/caseload/apply", post(apply_caseload_move));
-    http_edge(app).with_state(state)
+    http_edge(app)
+        .merge(contract_edge(review, HttpContract::Review))
+        .with_state(state)
 }
 
 fn http_edge<S>(router: Router<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
+    contract_edge(router.fallback(route_not_found), HttpContract::Casework)
+}
+
+fn contract_edge<S>(router: Router<S>, contract: HttpContract) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     router
-        .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(request_body_limit_default())
-        .layer(middleware::from_fn(http_boundary))
+        .layer(middleware::from_fn(move |request, next| {
+            http_boundary(contract, request, next)
+        }))
         .layer(security_headers(CspBuilder::restrictive()).without_hsts())
 }
 
-async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
+async fn http_boundary(
+    contract: HttpContract,
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
     let trace = TraceContext::from_headers(request.headers());
     let mut response = REQUEST_TRACE
         .scope(trace.clone(), async move {
-            normalize_framework_rejection(next.run(request).await)
+            REQUEST_CONTRACT
+                .scope(contract, async move {
+                    normalize_framework_rejection(next.run(request).await)
+                })
+                .await
         })
         .await;
     trace.apply(response.headers_mut());
@@ -1296,7 +1355,7 @@ async fn authenticate<'a>(
         .and_then(|value| value.to_str().ok())
         .ok_or(HttpError::AuthenticationRefused)?;
     let token = parse_bearer_token(authorization).map_err(|_| HttpError::AuthenticationRefused)?;
-    let profile = profile_header(headers, CASEWORK_PROFILE_HEADER)?;
+    let profile = profile_header(headers, HttpContract::current().profile_header())?;
     let actor = state
         .authenticator
         .authenticate(token, profile)
@@ -1564,7 +1623,11 @@ fn problem_response(
         .unwrap_or_else(|_| TraceContext::server_created());
     let status = problem.status();
     let body = ProblemBody {
-        type_uri: problem.type_uri(),
+        type_uri: format!(
+            "{}{}",
+            HttpContract::current().problem_base(),
+            problem.code().replace('.', "/")
+        ),
         title: problem.title(),
         status: status.as_u16(),
         detail: problem.detail(),
@@ -1594,15 +1657,16 @@ fn problem_response(
         );
     }
     if let Some(validation) = validation {
+        let (path_header, reason_header) = HttpContract::current().validation_headers();
         response.headers_mut().insert(
-            VALIDATION_PATH_HEADER,
+            path_header,
             validation
                 .path
                 .parse()
                 .expect("bounded JSON paths are valid header values"),
         );
         response.headers_mut().insert(
-            VALIDATION_REASON_HEADER,
+            reason_header,
             review_validation_reason(validation.reason)
                 .parse()
                 .expect("validation reasons are valid header values"),
@@ -1673,6 +1737,163 @@ mod tests {
 
     fn edge_fixture() -> Router {
         http_edge(Router::new().route("/json/{id}", post(json_route)))
+    }
+
+    #[tokio::test]
+    async fn review_and_staff_routes_select_only_their_own_profile_contract() {
+        async fn selected_profile(headers: HeaderMap) -> Result<Json<String>, HttpError> {
+            Ok(Json(
+                profile_header(&headers, HttpContract::current().profile_header())?.to_owned(),
+            ))
+        }
+        let app =
+            http_edge(Router::new().route("/staff", post(selected_profile))).merge(contract_edge(
+                Router::new().route("/review", post(selected_profile)),
+                HttpContract::Review,
+            ));
+        for (path, selected, other, base) in [
+            (
+                "/review",
+                REVIEW_PROFILE_HEADER,
+                CASEWORK_PROFILE_HEADER,
+                REVIEW_PROBLEM_TYPE_BASE,
+            ),
+            (
+                "/staff",
+                CASEWORK_PROFILE_HEADER,
+                REVIEW_PROFILE_HEADER,
+                CASEWORK_PROBLEM_TYPE_BASE,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header(selected, "expected")
+                        .header(other, "ignored")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                to_bytes(response.into_body(), 1024).await.unwrap(),
+                "\"expected\""
+            );
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header(other, "ignored")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let problem: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap())
+                    .unwrap();
+            assert_eq!(problem["type"], format!("{base}request/invalid"));
+        }
+    }
+
+    #[tokio::test]
+    async fn review_contract_covers_framework_and_validation_failures() {
+        let app = contract_edge(
+            Router::new().route("/json/{id}", post(json_route)).route(
+                "/validation",
+                post(|| async {
+                    Err::<StatusCode, _>(HttpError::Validation(ReviewValidationError {
+                        path: "$.policy".to_owned(),
+                        reason: ReviewValidationReason::PolicyNotAllowed,
+                    }))
+                }),
+            ),
+            HttpContract::Review,
+        );
+        for (method, path, media, body, expected) in [
+            (
+                "GET",
+                "/json/00000000-0000-0000-0000-000000000000",
+                "application/json",
+                Vec::new(),
+                ProblemCode::RequestMethodNotAllowed,
+            ),
+            (
+                "POST",
+                "/json/invalid",
+                "application/json",
+                b"{}".to_vec(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                "POST",
+                "/json/00000000-0000-0000-0000-000000000000",
+                "text/plain",
+                b"{}".to_vec(),
+                ProblemCode::RequestUnsupportedMediaType,
+            ),
+            (
+                "POST",
+                "/json/00000000-0000-0000-0000-000000000000",
+                "application/json",
+                vec![b'x'; 1024 * 1024 + 1],
+                ProblemCode::RequestBodyTooLarge,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(CONTENT_TYPE, media)
+                        .header("traceparent", TRACEPARENT)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected.status());
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            let problem: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                problem["type"],
+                format!(
+                    "{REVIEW_PROBLEM_TYPE_BASE}{}",
+                    expected.code().replace('.', "/")
+                )
+            );
+            assert_eq!(problem["traceId"], "0123456789abcdef0123456789abcdef");
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/validation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()[REVIEW_VALIDATION_PATH_HEADER],
+            "$.policy"
+        );
+        assert_eq!(
+            response.headers()[REVIEW_VALIDATION_REASON_HEADER],
+            "policy-not-allowed"
+        );
+        assert!(!response.headers().contains_key(VALIDATION_PATH_HEADER));
+        assert!(!response.headers().contains_key(VALIDATION_REASON_HEADER));
     }
 
     #[test]

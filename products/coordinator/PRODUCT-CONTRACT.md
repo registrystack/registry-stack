@@ -1,6 +1,6 @@
 # Coordinator product contract
 
-Registry Coordinator is an optional Rust service for explicit, authorized starts of reviewed,
+Registry Coordinator is an optional Rust service for authenticated admissions of reviewed,
 finite, acyclic workflows. One service and PostgreSQL 17 or newer are sufficient. Maintained
 public clients reach downstream products over HTTP; each product retains its authorization,
 data, and effect ownership. Coordinator owns durable progress, prepared commands, waits, and audit.
@@ -26,6 +26,12 @@ prior step output, or literals; construct fields; or invoke a named Function wit
 The compiler resolves schema references and proves data availability on every route. Computed
 commands are validated again before preparation, saving, or dispatch. Invalid commands report a
 bounded `failurePath` without the submitted value.
+
+Owner-generated numeric width annotations such as `int64` are accepted only on
+matching numeric types. Validation intersects explicit bounds with the declared
+width and the canonical safe-integer range, while retaining imported schema bytes
+and their governed identity. The schema execution profile is pinned in every
+snapshot; unknown formats and remote schema references remain refused.
 
 Runtime connections form one tagged `connections` map. Supported types are `breg`,
 `casework-review-producer`, `messaging`, `scheduling`, `external-http`, and `evaluation`.
@@ -54,8 +60,9 @@ uncertain application state holds the wait and cannot become a terminal business
 The original prepared command and submission identity stay fixed across recovery.
 
 `breg.apply-proposal/v1`, `breg.retry-proposal/v1`, and `breg.cancel-proposal/v1` are explicit calls
-subject to the receiving BReg policy. Coordinator neither approves a Proposal nor changes its
-application policy. A notice after application is a separate `messaging.submit-message/v1` call,
+subject to the receiving BReg policy. A Review-provider workflow may assess a Proposal, but BReg
+independently decides application under its current policy and commit-time conditions.
+A notice after application is a separate `messaging.submit-message/v1` call,
 authorized by Messaging. A refused notice leaves the registry application intact.
 
 An immediate Action call may declare `onDeclaredRefusal`. Only a validated owner-declared no-effect refusal
@@ -124,6 +131,47 @@ is not calibrated across providers or a guarantee of correctness.
 
 ## Admission and integration
 
+A Workflow may expose the shared Review protocol with `workflow.review`. Every declared
+terminal outcome maps to one explicit Review status and, where required, an outcome code.
+The computed Workflow revision pins that mapping, graph, Functions and contracts; project ID
+and human version identify its `PolicyBinding`. Workflow metadata returns `reviewPolicy`, or
+null when Review admission is unavailable. A completed workflow is approval only when its
+authored outcome maps to `approved`.
+
+Review producer policies bind an authenticated client to its producer identity, source
+namespace, profile, allowed sources and workflows. `POST /v1/review-requests` admits the exact
+shared `ReviewCreateRequest` as the ordinary Run input. The request and Run share one ID and
+transactional admission path. The original subject, submission digest and policy stay fixed.
+Results are immutable and available for the declared `resultRetentionSeconds`, default 86400,
+from completion. Cancellation cannot renew a deadline or overwrite a completed outcome.
+Recovery holds also govern result release and retention. If an assessment calls Casework,
+Coordinator uses its own independently registered producer and computes that downstream
+submission's binding rather than forwarding the upstream producer identity.
+
+`breg.read-review-context/v1` reads only the exact frozen Proposal context allowed to its service
+assessment grant. A reviewed earlier condition is evidence of that observation, not current
+commit authority. BReg rechecks its own authorization, optimistic concurrency and authored
+conditions when applying. Stale conditions refuse application without changing the reviewed
+submission; a revised submission requires a fresh assessment.
+
+An authored `workflow.eventTriggers` entry accepts a logical source, exact event type and
+data-schema identity, a schema for the full event and an ordinary typed input mapping.
+`POST /v1/events/{workflow}/{trigger}` accepts the shared platform HookEnvelope and v1 delivery
+signature under the operator's `eventSources` key binding. The source owns event meaning and
+disclosure. The receiving workflow uses the same finite execution engine and independently
+authorized downstream connections as an explicit start.
+
+The source URI, event ID and trigger bind admission; canonical event bytes bind exact retries.
+Admission, Run and durable job commit together. A repeated exact delivery recovers the same Run
+before evaluating any changed mapping. Delivery attempt time must be fresh within 30 seconds;
+the immutable event time may be older after an outage. Acknowledgement is an empty HTTP204 and
+never a source mutation proposal. This trigger admission is distinct from the completion wake-up
+route, which only advances an existing Run's eligible authoritative read.
+
+An event workflow that writes to its own source must select meaningful state transitions and
+use guards to avoid repeated fresh events. Ordinary product API calls do not propagate event
+causation across products, so the envelope hop bound alone does not prevent those loops.
+
 `POST /v1/runs` requires `workflow`, expected `workflowRevision`, `input`, and an idempotency key.
 A fresh start must match the active computed revision. Recovery of an unknown admission retains
 the original verified identity, key, revision, and input even after activation changes. Conflicting
@@ -183,12 +231,14 @@ reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
 fits: `registry_stack_client::coordinator` in Rust or the `coordinator`
 namespace of the unified Node.js and Python clients.
-Every refusal of that API, the request edge and the Casework wake-up route
-included, is an RFC 9457 problem document whose `code` comes from one closed
+Refusals of that API, the request edge and the Casework wake-up route
+use an RFC 9457 problem document whose `code` comes from one closed
 `family.reason` vocabulary with one status each. A refusal names no submitted
 value, a missing run and a run the caller may not see are the same
 `run.not-visible`, and the operator fixes that `coordinatorctl` diagnostics
-carry are not part of a problem.
+carry are not part of a problem. Shared Review producer routes use the neutral Review problem
+namespace and profile header. The shared result lookup protocol instead specifies bodyless
+202 pending, 404 concealed and 410 expired responses.
 
 ## Recovery and limits
 
@@ -237,7 +287,7 @@ Unknown product mutations do not qualify for this exception.
 
 ## Compatibility and verification
 
-Protected state schema version 3 directly replaces earlier pilot layouts. Apply and runtime access
+Protected state schema version 4 directly replaces earlier pilot layouts. Apply and runtime access
 refuse incompatible namespaces. Settle old work with its matching binary and preserve original
 packages, keys, and audit until retention allows erasure, then provision a fresh namespace and
 database identity. There are no legacy authoring aliases or automatic state conversions.

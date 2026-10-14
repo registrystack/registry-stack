@@ -3335,6 +3335,812 @@
         ],
         "type": "object"
       },
+      "ReviewProblemAbsenceCoverCycle": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.cover-cycle"
+              },
+              "detail": {
+                "const": "Choose cover assignments that do not return to an earlier person during a shared period."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Absence cover cycle"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/absence/cover-cycle"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemAbsenceInvalidPeriod": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.invalid-period"
+              },
+              "detail": {
+                "const": "Set until later than from."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Invalid absence period"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/absence/invalid-period"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemAbsenceOverlap": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.overlap"
+              },
+              "detail": {
+                "const": "Adjust the period so this person has no overlapping absence."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Absence period overlaps"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/absence/overlap"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemAbsenceSelfCover": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.self-cover"
+              },
+              "detail": {
+                "const": "Choose a different staff member as cover."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Absence self-cover not allowed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/absence/self-cover"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemAuthenticationRefused": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "authentication.refused"
+              },
+              "detail": {
+                "const": "The bearer credential is missing, invalid, or expired. Sign in again."
+              },
+              "status": {
+                "const": 401
+              },
+              "title": {
+                "const": "Authentication refused"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/authentication/refused"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemCursorExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cursor.expired"
+              },
+              "detail": {
+                "const": "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Cursor expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/cursor/expired"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemCursorInvalid": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cursor.invalid"
+              },
+              "detail": {
+                "const": "The cursor is invalid for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Cursor invalid"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/cursor/invalid"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemIdempotencyExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "idempotency.expired"
+              },
+              "detail": {
+                "const": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Idempotency window expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/idempotency/expired"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemIdempotencyKeyReused": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "idempotency.key-reused"
+              },
+              "detail": {
+                "const": "This idempotency key was used for a different request."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Idempotency key reused"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/idempotency/key-reused"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemOperationNotAuthorized": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "operation.not-authorized"
+              },
+              "detail": {
+                "const": "Your current Casework authority does not allow this operation."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Operation not authorized"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/operation/not-authorized"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemPreconditionFailed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "precondition.failed"
+              },
+              "detail": {
+                "const": "The item or directory changed since you loaded it. Reload and try again."
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Precondition failed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/precondition/failed"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemPreconditionRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "precondition.required"
+              },
+              "detail": {
+                "const": "This mutation requires the revision that you loaded."
+              },
+              "status": {
+                "const": 428
+              },
+              "title": {
+                "const": "Precondition required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/precondition/required"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemProfileNotAuthorized": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "profile.not-authorized"
+              },
+              "detail": {
+                "const": "The selected Casework profile does not authorize this request."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Profile not authorized"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/profile/not-authorized"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemProfileNotHuman": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "profile.not-human"
+              },
+              "detail": {
+                "const": "This action is reserved for a human session."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Human session required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/profile/not-human"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRequestBodyTooLarge": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.body-too-large"
+              },
+              "detail": {
+                "const": "The request body exceeds the one MiB limit."
+              },
+              "status": {
+                "const": 413
+              },
+              "title": {
+                "const": "Request body too large"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/request/body-too-large"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRequestInvalid": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.invalid"
+              },
+              "detail": {
+                "const": "The Casework request is invalid."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Invalid request"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/request/invalid"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRequestLimitOutOfRange": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.limit-out-of-range"
+              },
+              "detail": {
+                "const": "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Page size out of range"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/request/limit-out-of-range"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRequestNotFound": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.not-found"
+              },
+              "detail": {
+                "const": "The requested Casework route does not exist."
+              },
+              "status": {
+                "const": 404
+              },
+              "title": {
+                "const": "Route not found"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/request/not-found"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRequestUnprocessable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.unprocessable"
+              },
+              "detail": {
+                "const": "The request body does not match the Casework contract."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Request could not be processed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/request/unprocessable"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRequestUnsupportedMediaType": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.unsupported-media-type"
+              },
+              "detail": {
+                "const": "Send a JSON request body with Content-Type application/json."
+              },
+              "status": {
+                "const": 415
+              },
+              "title": {
+                "const": "Unsupported media type"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/request/unsupported-media-type"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemReviewInitiatorExcluded": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.initiator-excluded"
+              },
+              "detail": {
+                "const": "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Review initiator excluded"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/review/initiator-excluded"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemReviewInitiatorRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.initiator-required"
+              },
+              "detail": {
+                "const": "This review policy excludes the person who submitted the request, so the request must name its initiator."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Review initiator required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/review/initiator-required"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemReviewPolicyMismatch": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.policy-mismatch"
+              },
+              "detail": {
+                "const": "The expected review policy binding does not match the active policy."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Review policy mismatch"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/review/policy-mismatch"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemReviewResultExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.result-expired"
+              },
+              "detail": {
+                "const": "The retained review result is no longer available. Reconcile through the producer's retained source correlation."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Review result expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/review/result-expired"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemReviewSubmissionConflict": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.submission-conflict"
+              },
+              "detail": {
+                "const": "The same producer, source subject, version, and policy were already submitted with different canonical content."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Review submission conflict"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/review/submission-conflict"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemReviewTaskNotHeld": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.task-not-held"
+              },
+              "detail": {
+                "const": "Claim the review task before deciding it, and decide only while the claim remains current."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Review task not held"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/review/task-not-held"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemRuntimeFailure": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "runtime.failure"
+              },
+              "detail": {
+                "const": "Casework could not complete the request."
+              },
+              "status": {
+                "const": 500
+              },
+              "title": {
+                "const": "Casework runtime failure"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/runtime/failure"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemServiceUnavailable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "service.unavailable"
+              },
+              "detail": {
+                "const": "Casework storage is unavailable. Try again after the service recovers."
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Casework service unavailable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/service/unavailable"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemSourceBadGateway": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source.bad-gateway"
+              },
+              "detail": {
+                "const": "The source returned a response that does not match its registered contract."
+              },
+              "status": {
+                "const": 502
+              },
+              "title": {
+                "const": "Invalid source response"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/source/bad-gateway"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemSourceProfileNotApplicable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source-profile.not-applicable"
+              },
+              "detail": {
+                "const": "Omit the Registry-Source-Profile header for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Source profile not applicable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/source-profile/not-applicable"
+              }
+            }
+          }
+        ]
+      },
+      "ReviewProblemSourceProfileRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source-profile.required"
+              },
+              "detail": {
+                "const": "Send the Registry-Source-Profile header to select the source profile for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Source profile required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-review/source-profile/required"
+              }
+            }
+          }
+        ]
+      },
       "ReviewProducerPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -5394,7 +6200,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -5655,7 +6461,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -5916,7 +6722,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -6202,7 +7008,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -6570,7 +7376,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -6929,7 +7735,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -7307,7 +8113,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -7674,7 +8480,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -8032,7 +8838,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -8390,7 +9196,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -8748,7 +9554,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -9107,7 +9913,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -9464,7 +10270,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -9748,7 +10554,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -10081,7 +10887,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -10461,7 +11267,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -10745,7 +11551,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -11006,7 +11812,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -11281,9 +12087,9 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
-            "name": "registry-casework-profile",
+            "name": "registry-review-profile",
             "required": true,
             "schema": {
               "maxLength": 128,
@@ -11353,13 +12159,13 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemRequestInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileNotApplicable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileRequired"
                     }
                   ]
                 }
@@ -11367,14 +12173,14 @@
             },
             "description": "Problem: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
-              "Registry-Casework-Validation-Path": {
+              "Registry-Review-Validation-Path": {
                 "description": "Bounded value-free JSON path; present together with the validation reason.",
                 "schema": {
                   "maxLength": 256,
                   "type": "string"
                 }
               },
-              "Registry-Casework-Validation-Reason": {
+              "Registry-Review-Validation-Reason": {
                 "description": "Closed value-free validation category; present together with the validation path.",
                 "schema": {
                   "$ref": "#/components/schemas/ReviewValidationReason"
@@ -11389,7 +12195,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "$ref": "#/components/schemas/ReviewProblemAuthenticationRefused"
                 }
               }
             },
@@ -11411,16 +12217,16 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemOperationNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotHuman"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
+                      "$ref": "#/components/schemas/ReviewProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
@@ -11437,7 +12243,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                  "$ref": "#/components/schemas/ReviewProblemRequestNotFound"
                 }
               }
             },
@@ -11454,16 +12260,16 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                      "$ref": "#/components/schemas/ReviewProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
+                      "$ref": "#/components/schemas/ReviewProblemReviewPolicyMismatch"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                      "$ref": "#/components/schemas/ReviewProblemReviewSubmissionConflict"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                      "$ref": "#/components/schemas/ReviewProblemReviewTaskNotHeld"
                     }
                   ]
                 }
@@ -11482,10 +12288,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                      "$ref": "#/components/schemas/ReviewProblemIdempotencyExpired"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                      "$ref": "#/components/schemas/ReviewProblemReviewResultExpired"
                     }
                   ]
                 }
@@ -11502,7 +12308,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                  "$ref": "#/components/schemas/ReviewProblemPreconditionFailed"
                 }
               }
             },
@@ -11517,7 +12323,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                  "$ref": "#/components/schemas/ReviewProblemRequestBodyTooLarge"
                 }
               }
             },
@@ -11532,7 +12338,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnsupportedMediaType"
                 }
               }
             },
@@ -11549,22 +12355,22 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceCoverCycle"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceCoverCycle"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceInvalidPeriod"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceInvalidPeriod"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceOverlap"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceOverlap"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceSelfCover"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceSelfCover"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                      "$ref": "#/components/schemas/ReviewProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                      "$ref": "#/components/schemas/ReviewProblemReviewInitiatorRequired"
                     }
                   ]
                 }
@@ -11581,7 +12387,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                  "$ref": "#/components/schemas/ReviewProblemPreconditionRequired"
                 }
               }
             },
@@ -11596,7 +12402,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                  "$ref": "#/components/schemas/ReviewProblemRuntimeFailure"
                 }
               }
             },
@@ -11611,7 +12417,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "$ref": "#/components/schemas/ReviewProblemSourceBadGateway"
                 }
               }
             },
@@ -11626,7 +12432,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                  "$ref": "#/components/schemas/ReviewProblemServiceUnavailable"
                 }
               }
             },
@@ -11666,9 +12472,9 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
-            "name": "registry-casework-profile",
+            "name": "registry-review-profile",
             "required": true,
             "schema": {
               "maxLength": 128,
@@ -11711,19 +12517,19 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemCursorInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemRequestInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                      "$ref": "#/components/schemas/ReviewProblemRequestLimitOutOfRange"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileNotApplicable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileRequired"
                     }
                   ]
                 }
@@ -11740,7 +12546,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "$ref": "#/components/schemas/ReviewProblemAuthenticationRefused"
                 }
               }
             },
@@ -11762,13 +12568,13 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemOperationNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotHuman"
                     }
                   ]
                 }
@@ -11785,7 +12591,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                  "$ref": "#/components/schemas/ReviewProblemRequestNotFound"
                 }
               }
             },
@@ -11802,10 +12608,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorExpired"
+                      "$ref": "#/components/schemas/ReviewProblemCursorExpired"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                      "$ref": "#/components/schemas/ReviewProblemReviewResultExpired"
                     }
                   ]
                 }
@@ -11822,7 +12628,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                  "$ref": "#/components/schemas/ReviewProblemRequestBodyTooLarge"
                 }
               }
             },
@@ -11837,7 +12643,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnsupportedMediaType"
                 }
               }
             },
@@ -11852,7 +12658,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnprocessable"
                 }
               }
             },
@@ -11867,7 +12673,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                  "$ref": "#/components/schemas/ReviewProblemRuntimeFailure"
                 }
               }
             },
@@ -11882,7 +12688,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "$ref": "#/components/schemas/ReviewProblemSourceBadGateway"
                 }
               }
             },
@@ -11897,7 +12703,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                  "$ref": "#/components/schemas/ReviewProblemServiceUnavailable"
                 }
               }
             },
@@ -11938,9 +12744,9 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
-            "name": "registry-casework-profile",
+            "name": "registry-review-profile",
             "required": true,
             "schema": {
               "maxLength": 128,
@@ -12005,13 +12811,13 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemRequestInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileNotApplicable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileRequired"
                     }
                   ]
                 }
@@ -12028,7 +12834,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "$ref": "#/components/schemas/ReviewProblemAuthenticationRefused"
                 }
               }
             },
@@ -12050,16 +12856,16 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemOperationNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotHuman"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
+                      "$ref": "#/components/schemas/ReviewProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
@@ -12076,7 +12882,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                  "$ref": "#/components/schemas/ReviewProblemRequestNotFound"
                 }
               }
             },
@@ -12093,16 +12899,16 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                      "$ref": "#/components/schemas/ReviewProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
+                      "$ref": "#/components/schemas/ReviewProblemReviewPolicyMismatch"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                      "$ref": "#/components/schemas/ReviewProblemReviewSubmissionConflict"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                      "$ref": "#/components/schemas/ReviewProblemReviewTaskNotHeld"
                     }
                   ]
                 }
@@ -12121,10 +12927,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                      "$ref": "#/components/schemas/ReviewProblemIdempotencyExpired"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                      "$ref": "#/components/schemas/ReviewProblemReviewResultExpired"
                     }
                   ]
                 }
@@ -12141,7 +12947,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                  "$ref": "#/components/schemas/ReviewProblemPreconditionFailed"
                 }
               }
             },
@@ -12156,7 +12962,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                  "$ref": "#/components/schemas/ReviewProblemRequestBodyTooLarge"
                 }
               }
             },
@@ -12171,7 +12977,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnsupportedMediaType"
                 }
               }
             },
@@ -12188,22 +12994,22 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceCoverCycle"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceCoverCycle"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceInvalidPeriod"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceInvalidPeriod"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceOverlap"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceOverlap"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceSelfCover"
+                      "$ref": "#/components/schemas/ReviewProblemAbsenceSelfCover"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                      "$ref": "#/components/schemas/ReviewProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                      "$ref": "#/components/schemas/ReviewProblemReviewInitiatorRequired"
                     }
                   ]
                 }
@@ -12220,7 +13026,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                  "$ref": "#/components/schemas/ReviewProblemPreconditionRequired"
                 }
               }
             },
@@ -12235,7 +13041,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                  "$ref": "#/components/schemas/ReviewProblemRuntimeFailure"
                 }
               }
             },
@@ -12250,7 +13056,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "$ref": "#/components/schemas/ReviewProblemSourceBadGateway"
                 }
               }
             },
@@ -12265,7 +13071,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                  "$ref": "#/components/schemas/ReviewProblemServiceUnavailable"
                 }
               }
             },
@@ -12305,7 +13111,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -12589,7 +13395,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -12895,7 +13701,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -13275,9 +14081,9 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
-            "name": "registry-casework-profile",
+            "name": "registry-review-profile",
             "required": true,
             "schema": {
               "maxLength": 128,
@@ -13328,19 +14134,19 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemCursorInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemRequestInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                      "$ref": "#/components/schemas/ReviewProblemRequestLimitOutOfRange"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileNotApplicable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileRequired"
                     }
                   ]
                 }
@@ -13357,7 +14163,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "$ref": "#/components/schemas/ReviewProblemAuthenticationRefused"
                 }
               }
             },
@@ -13379,13 +14185,13 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemOperationNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotHuman"
                     }
                   ]
                 }
@@ -13418,7 +14224,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                  "$ref": "#/components/schemas/ReviewProblemRequestBodyTooLarge"
                 }
               }
             },
@@ -13433,7 +14239,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnsupportedMediaType"
                 }
               }
             },
@@ -13448,7 +14254,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnprocessable"
                 }
               }
             },
@@ -13463,7 +14269,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                  "$ref": "#/components/schemas/ReviewProblemRuntimeFailure"
                 }
               }
             },
@@ -13478,7 +14284,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "$ref": "#/components/schemas/ReviewProblemSourceBadGateway"
                 }
               }
             },
@@ -13493,7 +14299,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                  "$ref": "#/components/schemas/ReviewProblemServiceUnavailable"
                 }
               }
             },
@@ -13533,9 +14339,9 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
-            "name": "registry-casework-profile",
+            "name": "registry-review-profile",
             "required": true,
             "schema": {
               "maxLength": 128,
@@ -13589,19 +14395,19 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemCursorInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                      "$ref": "#/components/schemas/ReviewProblemRequestInvalid"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemRequestLimitOutOfRange"
+                      "$ref": "#/components/schemas/ReviewProblemRequestLimitOutOfRange"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileNotApplicable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                      "$ref": "#/components/schemas/ReviewProblemSourceProfileRequired"
                     }
                   ]
                 }
@@ -13618,7 +14424,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "$ref": "#/components/schemas/ReviewProblemAuthenticationRefused"
                 }
               }
             },
@@ -13640,13 +14446,13 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemOperationNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotAuthorized"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                      "$ref": "#/components/schemas/ReviewProblemProfileNotHuman"
                     }
                   ]
                 }
@@ -13663,7 +14469,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                  "$ref": "#/components/schemas/ReviewProblemRequestNotFound"
                 }
               }
             },
@@ -13680,10 +14486,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorExpired"
+                      "$ref": "#/components/schemas/ReviewProblemCursorExpired"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                      "$ref": "#/components/schemas/ReviewProblemReviewResultExpired"
                     }
                   ]
                 }
@@ -13700,7 +14506,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                  "$ref": "#/components/schemas/ReviewProblemRequestBodyTooLarge"
                 }
               }
             },
@@ -13715,7 +14521,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnsupportedMediaType"
                 }
               }
             },
@@ -13730,7 +14536,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "$ref": "#/components/schemas/ReviewProblemRequestUnprocessable"
                 }
               }
             },
@@ -13745,7 +14551,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                  "$ref": "#/components/schemas/ReviewProblemRuntimeFailure"
                 }
               }
             },
@@ -13760,7 +14566,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "$ref": "#/components/schemas/ReviewProblemSourceBadGateway"
                 }
               }
             },
@@ -13775,7 +14581,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                  "$ref": "#/components/schemas/ReviewProblemServiceUnavailable"
                 }
               }
             },
@@ -13815,7 +14621,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -14230,7 +15036,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -14645,7 +15451,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -15060,7 +15866,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -15368,7 +16174,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -15686,7 +16492,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -15971,7 +16777,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -16362,7 +17168,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -16742,7 +17548,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -17027,7 +17833,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -17424,7 +18230,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -17815,7 +18621,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -18186,7 +18992,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -18462,7 +19268,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -18853,7 +19659,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -19233,7 +20039,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -19516,7 +20322,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -19906,7 +20712,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,
@@ -20261,7 +21067,7 @@
             }
           },
           {
-            "description": "The caller's exact governed Casework access profile.",
+            "description": "The caller's exact governed access profile for this protocol.",
             "in": "header",
             "name": "registry-casework-profile",
             "required": true,

@@ -407,7 +407,7 @@ def prepare_native(destination, environment=None):
 
 class Journey:
     def __init__(self, root, binaries, wait_seconds, build_manifest=None, authority_preflight=False,
-                 required_binaries=None):
+                 required_binaries=None, require_reviewed_notice_starter=True):
         self.root = root
         self.started_at = stamp()
         self.source_at_start = source_digest()
@@ -461,20 +461,22 @@ class Journey:
             env = f"export DYLD_FALLBACK_LIBRARY_PATH={shlex.quote(':'.join(dylibs))}\n" if sys.platform == "darwin" and dylibs else ""
             private(wrapper, "#!/bin/sh\n" + env + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
             wrapper.chmod(0o700)
-        starter = binaries / "reviewed-notice-input"
-        if not starter.is_file():
-            starter = binaries / "examples/reviewed-notice-input"
-        assert starter.is_file(), "build the reviewed-notice-input example before running this journey"
-        frozen = frozen_binaries / starter.name
-        shutil.copy2(starter, frozen)
-        frozen.chmod(0o500)
-        wrapper = self.bin / starter.name
-        private(wrapper, "#!/bin/sh\n" + env + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
-        wrapper.chmod(0o700)
-        self.reviewed_notice_starter_digest = file_digest(frozen)
+        self.reviewed_notice_starter_digest = None
+        if require_reviewed_notice_starter:
+            starter = binaries / "reviewed-notice-input"
+            if not starter.is_file():
+                starter = binaries / "examples/reviewed-notice-input"
+            assert starter.is_file(), "build the reviewed-notice-input example before running this journey"
+            frozen = frozen_binaries / starter.name
+            shutil.copy2(starter, frozen)
+            frozen.chmod(0o500)
+            wrapper = self.bin / starter.name
+            private(wrapper, "#!/bin/sh\n" + env + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
+            wrapper.chmod(0o700)
+            self.reviewed_notice_starter_digest = file_digest(frozen)
         if self.build_provenance:
-            assert self.build_provenance["binarySha256"] == self.binary_digests, "native binaries differ from build evidence"
-            if "helperSha256" in self.build_provenance:
+            assert all(self.build_provenance["binarySha256"].get(name) == digest for name, digest in self.binary_digests.items()), "native binaries differ from build evidence"
+            if require_reviewed_notice_starter and "helperSha256" in self.build_provenance:
                 assert self.build_provenance["helperSha256"]["reviewed-notice-input"] == self.reviewed_notice_starter_digest, "reviewed-notice-input differs from build evidence"
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env.get("PATH", "")
         self.env["REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS"] = "1"
@@ -897,8 +899,8 @@ class Journey:
         self.ctl("coordinatorctl", "--runtime-config", runtime, "plan")
         applied = self.ctl("coordinatorctl", "--runtime-config", runtime, "apply")
         assert applied["activation"]["roleMode"] == "split", "serving role must not migrate or activate"
-        assert [(item["workflow"], item["change"]) for item in applied["workflows"]] == [
-            (flow_id, "install") for flow_id, _ in projects]
+        assert [(item["workflow"], item["change"]) for item in applied["workflows"]] == sorted(
+            (flow_id, "install") for flow_id, _ in projects)
         url = f"http://127.0.0.1:{port}"
         child = self.spawn("coordinator", runtime, label)
         self.ready(child, url)

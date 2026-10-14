@@ -36,7 +36,9 @@ use uuid::Uuid;
 
 mod readiness;
 mod recovery;
+mod review_provider;
 pub use recovery::DoctorStatus;
+pub use review_provider::ReviewLookup;
 
 enum InspectionBinding<'a> {
     RecordedOrRuntime(&'a crate::runtime::RuntimeConfig),
@@ -46,7 +48,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 3;
+pub(crate) const SCHEMA_VERSION: i32 = 4;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -758,7 +760,8 @@ impl Store {
             CREATE TABLE {0}.runs (
             run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
             workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
-            snapshot jsonb, input jsonb, outputs jsonb,
+            snapshot jsonb, input jsonb, outputs jsonb, review jsonb, review_source text, event_binding text,
+            review_available_until timestamptz, review_completed_at timestamptz,
             binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
             outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
             cancel_requested boolean NOT NULL DEFAULT false, authored_cancel_requested boolean NOT NULL DEFAULT false,
@@ -970,6 +973,8 @@ impl Store {
             binding_digest,
             None,
             &definition.digest,
+            None,
+            None,
         )
         .await
     }
@@ -987,7 +992,10 @@ impl Store {
         binding_digest: &str,
         runtime: Option<&crate::runtime::RuntimeConfig>,
         expected_revision: &str,
+        review: Option<&crate::review_provider::ReviewAdmission>,
+        event: Option<(&str, &crate::event_trigger::EventTrigger)>,
     ) -> Result<Uuid> {
+        let event_binding = event.map(|(binding, _)| binding);
         if producer.is_empty()
             || key.is_empty()
             || producer.len() > 256
@@ -1023,6 +1031,11 @@ impl Store {
                 key.as_bytes(),
             ],
         );
+        let event_binding = event_binding.map(|binding| {
+            self.security
+                .keys
+                .commitment("event", &[identity.as_bytes(), binding.as_bytes()])
+        });
         let input_digest = self
             .security
             .keys
@@ -1057,7 +1070,7 @@ impl Store {
         if let Some(row) = tx
             .query_opt(
                 &format!(
-                    "SELECT run_id,input_digest,definition_digest FROM {}.runs WHERE start_identity=$1",
+                    "SELECT run_id,input_digest,definition_digest,event_binding FROM {}.runs WHERE start_identity=$1",
                     self.namespace
                 ),
                 &[&identity],
@@ -1065,7 +1078,10 @@ impl Store {
             .await
             .map_err(unavailable)?
         {
-            if row.get::<_, String>(1) != input_digest || row.get::<_, String>(2) != expected_revision {
+            if (event_binding.is_none() && row.get::<_, String>(1) != input_digest)
+                || row.get::<_, Option<String>>(3).as_deref() != event_binding.as_deref()
+                || (event_binding.is_none() && row.get::<_, String>(2) != expected_revision)
+            {
                 return Err(refused(
                     "start-conflict",
                     "this producer, workflow and idempotency key already names different admitted work",
@@ -1078,9 +1094,28 @@ impl Store {
         if expected_revision != definition.digest {
             return Err(refused("workflow-revision-mismatch", "the expected Workflow revision is not active; discover the active contract before starting new work"));
         }
+        if let Some(review) = review {
+            if review.request.result_constraints.is_some() {
+                return Err(refused("request.invalid","this Review provider does not declare structured results; omit resultConstraints").at("request","$.resultConstraints"));
+            }
+            if crate::review_provider::policy_binding(&definition.workflow, &definition.digest)?
+                .as_ref()
+                != Some(&review.request.policy)
+            {
+                return Err(refused(
+                    "workflow-revision-mismatch",
+                    "the expected Review policy is not active",
+                ));
+            }
+        }
         if let Some(runtime) = runtime {
             self.check_live_bindings(&tx, runtime).await?;
         }
+        let input = if let Some((_, trigger)) = event {
+            trigger.map(definition, &input)?
+        } else {
+            input
+        };
         definition.validate_input(&input)?;
         self.require_unheld(&tx).await?;
         let now: DateTime<Utc> = tx
@@ -1094,7 +1129,39 @@ impl Store {
         let sealed_snapshot = self.seal(run, "snapshot", "", &snapshot)?;
         let sealed_input = self.seal(run, "input", "", &input)?;
         let sealed_outputs = self.seal(run, "outputs", "", &BTreeMap::<String, Value>::new())?;
-        tx.execute(&format!("INSERT INTO {}.runs (run_id,start_identity,input_digest,workflow_id,workflow_version,definition_digest,snapshot,input,binding_digest,step,admitted_at,deadline_at,outputs,owner_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)", self.namespace), &[&run, &identity, &input_digest, &definition.workflow.id, &definition.workflow.version, &definition.digest, &sealed_snapshot, &sealed_input, &binding_digest, &definition.workflow.start, &now, &deadline, &sealed_outputs, &producer]).await.map_err(unavailable)?;
+        let retained_review = review.map(|review| review.retain(run)).transpose()?;
+        let review_source = retained_review.as_ref().map(|review| {
+            self.security.keys.commitment(
+                "review-source",
+                &[
+                    self.security.database_id.as_bytes(),
+                    producer.as_bytes(),
+                    review.accepted.subject.source.as_bytes(),
+                ],
+            )
+        });
+        let sealed_review = retained_review
+            .as_ref()
+            .map(|review| self.seal(run, "review", "", review))
+            .transpose()?;
+        // Before a terminal read seals the exact result, this upper bound
+        // prevents retention from erasing any result still promised by policy.
+        let review_until = retained_review
+            .as_ref()
+            .map(|review| {
+                deadline
+                    .checked_add_signed(chrono::Duration::seconds(i64::from(
+                        review.policy.result_retention_seconds,
+                    )))
+                    .ok_or_else(|| {
+                        refused(
+                            "admission-invalid",
+                            "Review retention exceeds the supported clock",
+                        )
+                    })
+            })
+            .transpose()?;
+        tx.execute(&format!("INSERT INTO {}.runs (run_id,start_identity,input_digest,workflow_id,workflow_version,definition_digest,snapshot,input,binding_digest,step,admitted_at,deadline_at,outputs,owner_hash,review,review_available_until,event_binding,review_source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)", self.namespace), &[&run, &identity, &input_digest, &definition.workflow.id, &definition.workflow.version, &definition.digest, &sealed_snapshot, &sealed_input, &binding_digest, &definition.workflow.start, &now, &deadline, &sealed_outputs, &producer,&sealed_review,&review_until,&event_binding,&review_source]).await.map_err(unavailable)?;
         enqueue(
             &tx,
             &self.table,

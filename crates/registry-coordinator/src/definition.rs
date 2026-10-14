@@ -31,7 +31,8 @@ use crate::{
 pub(crate) const API_VERSION: &str =
     "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1";
 const ADAPTER_ABI: &str = "coordinator/product-operations/v1";
-const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
+const SCHEMA_ABI: &str =
+    "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid+numeric-widths/v2";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 /// Maximum canonical snapshot size, shared by authoring, restore and packaging.
 pub(crate) const MAX_SNAPSHOT_BYTES: usize = 393_216;
@@ -67,6 +68,10 @@ pub struct Workflow {
     pub start: String,
     pub steps: BTreeMap<String, Step>,
     pub outcomes: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::review_provider::ReviewPolicy>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub event_triggers: BTreeMap<String, crate::event_trigger::EventTrigger>,
 }
 
 /// How a step computes its value: a pure function over references, an
@@ -502,7 +507,8 @@ impl Definition {
         .map_err(|findings| crate::authoring::placed(&document, findings))?;
         // Authoring holds a project to the static mapping checks; a restored
         // snapshot is not, so an admitted run never fails on a stricter check.
-        let findings = crate::mapping_check::check(&definition.workflow);
+        let mut findings = crate::mapping_check::check(&definition.workflow);
+        findings.extend(crate::event_trigger::mapping_findings(&definition.workflow));
         if !findings.is_empty() {
             return Err(crate::authoring::placed(&document, findings));
         }
@@ -863,6 +869,61 @@ impl Definition {
         self.evaluate_as(name, input, outputs, true)
     }
 
+    pub(crate) fn evaluate_mapping(
+        &self,
+        mapping: &Mapping,
+        input: &Value,
+        field: &str,
+    ) -> Result<Value> {
+        self.check_integrity()?;
+        self.map_value(mapping, input, &BTreeMap::new(), field, false)
+    }
+
+    fn map_value(
+        &self,
+        mapping: &Mapping,
+        input: &Value,
+        outputs: &BTreeMap<String, Value>,
+        field: &str,
+        synthetic: bool,
+    ) -> Result<Value> {
+        Ok(match mapping {
+            Mapping::Function { function, inputs } => {
+                let arguments = inputs
+                    .iter()
+                    .map(|(name, reference)| {
+                        resolve(reference, input, outputs)
+                            .map(|value| (name.clone(), value.clone()))
+                            .map_err(|error| {
+                                error.at("workflow.yaml", format!("{field}.inputs.{name}"))
+                            })
+                    })
+                    .collect::<Result<serde_json::Map<_, _>>>()?;
+                self.functions
+                    .evaluate(function, &Value::Object(arguments), synthetic)
+                    .map_err(|error| error.at("workflow.yaml", field))?
+            }
+            Mapping::Fields { fields } => {
+                let members = fields
+                    .iter()
+                    .map(|(member, reference)| {
+                        resolve(reference, input, outputs)
+                            .map(|value| (member.clone(), value.clone()))
+                            .map_err(|error| {
+                                error.at("workflow.yaml", format!("{field}.fields.{member}"))
+                            })
+                    })
+                    .collect::<Result<serde_json::Map<_, _>>>()?;
+                let value = Value::Object(members);
+                check_value(&value).map_err(|error| error.at("workflow.yaml", field))?;
+                value
+            }
+            Mapping::Reference(reference) => resolve(reference, input, outputs)
+                .map_err(|error| error.at("workflow.yaml", field))?
+                .clone(),
+        })
+    }
+
     fn evaluate_as(
         &self,
         name: &str,
@@ -878,41 +939,7 @@ impl Definition {
             .ok_or_else(|| fail("mapping.unknown"))?;
         let mapping = step.mapping().ok_or_else(|| fail("mapping.unknown"))?;
         let field = format!("steps.{name}.{}", step.role());
-        let value = match mapping {
-            Mapping::Function { function, inputs } => {
-                let arguments = inputs
-                    .iter()
-                    .map(|(name, reference)| {
-                        resolve(reference, input, outputs)
-                            .map(|value| (name.clone(), value.clone()))
-                            .map_err(|error| {
-                                error.at("workflow.yaml", format!("{field}.inputs.{name}"))
-                            })
-                    })
-                    .collect::<Result<serde_json::Map<_, _>>>()?;
-                self.functions
-                    .evaluate(function, &Value::Object(arguments), synthetic)
-                    .map_err(|error| error.at("workflow.yaml", &field))?
-            }
-            Mapping::Fields { fields } => {
-                let members = fields
-                    .iter()
-                    .map(|(member, reference)| {
-                        resolve(reference, input, outputs)
-                            .map(|value| (member.clone(), value.clone()))
-                            .map_err(|error| {
-                                error.at("workflow.yaml", format!("{field}.fields.{member}"))
-                            })
-                    })
-                    .collect::<Result<serde_json::Map<_, _>>>()?;
-                let value = Value::Object(members);
-                check_value(&value).map_err(|error| error.at("workflow.yaml", &field))?;
-                value
-            }
-            Mapping::Reference(reference) => resolve(reference, input, outputs)
-                .map_err(|error| error.at("workflow.yaml", &field))?
-                .clone(),
-        };
+        let value = self.map_value(mapping, input, outputs, &field, synthetic)?;
         // Name the class of the synthetic value, never the value, and what
         // the step expected instead.
         let refused = |error: CoordinatorError, expected: &str| {
@@ -1137,6 +1164,11 @@ fn semantic_revision(snapshot: &Snapshot) -> Result<String> {
             }
         }
     }
+    for trigger in flow.event_triggers.values() {
+        if let Mapping::Function { function, .. } = &trigger.input {
+            used_functions.insert(function.as_str());
+        }
+    }
     let operations = used_operations
         .into_iter()
         .map(|name| (name, &flow.operations[name].revision))
@@ -1150,9 +1182,17 @@ fn semantic_revision(snapshot: &Snapshot) -> Result<String> {
                 .ok_or_else(|| fail("definition.abi"))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let semantic = serde_json::json!({"id":flow.id,"input":semantic_schema(&flow.input),"deadline":flow.deadline,"start":flow.start,
+    let mut semantic = serde_json::json!({"id":flow.id,"input":semantic_schema(&flow.input),"deadline":flow.deadline,"start":flow.start,
         "steps":flow.steps,"outcomes":flow.outcomes.iter().map(|(name,schema)| (name,semantic_schema(schema))).collect::<BTreeMap<_,_>>(),"operations":operations,"functions":functions,
         "adapterAbi":snapshot.adapter_abi,"interpreterAbi":snapshot.interpreter_abi,"schemaAbi":snapshot.schema_abi,"valueLimits":crate::functions::value_limits()});
+    if !flow.event_triggers.is_empty() {
+        semantic["eventTriggers"] =
+            serde_json::to_value(&flow.event_triggers).map_err(|_| fail("definition.canonical"))?;
+    }
+    if let Some(review) = &flow.review {
+        semantic["review"] =
+            serde_json::to_value(review).map_err(|_| fail("definition.canonical"))?;
+    }
     let bytes = registry_platform_canonical_json::canonicalize_json(&semantic)
         .map_err(|_| fail("definition.canonical"))?;
     Ok(sha256_uri(&bytes))
@@ -1258,7 +1298,12 @@ pub(crate) fn offered(product: &str) -> String {
 /// graph is walked only once start and every transition name a declared
 /// step, since reachability and cycles mean nothing across a broken edge.
 fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
-    let mut findings = Vec::new();
+    let mut findings = crate::event_trigger::workflow_findings(flow);
+    if let Some(review) = &flow.review {
+        if let Err(error) = review.check(flow) {
+            findings.push(error);
+        }
+    }
     for (field, size, minimum, maximum) in [
         ("steps", flow.steps.len(), 1, 64),
         ("connections", flow.connections.len(), 0, 16),
@@ -1792,7 +1837,7 @@ fn cycle(flow: &Workflow) -> CoordinatorError {
 /// Check one mapping's form for its step, its bounds, and that each step
 /// reference names a call or wait whose output every route to this step
 /// carries.
-fn validate_mapping(
+pub(crate) fn validate_mapping(
     flow: &Workflow,
     name: &str,
     mapping: &Mapping,
@@ -1972,6 +2017,10 @@ pub(crate) fn compile_schema(schema: &Value) -> Result<JSONSchema> {
     if !(schema.is_object() || schema.is_boolean()) || !local(schema, 0) {
         return Err(fail("definition.schema"));
     }
+    // Numeric width annotations from owner-generated contracts become explicit
+    // validation bounds without changing the governed schema or its digest.
+    let mut validation = schema.clone();
+    crate::contracts::bound_numbers(&mut validation);
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
@@ -1980,7 +2029,7 @@ pub(crate) fn compile_schema(schema: &Value) -> Result<JSONSchema> {
         // Keep the authored 2020-12 boundary explicit and versioned.
         .with_format("uuid", |value| uuid::Uuid::parse_str(value).is_ok())
         .with_resolver(NoRemoteSchemas)
-        .compile(schema)
+        .compile(&validation)
         .map_err(|_| fail("definition.schema"))
 }
 

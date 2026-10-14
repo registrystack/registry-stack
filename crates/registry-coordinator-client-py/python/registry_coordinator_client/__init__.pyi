@@ -16,11 +16,17 @@ class StartRunRequest(TypedDict):
     workflowRevision: str
     input: JsonValue
 
+class PolicyBinding(TypedDict):
+    id: str
+    version: str
+    digest: str
+
 class WorkflowContract(TypedDict):
     workflow: str
     workflowRevision: str
     input: JsonValue
     outcomes: dict[str, JsonValue]
+    reviewPolicy: PolicyBinding | None
 
 class RunStatus(TypedDict):
     runId: RunId

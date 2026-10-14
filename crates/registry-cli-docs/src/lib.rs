@@ -901,10 +901,7 @@ mod tests {
         }));
 
         let dev = find_command(&catalog.binaries, "evidencectl dev");
-        assert_eq!(
-            dev.usage,
-            "evidencectl dev [OPTIONS] <COMMAND>"
-        );
+        assert_eq!(dev.usage, "evidencectl dev [OPTIONS] <COMMAND>");
         assert_eq!(
             find_command(&catalog.binaries, "evidencectl dev start").usage,
             "evidencectl dev start [OPTIONS] [PROJECT]"

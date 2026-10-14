@@ -422,6 +422,16 @@ fn snapshots_refuse_unsupported_abi_duplicate_fields_and_mutation() {
     let mut definition = fixture();
     let snapshot = definition.snapshot().unwrap();
     let mut value: Value = serde_json::from_str(&snapshot).unwrap();
+    assert_eq!(
+        value["schemaAbi"],
+        "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid+numeric-widths/v2"
+    );
+    value["schemaAbi"] = json!("coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1");
+    assert_eq!(
+        refused(Definition::from_snapshot(&value.to_string())).code,
+        "definition.abi"
+    );
+    value = serde_json::from_str(&snapshot).unwrap();
     value["interpreterAbi"] = json!("unknown");
     assert_eq!(
         refused(Definition::from_snapshot(&value.to_string())).code,

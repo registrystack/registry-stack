@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "products/casework/generated/registry-casework.openapi.json"
 PROFILE = "registry-casework-profile"
+REVIEW_PROFILE = "registry-review-profile"
+REVIEW_PROBLEM_BASE = "https://id.registrystack.org/problems/registry-review/"
 SOURCE_PROFILE = "registry-source-profile"
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class Endpoint:
     idempotency: bool = False
     public: bool = False
     service: bool = False
+    review: bool = False
 
 # Transport metadata only. DTO shapes and all statuses/problems come from Rust.
 ENDPOINTS = [
@@ -38,14 +41,14 @@ ENDPOINTS = [
     Endpoint("GET","/v1/casework","describeCasework","Description"),
     Endpoint("GET","/v1/review-policies","listReviewPolicies","ReviewPolicyClosureList"),
     Endpoint("GET","/v1/review-policies/{policy_id}","getReviewPolicy","ReviewPolicyClosure"),
-    Endpoint("POST","/v1/review-requests","createOrRecoverReviewRequest","ReviewRequestAccepted","ReviewCreateRequest",idempotency=True),
-    Endpoint("GET","/v1/review-requests/{request_id}","getReviewRequest","ReviewRequestView"),
-    Endpoint("GET","/v1/review-requests/{request_id}/result","getReviewResult","ReviewResult"),
-    Endpoint("POST","/v1/review-requests/{request_id}/cancel","cancelReviewRequest","ReviewCancelResponse","ReviewCancelRequest",idempotency=True),
+    Endpoint("POST","/v1/review-requests","createOrRecoverReviewRequest","ReviewRequestAccepted","ReviewCreateRequest",idempotency=True,review=True),
+    Endpoint("GET","/v1/review-requests/{request_id}","getReviewRequest","ReviewRequestView",review=True),
+    Endpoint("GET","/v1/review-requests/{request_id}/result","getReviewResult","ReviewResult",review=True),
+    Endpoint("POST","/v1/review-requests/{request_id}/cancel","cancelReviewRequest","ReviewCancelResponse","ReviewCancelRequest",idempotency=True,review=True),
     Endpoint("GET","/v1/review-requests/{request_id}/history","getReviewHistory","ReviewHistoryPage",query="page",source=True),
     Endpoint("GET","/v1/review-requests/{request_id}/clocks","getReviewClocks","ReviewClockOccurrenceList",source=True),
     Endpoint("POST","/v1/review-requests/{request_id}/notes","addReviewNote","ReviewHistoryEntry","ReviewNoteRequest",source=True,idempotency=True),
-    Endpoint("GET","/v1/review-results","listReviewResults","ReviewResultFeedPage",query="page"),
+    Endpoint("GET","/v1/review-results","listReviewResults","ReviewResultFeedPage",query="page",review=True),
     Endpoint("GET","/v1/review-tasks","listReviewTasks","ReviewTaskPage",query="ReviewStaffingQuery",source=True),
     Endpoint("GET","/v1/review-tasks/next","getNextReviewTask","OptionalReviewTask",query="ReviewStaffingQuery",source=True),
     Endpoint("GET","/v1/review-tasks/holdings","getReviewTaskHoldings","ReviewTaskPage",query="ReviewStaffingQuery",source=True),
@@ -138,24 +141,25 @@ def response(schema_name: str | None = None, description="Success") -> dict:
     if schema_name: value["content"]={"application/json":{"schema":ref(schema_name)}}
     return value
 
-def problem_component_name(code: str) -> str:
-    return "Problem" + "".join(part.title() for part in re.split(r"[.-]",code))
+def problem_component_name(code: str, review: bool = False) -> str:
+    return ("ReviewProblem" if review else "Problem") + "".join(part.title() for part in re.split(r"[.-]",code))
 
-def problem_schemas(entries: list[dict]) -> dict:
+def problem_schemas(entries: list[dict], review: bool = False) -> dict:
     text={"type":"string"}
     base=object_schema({"type":text,"title":text,"status":{"type":"integer"},"detail":text,"code":text,"traceId":text},["type","title","status","detail","code","traceId"])
     result={"Problem":base}
     for entry in entries:
-        result[problem_component_name(entry["code"]) ]={"allOf":[ref("Problem"),{"properties":{"type":{"const":entry["uri"]},"title":{"const":entry["title"]},"status":{"const":entry["httpStatuses"][0]},"detail":{"const":entry["description"]},"code":{"const":entry["code"]}}}]}
+        uri=REVIEW_PROBLEM_BASE+entry["code"].replace(".","/") if review else entry["uri"]
+        result[problem_component_name(entry["code"],review)]={"allOf":[ref("Problem"),{"properties":{"type":{"const":uri},"title":{"const":entry["title"]},"status":{"const":entry["httpStatuses"][0]},"detail":{"const":entry["description"]},"code":{"const":entry["code"]}}}]}
     return result
 
-def problem_responses(codes: set[str], catalog: dict) -> dict:
+def problem_responses(codes: set[str], catalog: dict, review: bool = False) -> dict:
     by_status={}
     for code in sorted(codes):
         entry=catalog[code];by_status.setdefault(entry["httpStatuses"][0],[]).append(entry)
     result={}
     for status,entries in sorted(by_status.items()):
-        variants=[ref(problem_component_name(entry["code"])) for entry in entries]
+        variants=[ref(problem_component_name(entry["code"],review)) for entry in entries]
         value=response(description="Problem: "+", ".join(entry["code"] for entry in entries))
         value["content"]={"application/problem+json":{"schema":variants[0] if len(variants)==1 else {"oneOf":variants}}}
         if status==401:value["headers"]["WWW-Authenticate"]={"schema":{"const":"Bearer"}}
@@ -190,12 +194,16 @@ def document(contract: dict, wire: dict) -> dict:
     rust={(op["method"],op["path"]):op for op in contract["operations"]}
     endpoints={(endpoint.method,endpoint.path):endpoint for endpoint in ENDPOINTS}
     if endpoints.keys()!=rust.keys():raise ValueError(f"Rust/OpenAPI operation inventory drifted: {sorted(endpoints.keys() ^ rust.keys())}")
+    review_codes=set(contract["frameworkProblems"])
+    for key,endpoint in endpoints.items():
+        if endpoint.review:review_codes.update(rust[key]["problems"])
+    schemas.update(problem_schemas([catalog[code] for code in sorted(review_codes)],review=True))
     paths={}
     for key,endpoint in endpoints.items():
         op=rust[key]
         if bool(endpoint.body)!=op["acceptsJson"] or bool(endpoint.query)!=op["extractsQuery"] or bool(re.search(r"\{",endpoint.path))!=op["extractsPath"]:raise ValueError(f"Rust/OpenAPI extraction drifted for {key}")
         parameters=[parameter("traceparent","header",{"type":"string"})]
-        if not endpoint.public and not endpoint.service:parameters.append(parameter(PROFILE,"header",bounded_identifier(),True,"The caller's exact governed Casework access profile."))
+        if not endpoint.public and not endpoint.service:parameters.append(parameter(REVIEW_PROFILE if endpoint.review else PROFILE,"header",bounded_identifier(),True,"The caller's exact governed access profile for this protocol."))
         if endpoint.source:parameters.append(parameter(SOURCE_PROFILE,"header",bounded_identifier(),False,"Current-source work requires the human caller's source-valid profile and credential. Submitted context requires no provider."))
         for name in re.findall(r"\{([^}]+)\}",endpoint.path):
             schema={"type":"string","format":"uuid"}
@@ -207,7 +215,7 @@ def document(contract: dict, wire: dict) -> dict:
         if endpoint.idempotency:parameters.append(parameter("Idempotency-Key","header",{"type":"string","minLength":1,"maxLength":128,"pattern":"^[!-~]+$"},True,"Retain this exact key and request bytes for explicit recovery."))
         responses={str(status):response(endpoint.response if status in (200,201) else None) for status in op["successStatuses"]}
         codes=set(op["problems"])|set(contract["frameworkProblems"])
-        for status,value in problem_responses(codes,catalog).items():
+        for status,value in problem_responses(codes,catalog,endpoint.review).items():
             if status not in responses:responses[status]=value
         operation={"operationId":endpoint.operation_id,"summary":re.sub(r"([a-z])([A-Z])",r"\1 \2",endpoint.operation_id).capitalize(),"security":[] if endpoint.public else [{"bearerAuth":[]}],"parameters":parameters,"responses":responses}
         if endpoint.body:
@@ -217,8 +225,9 @@ def document(contract: dict, wire: dict) -> dict:
         if endpoint.idempotency:operation["description"]="Recovery repeats the exact request and caller-supplied idempotency key. Clients do not retry mutations implicitly."
         if endpoint.body in ("ReviewCreateRequest","ReviewTaskDecisionRequest"):
             headers=responses.get("400",{}).get("headers",{})
-            headers["Registry-Casework-Validation-Path"]={"description":"Bounded value-free JSON path; present together with the validation reason.","schema":{"type":"string","maxLength":256}}
-            headers["Registry-Casework-Validation-Reason"]={"description":"Closed value-free validation category; present together with the validation path.","schema":ref("ReviewValidationReason")}
+            prefix="Registry-Review" if endpoint.review else "Registry-Casework"
+            headers[prefix+"-Validation-Path"]={"description":"Bounded value-free JSON path; present together with the validation reason.","schema":{"type":"string","maxLength":256}}
+            headers[prefix+"-Validation-Reason"]={"description":"Closed value-free validation category; present together with the validation path.","schema":ref("ReviewValidationReason")}
         paths.setdefault(endpoint.path,{})[endpoint.method.lower()]=operation
     result={"openapi":"3.1.0","info":{"title":"Registry Casework API","version":"v1alpha1","description":"Source-neutral review policies, requests, human decisions, and immutable results. Context providers and downstream grant authority remain independent trust boundaries.","license":{"name":"Apache-2.0","identifier":"Apache-2.0"}},"paths":paths,"components":{"schemas":schemas,"headers":{"TraceparentHeader":{"description":"W3C trace context.","schema":{"type":"string"}}},"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"Exact trusted-issuer identity and governed scopes. A producer token grants no human review authority."}}},"x-registry-casework-framework-problems":contract["frameworkProblems"]}
     verify_operation_responses(result,contract)

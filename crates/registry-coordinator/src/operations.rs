@@ -264,6 +264,7 @@ macro_rules! operation_catalog {
             ApplyBregProposal => "breg.apply-proposal/v1", mutation("breg", false, true), breg_proposal;
             RetryBregProposal => "breg.retry-proposal/v1", mutation("breg", false, true), breg_proposal;
             CancelBregProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), breg_proposal;
+            ReadBregReviewContext => "breg.read-review-context/v1", read("breg"), read_breg_review_context;
         }
     };
 }
@@ -378,6 +379,10 @@ mod tests {
             (Operation::ApplyBregProposal, "breg.apply-proposal/v1"),
             (Operation::RetryBregProposal, "breg.retry-proposal/v1"),
             (Operation::CancelBregProposal, "breg.cancel-proposal/v1"),
+            (
+                Operation::ReadBregReviewContext,
+                "breg.read-review-context/v1",
+            ),
         ];
         assert_eq!(
             descriptors()

@@ -22,6 +22,9 @@ use std::{
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Action {
+    ReviewCreate,
+    ReviewRead,
+    ReviewCancel,
     Start,
     Status,
     Inspect,
@@ -54,6 +57,8 @@ impl Action {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_producer: Option<crate::review_provider::ReviewProducer>,
     #[serde(deserialize_with = "crate::runtime::unique_strings")]
     #[cfg_attr(
         feature = "schema",
@@ -84,7 +89,7 @@ pub struct ClientPolicy {
         feature = "schema",
         schemars(
             with = "registry_platform_yaml::UniqueList<Action>",
-            length(min = 1, max = 12)
+            length(min = 1, max = 15)
         )
     )]
     pub actions: Vec<Action>,
@@ -219,11 +224,24 @@ impl AccessConfig {
                 ));
             }
             if p.actions.is_empty()
-                || p.actions.len() > 12
+                || p.actions.len() > 15
                 || p.actions.iter().collect::<BTreeSet<_>>().len() != p.actions.len()
                 || (!p.operator && p.actions.iter().any(|a| a.is_deployment_wide()))
             {
                 errors.push(access_error(&format!("{field}/actions"), "list distinct authorized actions; recovery administration requires operator: true"));
+            }
+            let reviews = p.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    Action::ReviewCreate | Action::ReviewRead | Action::ReviewCancel
+                )
+            });
+            if reviews != p.review_producer.is_some()
+                || p.review_producer
+                    .as_ref()
+                    .is_some_and(|producer| !producer.check())
+            {
+                errors.push(access_error(&format!("{field}/reviewProducer"), "Review actions require an exact producer id, sourceNamespace, profile and nonempty distinct sources; omit reviewProducer for other actions"));
             }
             if p.required_scopes.is_empty()
                 || p.required_scopes.len() > 64
@@ -342,6 +360,16 @@ pub struct Caller {
     policy: ClientPolicy,
 }
 impl Caller {
+    pub(crate) fn review_producer(
+        &self,
+        profile: &str,
+    ) -> Result<&crate::review_provider::ReviewProducer> {
+        self.policy
+            .review_producer
+            .as_ref()
+            .filter(|producer| producer.profile == profile)
+            .ok_or_else(denied)
+    }
     pub fn authorized_workflows(&self, action: Action) -> Result<&[String]> {
         self.authorize(action, None)?;
         Ok(&self.policy.workflows)
@@ -508,6 +536,7 @@ mod tests {
                 operator,
             },
             policy: ClientPolicy {
+                review_producer: None,
                 required_scopes: vec!["coordinator:operate".into()],
                 workflows: workflows
                     .iter()

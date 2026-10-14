@@ -445,6 +445,14 @@ fn valid_casework_profile(value: &str) -> bool {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
+    /// Optional trusted event producers keyed by the logical IDs used in Workflow triggers.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "event_source_keys"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, crate::event_trigger::EventSourceConfig>", extend("maxProperties" = 16)))]
+    pub event_sources: BTreeMap<String, crate::event_trigger::EventSourceConfig>,
     pub secret_providers: SecretProvidersConfig,
     #[serde(serialize_with = "serialize_database")]
     pub database: DatabaseConfig,
@@ -532,7 +540,8 @@ impl RuntimeConfig {
     }
 
     fn findings(&self) -> Vec<CoordinatorError> {
-        let mut errors = Vec::new();
+        let mut errors =
+            crate::event_trigger::source_findings(&self.event_sources, &self.secret_providers);
         self.secret_providers
             .check()
             .map_err(|_| config_error("secretProviders", "declare valid shared secret providers"))
@@ -776,6 +785,23 @@ impl RuntimeConfig {
     }
 
     pub fn validate_workflow(&self, workflow: &crate::definition::Workflow) -> Result<()> {
+        for (id, trigger) in &workflow.event_triggers {
+            if !self.event_sources.contains_key(&trigger.source) {
+                return Err(config_error(
+                    &format!("eventSources.{}", trigger.source),
+                    &format!("configure the source named by event trigger {id}"),
+                ));
+            }
+        }
+        self.validate_workflow_effect_bindings(workflow)
+    }
+
+    /// Retained Runs require their effect bindings, independently of whether
+    /// the event source that admitted them is still enabled for new starts.
+    fn validate_workflow_effect_bindings(
+        &self,
+        workflow: &crate::definition::Workflow,
+    ) -> Result<()> {
         for (name, interface) in &workflow.connections {
             if self
                 .connections
@@ -796,6 +822,7 @@ impl RuntimeConfig {
                         | crate::protocol::Operation::ApplyBregProposal
                         | crate::protocol::Operation::RetryBregProposal
                         | crate::protocol::Operation::CancelBregProposal
+                        | crate::protocol::Operation::ReadBregReviewContext
                 ) && self
                     .connections
                     .get(&call.connection)
@@ -805,7 +832,7 @@ impl RuntimeConfig {
                             .is_some_and(|auth| auth.task_authority.is_some())
                     })
                 {
-                    return Err(CoordinatorError::new("workflow-binding", "BReg mutations require an explicitly permitted service profile")
+                    return Err(CoordinatorError::new("workflow-binding", "this BReg operation requires an explicitly permitted service profile")
                         .at("workflow.yaml", format!("/workflow/steps/{name}/operation"))
                         .suggest("Use a separately authorized BReg connection without taskAuthority for this operation; task authority cannot fall back to service authority."));
                 }
@@ -839,9 +866,10 @@ impl RuntimeConfig {
         self.binding_digest_names(self.connections.keys().map(String::as_str))
     }
 
-    /// Hash only this workflow's bindings. Unrelated deployment additions are compatible.
+    /// Hash this workflow's effect bindings. Ingress removal cannot strand a
+    /// retained Run, while active package validation still checks its sources.
     pub fn binding_digest_for(&self, workflow: &crate::definition::Workflow) -> Result<String> {
-        self.validate_workflow(workflow)?;
+        self.validate_workflow_effect_bindings(workflow)?;
         self.binding_digest_names(workflow.connections.keys().map(String::as_str))
     }
 
@@ -1102,6 +1130,12 @@ fn connection_keys<'de, D: Deserializer<'de>>(
     })
 }
 
+fn event_source_keys<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, crate::event_trigger::EventSourceConfig>, D::Error> {
+    BTreeMap::<registry_platform_yaml::LocalId,crate::event_trigger::EventSourceConfig>::deserialize(d).map(|map|map.into_iter().map(|(id,source)|(id.into_string(),source)).collect())
+}
+
 pub(crate) fn key_version<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u32, D::Error> {
     registry_platform_yaml::BoundedU32::<1, { u32::MAX }>::deserialize(d)
         .map(registry_platform_yaml::BoundedU32::get)
@@ -1141,7 +1175,7 @@ pub(crate) fn external<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<S
     registry_platform_yaml::ExternalId::deserialize(d)
         .map(registry_platform_yaml::ExternalId::into_string)
 }
-fn optional_external<'de, D: Deserializer<'de>>(
+pub(crate) fn optional_external<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<String>, D::Error> {
     external(d).map(Some)

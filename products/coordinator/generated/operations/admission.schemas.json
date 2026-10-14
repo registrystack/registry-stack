@@ -1,0 +1,939 @@
+{
+  "HookEnvelope": {
+    "$defs": {
+      "Causation": {
+        "additionalProperties": false,
+        "description": "Why this event exists: the chain it belongs to and the event that caused it.",
+        "properties": {
+          "hop": {
+            "description": "0 for a root event, parent hop + 1 otherwise.",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parent": {
+            "description": "The id of the event whose handler proposed the change that produced\nthis one. Absent for a root event, never spelled `null` on the wire:\nthe decoder refuses bytes a re-encode cannot reproduce. A UUID when\npresent.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "root": {
+            "description": "The id of the first event in the chain; equals `id` for a root event.\nA later orchestrator correlates on this field. A UUID, like every\nevent identity on the envelope.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "hop"
+        ],
+        "type": "object"
+      },
+      "EventSubject": {
+        "additionalProperties": false,
+        "description": "The product record the triggering change landed on.",
+        "properties": {
+          "recordReference": {
+            "description": "The record reference, as the product addresses it.",
+            "type": "string"
+          },
+          "recordRevision": {
+            "description": "The revision the triggering change produced. Revisions start at one, so\na revision of zero or below is refused on both encode and decode, the\nsame bound the delivery store enforces on a stored envelope.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recordReference",
+          "recordRevision"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "The hook envelope, one shape for every product and every destination kind.",
+    "properties": {
+      "causation": {
+        "$ref": "#/$defs/Causation",
+        "description": "The chain this event belongs to."
+      },
+      "data": {
+        "description": "The product projection. Integers that are not exactly representable as\nbinary64 must be strings; canonical JSON refuses them otherwise."
+      },
+      "dataschema": {
+        "description": "The product data contract id for `data`.",
+        "type": "string"
+      },
+      "id": {
+        "description": "Event identity, unique per triggering change. The idempotency key a\nremote handler must honor across retries.\n\nA UUID: the delivery store keys an envelope by a UUID event id, so an\nid that is not one could never be stored. Refused on both encode and\ndecode.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "source": {
+        "description": "The producing product and deployment identity.",
+        "type": "string"
+      },
+      "subject": {
+        "$ref": "#/$defs/EventSubject",
+        "description": "The product record reference and revision."
+      },
+      "time": {
+        "description": "Commit time of the triggering change, RFC 3339.\n\nNormalized on every serialization: converted to UTC and truncated to\nwhole milliseconds, so two equal instants written at different offsets\nor at finer precision produce identical canonical bytes. The in-memory\nvalue keeps whatever the product gave it; the wire form is the\nnormalized one. Decoding requires that wire form and refuses any other\nspelling, so a decoded envelope re-encodes to the bytes it arrived as.",
+        "format": "date-time",
+        "type": "string"
+      },
+      "type": {
+        "description": "The hook's stable contract id.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "type",
+      "source",
+      "time",
+      "subject",
+      "dataschema",
+      "data",
+      "causation"
+    ],
+    "title": "HookEnvelope",
+    "type": "object"
+  },
+  "PolicyBinding": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "digest": {
+        "$ref": "#/$defs/ContentDigest"
+      },
+      "id": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "version",
+      "digest"
+    ],
+    "title": "PolicyBinding",
+    "type": "object"
+  },
+  "ReviewCancelRequest": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "SubjectBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "reason": {
+        "type": "string"
+      },
+      "subject": {
+        "$ref": "#/$defs/SubjectBinding"
+      }
+    },
+    "required": [
+      "subject",
+      "reason"
+    ],
+    "title": "ReviewCancelRequest",
+    "type": "object"
+  },
+  "ReviewCancelResponse": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "PolicyBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "ReviewResult": {
+        "additionalProperties": false,
+        "properties": {
+          "availableUntil": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "policy": {
+            "$ref": "#/$defs/PolicyBinding"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384
+          },
+          "resultId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/ReviewResultStatus"
+          },
+          "subject": {
+            "$ref": "#/$defs/SubjectBinding"
+          },
+          "submissionDigest": {
+            "$ref": "#/$defs/ContentDigest"
+          }
+        },
+        "required": [
+          "resultId",
+          "requestId",
+          "subject",
+          "policy",
+          "submissionDigest",
+          "status",
+          "completedAt",
+          "availableUntil"
+        ],
+        "type": "object"
+      },
+      "ReviewResultStatus": {
+        "enum": [
+          "approved",
+          "rejected",
+          "changes-requested",
+          "answered",
+          "cancelled",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "SubjectBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "const": "cancelled",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/$defs/ReviewResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "const": "already-terminal",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/$defs/ReviewResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "ReviewCancelResponse"
+  },
+  "ReviewCompletion": {
+    "$defs": {
+      "ReviewCompletionType": {
+        "enum": [
+          "review.completed"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "completedAt": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "eventId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requestId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "resultId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": {
+        "$ref": "#/$defs/ReviewCompletionType"
+      }
+    },
+    "required": [
+      "type",
+      "eventId",
+      "requestId",
+      "resultId",
+      "completedAt"
+    ],
+    "title": "ReviewCompletion",
+    "type": "object"
+  },
+  "ReviewCreateRequest": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "HumanIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "PolicyBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "ReviewContext": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "submitted",
+                "type": "string"
+              },
+              "snapshot": {
+                "additionalProperties": true,
+                "type": "object",
+                "x-maximum-canonical-bytes": 65536,
+                "x-maximum-json-depth": 32,
+                "x-maximum-json-nodes": 4096
+              }
+            },
+            "required": [
+              "mode",
+              "snapshot"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "binding": {
+                "$ref": "#/$defs/SourceContextBinding"
+              },
+              "mode": {
+                "const": "current-source",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode",
+              "binding"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SourceContextBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "type": "object"
+      },
+      "SubjectBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "context": {
+        "$ref": "#/$defs/ReviewContext"
+      },
+      "initiator": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HumanIdentity"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "policy": {
+        "$ref": "#/$defs/PolicyBinding"
+      },
+      "requesterReference": {
+        "type": "string"
+      },
+      "resultConstraints": {
+        "additionalProperties": true,
+        "type": "object",
+        "x-maximum-canonical-bytes": 16384
+      },
+      "subject": {
+        "$ref": "#/$defs/SubjectBinding"
+      }
+    },
+    "required": [
+      "policy",
+      "subject",
+      "requesterReference",
+      "context"
+    ],
+    "title": "ReviewCreateRequest",
+    "type": "object"
+  },
+  "ReviewRequestAccepted": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "PolicyBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "SubjectBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "policy": {
+        "$ref": "#/$defs/PolicyBinding"
+      },
+      "requestId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "subject": {
+        "$ref": "#/$defs/SubjectBinding"
+      },
+      "submissionDigest": {
+        "$ref": "#/$defs/ContentDigest"
+      }
+    },
+    "required": [
+      "requestId",
+      "subject",
+      "policy",
+      "submissionDigest"
+    ],
+    "title": "ReviewRequestAccepted",
+    "type": "object"
+  },
+  "ReviewRequestView": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "PolicyBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "ReviewRequestLifecycle": {
+        "enum": [
+          "reviewing",
+          "approved",
+          "rejected",
+          "changes-requested",
+          "answered",
+          "cancelled",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "SubjectBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "activeStage": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "createdAt": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "lifecycle": {
+        "$ref": "#/$defs/ReviewRequestLifecycle"
+      },
+      "policy": {
+        "$ref": "#/$defs/PolicyBinding"
+      },
+      "requestId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requesterReference": {
+        "type": "string"
+      },
+      "subject": {
+        "$ref": "#/$defs/SubjectBinding"
+      },
+      "submissionDigest": {
+        "$ref": "#/$defs/ContentDigest"
+      },
+      "updatedAt": {
+        "format": "date-time",
+        "type": "string"
+      }
+    },
+    "required": [
+      "requestId",
+      "subject",
+      "policy",
+      "submissionDigest",
+      "requesterReference",
+      "lifecycle",
+      "createdAt",
+      "updatedAt"
+    ],
+    "title": "ReviewRequestView",
+    "type": "object"
+  },
+  "ReviewResult": {
+    "$defs": {
+      "ContentDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "PolicyBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "ReviewResultStatus": {
+        "enum": [
+          "approved",
+          "rejected",
+          "changes-requested",
+          "answered",
+          "cancelled",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "SubjectBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/ContentDigest"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "availableUntil": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "completedAt": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "outcome": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "policy": {
+        "$ref": "#/$defs/PolicyBinding"
+      },
+      "requestId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "result": {
+        "additionalProperties": true,
+        "type": "object",
+        "x-maximum-canonical-bytes": 16384
+      },
+      "resultId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/ReviewResultStatus"
+      },
+      "subject": {
+        "$ref": "#/$defs/SubjectBinding"
+      },
+      "submissionDigest": {
+        "$ref": "#/$defs/ContentDigest"
+      }
+    },
+    "required": [
+      "resultId",
+      "requestId",
+      "subject",
+      "policy",
+      "submissionDigest",
+      "status",
+      "completedAt",
+      "availableUntil"
+    ],
+    "title": "ReviewResult",
+    "type": "object"
+  },
+  "ReviewResultFeedPage": {
+    "$defs": {
+      "ReviewResultFeedEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "resultId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "requestId",
+          "resultId",
+          "completedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/$defs/ReviewResultFeedEntry"
+        },
+        "type": "array"
+      },
+      "nextCursor": {
+        "format": "uuid",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "ReviewResultFeedPage",
+    "type": "object"
+  }
+}

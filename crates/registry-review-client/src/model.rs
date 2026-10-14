@@ -24,7 +24,7 @@ impl<'a> ReviewAuth<'a> {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
             })
         {
-            return Err("the Casework profile is invalid");
+            return Err("the review profile is invalid");
         }
         Ok(())
     }

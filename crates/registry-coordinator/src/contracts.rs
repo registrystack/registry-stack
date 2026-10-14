@@ -178,29 +178,60 @@ impl OperationContract {
 
 const SAFE_INTEGER: i64 = (1 << 53) - 1;
 
-fn bound_numbers(value: &mut Value) {
+/// Normalize supported numeric width annotations at schema positions only.
+/// Callers compiling imported schemas apply this to a validation copy so the
+/// governed source and its revision remain unchanged.
+pub(crate) fn bound_numbers(value: &mut Value) {
     match value {
         Value::Object(object) => {
+            let has_type = |expected: &str| match object.get("type") {
+                Some(Value::String(kind)) => kind == expected,
+                Some(Value::Array(kinds)) => {
+                    kinds.iter().any(|kind| kind == expected)
+                        && kinds.iter().all(|kind| kind == expected || kind == "null")
+                }
+                _ => false,
+            };
+            let integer = has_type("integer");
+            let number = has_type("number");
             let bounds: Option<(Value, Value)> = match object.get("format").and_then(Value::as_str)
             {
-                Some("uint8") => Some((json!(0), json!(u8::MAX))),
-                Some("uint16") => Some((json!(0), json!(u16::MAX))),
-                Some("uint32") => Some((json!(0), json!(u32::MAX))),
-                Some("uint64" | "uint") => Some((json!(0), json!(SAFE_INTEGER))),
-                Some("int8") => Some((json!(i8::MIN), json!(i8::MAX))),
-                Some("int16") => Some((json!(i16::MIN), json!(i16::MAX))),
-                Some("int32") => Some((json!(i32::MIN), json!(i32::MAX))),
-                Some("int64" | "int") => Some((json!(-SAFE_INTEGER), json!(SAFE_INTEGER))),
-                Some("double" | "float") => Some((Value::Null, Value::Null)),
+                Some("uint8") if integer => Some((json!(0), json!(u8::MAX))),
+                Some("uint16") if integer => Some((json!(0), json!(u16::MAX))),
+                Some("uint32") if integer => Some((json!(0), json!(u32::MAX))),
+                Some("uint64" | "uint") if integer => Some((json!(0), json!(SAFE_INTEGER))),
+                Some("int8") if integer => Some((json!(i8::MIN), json!(i8::MAX))),
+                Some("int16") if integer => Some((json!(i16::MIN), json!(i16::MAX))),
+                Some("int32") if integer => Some((json!(i32::MIN), json!(i32::MAX))),
+                Some("int64" | "int") if integer => {
+                    Some((json!(-SAFE_INTEGER), json!(SAFE_INTEGER)))
+                }
+                Some("double" | "float") if number => Some((Value::Null, Value::Null)),
                 _ => None,
             };
             if let Some((minimum, maximum)) = bounds {
                 object.remove("format");
-                if !minimum.is_null() && !object.contains_key("minimum") {
-                    object.insert("minimum".into(), minimum);
-                }
-                if !maximum.is_null() && !object.contains_key("maximum") {
-                    object.insert("maximum".into(), maximum);
+                for (keyword, bound, lower) in
+                    [("minimum", minimum, true), ("maximum", maximum, false)]
+                {
+                    if bound.is_null() {
+                        continue;
+                    }
+                    let replace = match object.get(keyword) {
+                        None => true,
+                        Some(existing) => existing.as_f64().zip(bound.as_f64()).is_some_and(
+                            |(existing, bound)| {
+                                if lower {
+                                    existing < bound
+                                } else {
+                                    existing > bound
+                                }
+                            },
+                        ),
+                    };
+                    if replace {
+                        object.insert(keyword.into(), bound);
+                    }
                 }
             }
             // Only descend into schema positions. Values in const, enum,
@@ -496,6 +527,24 @@ pub fn casework_completion_schema() -> &'static Value {
     })
 }
 
+/// Shared Review and event wire schemas, generated from their owning types.
+pub fn admission_schemas() -> &'static Value {
+    static SCHEMAS: OnceLock<Value> = OnceLock::new();
+    SCHEMAS.get_or_init(|| {
+        #[cfg(feature = "schema")]
+        {
+            derived::admission_schemas()
+        }
+        #[cfg(not(feature = "schema"))]
+        {
+            serde_json::from_str(include_str!(
+                "../../../products/coordinator/generated/operations/admission.schemas.json"
+            ))
+            .expect("generated admission wire schemas")
+        }
+    })
+}
+
 /// The committed contract of a catalog operation.
 pub fn contract(operation: Operation) -> &'static OperationContract {
     static CONTRACTS: OnceLock<BTreeMap<String, OperationContract>> = OnceLock::new();
@@ -568,6 +617,13 @@ fn derived_contracts() -> BTreeMap<&'static str, (Value, Value)> {
 pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
     let mut contracts = derived_contracts();
     let mut files = BTreeMap::new();
+    files.insert(
+        "admission.schemas.json".into(),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&derived::admission_schemas())?
+        ),
+    );
     for descriptor in crate::operations::descriptors() {
         let (mut input, mut output) = contracts
             .remove(descriptor.id)
@@ -656,10 +712,37 @@ mod derived {
     use schemars::{generate::SchemaSettings, JsonSchema};
     use serde_json::{json, Value};
 
+    pub(super) fn admission_schemas() -> Value {
+        use registry_review_protocol::*;
+        let mut schemas = json!({
+            "PolicyBinding": output::<PolicyBinding>(),
+            "ReviewCreateRequest": input::<ReviewCreateRequest>(),
+            "ReviewRequestAccepted": output::<ReviewRequestAccepted>(),
+            "ReviewRequestView": output::<ReviewRequestView>(),
+            "ReviewResult": output::<ReviewResult>(),
+            "ReviewCancelRequest": input::<ReviewCancelRequest>(),
+            "ReviewCancelResponse": output::<ReviewCancelResponse>(),
+            "ReviewResultFeedPage": output::<ReviewResultFeedPage>(),
+            "ReviewCompletion": input::<ReviewCompletion>(),
+            "HookEnvelope": input::<registry_platform_hooks::HookEnvelope>()
+        });
+        for (name, schema) in schemas.as_object_mut().expect("wire schema map") {
+            finish(schema, name);
+        }
+        schemas
+    }
+
     pub(super) fn read_record() -> (Value, Value) {
         (
             input::<ReadRequest>(),
             output::<RegistryRecordSingleResponse>(),
+        )
+    }
+
+    pub(super) fn read_breg_review_context() -> (Value, Value) {
+        (
+            input::<crate::breg_review_context::ReadReviewContext>(),
+            output::<crate::breg_review_context::ReviewContextObservation>(),
         )
     }
 
@@ -834,9 +917,9 @@ mod derived {
         schema
     }
 
-    /// Coordinator asserts formats and knows no numeric format names, so each
-    /// width becomes explicit bounds. Canonical JSON carries integers only
-    /// within the IEEE 754 safe range, which bounds the 64-bit widths.
+    /// Publish the same explicit numeric width bounds the runtime compiler
+    /// applies on its validation copy. Canonical JSON's IEEE 754 safe integer
+    /// range also bounds the 64-bit widths.
     pub(super) fn finish(schema: &mut Value, title: &str) {
         super::bound_numbers(schema);
         schema["title"] = json!(title);
@@ -1042,6 +1125,66 @@ mod tests {
             schema["dependentSchemas"]["number"]["properties"]["other"]["minimum"],
             i8::MIN
         );
+    }
+
+    #[test]
+    fn numeric_widths_intersect_explicit_limits_and_require_matching_types() {
+        for (schema, accepted, refused) in [
+            (
+                json!({"type":"integer","format":"uint8","minimum":-5,"maximum":1000}),
+                json!([0, 255]),
+                json!([-1, 256]),
+            ),
+            (
+                json!({"type":"integer","format":"uint8","minimum":10,"maximum":20}),
+                json!([10, 20]),
+                json!([9, 21]),
+            ),
+            (
+                json!({"type":["integer","null"],"format":"int64","minimum":1}),
+                json!([null, 1, SAFE_INTEGER]),
+                json!([0, 1.5, "1", SAFE_INTEGER + 1]),
+            ),
+            (
+                json!({"type":"number","format":"double","minimum":1,"maximum":2}),
+                json!([1, 1.5, 2]),
+                json!([0, 2.5, "1"]),
+            ),
+        ] {
+            let original = schema.clone();
+            let validator = crate::definition::compile_schema(&schema).unwrap();
+            for value in accepted.as_array().unwrap() {
+                assert!(validator.is_valid(value));
+            }
+            for value in refused.as_array().unwrap() {
+                assert!(!validator.is_valid(value));
+            }
+            assert_eq!(
+                schema, original,
+                "compiler normalization never changes source"
+            );
+        }
+        for schema in [
+            json!({"type":"string","format":"int64"}),
+            json!({"type":["integer","string"],"format":"int64"}),
+            json!({"type":"integer","format":"double"}),
+            json!({"format":"int64"}),
+            json!({"type":"integer","format":"unknown-numeric-format"}),
+            json!({"$ref":"https://example.invalid/private-schema"}),
+        ] {
+            assert!(crate::definition::compile_schema(&schema).is_err());
+        }
+    }
+
+    #[test]
+    fn compiler_preserves_schema_shaped_literal_data() {
+        let literal = json!({"format":"int64","properties":{"secret":{"$ref":"https://example.invalid/literal"}}});
+        let schema = json!({"type":"object","const":literal,"enum":[literal],
+            "default":literal,"examples":[literal]});
+        let original = schema.clone();
+        let validator = crate::definition::compile_schema(&schema).unwrap();
+        assert!(validator.is_valid(&literal));
+        assert_eq!(schema, original);
     }
 
     #[test]

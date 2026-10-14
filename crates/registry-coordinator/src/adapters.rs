@@ -609,6 +609,12 @@ impl AdapterSet for HttpAdapters {
 
     async fn call(&self, request: &CallRequest) -> CallOutcome {
         match (self.connections.get(&request.connection), request.operation) {
+            (
+                Some(Connection::Breg {
+                    client, profile, ..
+                }),
+                Operation::ReadBregReviewContext,
+            ) => crate::breg_review_context::read(client, profile, &request.input).await,
             (Some(Connection::External(connection)), Operation::ExternalGet) => {
                 connection.get(&request.input, false).await
             }

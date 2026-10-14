@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: review-provider, version: "1"}
+operations:
+  assess-proposal: {uses: breg.read-review-context/v1, connection: registry}
+  request-human: {uses: casework.submit-review-request/v1, connection: review}
+  withdraw-human: {uses: casework.cancel-review-request/v1, connection: review}
+functions:
+  assessment-input:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: assessment_input
+    inputs: {request: {operationInput: request-human}}
+    output: {operationInput: assess-proposal}
+  assessment-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: assessment_route
+    inputs: {assessment: {operationOutput: assess-proposal}}
+    output: {type: string, enum: [automatic, human, refused]}
+  human-input:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: human_input
+    inputs: {request: {operationInput: request-human}}
+    output: {operationInput: request-human}
+  human-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: human_route
+    inputs: {result: {completionOutput: {operation: request-human, name: result}}}
+    output: {type: string, enum: [approved, rejected, changes-requested, answered, cancelled, superseded]}
+workflow:
+  input: {operationInput: request-human}
+  deadlineSeconds: 3600
+  review:
+    resultRetentionSeconds: 86400
+    outcomes:
+      automatic-approved: {status: approved}
+      human-approved: {status: approved}
+      assessment-refused: {status: rejected, outcome: record-inactive}
+      human-rejected: {status: rejected, outcome: correction-not-authorized}
+      human-changes-requested: {status: changes-requested, outcome: correction-needs-changes}
+      human-answered: {status: answered, outcome: human-answer}
+      cancelled: {status: cancelled}
+      superseded: {status: superseded}
+  start: assess
+  steps:
+    assess:
+      type: call
+      operation: assess-proposal
+      input: {type: function, function: assessment-input, inputs: {request: {type: input}}}
+      next: route-assessment
+    route-assessment:
+      type: choose
+      choose: {type: function, function: assessment-route, inputs: {assessment: {type: step, step: assess}}}
+      cases: {automatic: automatic-approved, human: submit-human, refused: assessment-refused}
+    submit-human:
+      type: call
+      operation: request-human
+      input: {type: function, function: human-input, inputs: {request: {type: input}}}
+      next: await-human
+    await-human:
+      type: wait-for
+      completion: {step: submit-human, name: result}
+      timeoutSeconds: 1800
+      next: route-human
+      onTimeout: withdraw-human
+      onCancel: withdraw-human
+    route-human:
+      type: choose
+      choose: {type: function, function: human-route, inputs: {result: {type: step, step: await-human}}}
+      cases: {approved: human-approved, rejected: human-rejected, changes-requested: human-changes-requested, answered: human-answered, cancelled: cancelled, superseded: superseded}
+    withdraw-human:
+      type: call
+      operation: withdraw-human
+      input:
+        type: fields
+        fields:
+          request: {type: step, step: submit-human}
+          reason: {type: literal, value: The upstream review no longer needs a human decision.}
+      next: cancelled
+    automatic-approved: {type: finish, outcome: automatic-approved}
+    human-approved: {type: finish, outcome: human-approved}
+    assessment-refused: {type: finish, outcome: assessment-refused}
+    human-rejected: {type: finish, outcome: human-rejected}
+    human-changes-requested: {type: finish, outcome: human-changes-requested}
+    human-answered: {type: finish, outcome: human-answered}
+    cancelled: {type: finish, outcome: cancelled}
+    superseded: {type: finish, outcome: superseded}
+  outcomes:
+    automatic-approved: {type: "null"}
+    human-approved: {type: "null"}
+    assessment-refused: {type: "null"}
+    human-rejected: {type: "null"}
+    human-changes-requested: {type: "null"}
+    human-answered: {type: "null"}
+    cancelled: {type: "null"}
+    superseded: {type: "null"}

@@ -32,8 +32,31 @@ use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::Instant};
 use uuid::Uuid;
 
+mod admission_contracts;
+
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
+    static REQUEST_CONTRACT: HttpContract;
+}
+
+#[derive(Clone, Copy, Default)]
+enum HttpContract {
+    #[default]
+    Coordinator,
+    Review,
+}
+
+impl HttpContract {
+    fn type_uri(self, code: &str) -> String {
+        match self {
+            Self::Coordinator => type_uri(code),
+            Self::Review => format!(
+                "{}{}",
+                registry_review_protocol::REVIEW_PROBLEM_TYPE_BASE,
+                code.replace('.', "/")
+            ),
+        }
+    }
 }
 
 const BINDING_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
@@ -113,28 +136,47 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/complete-execution-recovery", post(complete_execution))
         .route("/v1/retention", post(retain))
         .route(
+            "/v1/events/{workflow}/{trigger}",
+            post(crate::event_trigger::receive),
+        )
+        .route(
             registry_review_protocol::REVIEW_COMPLETIONS_PATH,
             post(review_completion),
         )
-        .with_state(state);
-    http_edge(routes)
+        .with_state(state.clone());
+    http_edge(routes).merge(contract_edge(
+        crate::review_provider::router().with_state(state),
+        HttpContract::Review,
+    ))
 }
 fn http_edge(router: Router) -> Router {
+    contract_edge(router.fallback(route_not_found), HttpContract::Coordinator)
+}
+fn contract_edge(router: Router, contract: HttpContract) -> Router {
     router
-        .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .layer(DefaultBodyLimit::max(65_536))
-        .layer(registry_platform_httpsec::request_body_limit(65_536))
-        .layer(middleware::from_fn(http_boundary))
+        .layer(DefaultBodyLimit::max(131_072))
+        .layer(registry_platform_httpsec::request_body_limit(131_072))
+        .layer(middleware::from_fn(move |request, next| {
+            http_boundary(contract, request, next)
+        }))
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
         ))
 }
-async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
+async fn http_boundary(
+    contract: HttpContract,
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
     let trace = TraceContext::from_headers(request.headers());
     let mut response = REQUEST_TRACE
         .scope(trace.clone(), async move {
-            normalize_framework_rejection(next.run(request).await)
+            REQUEST_CONTRACT
+                .scope(contract, async move {
+                    normalize_framework_rejection(next.run(request).await)
+                })
+                .await
         })
         .await;
     trace.apply(response.headers_mut());
@@ -195,7 +237,7 @@ pub(crate) fn problem(error: CoordinatorError) -> Response {
     }
     problem_response(problem)
 }
-fn current_trace() -> TraceContext {
+pub(crate) fn current_trace() -> TraceContext {
     REQUEST_TRACE
         .try_with(Clone::clone)
         .unwrap_or_else(|_| TraceContext::server_created())
@@ -248,7 +290,9 @@ fn problem_response(problem: ProblemCode) -> Response {
     let trace = current_trace();
     let status = problem.http_status();
     let body = ProblemBody {
-        type_uri: type_uri(problem.code()),
+        type_uri: REQUEST_CONTRACT
+            .try_with(|contract| contract.type_uri(problem.code()))
+            .unwrap_or_else(|_| HttpContract::default().type_uri(problem.code())),
         title: problem.title(),
         status,
         detail: problem.detail(),
@@ -279,7 +323,7 @@ fn problem_response(problem: ProblemCode) -> Response {
     response
 }
 /// The verified caller, counting every refusal by its closed reason.
-async fn caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller> {
+pub(crate) async fn caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller> {
     let result = authenticated_caller(s, headers).await;
     if let Err(error) = &result {
         s.store
@@ -614,9 +658,14 @@ mod problem_tests {
             .flat_map(|path| path.as_object().unwrap().values())
         {
             if operation.get("security").is_some() {
+                let challenge = if operation["security"][0].get("eventSource").is_some() {
+                    "Registry-Signature version=\"v1\""
+                } else {
+                    "Bearer"
+                };
                 assert_eq!(
                     operation["responses"]["401"]["headers"]["WWW-Authenticate"]["schema"]["const"],
-                    "Bearer"
+                    challenge
                 );
                 for status in ["400", "403", "404", "503"] {
                     assert!(operation["responses"][status]["headers"]
@@ -656,11 +705,28 @@ mod problem_tests {
                 if status.starts_with('2') || ["live", "ready"].contains(&id) && status == "503" {
                     continue;
                 }
+                if id == "reviewResult" && ["404", "410"].contains(&status.as_str()) {
+                    assert!(
+                        response.get("content").is_none(),
+                        "{id} {status} is bodyless"
+                    );
+                    continue;
+                }
                 let schema = &response["content"]["application/problem+json"]["schema"];
-                assert_eq!(
-                    schema["allOf"][0]["$ref"], "#/components/schemas/Problem",
-                    "{id} {status}"
-                );
+                let expected = if [
+                    "createReviewRequest",
+                    "reviewRequest",
+                    "reviewResult",
+                    "cancelReviewRequest",
+                    "reviewResults",
+                ]
+                .contains(&id)
+                {
+                    "#/components/schemas/ReviewProblem"
+                } else {
+                    "#/components/schemas/Problem"
+                };
+                assert_eq!(schema["allOf"][0]["$ref"], expected, "{id} {status}");
                 let codes = schema["allOf"][1]["properties"]["code"]["enum"]
                     .as_array()
                     .unwrap_or_else(|| panic!("{id} {status}"));
@@ -746,7 +812,7 @@ mod list_query_tests {
         }
     }
 }
-type BoundedBody = std::result::Result<Bytes, BytesRejection>;
+pub(crate) type BoundedBody = std::result::Result<Bytes, BytesRejection>;
 /// A body the size limit cut short is too large; any other unreadable body is
 /// an invalid request.
 fn bounded_bytes(body: BoundedBody) -> Result<Bytes> {
@@ -758,6 +824,16 @@ fn bounded_bytes(body: BoundedBody) -> Result<Bytes> {
             )
         } else {
             CoordinatorError::new("request.invalid", "supply a bounded JSON object")
+        }
+    })
+    .and_then(|bytes| {
+        if bytes.len() <= 65_536 {
+            Ok(bytes)
+        } else {
+            Err(CoordinatorError::new(
+                "request.body-too-large",
+                "supply a JSON object of at most 65536 bytes",
+            ))
         }
     })
 }
@@ -798,7 +874,7 @@ async fn workflow_contract(
         c.authorize(Action::Start, Some(&workflow))?;
         let package = s.workflows.get(&workflow).ok_or_else(|| CoordinatorError::new("workflow-absent", "this deployment does not serve the named workflow"))?;
         deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
-        Ok(json!({"workflow":package.definition.workflow.id, "workflowRevision":package.definition.digest, "input":package.definition.workflow.input, "outcomes":package.definition.workflow.outcomes}))
+        Ok(json!({"workflow":package.definition.workflow.id, "workflowRevision":package.definition.digest, "input":package.definition.workflow.input, "outcomes":package.definition.workflow.outcomes, "reviewPolicy":crate::review_provider::policy_binding(&package.definition.workflow,&package.definition.digest)?}))
     }.await)
 }
 
@@ -1527,7 +1603,7 @@ pub fn openapi() -> Value {
         .map(|operation| operation.id)
         .collect();
     let status = json!({"type":"object","required":["runId","workflow","workflowRevision","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflow":{"type":"string"},"workflowRevision":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":{"type":"string"},"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
-    let schemas = json!({
+    let mut schemas = json!({
       "WorkflowContract":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input","outcomes"],"properties":{"workflow":{"type":"string"},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{},"outcomes":{"type":"object","minProperties":1,"maxProperties":64}}},
       "Start":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input"],"properties":{"workflow":{"type":"string","minLength":1,"maxLength":64},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{}}},
       "Reason":{"type":"object","additionalProperties":false,"required":["reason"],"properties":{"reason":{"type":"string","minLength":1,"maxLength":256}}},
@@ -1545,8 +1621,8 @@ pub fn openapi() -> Value {
       "Doctor":{"type":"object","required":["activationReady","state"],"properties":{"activationReady":{"type":"boolean"},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"}}}}},
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},
-      "ReviewCompletion":{"type":"object","additionalProperties":false,"required":["type","eventId","requestId","resultId","completedAt"],"properties":{"type":{"const":"review.completed"},"eventId":{"type":"string","format":"uuid"},"requestId":{"type":"string","format":"uuid"},"resultId":{"type":"string","format":"uuid"},"completedAt":date}},
       "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"}}}
     });
-    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Every refusal is one application/problem+json document from the closed vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."}},"schemas":schemas},"paths":paths})
+    admission_contracts::extend(&mut paths, &mut schemas);
+    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary, except the shared Review result protocol's bodyless not-found and expired responses."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."},"eventSource":{"type":"apiKey","in":"header","name":"X-Registry-Signature","description":"The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens."}},"schemas":schemas},"paths":paths})
 }

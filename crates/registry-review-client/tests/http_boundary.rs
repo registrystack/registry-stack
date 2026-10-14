@@ -152,7 +152,8 @@ async fn create_posts_once_with_caller_auth_and_stable_idempotency_key() {
     assert_eq!(method, Method::POST);
     assert_eq!(path, "/v1/review-requests");
     assert_eq!(headers["authorization"], "Bearer one-call-secret");
-    assert_eq!(headers["registry-casework-profile"], "producer");
+    assert_eq!(headers["registry-review-profile"], "producer");
+    assert!(headers.get("registry-casework-profile").is_none());
     assert_eq!(headers["idempotency-key"], "submission-7");
     assert_eq!(headers["accept"], "application/json");
     assert_eq!(headers["content-type"], "application/json");
@@ -366,7 +367,7 @@ async fn request_feed_and_cancel_use_the_product_neutral_routes() {
     let observations = observations.lock().expect("observations");
     assert_eq!(observations.len(), 3);
     for (_, _, headers) in observations.iter() {
-        assert_eq!(headers["registry-casework-profile"], "producer");
+        assert_eq!(headers["registry-review-profile"], "producer");
     }
     assert_eq!(observations[0].0, Method::GET);
     assert_eq!(
@@ -712,6 +713,10 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         .route("/media/v1/review-requests/{id}", get(wrong_media))
         .route("/problem/v1/review-requests/{id}", get(malformed_problem))
         .route("/unpaired/v1/review-requests/{id}", get(unpaired_problem))
+        .route(
+            "/provider-namespace/v1/review-requests/{id}",
+            get(wrong_problem_namespace),
+        )
         .route("/valid-problem/v1/review-requests/{id}", get(valid_problem))
         .route(
             "/server-problem/v1/review-requests/{id}",
@@ -734,6 +739,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ("media", ReviewProtocolFailure::MediaType),
         ("problem", ReviewProtocolFailure::Problem),
         ("unpaired", ReviewProtocolFailure::Problem),
+        ("provider-namespace", ReviewProtocolFailure::Problem),
     ] {
         let client = ReviewClient::new(ReviewClientConfig::new(
             Url::parse(&format!("http://{address}/{prefix}/")).expect("fixture URL"),
@@ -847,10 +853,24 @@ async fn malformed_problem() -> Response<Body> {
     problem_response(true)
 }
 
+async fn wrong_problem_namespace() -> Response<Body> {
+    let value = json!({
+        "type":"https://id.registrystack.org/problems/provider-private/request/invalid",
+        "title":"Invalid request", "status":400, "detail":"The request is invalid.",
+        "code":"request.invalid", "traceId":"0123456789abcdef0123456789abcdef"
+    });
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header("content-type", "application/problem+json")
+        .header("traceparent", TRACEPARENT)
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+
 async fn unpaired_problem() -> Response<Body> {
     let mut response = problem_response(false);
     response.headers_mut().insert(
-        "registry-casework-validation-path",
+        "registry-review-validation-path",
         HeaderValue::from_static("$.context.snapshot"),
     );
     response
@@ -859,11 +879,11 @@ async fn unpaired_problem() -> Response<Body> {
 async fn valid_problem() -> Response<Body> {
     let mut response = problem_response(false);
     response.headers_mut().insert(
-        "registry-casework-validation-path",
+        "registry-review-validation-path",
         HeaderValue::from_static("$.context.snapshot"),
     );
     response.headers_mut().insert(
-        "registry-casework-validation-reason",
+        "registry-review-validation-reason",
         HeaderValue::from_static("schema-mismatch"),
     );
     response
@@ -871,7 +891,7 @@ async fn valid_problem() -> Response<Body> {
 
 async fn server_problem() -> Response<Body> {
     let value = json!({
-        "type": "https://id.registrystack.org/problems/registry-casework/runtime/failure",
+        "type": "https://id.registrystack.org/problems/registry-review/runtime/failure",
         "title": "Casework runtime failure",
         "status": 503,
         "detail": "Casework could not complete the request.",
@@ -888,7 +908,7 @@ async fn server_problem() -> Response<Body> {
 
 fn problem_response(extra_member: bool) -> Response<Body> {
     let mut value = json!({
-        "type": "https://id.registrystack.org/problems/registry-casework/request/invalid",
+        "type": "https://id.registrystack.org/problems/registry-review/request/invalid",
         "title": "Invalid request",
         "status": 400,
         "detail": "The review request is invalid.",

@@ -73,6 +73,7 @@ pub fn config(
     };
     RuntimeConfig {
         minimum_observation_interval_seconds: registry_platform_yaml::BoundedU32::new(30).unwrap(),
+        event_sources: BTreeMap::new(),
         deployment: None,
         secret_providers: SecretProvidersConfig {
             file: Some(FileSecretProviderConfig {

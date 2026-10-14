@@ -24,5 +24,7 @@ pub use registry_review_protocol::{
     ReviewContext, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestLifecycle,
     ReviewRequestView, ReviewResult, ReviewResultFeedEntry, ReviewResultFeedPage,
     ReviewResultLookup, ReviewResultStatus, SourceContextBinding, SubjectBinding, SubmissionDigest,
+    REVIEW_PROBLEM_TYPE_BASE, REVIEW_PROFILE_HEADER, REVIEW_VALIDATION_PATH_HEADER,
+    REVIEW_VALIDATION_REASON_HEADER,
 };
 pub use uuid::Uuid;

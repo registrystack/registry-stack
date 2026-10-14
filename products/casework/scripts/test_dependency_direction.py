@@ -26,6 +26,7 @@ def metadata(edges: dict[str, list[str]]) -> dict:
         "ctl": "registry-caseworkctl",
         "coordinator": "registry-coordinator",
         "coordinator-client": "registry-coordinator-client",
+        "stack-client": "registry-stack-client",
         "serde": "serde",
     }
     return {
@@ -190,6 +191,44 @@ class DependencyDirectionTests(unittest.TestCase):
             }
         )
         self.assertEqual(MODULE.violations(graph), [])
+
+    def test_only_tooling_tests_may_use_the_coordinator_client(self):
+        for kinds in (["dev"], [None], ["build"], ["dev", None]):
+            with self.subTest(kinds=kinds):
+                graph = metadata({
+                    "ctl": ["stack-client"],
+                    "stack-client": ["coordinator-client"],
+                    "coordinator-client": [],
+                })
+                graph["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = [
+                    {"kind": kind} for kind in kinds
+                ]
+                failures = MODULE.violations(graph)
+                if kinds == ["dev"]:
+                    self.assertEqual(failures, [])
+                else:
+                    self.assertIn(
+                        "registry-caseworkctl transitively depends on Coordinator",
+                        "\n".join(failures),
+                    )
+
+    def test_tooling_test_exception_never_allows_the_coordinator_runtime(self):
+        graph = metadata({"ctl": ["coordinator"], "coordinator": []})
+        graph["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = [{"kind": "dev"}]
+        self.assertIn(
+            "registry-caseworkctl transitively depends on Coordinator",
+            "\n".join(MODULE.violations(graph)),
+        )
+
+    def test_a_dependency_test_edge_does_not_enter_the_consumers_closure(self):
+        graph = metadata({
+            "runtime": ["core"], "core": ["coordinator-client"],
+            "coordinator-client": [],
+        })
+        graph["resolve"]["nodes"][1]["deps"][0]["dep_kinds"] = [{"kind": "dev"}]
+        failures = MODULE.violations(graph)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("registry-casework-core transitively depends on Coordinator", failures[0])
 
     def test_the_coordinator_reaching_the_casework_runtime_tooling_or_adapter_is_rejected(self):
         for target, reached in (

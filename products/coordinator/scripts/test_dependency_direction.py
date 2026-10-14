@@ -57,7 +57,7 @@ INTENDED = {
         "serde",
         ("platform-testing", "dev"),
     ],
-    "client": ["platform", "serde"],
+    "client": ["platform", "review-protocol", "serde"],
     "client-node": ["client", "serde"],
     "client-py": ["client", "serde"],
     "stack-client": ["client", "breg-client", "messaging-client", "scheduling-client"],
@@ -178,6 +178,16 @@ class RuntimeTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_client_reuses_only_the_named_runtime_free_review_protocol(self):
+        self.assertEqual(MODULE.COORDINATOR_CLIENT_SUPPORT, {"registry-review-protocol"})
+        self.assertEqual(MODULE.violations(metadata()), [])
+        for dependency in ("review-client", "casework-core", "breg-client"):
+            with self.subTest(dependency=dependency):
+                self.assertIn("registry-coordinator-client reaches", failures(client=["platform", dependency]))
+        carried = failures(**{"review-protocol": ["casework-core"]})
+        for client in MODULE.COORDINATOR_CLIENTS:
+            self.assertIn(f"{client} reaches", carried)
+
     def test_the_client_reaching_the_runtime_is_refused(self):
         refused = [
             failure
@@ -195,7 +205,7 @@ class ClientTests(unittest.TestCase):
     def test_the_client_reaching_another_product_client_is_refused(self):
         self.assertIn(
             "registry-coordinator-client reaches package(s) other than the Coordinator "
-            "client and registry-platform-*: registry-messaging-client, registry-messaging-core",
+            "client and registry-platform-* and registry-review-protocol: registry-messaging-client, registry-messaging-core",
             failures(client=["platform", "messaging-client"]),
         )
 

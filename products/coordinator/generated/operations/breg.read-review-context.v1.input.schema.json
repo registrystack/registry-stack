@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "BRegProposalReviewContextContract": {
+      "additionalProperties": false,
+      "description": "Exact local interface exported by the governed producer, independent of a review policy pin.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "schemaDigest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "schemaDigest"
+      ],
+      "type": "object"
+    },
+    "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "SubjectBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "type",
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "actionId": {
+      "type": "string"
+    },
+    "contract": {
+      "$ref": "#/$defs/BRegProposalReviewContextContract"
+    },
+    "subject": {
+      "$ref": "#/$defs/SubjectBinding"
+    }
+  },
+  "required": [
+    "actionId",
+    "contract",
+    "subject"
+  ],
+  "title": "breg.read-review-context/v1 input",
+  "type": "object"
+}

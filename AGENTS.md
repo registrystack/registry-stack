@@ -20,17 +20,17 @@ The maintained runtime products include:
 - **Registry Messaging** sends one message to one destination over one
   channel for an authorized caller, rendered from a reviewed template through
   an operator-configured provider, and reports what is known about delivery.
-- **Registry Coordinator** runs finite, reviewed workflows that an authorized
-  caller starts explicitly: product API calls made through the maintained
+- **Registry Coordinator** runs finite, reviewed workflows admitted by an authorized
+  caller, an explicitly trusted event source, or the shared Review protocol: product API calls made through the maintained
   product clients, separated by waits, with progress kept durable across
   outages and restarts. Products retain effect ownership and authorization; a
   wait never renews an approval or creates downstream authority. A run
   waits until an instant or for a named completion exposed by an accepted operation,
   including a Casework result, exact BReg Proposal application, or bounded external
   read. A completion wake-up only advances an eligible authoritative read.
-  A run never starts from a product event, only from an
-  explicit caller request, so it sequences product calls for the caller who
-  started the run; it does not let one product start work in another.
+  Authenticated product events may start a run through an authored typed trigger.
+  A Review workflow maps explicit terminal outcomes to immutable review results.
+  Neither admission path grants authority to mutate the source or another product.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
@@ -110,7 +110,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
 | `crates/registry-casework-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-casework-client-py` | Internal PyO3 binding used to assemble the unified Python client |
-| `crates/registry-review-protocol` | Runtime-free wire contract between review producers and Registry Casework |
+| `crates/registry-review-protocol` | Runtime-free wire contract between review producers and providers such as Casework and Coordinator |
 | `crates/registry-review-client` | Product-neutral bounded client for the review handoff protocol, shared by the Casework client and BReg |
 | `crates/registry-scheduling-core` | Source-neutral Scheduling policy model, wire DTOs, problem codes, and authoring checks |
 | `crates/registry-scheduling` | PostgreSQL-backed Scheduling runtime and the `scheduling` binary |
@@ -265,8 +265,9 @@ product's public HTTP contract through the maintained Rust client, inherits no
 authorization from a caller or a product, and never writes to another
 product's database. The runtime may depend on product clients, product cores,
 `registry-record`, and `registry-platform-*`, and never on a product runtime,
-adopter tooling, a supporting service, or a binding; its client reaches only
-`registry-platform-*`. No product crate depends on a Coordinator crate: only
+adopter tooling, a supporting service, or a binding; its client reaches
+`registry-platform-*` and the runtime-free `registry-review-protocol` wire types.
+No product crate depends on a Coordinator crate: only
 `registry-stack-client`, on the client, and `registry-cli-docs`, on the
 runtime for the CLI reference, may. The Coordinator dependency-direction gate
 enforces both directions on the whole forward closure, and the Casework,

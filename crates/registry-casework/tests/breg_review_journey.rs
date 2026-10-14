@@ -415,7 +415,7 @@ async fn post_review(url: &Url, token: &str, body: &Value, key: &str) -> (Status
     let response = reqwest::Client::new()
         .post(url.join("v1/review-requests").unwrap())
         .bearer_auth(token)
-        .header("registry-casework-profile", "requester")
+        .header("registry-review-profile", "requester")
         .header("idempotency-key", key)
         .json(body)
         .send()

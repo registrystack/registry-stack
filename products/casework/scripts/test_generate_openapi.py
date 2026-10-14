@@ -70,7 +70,8 @@ class GeneratedContractTests(unittest.TestCase):
         self.assertFalse(any(parameter["name"] in (GEN.PROFILE,GEN.SOURCE_PROFILE) for parameter in parameters))
         parameters=self.operation("/v1/review-requests","post")["parameters"]
         self.assertFalse(any(parameter["name"]==GEN.SOURCE_PROFILE for parameter in parameters))
-        self.assertTrue(any(parameter["name"]==GEN.PROFILE and parameter["required"] for parameter in parameters))
+        self.assertTrue(any(parameter["name"]==GEN.REVIEW_PROFILE and parameter["required"] for parameter in parameters))
+        self.assertFalse(any(parameter["name"]==GEN.PROFILE for parameter in parameters))
 
     def test_mutation_revision_and_idempotency_fences_are_explicit(self):
         parameters=self.operation("/v1/review-tasks/{task_id}/decisions","post")["parameters"]
@@ -84,10 +85,22 @@ class GeneratedContractTests(unittest.TestCase):
 
     def test_paired_validation_headers_use_closed_rust_reason_enum(self):
         headers=self.operation("/v1/review-requests","post")["responses"]["400"]["headers"]
-        self.assertIn("Registry-Casework-Validation-Path",headers)
-        self.assertEqual(headers["Registry-Casework-Validation-Reason"]["schema"],GEN.ref("ReviewValidationReason"))
+        self.assertIn("Registry-Review-Validation-Path",headers)
+        self.assertEqual(headers["Registry-Review-Validation-Reason"]["schema"],GEN.ref("ReviewValidationReason"))
+        self.assertNotIn("Registry-Casework-Validation-Path",headers)
+        staff=self.operation("/v1/review-tasks/{task_id}/decisions","post")["responses"]["400"]["headers"]
+        self.assertIn("Registry-Casework-Validation-Path",staff)
         self.assertIn("policy-not-allowed",self.schemas["ReviewValidationReason"]["enum"])
         self.assertNotIn("kind-not-allowed",self.schemas["ReviewValidationReason"]["enum"])
+
+    def test_only_shared_review_routes_use_provider_neutral_problems(self):
+        for endpoint in GEN.ENDPOINTS:
+            operation=self.operation(endpoint.path,endpoint.method.lower())
+            schema=operation["responses"]["400"]["content"]["application/problem+json"]["schema"]
+            component=self.document["components"]["schemas"][schema["$ref"].rsplit("/",1)[1]]
+            uri=component["allOf"][1]["properties"]["type"]["const"]
+            expected=GEN.REVIEW_PROBLEM_BASE if endpoint.review else "https://id.registrystack.org/problems/registry-casework/"
+            self.assertEqual(uri,expected+"request/invalid",endpoint.path)
 
     def test_result_lookup_keeps_pending_concealed_and_expired_bodyless(self):
         changed=contract()

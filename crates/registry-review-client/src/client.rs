@@ -11,8 +11,9 @@ use registry_platform_httputil::{
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
     ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_REQUESTS_PATH,
-    REVIEW_RESULTS_FEED_PATH,
+    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PROBLEM_TYPE_BASE,
+    REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
+    REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -29,12 +30,8 @@ use crate::{
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-const CASEWORK_PROFILE_HEADER: &str = "registry-casework-profile";
-const VALIDATION_PATH_HEADER: &str = "registry-casework-validation-path";
-const VALIDATION_REASON_HEADER: &str = "registry-casework-validation-reason";
 const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
-const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-casework/";
 
 pub struct ReviewClient {
     http: reqwest::Client,
@@ -297,10 +294,10 @@ impl ReviewClient {
     ) -> Result<RequestBuilder, ReviewClientError> {
         auth.check().map_err(ReviewClientError::invalid_request)?;
         let profile = HeaderValue::from_str(auth.profile)
-            .map_err(|_| ReviewClientError::invalid_request("the Casework profile is invalid"))?;
+            .map_err(|_| ReviewClientError::invalid_request("the review profile is invalid"))?;
         Ok(request
             .header(AUTHORIZATION, auth.token.authorization_header_value())
-            .header(HeaderName::from_static(CASEWORK_PROFILE_HEADER), profile)
+            .header(HeaderName::from_static(REVIEW_PROFILE_HEADER), profile)
             .header(ACCEPT, JSON_MEDIA_TYPE))
     }
 
@@ -427,13 +424,13 @@ impl ReviewClient {
         let trace_id = known_trace_id.or_else(|| response_trace(status, response.headers()).ok());
         let validation_paths = response
             .headers()
-            .get_all(VALIDATION_PATH_HEADER)
+            .get_all(REVIEW_VALIDATION_PATH_HEADER)
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         let validation_reasons = response
             .headers()
-            .get_all(VALIDATION_REASON_HEADER)
+            .get_all(REVIEW_VALIDATION_REASON_HEADER)
             .iter()
             .cloned()
             .collect::<Vec<_>>();
@@ -457,7 +454,10 @@ impl ReviewClient {
             && document.code.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
             });
-        let expected_type = format!("{PROBLEM_TYPE_BASE}{}", document.code.replace('.', "/"));
+        let expected_type = format!(
+            "{REVIEW_PROBLEM_TYPE_BASE}{}",
+            document.code.replace('.', "/")
+        );
         if document.status != status.as_u16()
             || trace_id.as_deref() != Some(document.trace_id.as_str())
             || !valid_code

@@ -483,12 +483,15 @@ fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
 }
 
 /// One header per line, so `curl --header @file` sends the bearer credential
-/// and, for a client bound to a Casework access profile, that profile.
+/// and, for a client bound to an access profile, that profile for each protocol.
+/// Each route selects its own header and independently checks the actor's role.
 fn header_file(credential: &[u8], profile: Option<&str>) -> Zeroizing<Vec<u8>> {
     let mut header = Zeroizing::new(b"Authorization: Bearer ".to_vec());
     header.extend_from_slice(credential);
     if let Some(profile) = profile {
         header.extend_from_slice(b"\nRegistry-Casework-Profile: ");
+        header.extend_from_slice(profile.as_bytes());
+        header.extend_from_slice(b"\nRegistry-Review-Profile: ");
         header.extend_from_slice(profile.as_bytes());
     }
     header.push(b'\n');

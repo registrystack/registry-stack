@@ -253,6 +253,12 @@ impl NarrowedLimits {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct AuthoredWorkflow {
+    /// Optional authenticated product-event starts keyed by stable trigger ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    event_triggers: BTreeMap<LocalId, AuthoredEventTrigger>,
+    /// Exposes this Workflow as an exact product-neutral Review policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review: Option<crate::review_provider::ReviewPolicy>,
     /// The typed Workflow start input, or a mapping supplying the called Operation input.
     input: Schema,
     /// Maximum seconds from Run admission to expiry, from 1 to 31536000.
@@ -263,6 +269,22 @@ struct AuthoredWorkflow {
     steps: BTreeMap<LocalId, AuthoredStep>,
     /// Named terminal result schemas used by finish Steps.
     outcomes: BTreeMap<LocalId, Schema>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct AuthoredEventTrigger {
+    /// Logical producer binding declared in runtime eventSources.
+    source: LocalId,
+    /// Exact producer event type accepted by this trigger.
+    event_type: registry_platform_yaml::ExternalId,
+    /// Exact producer data-schema identifier accepted by this trigger.
+    data_schema: registry_platform_yaml::ExternalId,
+    /// Schema for the complete authenticated event envelope before input mapping.
+    event: Schema,
+    /// Ordinary typed Mapping from the event envelope to Workflow start input.
+    input: AuthoredMapping,
 }
 
 #[derive(Debug, Deserialize)]
@@ -878,6 +900,28 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         );
     }
     let input = resolver.resolve(&project.workflow.input.0.into_value(), "/workflow/input")?;
+    let event_triggers = project
+        .workflow
+        .event_triggers
+        .into_iter()
+        .map(|(id, trigger)| {
+            let id = id.into_string();
+            let event = resolver.resolve(
+                &trigger.event.0.into_value(),
+                &format!("/workflow/eventTriggers/{id}/event"),
+            )?;
+            Ok((
+                id,
+                crate::event_trigger::EventTrigger {
+                    source: trigger.source.into_string(),
+                    event_type: trigger.event_type.into_string(),
+                    data_schema: trigger.data_schema.into_string(),
+                    event,
+                    input: trigger.input.into(),
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let outcomes = project
         .workflow
         .outcomes
@@ -1032,6 +1076,8 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         start: project.workflow.start.into_string(),
         steps,
         outcomes,
+        review: project.workflow.review,
+        event_triggers,
     })
 }
 
@@ -1683,6 +1729,7 @@ pub fn project_schema() -> std::result::Result<String, serde_json::Error> {
         ("/properties/operations", 0, 64),
         ("/properties/functions", 0, 128),
         ("/properties/types", 0, 128),
+        ("/$defs/AuthoredWorkflow/properties/eventTriggers", 0, 16),
         ("/$defs/AuthoredWorkflow/properties/steps", 1, 64),
         ("/$defs/AuthoredWorkflow/properties/outcomes", 1, 64),
     ] {

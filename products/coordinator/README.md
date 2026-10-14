@@ -8,7 +8,7 @@ retain authority and ownership of every effect.
 The [product contract](PRODUCT-CONTRACT.md) defines the boundary; the
 [deployment runbook](DEPLOYMENT.md) covers installation, custody, activation, and recovery.
 Coordinator is pre-1.0. Use one source version's binaries, packages, configuration, and state
-layout together. The current protected state schema is version 3, with no in-place migration
+layout together. The current protected state schema is version 4, with no in-place migration
 from earlier pilot layouts.
 
 ## Create and check a project
@@ -119,11 +119,29 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
   request under an exact expected policy and waits for its result.
 - [Reviewed notice](examples/reviewed-notice/README.md) combines standalone review with a fresh
   record and permission check before Messaging.
+- [Review provider](examples/review-provider/README.md) assesses a BReg Proposal automatically
+  or through Casework, with independent application, stale-condition refusal and recovery.
+- [Product events](examples/product-events/README.md) admits committed BReg events and a
+  conforming alternate-source fixture through the same signed event contract.
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
 - [External job](examples/external-job/README.md) uses a bounded completion poll and pure
   interpreter for one previously selected external job.
 
 ## Waits and polling
+
+To assess proposed changes, add `workflow.review` and map every Workflow outcome to an explicit
+Review status. The exact policy pin appears as `reviewPolicy` in workflow metadata. Producers use
+the shared Review client with `Registry-Review-Profile`. A Workflow can approve from a fresh
+source read or submit its own independently authorized request to Casework. The source still
+owns final authorization and checks conditions again at commit. See the
+[Review provider contract](PRODUCT-CONTRACT.md#admission-and-integration).
+
+To react to product events, declare `workflow.eventTriggers` and bind each logical source in
+runtime `eventSources`. The receiver at `POST /v1/events/{workflow}/{trigger}` accepts the shared
+platform signed HookEnvelope. Its ordinary mapping selects typed Workflow input; product event
+names and payload meanings remain in the authored project. The same event recovers one durable
+Run after a lost response or restart. Downstream calls require their own product credentials.
+Select state transitions and guard writes back to the source to avoid fresh-event loops.
 
 `wait-until` persists an instant and continues immediately when that instant has passed.
 `wait-for` observes a named completion exposed by an earlier accepted call:

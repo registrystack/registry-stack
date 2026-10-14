@@ -72,9 +72,9 @@ pub mod coordinator {
     pub use registry_coordinator_client::{
         BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError,
         CoordinatorComplete, CoordinatorProtocolFailure, EffectKind, EffectState, EffectStatus,
-        KeyRequirement, OperationIdentity, RecoverySemantics, RecoveryStatus, RetryBlockReason,
-        RetryScheduled, RunInspection, RunList, RunListQuery, RunListState, RunStatus,
-        StartRunRequest, StepStatus, TransportKind, Uuid, WaitStatus, WorkflowContract,
+        KeyRequirement, OperationIdentity, PolicyBinding, RecoverySemantics, RecoveryStatus,
+        RetryBlockReason, RetryScheduled, RunInspection, RunList, RunListQuery, RunListState,
+        RunStatus, StartRunRequest, StepStatus, TransportKind, Uuid, WaitStatus, WorkflowContract,
     };
 }
 

@@ -45,6 +45,7 @@ async fn execute(cli: Cli) -> Result<()> {
     let d = deployment::config(&runtime)?;
     let workflows = Arc::new(deployment::load_workflows(d)?);
     workflows.validate(&runtime)?;
+    check_event_ingress_keys(&runtime, cli.recovery_only)?;
     let authenticator = Arc::new(
         d.authentication
             .authenticator(&runtime.secret_providers, d.local())
@@ -134,6 +135,16 @@ async fn execute(cli: Cli) -> Result<()> {
         "serving Registry Coordinator"
     );
     serve_until(server, worker, shutdown, stop).await
+}
+
+/// Recovery disables event intake, so unavailable ingress secrets must not
+/// prevent an operator from inspecting and reconciling retained work.
+fn check_event_ingress_keys(runtime: &RuntimeConfig, recovery_only: bool) -> Result<()> {
+    if recovery_only {
+        Ok(())
+    } else {
+        crate::event_trigger::check_keys(runtime)
+    }
 }
 
 /// Resolve on the first SIGTERM or SIGINT. The SIGTERM handler is installed
@@ -335,6 +346,27 @@ pub fn command() -> clap::Command {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[test]
+    fn recovery_only_does_not_resolve_unavailable_event_ingress_keys() {
+        let absent = tempfile::tempdir().unwrap();
+        let runtime: RuntimeConfig = serde_json::from_value(serde_json::json!({
+            "secretProviders":{"environment":{},"file":{"root":absent.path().canonicalize().unwrap()}},
+            "database":{"runtimeUrlRef":"secret:env/COORDINATOR_TEST_DATABASE_URL","migrationUrlRef":"secret:env/COORDINATOR_TEST_DATABASE_URL"},
+            "namespace":"coordinator_recovery_ingress",
+            "connections":{"source":{"type":"breg","baseUrl":"http://127.0.0.1:9999","profile":"synthetic-reader",
+                "authorization":{"tokenEndpoint":"http://127.0.0.1:9998/token","clientId":"synthetic-client",
+                    "signingKeyRef":"secret:file/client-key","resource":"urn:example:registry","scopes":["records:read"]}}},
+            "eventSources":{"registry":{
+                "source":"urn:example:synthetic-event-source",
+                "signingKeyRef":"secret:file/unavailable-event-key"
+            }}
+        }))
+        .unwrap();
+        runtime.validate().unwrap();
+        assert!(check_event_ingress_keys(&runtime, false).is_err());
+        check_event_ingress_keys(&runtime, true).unwrap();
+    }
 
     fn increment(counter: &AtomicUsize) {
         counter.fetch_add(1, Ordering::SeqCst);
