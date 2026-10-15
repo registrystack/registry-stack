@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: an event with no compiled delivery is bounded at 1 MiB, the
+  Version 1 signable bound, instead of 2 MiB, and a larger one is refused
+  when it is recorded. Publish a smaller event.
+- The Rust client's `verify_webhook` delegates to the shared hooks receiver
+  and keeps its API and refusal codes. A signed header that is not visible
+  ASCII is refused as `malformed-signature`.
 - `bregctl dev` pulls the same pinned PostgreSQL image from Docker Hub after
   ECR Public throttled hosted development journeys. Existing owned containers
   at the prior exact ECR reference remain valid.

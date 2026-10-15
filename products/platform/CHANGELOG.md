@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- `registry-platform-hooks` gains `receiver::verify_delivery`, behind the
+  opt-in `receiver` feature: the one reading of a signed Version 1 delivery's
+  headers, counters, body bound and signature, shared by the BReg client and
+  Coordinator's event intake. A receiver keeps only its local policy.
+- BREAKING: `registry-platform-hooks` bounds an event envelope at 1 MiB
+  (`MAX_ENVELOPE_BYTES`), the Version 1 signable bound, instead of 2 MiB, so
+  no envelope is admitted that could never be signed and delivered. A larger
+  envelope is refused with `InvalidProjection`; publish a smaller event.
+- BREAKING: `registry-platform-calendar` resolves a working-day deadline
+  inside a daylight-saving gap to the first instant after the gap, and one
+  inside a fold to the earlier instant, instead of refusing it with
+  `NonexistentLocalTime` or `AmbiguousLocalTime`. The rule has no knob.
+  Interval conversion (`local_interval` and weekly openings) still refuses an
+  endpoint inside a gap or fold.
+- BREAKING: `CalendarEvaluationError::InvalidDueTime`,
+  `InvalidWorkingDayOffset`, `InvalidWarningOffset` and
+  `InvalidReminderOffset` carry the refused value (and the offset limit), and
+  their messages name the fix instead of a caller's configuration keys. Match
+  them with `{ .. }` and attach your own configuration pointer.
 - BREAKING: `registry-platform-audit` bounds a `stdout` audit destination
   that stops taking lines. One thread writes the stream, and an append waits
   at most 5 seconds for its line. A destination that holds one line past that

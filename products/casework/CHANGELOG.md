@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- An activity clock whose due time falls inside a daylight-saving gap on a
+  given date is due at the first instant after the gap, and one inside a
+  fold at the earlier instant, so a due time that passes `check` evaluates on
+  every date instead of failing at runtime.
+- BREAKING: `registry_casework_core::ClockPolicyError` gains
+  `Calendar { at, reason }`, which keeps the calendar's refusal and the clock
+  field it concerns (such as `/reminders/1/workingDaysBefore`) instead of
+  reporting `Value`, and is no longer `Copy`. The runtime logs that reason
+  before refusing a stored clock it cannot evaluate.
 - `caseworkctl dev` pulls the same pinned PostgreSQL image from Docker Hub
   after ECR Public throttled hosted development journeys. Existing owned
   containers at the prior exact ECR reference remain valid.
