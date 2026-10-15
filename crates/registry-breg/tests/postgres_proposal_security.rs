@@ -1056,6 +1056,16 @@ fn review_binding() -> Arc<registry_breg::review_store::ReviewAuthorityRegistry>
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     let mut source = source(false);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] = json!([
+        "get",
+        "edit",
+        "submit",
+        "cancel",
+        "get-review-status",
+        "get-review-context"
+    ]);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["currentName", "proposedName"]);
     source["reviewAuthorities"] =
         json!([{"id":"casework","protocol":"id.registrystack.org/protocols/review/v1"}]);
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"casework","source":"proposal-security",
@@ -1112,6 +1122,10 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     assert_eq!(value["authority"], "casework");
     assert_eq!(value["subject"]["id"], id);
     assert_eq!(value["result"]["state"], "pending");
+    assert!(
+        value.get("requestId").is_none(),
+        "no correlation before acceptance"
+    );
     assert_review_contract(&fixture.registry, &value);
     assert!(value["context"].get("fields").is_none());
     assert!(!value.to_string().contains("current-name-canary"));
@@ -1225,6 +1239,82 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
         submission_digest: registry_review_client::SubmissionDigest::parse(&digest).unwrap(),
     };
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",&[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+    let accepted_value = serde_json::to_value(&accepted).unwrap();
+    for state in ["accepted", "cancelling", "cancelled"] {
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state=$1,withdrawn=($1<>'accepted')", &[&state]).await.unwrap();
+        for (http, selected) in [(&service, "review-status"), (&fixture.http, "clerk")] {
+            let (code, value, _) = send(
+                http,
+                Method::GET,
+                &format!("/v1/proposals/{id}/review-status?accessProfile={selected}"),
+                Value::Null,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(code, StatusCode::OK, "{state} correlation: {value}");
+            assert_eq!(value["requestId"], accepted.request_id.to_string());
+        }
+        let purpose_read = service
+            .client
+            .read_proposal_review_by_id(&binding, id)
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(
+            purpose_read.request_id.as_deref(),
+            Some(accepted.request_id.to_string().as_str())
+        );
+    }
+    let (code, context, _) = send(
+        &fixture.http,
+        Method::GET,
+        &format!("/v1/proposals/{id}/review-context?accessProfile=clerk"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{context}");
+    assert!(
+        context.get("requestId").is_none(),
+        "context does not expose status correlation"
+    );
+    let (code, denied, _) = send(&human, Method::GET, &path, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    assert!(!denied
+        .to_string()
+        .contains(&accepted.request_id.to_string()));
+    for field in ["id", "version", "digest", "submissionDigest", "requestId"] {
+        let mut changed = accepted_value.clone();
+        match field {
+            "id" => changed["subject"][field] = json!(uuid::Uuid::new_v4()),
+            "version" => changed["subject"][field] = json!("2"),
+            "digest" => changed["subject"][field] = json!(format!("sha256:{}", "f".repeat(64))),
+            "submissionDigest" => changed[field] = json!(format!("sha256:{}", "f".repeat(64))),
+            "requestId" => changed[field] = json!(uuid::Uuid::nil()),
+            _ => unreachable!(),
+        }
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET accepted_binding=$1", &[&changed]).await.unwrap();
+        for (http, selected) in [(&service, "review-status"), (&fixture.http, "clerk")] {
+            let (code, value, _) = send(
+                http,
+                Method::GET,
+                &format!("/v1/proposals/{id}/review-status?accessProfile={selected}"),
+                Value::Null,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(
+                code,
+                StatusCode::NOT_FOUND,
+                "substituted accepted {field}: {value}"
+            );
+            assert!(value.get("requestId").is_none());
+        }
+    }
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',withdrawn=false,accepted_binding=$1", &[&accepted_value]).await.unwrap();
     let now = chrono::Utc::now();
     let result = registry_review_client::ReviewResult {
         result_id: uuid::Uuid::new_v4(),
@@ -1248,6 +1338,7 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     let (code, value, _) = send(&service, Method::GET, &path, Value::Null, None, None).await;
     assert_eq!(code, StatusCode::OK, "{value}");
     assert_eq!(value["result"]["state"], "approved");
+    assert_eq!(value["requestId"], parsed.request_id.to_string());
     fixture
         .database
         .admin

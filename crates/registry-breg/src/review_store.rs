@@ -1236,6 +1236,86 @@ impl ReviewResultSource for ReviewAuthorityClient {
     }
 }
 
+/// Read the exact accepted correlation without treating worker state as authority.
+/// In particular, cancellation keeps the original accepted binding while it settles.
+pub(crate) async fn load_status_binding(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    action_id: &str,
+    proposal_id: Uuid,
+    frozen: &ProposalSnapshot,
+) -> Result<Option<ReviewRequestAccepted>, MutationError> {
+    let CompiledProposalReview::Required {
+        authority: expected_authority,
+        source,
+        policy,
+    } = frozen.review_requirement()
+    else {
+        return Err(MutationError::PreconditionFailed);
+    };
+    let row = client
+        .query_opt(
+            "SELECT authority,proposal_digest,expected_policy,create_request,
+            producer_id,expected_submission_digest,accepted_binding
+            FROM registry_internal.registry_proposal_review_submissions
+            WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&action_id, &proposal_id, &i64::from(frozen.version().get())],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(3)).map_err(|_| MutationError::PreconditionFailed)?;
+    create
+        .check()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    let context_reference = format!(
+        "breg:{}:{}:{}:{}",
+        registry.registry_id(),
+        action_id,
+        proposal_id,
+        frozen.version().get()
+    );
+    let expected_digest = registry_review_client::submission_digest(
+        &row.get::<_, String>(4),
+        registry.registry_id(),
+        &create,
+    )
+    .map_err(|_| MutationError::PreconditionFailed)?;
+    if row.get::<_, String>(0) != *expected_authority
+        || row.get::<_, String>(1) != frozen.effect_digest().as_str()
+        || row.get::<_, Value>(2)
+            != serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?
+        || create.policy != *policy
+        || create.subject.source != *source
+        || create.subject.subject_type != "proposal"
+        || create.subject.id != proposal_id.to_string()
+        || create.subject.version != frozen.version().get().to_string()
+        || create.subject.digest.as_str() != frozen.effect_digest().as_str()
+        || !matches!(&create.context,registry_review_client::ReviewContext::CurrentSource { binding }
+                if binding.reference == context_reference)
+        || expected_digest.as_str() != row.get::<_, String>(5)
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let accepted = row
+        .get::<_, Option<Value>>(6)
+        .map(serde_json::from_value::<registry_review_client::ReviewRequestAccepted>)
+        .transpose()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    if accepted.as_ref().is_some_and(|accepted| {
+        accepted.request_id.is_nil()
+            || accepted.subject.check().is_err()
+            || accepted.policy.check().is_err()
+            || accepted.subject != create.subject
+            || !policy.matches(&accepted.policy)
+            || accepted.submission_digest != expected_digest
+    }) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(accepted)
+}
+
 pub(crate) async fn load_accepted_binding(
     client: &impl GenericClient,
     action_id: &str,

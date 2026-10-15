@@ -182,5 +182,60 @@ class ProposalStartTests(unittest.TestCase):
             server.server_close()
 
 
+class ProposalReviewCorrelationTests(unittest.TestCase):
+    def test_status_preserves_accepted_correlation_without_widening_context(self):
+        request_id = '00000000-0000-4000-8000-000000000002'
+        readable = dict(PROPOSAL, links=dict(PROPOSAL['links'],
+            reviewStatus={'method': 'GET', 'path': f'/v1/proposals/{ID}/review-status', 'accessProfile': 'reader', 'operation': 'get-review-status'},
+            reviewContext={'method': 'GET', 'path': f'/v1/proposals/{ID}/review-context', 'accessProfile': 'reader', 'operation': 'get-review-context'}))
+        base = {'id': ID, 'actionId': 'correct', 'actionRevision': REVISION, 'submissionVersion': 1,
+                'revision': 2, 'effectDigest': REVISION, 'reviewable': True,
+                'subject': {'source': 'proposal-lookup', 'subjectType': 'proposal', 'id': ID, 'version': '1', 'digest': REVISION},
+                'context': {'reference': 'opaque-review-context'}}
+        status = dict(base, authority='review', policy={'id': 'correction'}, result={'state': 'pending'})
+        context = dict(base, context=dict(base['context'], fields={}, contract={
+            'id': 'urn:registry:breg:review-context:proposal-lookup:correct:display',
+            'revision': REVISION, 'schemaDigest': REVISION}))
+        response_value = status
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                value = METADATA if self.path.startswith('/tenant/v1/registry') else response_value if '/review-' in self.path else readable
+                payload = json.dumps(value).encode()
+                self.send_response(200)
+                for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                 ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'),
+                                 ('vary', 'authorization, accept'), ('content-length', str(len(payload)))]:
+                    self.send_header(key, val)
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
+            binding = client.registry_contract('reader').select_proposal_get('reader')
+            current = client.get_proposal(binding, ID)
+            self.assertNotIn('requestId', client.read_proposal_review_status(current)['value'])
+            response_value = dict(status, requestId=request_id)
+            self.assertEqual(client.read_proposal_review_status(current)['value']['requestId'], request_id)
+            response_value = dict(status, requestId='00000000-0000-0000-0000-000000000000')
+            with self.assertRaises(BaseRegistryClientError):
+                client.read_proposal_review_status(current)
+            response_value = context
+            self.assertNotIn('requestId', client.read_proposal_review_context(current)['value'])
+            response_value = dict(context, requestId=request_id)
+            with self.assertRaises(BaseRegistryClientError):
+                client.read_proposal_review_context(current)
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+
 if __name__ == '__main__':
     unittest.main()

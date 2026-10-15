@@ -224,6 +224,8 @@ fn review_document_schema(context: bool) -> Value {
     if context {
         properties["context"]["properties"]["fields"] = json!({"type":"object"});
         properties["context"]["required"] = json!(["reference", "contract", "fields"]);
+    } else {
+        properties["requestId"] = json!({"type":"string","format":"uuid"});
     }
     json!({"type":"object","additionalProperties":false,"required":["id","actionId","actionRevision","submissionVersion","revision","effectDigest","subject","context","reviewable"],"properties":properties})
 }

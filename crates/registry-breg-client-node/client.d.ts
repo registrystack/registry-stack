@@ -942,6 +942,7 @@ export interface BRegProposalReviewDocument {
   readonly submissionVersion: number; readonly revision: number; readonly effectDigest: string; readonly reviewable: boolean
   readonly subject: {readonly source: string; readonly subjectType: 'proposal'; readonly id: string; readonly version: string; readonly digest: string}
   readonly context: {readonly reference: string; readonly contract?: {readonly id: string; readonly revision: string; readonly schemaDigest: string}; readonly fields?: Readonly<Record<string, JsonValue>>}
+  readonly requestId?: string
   readonly authority?: string; readonly policy?: {readonly id: string; readonly version: string; readonly digest: string}
   readonly result?: {readonly state: 'pending' | 'approved' | 'rejected' | 'changes-requested' | 'answered' | 'cancelled' | 'superseded' | 'expired'; readonly resultId?: string; readonly completedAt?: string; readonly availableUntil?: string}
 }

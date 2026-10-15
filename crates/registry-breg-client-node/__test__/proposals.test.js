@@ -142,3 +142,39 @@ test('Proposal Start accepts exact Draft replay and refuses otherwise valid term
     }
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+
+test('review status preserves accepted request correlation without widening context reads', async () => {
+  const requestId = '00000000-0000-4000-8000-000000000002';
+  const readable = {...proposal, links: {...proposal.links,
+    reviewStatus: {method: 'GET', path: `/v1/proposals/${id}/review-status`, accessProfile: 'author', operation: 'get-review-status'},
+    reviewContext: {method: 'GET', path: `/v1/proposals/${id}/review-context`, accessProfile: 'author', operation: 'get-review-context'}}};
+  const base = {id, actionId: 'correct', actionRevision: revision, submissionVersion: 1, revision: 2,
+    effectDigest: revision, subject: {source: 'proposal-client', subjectType: 'proposal', id, version: '1', digest: revision},
+    context: {reference: 'opaque-review-context'}, reviewable: true};
+  const status = {...base, authority: 'review', policy: {id: 'correction'}, result: {state: 'pending'}};
+  const context = {...base, context: {...base.context,
+    contract: {id: 'urn:registry:breg:review-context:proposal-client:correct:display', revision, schemaDigest: revision}, fields: {}}};
+  let responseValue = status;
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store',
+      vary: 'authorization, accept', traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
+    response.end(JSON.stringify(request.url.startsWith('/tenant/v1/registry') ? metadata
+      : request.url.includes('/review-') ? responseValue : readable));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/tenant/`});
+    const binding = (await client.registryContract('author')).selectProposalGet('author');
+    const current = await client.getProposal(binding, id);
+    assert.equal((await client.readProposalReviewStatus(current)).value.requestId, undefined);
+    responseValue = {...status, requestId};
+    assert.equal((await client.readProposalReviewStatus(current)).value.requestId, requestId);
+    responseValue = {...status, requestId: '00000000-0000-0000-0000-000000000000'};
+    await assert.rejects(client.readProposalReviewStatus(current), error => error.kind === 'invalid-request');
+    responseValue = context;
+    assert.equal((await client.readProposalReviewContext(current)).value.requestId, undefined);
+    responseValue = {...context, requestId};
+    await assert.rejects(client.readProposalReviewContext(current), error => error.kind === 'invalid-request');
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

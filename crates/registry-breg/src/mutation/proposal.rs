@@ -2316,8 +2316,7 @@ impl MutationCoordinator {
             .map_err(workflow_error)?;
         let CompiledProposalReview::Required {
             authority: frozen_authority,
-            source,
-            policy,
+            ..
         } = frozen.review_requirement()
         else {
             return Err(MutationError::PreconditionFailed);
@@ -2328,67 +2327,14 @@ impl MutationCoordinator {
         {
             return Err(MutationError::PreconditionFailed);
         }
-        let row = tx
-            .query_opt(
-                "SELECT authority,proposal_digest,expected_policy,create_request,
-            producer_id,expected_submission_digest,accepted_binding
-            FROM registry_internal.registry_proposal_review_submissions
-            WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
-                &[
-                    &document.action_id,
-                    &document.proposal_id,
-                    &document.header.submission_version,
-                ],
-            )
-            .await
-            .map_err(map_database_error)?
-            .ok_or(MutationError::PreconditionFailed)?;
-        let create: registry_review_client::ReviewCreateRequest =
-            serde_json::from_value(row.get(3)).map_err(|_| MutationError::PreconditionFailed)?;
-        create
-            .check()
-            .map_err(|_| MutationError::PreconditionFailed)?;
-        let context_reference = format!(
-            "breg:{}:{}:{}:{}",
-            registry.registry_id(),
-            document.action_id,
+        let accepted = crate::review_store::load_status_binding(
+            tx,
+            registry,
+            &document.action_id,
             document.proposal_id,
-            frozen.version().get()
-        );
-        let expected_digest = registry_review_client::submission_digest(
-            &row.get::<_, String>(4),
-            registry.registry_id(),
-            &create,
+            frozen,
         )
-        .map_err(|_| MutationError::PreconditionFailed)?;
-        if row.get::<_, String>(0) != *expected_authority
-            || row.get::<_, String>(1) != frozen.effect_digest().as_str()
-            || row.get::<_, Value>(2)
-                != serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?
-            || create.policy != *policy
-            || create.subject.source != *source
-            || create.subject.subject_type != "proposal"
-            || create.subject.id != document.proposal_id.to_string()
-            || create.subject.version != frozen.version().get().to_string()
-            || create.subject.digest.as_str() != frozen.effect_digest().as_str()
-            || !matches!(&create.context,registry_review_client::ReviewContext::CurrentSource { binding }
-                if binding.reference == context_reference)
-            || expected_digest.as_str() != row.get::<_, String>(5)
-        {
-            return Err(MutationError::PreconditionFailed);
-        }
-        let accepted = row
-            .get::<_, Option<Value>>(6)
-            .map(serde_json::from_value::<registry_review_client::ReviewRequestAccepted>)
-            .transpose()
-            .map_err(|_| MutationError::PreconditionFailed)?;
-        if accepted.as_ref().is_some_and(|accepted| {
-            accepted.subject != create.subject
-                || !policy.matches(&accepted.policy)
-                || accepted.submission_digest != expected_digest
-        }) {
-            return Err(MutationError::PreconditionFailed);
-        }
+        .await?;
         if let Some(row) = tx
             .query_opt(
                 "SELECT authority,result_id,result,status,completed_at,available_until
@@ -2479,6 +2425,17 @@ impl MutationCoordinator {
                     frozen.review_requirement(),
                     CompiledProposalReview::Required { .. }
                 ) {
+                    if let Some(accepted) = crate::review_store::load_status_binding(
+                        tx,
+                        registry,
+                        &document.action_id,
+                        document.proposal_id,
+                        frozen,
+                    )
+                    .await?
+                    {
+                        value["requestId"] = json!(accepted.request_id);
+                    }
                     value["result"] = proposal_review_result(tx, document).await?;
                 }
             }

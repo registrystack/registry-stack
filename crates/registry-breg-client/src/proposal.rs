@@ -198,6 +198,9 @@ pub struct BRegProposalReviewDocument {
     pub subject: BRegProposalReviewSubject,
     pub context: BRegProposalReviewContext,
     pub reviewable: bool,
+    /// Provider correlation for the exact accepted submission, on status reads only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1357,8 +1360,14 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
         document.context.contract.is_some()
             && document.context.fields.is_some()
             && document.result.is_none()
+            && document.request_id.is_none()
     } else {
         document.context.fields.is_none()
+            && document.request_id.as_deref().is_none_or(|id| {
+                document.policy.is_some()
+                    && Uuid::parse_str(id)
+                        .is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == id)
+            })
             && document.result.is_some() == document.policy.is_some()
             && document.result.as_ref().is_none_or(valid_review_result)
     }
@@ -2103,6 +2112,75 @@ mod tests {
         server.abort();
     }
     #[tokio::test]
+    async fn review_status_preserves_only_valid_accepted_request_correlation() {
+        let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
+            "submissionVersion":1,"revision":2,"effectDigest":REVISION,
+            "subject":{"source":"directory","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},
+            "context":{"reference":"breg:directory:correct-address:proposal:1"},"reviewable":true,
+            "authority":"review","policy":{"id":"address-review"},"result":{"state":"pending"},"requestId":ID});
+        let (client, response, server) = proposal_response_client(valid.clone()).await;
+        let mut prior = document();
+        prior["links"]["reviewStatus"] = json!({"method":"GET","path":format!("/v1/proposals/{ID}/review-status"),"accessProfile":"author","operation":"get-review-status"});
+        let prior = proposal(&client, prior);
+        let binding = BRegProposalReviewBinding::from_metadata(
+            &json!([{"actionId":"correct-address","accessProfile":"author","operations":["get-review-status"]}]),
+            &client.source_binding(), "author", "correct-address", true).unwrap();
+        assert_eq!(
+            client
+                .read_proposal_review_status(&prior)
+                .await
+                .unwrap()
+                .value
+                .request_id
+                .as_deref(),
+            Some(ID)
+        );
+        assert_eq!(
+            client
+                .read_proposal_review_by_id(&binding, ID)
+                .await
+                .unwrap()
+                .value
+                .request_id
+                .as_deref(),
+            Some(ID)
+        );
+        let mut pending = valid.clone();
+        pending.as_object_mut().unwrap().remove("requestId");
+        *response.lock().unwrap() = pending;
+        assert!(client
+            .read_proposal_review_status(&prior)
+            .await
+            .unwrap()
+            .value
+            .request_id
+            .is_none());
+        for request_id in [
+            json!(""),
+            json!("not-a-request"),
+            json!("00000000-0000-0000-0000-000000000000"),
+            json!("00000000-0000-4000-8000-00000000000A"),
+            json!(42),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["requestId"] = request_id;
+            *response.lock().unwrap() = invalid;
+            assert!(client.read_proposal_review_status(&prior).await.is_err());
+            assert!(client
+                .read_proposal_review_by_id(&binding, ID)
+                .await
+                .is_err());
+        }
+        let mut no_review = valid;
+        for field in ["authority", "policy", "result"] {
+            no_review.as_object_mut().unwrap().remove(field);
+        }
+        *response.lock().unwrap() = no_review;
+        assert!(client.read_proposal_review_status(&prior).await.is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn review_context_exchange_requires_a_closed_producer_contract_binding() {
         use axum::{extract::State, routing::get, Json, Router};
         use std::sync::{Arc, Mutex};
@@ -2171,6 +2249,9 @@ mod tests {
             REVISION
         );
         let mut refused = Vec::new();
+        let mut status_correlation = valid.clone();
+        status_correlation["requestId"] = json!(ID);
+        refused.push(status_correlation);
         for field in ["id", "revision", "schemaDigest"] {
             let mut changed = valid.clone();
             changed["context"]["contract"][field] = json!("unbound-contract-canary");

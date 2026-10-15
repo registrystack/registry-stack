@@ -225,3 +225,8 @@ function mayHaveTakenEffect(error: BaseRegistryClientError): boolean {
   return unknown
 }
 void mayHaveTakenEffect
+
+client.readProposalReviewStatus(proposal).then(outcome => {
+  const acceptedRequestId: string | undefined = outcome.value.requestId
+  acceptedRequestId?.toUpperCase()
+})
