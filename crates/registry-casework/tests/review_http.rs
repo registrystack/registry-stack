@@ -3439,7 +3439,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         receipt.decision,
         registry_casework_core::ReviewDecisionType::Answer
     );
-    assert_eq!(receipt.outcome.as_deref(), Some("found"));
+    assert_eq!(receipt.outcome, "found");
     let receipt_wire = serde_json::to_value(receipt).expect("receipt wire");
     assert_eq!(receipt_wire.as_object().expect("receipt object").len(), 5);
     assert_eq!(receipt_wire["outcomeLabel"], "Found");
@@ -3503,7 +3503,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         approved.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert_eq!(approved.outcome.as_deref(), Some("approved"));
+    assert_eq!(approved.outcome, "approved");
     revoked.store(true, Ordering::SeqCst);
     assert_client_status(
         client
@@ -3795,7 +3795,7 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
             .value;
         let receipt = record.decision_receipt.unwrap();
         assert_eq!(receipt.policy, accepted.policy);
-        assert_eq!(receipt.outcome.as_deref(), Some(*code));
+        assert_eq!(receipt.outcome, *code);
         assert_eq!(receipt.outcome_label.as_deref(), Some(*label));
         assert_eq!(receipt.decided_at, record.occurred_at);
         assert_eq!(

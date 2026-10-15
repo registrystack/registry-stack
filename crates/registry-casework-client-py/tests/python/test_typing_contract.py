@@ -155,11 +155,16 @@ class TypingContractTests(unittest.TestCase):
         }
         self.assertEqual(
             receipt_fields,
-            {"policy": "PolicyBinding", "decision": "ReviewDecisionType", "decidedAt": "str"},
+            {
+                "policy": "PolicyBinding",
+                "decision": "ReviewDecisionType",
+                "outcome": "str",
+                "decidedAt": "str",
+            },
         )
         self.assertEqual(
             {node.target.id for node in classes["_ReviewDecisionReceiptOptional"].body if isinstance(node, ast.AnnAssign)},
-            {"outcome", "outcomeLabel"},
+            {"outcomeLabel"},
         )
         self.assertEqual(
             {node.target.id for node in classes["OwnReviewDecision"].body if isinstance(node, ast.AnnAssign)},

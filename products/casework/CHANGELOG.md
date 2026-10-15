@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: every `ReviewDecisionReceipt` names the policy `outcome` its
+  decision selected; the field is required in the OpenAPI document and the
+  Rust, Node.js and Python clients, and a client refuses a receipt without
+  one. `outcomeLabel` stays optional.
 - BREAKING: the Casework project format aligns with the cross-product
   configuration conventions. `caseworkctl check` and the runtime refuse every
   old spelling at its path, name the replacement, and point at its row in the

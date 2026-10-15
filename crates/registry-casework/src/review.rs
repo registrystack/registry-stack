@@ -5630,28 +5630,24 @@ fn review_decision_receipt(
     decided_at: DateTime<Utc>,
 ) -> Result<ReviewDecisionReceipt, ReviewRuntimeError> {
     let decision = match decision {
-        "approve" if outcome.is_some() => ReviewDecisionType::Approve,
-        "reject" if outcome.is_some() => ReviewDecisionType::Reject,
-        "changes-requested" if outcome.is_some() => ReviewDecisionType::ChangesRequested,
-        "answer" if outcome.is_some() => ReviewDecisionType::Answer,
+        "approve" => ReviewDecisionType::Approve,
+        "reject" => ReviewDecisionType::Reject,
+        "changes-requested" => ReviewDecisionType::ChangesRequested,
+        "answer" => ReviewDecisionType::Answer,
         _ => return Err(ReviewRuntimeError::Corrupt),
     };
-    let outcome_label = outcome
-        .as_ref()
-        .map(|id| {
-            policy
-                .outcomes
-                .iter()
-                .find(|configured| &configured.id == id)
-                .map(|configured| configured.label.clone())
-                .ok_or(ReviewRuntimeError::Corrupt)
-        })
-        .transpose()?;
+    let outcome = outcome.ok_or(ReviewRuntimeError::Corrupt)?;
+    let outcome_label = policy
+        .outcomes
+        .iter()
+        .find(|configured| configured.id == outcome)
+        .map(|configured| configured.label.clone())
+        .ok_or(ReviewRuntimeError::Corrupt)?;
     Ok(ReviewDecisionReceipt {
         policy: policy_binding(policy),
         decision,
         outcome,
-        outcome_label,
+        outcome_label: Some(outcome_label),
         decided_at,
     })
 }

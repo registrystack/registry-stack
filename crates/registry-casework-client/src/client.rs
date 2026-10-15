@@ -1807,22 +1807,19 @@ fn valid_decision_receipt(receipt: &registry_casework_core::ReviewDecisionReceip
             .version
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
-    let valid_outcome = receipt.outcome.as_ref().is_none_or(|outcome| {
-        !outcome.trim().is_empty()
-            && outcome.len() <= MAXIMUM_REVIEW_RECEIPT_OUTCOME_BYTES
-            && outcome.chars().all(|character| !character.is_control())
-    });
+    // Every decision names the declared outcome it settles with.
+    let outcome = &receipt.outcome;
+    let valid_outcome = !outcome.trim().is_empty()
+        && outcome.len() <= MAXIMUM_REVIEW_RECEIPT_OUTCOME_BYTES
+        && outcome.chars().all(|character| !character.is_control());
     valid_policy_id
         && valid_policy_version
         && valid_outcome
         && receipt.outcome_label.as_ref().is_none_or(|label| {
-            receipt.outcome.is_some()
-                && !label.trim().is_empty()
+            !label.trim().is_empty()
                 && label.len() <= 120
                 && label.chars().all(|character| !character.is_control())
         })
-        // Every decision names the declared outcome it settles with.
-        && receipt.outcome.is_some()
 }
 
 fn review_task_matches_ownership(
@@ -2257,38 +2254,34 @@ mod tests {
         };
         assert!(valid_decision_receipt(&receipt(
             ReviewDecisionType::Approve,
-            Some("approved".to_owned())
+            "approved".to_owned()
         )));
         assert!(valid_decision_receipt(&receipt(
             ReviewDecisionType::Reject,
-            Some("declined".to_owned())
-        )));
-        assert!(!valid_decision_receipt(&receipt(
-            ReviewDecisionType::Approve,
-            None
+            "declined".to_owned()
         )));
         assert!(!valid_decision_receipt(&receipt(
             ReviewDecisionType::Answer,
-            None
+            String::new()
         )));
         assert!(!valid_decision_receipt(&receipt(
             ReviewDecisionType::Reject,
-            Some(" \n".to_owned())
+            " \n".to_owned()
         )));
-        let mut invalid_policy = receipt(ReviewDecisionType::Reject, Some("declined".to_owned()));
+        let mut invalid_policy = receipt(ReviewDecisionType::Reject, "declined".to_owned());
         invalid_policy.policy.id = "Invalid_Policy".to_owned();
         assert!(!valid_decision_receipt(&invalid_policy));
         invalid_policy.policy.id = "review".to_owned();
         invalid_policy.policy.version = "x".repeat(MAXIMUM_REVIEW_IDENTITY_BYTES + 1);
         assert!(!valid_decision_receipt(&invalid_policy));
-        let mut labelled = receipt(ReviewDecisionType::Answer, Some("confirm".to_owned()));
+        let mut labelled = receipt(ReviewDecisionType::Answer, "confirm".to_owned());
         labelled.outcome_label = Some("Confirm".to_owned());
         assert!(valid_decision_receipt(&labelled));
         for invalid_label in ["".to_owned(), " \n".to_owned(), "x".repeat(121)] {
             labelled.outcome_label = Some(invalid_label);
             assert!(!valid_decision_receipt(&labelled));
         }
-        let mut approval = receipt(ReviewDecisionType::Approve, Some("approved".to_owned()));
+        let mut approval = receipt(ReviewDecisionType::Approve, "approved".to_owned());
         approval.outcome_label = Some("Approved".to_owned());
         assert!(valid_decision_receipt(&approval));
     }

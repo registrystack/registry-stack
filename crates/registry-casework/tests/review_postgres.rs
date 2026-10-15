@@ -1149,7 +1149,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         receipt.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert_eq!(receipt.outcome.as_deref(), Some("approved"));
+    assert_eq!(receipt.outcome, "approved");
     assert_eq!(readback.decided_by_caller, Some(true));
 
     let secondary = task_id(&fixture, first.accepted.request_id, 1).await;
@@ -3459,7 +3459,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
             .unwrap();
         let receipt = accountability.decision_receipt.unwrap();
         assert_eq!(receipt.policy, accepted.policy);
-        assert_eq!(receipt.outcome.as_deref(), Some(*code));
+        assert_eq!(receipt.outcome, *code);
         assert_eq!(receipt.outcome_label.as_deref(), Some(*label));
         assert_eq!(receipt.decided_at, accountability.occurred_at);
         assert_eq!(accountability.decision, "answer");

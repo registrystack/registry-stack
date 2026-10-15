@@ -548,11 +548,11 @@ class ReviewHeldTaskState(TypedDict):
 ReviewTaskState: TypeAlias = Literal["open", "decided"] | ReviewHeldTaskState
 ReviewDecisionType: TypeAlias = Literal["approve", "reject", "changes-requested", "answer"]
 class _ReviewDecisionReceiptOptional(TypedDict, total=False):
-    outcome: str
     outcomeLabel: str
 class ReviewDecisionReceipt(_ReviewDecisionReceiptOptional):
     policy: PolicyBinding
     decision: ReviewDecisionType
+    outcome: str
     decidedAt: str
 class OwnReviewDecision(TypedDict):
     taskId: Uuid

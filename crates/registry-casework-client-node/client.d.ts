@@ -272,7 +272,7 @@ export type ReviewDecisionType = 'approve' | 'reject' | 'changes-requested' | 'a
 export interface ReviewDecisionReceipt {
   policy: PolicyBinding
   decision: ReviewDecisionType
-  outcome?: string
+  outcome: string
   outcomeLabel?: string
   decidedAt: string
 }

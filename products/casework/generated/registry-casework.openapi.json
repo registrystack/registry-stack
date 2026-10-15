@@ -3084,10 +3084,8 @@
             "$ref": "#/components/schemas/ReviewDecisionType"
           },
           "outcome": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "The policy outcome the decision selected; every decision names one.",
+            "type": "string"
           },
           "outcomeLabel": {
             "description": "The configured label from the decision's immutable pinned policy.",
@@ -3103,6 +3101,7 @@
         "required": [
           "policy",
           "decision",
+          "outcome",
           "decidedAt"
         ],
         "type": "object"

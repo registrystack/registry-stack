@@ -955,8 +955,8 @@ pub enum ReviewDecisionType {
 pub struct ReviewDecisionReceipt {
     pub policy: crate::PolicyBinding,
     pub decision: ReviewDecisionType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<String>,
+    /// The policy outcome the decision selected; every decision names one.
+    pub outcome: String,
     /// The configured label from the decision's immutable pinned policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome_label: Option<String>,
@@ -2727,6 +2727,21 @@ mod tests {
             assert!(outcome.is_object(), "{variant}");
             assert!(outcome.get("default").is_none(), "{variant}");
         }
+    }
+
+    #[test]
+    fn a_decision_receipt_names_the_outcome_its_decision_selected() {
+        let policy = serde_json::json!({"id":"review","version":"1","digest":crate::ContentDigest::for_bytes(b"review")});
+        let receipt = serde_json::json!({"policy":policy,"decision":"approve","outcome":"approved","outcomeLabel":"Approve","decidedAt":"2026-09-20T01:00:00Z"});
+        let read: ReviewDecisionReceipt = serde_json::from_value(receipt.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&read).unwrap(), receipt);
+        let mut without = receipt;
+        without.as_object_mut().unwrap().remove("outcome");
+        let refused = serde_json::from_value::<ReviewDecisionReceipt>(without).unwrap_err();
+        assert!(
+            refused.to_string().contains("missing field `outcome`"),
+            "{refused}"
+        );
     }
 
     #[test]
