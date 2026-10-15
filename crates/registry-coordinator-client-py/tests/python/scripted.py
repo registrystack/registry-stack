@@ -18,7 +18,7 @@ STATUS = {
 
     "bindingDigest": "sha256:binding",
     "step": "notify",
-    "state": "pending",
+    "state": "running",
     "outcome": None,
     "output": None,
     "failureCode": None,

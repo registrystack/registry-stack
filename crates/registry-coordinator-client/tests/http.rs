@@ -26,7 +26,7 @@ const TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 fn status() -> Value {
-    json!({"runId":RUN,"workflow":"nursing-notice","workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","bindingDigest":"sha256:binding","step":"notify","state":"pending","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
+    json!({"runId":RUN,"workflow":"nursing-notice","workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","bindingDigest":"sha256:binding","step":"notify","state":"running","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
 }
 fn inspection() -> Value {
     json!({"run":status(),"effects":[],"waits":[],"steps":[{"step":"notify","state":"unknown","generation":1,"attempt":1,"nextDueAt":null,"leaseExpiresAt":null,"commandPrepared":true,"uncertain":true,"receiptExpired":false,"failureCode":"response-lost","failurePath":null}],"recovery":{"retryAllowed":true,"reason":null,"operation":{"id":"submit-message","version":1,"product":"messaging","effect":"mutation","keyRequirement":"required","requiresPreparation":false,"recovery":"same-command-and-receipt","readReceipt":true}}})
@@ -149,6 +149,133 @@ fn request() -> StartRunRequest {
     }
 }
 
+async fn run_state_answers(
+    server: &Server,
+    state: Value,
+) -> Vec<(&'static str, Result<String, CoordinatorClientError>)> {
+    let client = server.client();
+    let run_id = Uuid::parse_str(RUN).unwrap();
+    let mut run = status();
+    run["state"] = state;
+    server.answer(200, "application/json", &run.to_string());
+    let mut answers = vec![
+        (
+            "start",
+            client
+                .start(&token(), "original-admission", &request())
+                .await
+                .map(|answer| answer.value.state),
+        ),
+        (
+            "status",
+            client
+                .status(&token(), run_id)
+                .await
+                .map(|answer| answer.value.state),
+        ),
+        (
+            "cancel",
+            client
+                .cancel(&token(), run_id, "caller-withdrew")
+                .await
+                .map(|answer| answer.value.state),
+        ),
+    ];
+    let mut inspected = inspection();
+    inspected["run"] = run.clone();
+    server.answer(200, "application/json", &inspected.to_string());
+    answers.push((
+        "inspect",
+        client
+            .inspect(&token(), run_id)
+            .await
+            .map(|answer| answer.value.run.state),
+    ));
+    answers.push((
+        "reconcile",
+        client
+            .reconcile(&token(), run_id, "response-lost")
+            .await
+            .map(|answer| answer.value.run.state),
+    ));
+    server.answer(200, "application/json", &json!({"runs":[run]}).to_string());
+    answers.push((
+        "list",
+        client
+            .list(&token(), 1)
+            .await
+            .map(|mut answer| answer.value.runs.remove(0).state),
+    ));
+    answers.push((
+        "list_page",
+        client
+            .list_page(&token(), &RunListQuery::new(1))
+            .await
+            .map(|mut answer| answer.value.runs.remove(0).state),
+    ));
+    answers
+}
+
+#[tokio::test]
+async fn every_run_status_response_rejects_unknown_effective_states() {
+    let server = Server::new(status()).await;
+    for state in [
+        json!("pending"),
+        json!("waiting"),
+        json!("Running"),
+        json!(""),
+        json!("protected-state-canary"),
+        Value::Null,
+        json!(1),
+        json!({"running": null}),
+    ] {
+        let before = server.count();
+        let invalid_answers: Vec<_> = run_state_answers(&server, state.clone())
+            .await
+            .into_iter()
+            .filter_map(|(operation, answer)| {
+                (!matches!(
+                    answer,
+                    Err(CoordinatorClientError::Protocol {
+                        status: 200,
+                        failure: registry_coordinator_client::CoordinatorProtocolFailure::Body
+                    })
+                ))
+                .then_some(operation)
+            })
+            .collect();
+        assert!(
+            invalid_answers.is_empty(),
+            "state {state}: responses accepted by {invalid_answers:?}"
+        );
+        assert_eq!(server.count(), before + 7, "each operation sends once");
+    }
+}
+
+#[tokio::test]
+async fn every_run_status_response_preserves_each_closed_effective_state() {
+    let server = Server::new(status()).await;
+    for state in [
+        "running",
+        "finished",
+        "failed",
+        "cancelled",
+        "cancelled-after-effect",
+        "expired",
+        "attention",
+        "cancel-requested",
+    ] {
+        let before = server.count();
+        for (operation, answer) in run_state_answers(&server, json!(state)).await {
+            assert_eq!(
+                answer.unwrap_or_else(|_| panic!("{operation} refused {state}")),
+                state
+            );
+        }
+        assert_eq!(server.count(), before + 7, "each operation sends once");
+    }
+}
+
 #[tokio::test]
 async fn explicit_admission_preserves_prefix_key_input_and_single_exchange() {
     let server = Server::new(status()).await;
@@ -158,7 +285,7 @@ async fn explicit_admission_preserves_prefix_key_input_and_single_exchange() {
         .await
         .unwrap();
     assert_eq!(outcome.value.run_id.to_string(), RUN);
-    assert_eq!(outcome.value.state, "pending");
+    assert_eq!(outcome.value.state, "running");
     let seen = server.fixture.seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0, Method::POST);

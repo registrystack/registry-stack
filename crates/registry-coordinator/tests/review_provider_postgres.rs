@@ -19,6 +19,37 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[derive(Clone, Default)]
+struct AuditCapture(
+    Arc<std::sync::Mutex<Vec<u8>>>,
+    Arc<std::sync::Mutex<Option<usize>>>,
+);
+impl std::io::Write for AuditCapture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if let Some(remaining) = self.1.lock().unwrap().as_mut() {
+            if *remaining == 0 {
+                return Err(std::io::Error::other("synthetic audit outage"));
+            }
+            *remaining -= 1;
+        }
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl AuditCapture {
+    fn take(&self) -> Vec<serde_json::Value> {
+        let bytes = std::mem::take(&mut *self.0.lock().unwrap());
+        std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
 struct Pure(String);
 #[async_trait]
 impl AdapterSet for Pure {
@@ -54,10 +85,9 @@ struct Harness {
 impl Harness {
     async fn new(retention: u32) -> Self {
         let root = tempfile::tempdir().unwrap();
-        let project = json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"resultRetentionSeconds":retention,"outcomes":{"accepted":{"status":"approved"}}},"start":"done","steps":{"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}});
         std::fs::write(
             root.path().join("workflow.yaml"),
-            serde_json::to_string(&project).unwrap(),
+            serde_json::to_string(&review_project(retention)).unwrap(),
         )
         .unwrap();
         let definition = Definition::load(root.path()).unwrap();
@@ -178,6 +208,36 @@ impl Harness {
         self.sql("DROP SCHEMA {schema} CASCADE").await;
     }
 
+    async fn capture_audit(&mut self) -> AuditCapture {
+        use registry_coordinator::{protected_state::StateKeys, store::StoreSecurity};
+        use registry_platform_audit::{AuditProfile, AuditWriter};
+        let capture = AuditCapture::default();
+        self.store = Arc::new(
+            Store::open(
+                &self.url,
+                &self.namespace,
+                StoreSecurity {
+                    database_id: self.namespace.clone(),
+                    keys: StateKeys::new(
+                        1,
+                        std::collections::BTreeMap::from([(1, [0x11; 32])]),
+                        [0x22; 32],
+                    )
+                    .unwrap(),
+                    audit: AuditWriter::from_line_sink(Box::new(capture.clone())),
+                    audit_profile: AuditProfile::production_from_secret_bytes(
+                        zeroize::Zeroizing::new(vec![0x33; 32]),
+                    )
+                    .unwrap(),
+                },
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+        capture
+    }
+
     async fn cancel_expired_after_restart(
         &self,
         accepted: &registry_review_protocol::ReviewRequestAccepted,
@@ -212,6 +272,10 @@ impl Harness {
             ReviewLookup::Expired
         ));
     }
+}
+
+fn review_project(retention: u32) -> serde_json::Value {
+    json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"resultRetentionSeconds":retention,"outcomes":{"accepted":{"status":"approved"}}},"start":"done","steps":{"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}})
 }
 
 #[tokio::test]
@@ -273,10 +337,15 @@ async fn exact_admission_result_restart_feed_and_current_ownership_share_one_run
         .unwrap();
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].result_id, result.result_id);
+    assert_eq!(page.items[0].event_id, accepted.request_id);
+    assert_eq!(result.result_id, accepted.request_id);
     let mut stranger = h.actor.clone();
     stranger.client_id = "other-client".into();
+    let mut other_subject = h.actor.clone();
+    other_subject.subject = "other-subject".into();
     for (actor, workflows, producer) in [
         (&stranger, h.workflows(), h.producer.clone()),
+        (&other_subject, h.workflows(), h.producer.clone()),
         (
             &h.actor,
             vec!["another-workflow".into()],
@@ -297,6 +366,38 @@ async fn exact_admission_result_restart_feed_and_current_ownership_share_one_run
                 .await
                 .err()
                 .unwrap()
+                .code,
+            "run-absent"
+        );
+        assert_eq!(
+            restarted
+                .review_request_owned(accepted.request_id, actor, &producer, &workflows)
+                .await
+                .unwrap_err()
+                .code,
+            "run-absent"
+        );
+        assert!(restarted
+            .review_results_owned(actor, &producer, &workflows, None, 20)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        assert_eq!(
+            restarted
+                .cancel_review_owned(
+                    accepted.request_id,
+                    actor,
+                    &producer,
+                    &workflows,
+                    "foreign-cancel",
+                    &ReviewCancelRequest {
+                        subject: accepted.subject.clone(),
+                        reason: "foreign-subject-cannot-cancel".into(),
+                    },
+                )
+                .await
+                .unwrap_err()
                 .code,
             "run-absent"
         );
@@ -1206,10 +1307,20 @@ async fn cancellation_refuses_owned_malformed_input_and_conceals_foreign_and_exp
             404,
             empty_reason.as_str(),
         ),
+        (
+            "other-subject",
+            active.request_id,
+            404,
+            empty_reason.as_str(),
+        ),
         ("breg-client", Uuid::new_v4(), 404, empty_reason.as_str()),
     ] {
         let token = issuer.issue_access_token(
-            caller,
+            if caller == "other-subject" {
+                "breg-client"
+            } else {
+                caller
+            },
             caller,
             "urn:coordinator:review-test",
             "review:request",
@@ -1282,6 +1393,48 @@ async fn cancellation_refuses_owned_malformed_input_and_conceals_foreign_and_exp
     assert!(
         matches!(response.json::<ReviewCancelResponse>().await.unwrap(), ReviewCancelResponse::Cancelled { result } if result.status == ReviewResultStatus::Cancelled && result.subject == active.subject)
     );
+    for subject in ["breg-client", "other-subject"] {
+        let token = issuer.issue_access_token(
+            "breg-client",
+            subject,
+            "urn:coordinator:review-test",
+            "review:request",
+            chrono::Utc::now().timestamp() + 300,
+        );
+        for suffix in ["", "/result"] {
+            let response = client
+                .get(format!(
+                    "{url}/v1/review-requests/{}{suffix}",
+                    active.request_id
+                ))
+                .bearer_auth(&token)
+                .header(
+                    registry_review_protocol::REVIEW_PROFILE_HEADER,
+                    &h.producer.profile,
+                )
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if subject == "breg-client" { 200 } else { 404 }
+            );
+        }
+        let page: registry_review_protocol::ReviewResultFeedPage = client
+            .get(format!("{url}/v1/review-results"))
+            .bearer_auth(&token)
+            .header(
+                registry_review_protocol::REVIEW_PROFILE_HEADER,
+                &h.producer.profile,
+            )
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), usize::from(subject == "breg-client"));
+    }
     let response = client
         .put(format!("{url}/v1/review-requests"))
         .send()
@@ -1344,10 +1497,12 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
         .await;
     let mut h = Harness::new(86400).await;
     h.actor.issuer = issuer.issuer();
+    let audit = h.capture_audit().await;
     let mut request = h.request();
     request.policy = registry_review_protocol::PolicySelection::current(&h.definition.workflow.id);
     // Seed the acceptance as the previous process did before its response was lost.
     let accepted = h.admit(request.clone(), "removed-policy").await;
+    assert_review_admission_audit(&audit.take(), "accepted");
     let root = tempfile::tempdir().unwrap();
     let authored = root.path().join("other-workflow");
     project::init(&authored, Some("other-workflow")).unwrap();
@@ -1394,6 +1549,7 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
         "profile-revoked",
         "action-revoked",
         "recovery-only",
+        "subject-changed",
     ] {
         let mut policy = ClientPolicy {
             review_producer: Some(h.producer.clone()),
@@ -1435,7 +1591,17 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
             tokio::spawn(async move { axum::serve(listener, http::router(state)).await.unwrap() });
         let response = client
             .post(&url)
-            .bearer_auth(&token)
+            .bearer_auth(if mode == "subject-changed" {
+                issuer.issue_access_token(
+                    "breg-client",
+                    "other-subject",
+                    "urn:coordinator:review-test",
+                    "review:request",
+                    chrono::Utc::now().timestamp() + 300,
+                )
+            } else {
+                token.clone()
+            })
             .header(
                 registry_review_protocol::REVIEW_PROFILE_HEADER,
                 &h.producer.profile,
@@ -1450,6 +1616,7 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
             let recovered: registry_review_protocol::ReviewRequestAccepted =
                 response.json().await.unwrap();
             assert_eq!(recovered, accepted);
+            assert_review_admission_audit(&audit.take(), "accepted");
             let mut changed = request.clone();
             changed.requester_reference = "different-request".into();
             let mut fresh = request.clone();
@@ -1476,7 +1643,13 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
                 assert_eq!(response.status(), status, "{key}");
                 let problem: serde_json::Value = response.json().await.unwrap();
                 assert_eq!(problem["code"], code, "{key}");
+                assert_review_admission_audit(&audit.take(), "unknown");
             }
+        } else if mode == "subject-changed" {
+            assert_eq!(response.status(), 404);
+            let problem: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(problem["code"], "workflow.not-served");
+            assert_review_admission_audit(&audit.take(), "unknown");
         } else {
             assert_eq!(
                 response.status(),
@@ -1496,6 +1669,7 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
         }
         server.abort();
         let _ = server.await;
+        audit.take();
     }
     let (db, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
         .await
@@ -1510,6 +1684,220 @@ async fn router_recovers_removed_policy_only_under_current_authority_and_exact_i
     drop(db);
     connection.await.unwrap();
     h.cleanup().await;
+}
+
+fn assert_review_admission_audit(entries: &[serde_json::Value], outcome: &str) {
+    assert_eq!(entries.len(), 2, "one request/response pair per admission");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    for entry in entries {
+        assert_eq!(entry["record"]["action"], "review-admit");
+    }
+    assert_eq!(entries[1]["record"]["outcome"], outcome);
+}
+
+#[tokio::test]
+async fn router_fresh_admission_audits_once_and_audit_outages_gate_commit_and_release() {
+    use registry_coordinator::{
+        access::{Action, Authenticator, ClientPolicy},
+        deployment,
+        http::{self, HttpState},
+    };
+    use registry_platform_config::PackageConfig;
+    use registry_platform_httputil::FetchUrlPolicy;
+    use registry_platform_oidc::{
+        access_token_typ_set, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
+    };
+    use registry_platform_testing::{TestAuthorizationServerBuilder, TestClient};
+
+    let mut h = Harness::new(86400).await;
+    let admin_url = h.url.clone();
+    let (admin, connection) = tokio_postgres::connect(&admin_url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(async move { connection.await.unwrap() });
+    let role = format!("coord_review_{}", Uuid::new_v4().simple());
+    let password = Uuid::new_v4().simple().to_string();
+    admin
+        .batch_execute(&format!(
+            "CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+        ))
+        .await
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(
+        project.join("workflow.yaml"),
+        serde_json::to_string(&review_project(86400)).unwrap(),
+    )
+    .unwrap();
+    let package = root.path().join("package");
+    let digest = deployment::package(&project, &package).unwrap();
+    let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/coordinator/examples/single-flow-runtime.yaml")
+        .canonicalize()
+        .unwrap();
+    let mut runtime = RuntimeConfig::load(&template).unwrap();
+    runtime.namespace = h.namespace.clone();
+    let deployment = runtime.deployment.as_mut().unwrap();
+    deployment.database_id = h.namespace.clone();
+    deployment.runtime_role = role.clone();
+    deployment.packages = vec![PackageConfig {
+        root: package,
+        expected_digest: Some(digest),
+    }];
+    let workflows = Arc::new(deployment::load_workflows(deployment).unwrap());
+    deployment::apply(&h.store, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+    h.url = if let Ok(mut url) = url::Url::parse(&admin_url) {
+        url.set_username(&role).unwrap();
+        url.set_password(Some(&password)).unwrap();
+        url.into()
+    } else {
+        format!("{admin_url} user={role} password={password}")
+    };
+    let issuer = TestAuthorizationServerBuilder::default()
+        .client(TestClient::new("breg-client"))
+        .start()
+        .await;
+    h.actor.issuer = issuer.issuer();
+    let verifier = TokenVerifierConfig::access_token_profile(
+        issuer.issuer(),
+        vec!["urn:coordinator:review-test".into()],
+        vec![jsonwebtoken::Algorithm::EdDSA],
+        access_token_typ_set("at+jwt"),
+    )
+    .with_scope_claim("scope")
+    .with_allowed_clients(vec!["breg-client".into()]);
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        issuer.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let authenticator = Arc::new(Authenticator::new(
+        verifier,
+        keys,
+        [(
+            "breg-client".into(),
+            ClientPolicy {
+                review_producer: Some(h.producer.clone()),
+                required_scopes: vec!["review:request".into()],
+                workflows: h.workflows(),
+                actions: vec![Action::ReviewCreate],
+                operator: false,
+            },
+        )]
+        .into(),
+        false,
+    ));
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let request = h.request();
+    let mut lost_response = None;
+    let mut first_response = None;
+    for (subject, writes, key, status, count) in [
+        ("breg-client", None, "fresh-success", 201, 1_i64),
+        ("breg-client", Some(0), "request-audit-outage", 503, 1),
+        ("breg-client", Some(1), "response-audit-outage", 503, 2),
+        ("breg-client", None, "response-audit-outage", 201, 2),
+        ("other-subject", None, "fresh-success", 201, 3),
+    ] {
+        let token = issuer.issue_access_token(
+            "breg-client",
+            subject,
+            "urn:coordinator:review-test",
+            "review:request",
+            chrono::Utc::now().timestamp() + 300,
+        );
+        let audit = h.capture_audit().await;
+        *audit.1.lock().unwrap() = writes;
+        let state = HttpState {
+            store: h.store.clone(),
+            runtime: Arc::new(runtime.clone()),
+            workflows: workflows.clone(),
+            authenticator: authenticator.clone(),
+            adapters: Arc::new(Pure(h.binding.clone())),
+            recovery_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/v1/review-requests",
+            listener.local_addr().unwrap()
+        );
+        let server =
+            tokio::spawn(async move { axum::serve(listener, http::router(state)).await.unwrap() });
+        let response = client
+            .post(&url)
+            .bearer_auth(&token)
+            .header(
+                registry_review_protocol::REVIEW_PROFILE_HEADER,
+                &h.producer.profile,
+            )
+            .header("idempotency-key", key)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{key}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        let entries = audit.take();
+        if status == 201 {
+            assert_review_admission_audit(&entries, "accepted");
+            let accepted: registry_review_protocol::ReviewRequestAccepted =
+                serde_json::from_value(body).unwrap();
+            if key == "response-audit-outage" {
+                assert_eq!(accepted.request_id, lost_response.unwrap());
+            } else if subject == "breg-client" {
+                first_response = Some(accepted.request_id);
+            } else {
+                assert_ne!(Some(accepted.request_id), first_response);
+            }
+        } else {
+            assert_eq!(
+                body["code"],
+                if writes == Some(0) {
+                    "service.unavailable"
+                } else {
+                    "audit.response-unavailable"
+                }
+            );
+            assert!(body.get("requestId").is_none());
+            assert_eq!(entries.len(), usize::from(writes == Some(1)));
+            if writes == Some(1) {
+                lost_response = Some(
+                    admin
+                        .query_one(
+                            &format!(
+                                "SELECT run_id FROM {}.runs ORDER BY admitted_at DESC LIMIT 1",
+                                h.namespace
+                            ),
+                            &[],
+                        )
+                        .await
+                        .unwrap()
+                        .get::<_, Uuid>(0),
+                );
+            }
+        }
+        let actual: i64 = admin
+            .query_one(&format!("SELECT count(*) FROM {}.runs", h.namespace), &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(actual, count, "{key}");
+        server.abort();
+        let _ = server.await;
+    }
+    h.url = admin_url;
+    h.cleanup().await;
+    admin
+        .batch_execute(&format!("DROP ROLE {role}"))
+        .await
+        .unwrap();
+    drop(admin);
+    connection.await.unwrap();
 }
 
 #[tokio::test]

@@ -90,6 +90,26 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observed["idempotency_key"], "")
         self.assertEqual(observed["body"], "")
 
+    def test_every_run_response_rejects_an_unknown_effective_state_without_disclosing_it(self) -> None:
+        run = {**STATUS, "state": "protected-state-canary"}
+        calls = (
+            (lambda: self.client.start("token", KEY, START_REQUEST), run),
+            (lambda: self.client.status("token", RUN), run),
+            (lambda: self.client.cancel("token", RUN, "caller-withdrew"), run),
+            (lambda: self.client.inspect("token", RUN), {**INSPECTION, "run": run}),
+            (lambda: self.client.reconcile("token", RUN, "response-lost"), {**INSPECTION, "run": run}),
+            (lambda: self.client.list("token", 1), {"runs": [run]}),
+        )
+        for call, document in calls:
+            self.service.script(ok(document))
+            with self.assertRaises(CoordinatorClientError) as refused:
+                call()
+            error = refused.exception
+            self.assertEqual(error.kind, "protocol")
+            self.assertEqual(error.protocol_failure, "body")
+            self.assertNotIn("protected-state-canary", rendered(error))
+            self.assertEqual(len(self.observed()), 1)
+
     def test_a_run_and_step_status_carry_the_failure_path_a_refused_call_input_names(self) -> None:
         absent = object()
         for member, expected in (("/recordId", "/recordId"), (None, None), (absent, None)):

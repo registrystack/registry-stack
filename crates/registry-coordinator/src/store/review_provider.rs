@@ -30,6 +30,7 @@ impl Store {
             &[
                 self.security.database_id.as_bytes(),
                 actor.issuer.as_bytes(),
+                actor.subject.as_bytes(),
                 actor.client_id.as_bytes(),
                 producer.id.as_bytes(),
                 producer.source_namespace.as_bytes(),
@@ -88,6 +89,7 @@ impl Store {
 
     /// Caller workflow authorization is checked by the HTTP boundary; current
     /// producer ownership and source authorization also apply before replay.
+    /// The HTTP boundary audits replay and fresh admission as one operation.
     pub(crate) async fn recover_review_owned(
         &self,
         request: &ReviewCreateRequest,
@@ -95,20 +97,17 @@ impl Store {
         producer: &ReviewProducer,
         key: &str,
     ) -> Result<Option<ReviewRequestAccepted>> {
-        self.audited("review-admit", actor, None, None, async {
-            let (input, owner) = self.review_admission_input(request, actor, producer)?;
-            let (identity, input_digest) =
-                self.admission_identity(&request.policy.id, &owner, key, &input)?;
-            let mut client = self.client().await.map_err(unavailable)?;
-            let tx = client.transaction().await.map_err(unavailable)?;
-            self.lock_admission(&tx).await?;
-            let accepted = self
-                .recover_review_admission(&tx, &identity, &input_digest)
-                .await?;
-            tx.commit().await.map_err(unavailable)?;
-            Ok(accepted)
-        })
-        .await
+        let (input, owner) = self.review_admission_input(request, actor, producer)?;
+        let (identity, input_digest) =
+            self.admission_identity(&request.policy.id, &owner, key, &input)?;
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.lock_admission(&tx).await?;
+        let accepted = self
+            .recover_review_admission(&tx, &identity, &input_digest)
+            .await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(accepted)
     }
 
     #[expect(
@@ -126,29 +125,47 @@ impl Store {
         runtime: &crate::runtime::RuntimeConfig,
     ) -> Result<ReviewRequestAccepted> {
         self.audited("review-admit", actor, None, None, async {
-            let (input, owner) = self.review_admission_input(&request, actor, producer)?;
-            let admission = ReviewAdmission {
-                request: request.clone(),
-                producer: producer.clone(),
-            };
-            let admission = self
-                .admit_bound(
-                    definition,
-                    input,
-                    &owner,
-                    key,
-                    binding,
-                    Some(runtime),
-                    &definition.digest,
-                    Some(&admission),
-                    None,
-                )
-                .await?;
-            admission
-                .accepted_review
-                .ok_or_else(|| unavailable("Review admission did not retain its accepted binding"))
+            self.admit_review_bound(definition, request, actor, producer, key, binding, runtime)
+                .await
         })
         .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Review admission binds caller, producer, exact policy and runtime independently"
+    )]
+    pub(crate) async fn admit_review_bound(
+        &self,
+        definition: &Definition,
+        request: ReviewCreateRequest,
+        actor: &Actor,
+        producer: &ReviewProducer,
+        key: &str,
+        binding: &str,
+        runtime: &crate::runtime::RuntimeConfig,
+    ) -> Result<ReviewRequestAccepted> {
+        let (input, owner) = self.review_admission_input(&request, actor, producer)?;
+        let admission = ReviewAdmission {
+            request,
+            producer: producer.clone(),
+        };
+        let admission = self
+            .admit_bound(
+                definition,
+                input,
+                &owner,
+                key,
+                binding,
+                Some(runtime),
+                &definition.digest,
+                Some(&admission),
+                None,
+            )
+            .await?;
+        admission
+            .accepted_review
+            .ok_or_else(|| unavailable("Review admission did not retain its accepted binding"))
     }
 
     fn review_sources(&self, owner: &str, producer: &ReviewProducer) -> Vec<String> {

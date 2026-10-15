@@ -114,7 +114,7 @@ impl Store {
             .await
             .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))
     }
-    pub(super) async fn audited<T>(
+    pub(crate) async fn audited<T>(
         &self,
         action: &str,
         actor: &Actor,

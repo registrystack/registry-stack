@@ -1511,6 +1511,16 @@
             "type": "string"
           },
           "state": {
+            "enum": [
+              "running",
+              "finished",
+              "failed",
+              "cancelled",
+              "cancelled-after-effect",
+              "expired",
+              "attention",
+              "cancel-requested"
+            ],
             "type": "string"
           },
           "step": {

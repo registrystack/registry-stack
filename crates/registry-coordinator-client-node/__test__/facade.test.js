@@ -13,7 +13,7 @@ const STATUS = {
 
   bindingDigest: 'sha256:binding',
   step: 'read-record',
-  state: 'waiting',
+  state: 'running',
   outcome: null,
   output: null,
   failureCode: null,
@@ -152,6 +152,37 @@ test('status, inspect, and reconcile use only the requested run routes', async (
     ['POST', `/v1/runs/${RUN_ID}/reconcile`],
   ]);
   assert.deepEqual(JSON.parse(requests[2].body), { reason: 'operator reviewed the original receipt' });
+});
+
+test('every run response rejects an unknown effective state without disclosing it', async (context) => {
+  const run = { ...STATUS, state: 'protected-state-canary' };
+  const { baseUrl, requests } = await serve(context, (request) => ({
+    status: 200,
+    document: request.url.endsWith('/inspect') || request.url.endsWith('/reconcile')
+      ? { ...INSPECTION, run }
+      : request.url.includes('?limit=') ? { runs: [run] } : run,
+  }));
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  const calls = [
+    () => client.start('token', 'original-admission', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} }),
+    () => client.status('token', RUN_ID),
+    () => client.cancel('token', RUN_ID, 'caller-withdrew'),
+    () => client.inspect('token', RUN_ID),
+    () => client.reconcile('token', RUN_ID, 'response-lost'),
+    () => client.list('token', 1),
+  ];
+  for (const call of calls) {
+    const before = requests.length;
+    await assert.rejects(call, (error) => {
+      assert.ok(error instanceof CoordinatorClientError);
+      assert.equal(error.kind, 'protocol');
+      assert.equal(error.protocolFailure, 'body');
+      assert.doesNotMatch(inspectValue(error), /protected-state-canary/);
+      return true;
+    });
+    assert.equal(requests.length, before + 1);
+  }
 });
 
 test('a run and step status carry the failure path a refused call input names', async (context) => {
