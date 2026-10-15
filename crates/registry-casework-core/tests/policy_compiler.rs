@@ -582,3 +582,28 @@ fn a_producer_names_its_review_policies_in_its_findings() {
         .iter()
         .any(|item| item.code == "casework.review-producer.duplicate-policy"));
 }
+
+#[test]
+fn a_producer_names_its_receipt_retention_in_its_findings() {
+    let retention = "/trustedProducers/notice-service/retention/receiptRetentionDays";
+    let mut project = CaseworkProject::from_slice(&serde_json::to_vec(&project_value()).unwrap())
+        .expect("the fixture project loads");
+    // The reader bounds the value first; the model check holds the same bound
+    // for a project built in code.
+    project.trusted_producers[0]
+        .retention
+        .receipt_retention_days = 0;
+    assert!(project.findings().iter().any(|finding| finding.code
+        == "casework.review-producer.receipt-retention-out-of-range"
+        && finding.pointer == retention));
+    let mut value = project_value();
+    value["trustedProducers"]["notice-service"]["retention"]["receiptRetentionDays"] = json!(31);
+    let Err(ConfigLoadError::Refused(report)) =
+        CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+    else {
+        panic!("the project must be refused");
+    };
+    assert!(report.diagnostics().iter().any(|item| item.code
+        == "casework.review-producer.receipt-retention-exceeds-result-retention"
+        && item.path == retention));
+}

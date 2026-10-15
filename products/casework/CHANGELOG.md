@@ -51,7 +51,11 @@
   `casework.review-producer.no-policies`, `too-many-policies`,
   `invalid-policy` and `duplicate-policy` instead of `no-kinds`,
   `too-many-kinds`, `invalid-kind` and `duplicate-kind`, and the refusal of
-  a missing initiator reads "the review policy excludes its initiator".
+  a missing initiator reads "the review policy excludes its initiator". Its
+  receipt retention findings read
+  `casework.review-producer.receipt-retention-out-of-range` and
+  `receipt-retention-exceeds-result-retention` instead of
+  `recovery-days-out-of-range` and `recovery-exceeds-retention`.
 - A stage clock whose due time falls inside a daylight-saving gap on a
   given date is due at the first instant after the gap, and one inside a
   fold at the earlier instant, so a due time that passes `check` evaluates on

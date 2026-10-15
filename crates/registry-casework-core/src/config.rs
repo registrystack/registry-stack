@@ -1251,7 +1251,7 @@ impl CaseworkProject {
                 {
                     findings.add(
                         ConfigFinding::new(
-                            "casework.review-producer.recovery-exceeds-retention",
+                            "casework.review-producer.receipt-retention-exceeds-result-retention",
                             format!("{at}/retention/receiptRetentionDays"),
                             "receiptRetentionDays is longer than the result retention of a review policy this producer submits",
                             "Make receiptRetentionDays no longer than that review policy's retention.terminalRetentionDays.",
@@ -1464,7 +1464,7 @@ impl ReviewProducerPolicy {
             .contains(&self.retention.receipt_retention_days)
         {
             findings.push(
-                "casework.review-producer.recovery-days-out-of-range",
+                "casework.review-producer.receipt-retention-out-of-range",
                 format!("{at}/retention/receiptRetentionDays"),
                 format!(
                     "expected a whole number of days from 1 to {}",
