@@ -95,37 +95,41 @@ async fn create(State(s): State<HttpState>, headers: HeaderMap, input: BoundedBo
                 "Review admissions are disabled during recovery",
             ));
         }
-        if let Some(accepted) = s
-            .store
-            .recover_review_owned(
-                &request,
-                &caller.actor,
-                binding(&caller, &headers)?,
-                idempotency_key(&headers)?,
-            )
-            .await?
-        {
-            return Ok((StatusCode::CREATED, Json(accepted)).into_response());
-        }
-        let package = s.workflows.get(&request.policy.id).ok_or_else(|| {
-            CoordinatorError::new(
-                "workflow-absent",
-                "this deployment does not serve the Review policy",
-            )
-        })?;
-        deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
-        let runtime_binding = s.runtime.binding_digest_for(&package.definition.workflow)?;
         let accepted = s
             .store
-            .admit_review_owned(
-                &package.definition,
-                request,
-                &caller.actor,
-                binding(&caller, &headers)?,
-                idempotency_key(&headers)?,
-                &runtime_binding,
-                &s.runtime,
-            )
+            .audited("review-admit", &caller.actor, None, None, async {
+                if let Some(accepted) = s
+                    .store
+                    .recover_review_owned(
+                        &request,
+                        &caller.actor,
+                        binding(&caller, &headers)?,
+                        idempotency_key(&headers)?,
+                    )
+                    .await?
+                {
+                    return Ok(accepted);
+                }
+                let package = s.workflows.get(&request.policy.id).ok_or_else(|| {
+                    CoordinatorError::new(
+                        "workflow-absent",
+                        "this deployment does not serve the Review policy",
+                    )
+                })?;
+                deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
+                let runtime_binding = s.runtime.binding_digest_for(&package.definition.workflow)?;
+                s.store
+                    .admit_review_bound(
+                        &package.definition,
+                        request,
+                        &caller.actor,
+                        binding(&caller, &headers)?,
+                        idempotency_key(&headers)?,
+                        &runtime_binding,
+                        &s.runtime,
+                    )
+                    .await
+            })
             .await?;
         Ok((StatusCode::CREATED, Json(accepted)).into_response())
     }
