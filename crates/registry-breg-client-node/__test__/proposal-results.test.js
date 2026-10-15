@@ -200,12 +200,19 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         subject: {source: 'directory', subjectType: 'proposal', id, version: '2', digest},
         context: {reference: `breg:directory:correct:${id}:2`}, reviewable: true};
       const configured = {...base, authority: 'review-provider', policy: {id: 'review', version: '1', digest}};
+      const canonicalId = '123e4567-e89b-42d3-a456-426614174000';
       const terminal = {state: 'approved', resultId: targetId, completedAt: '2026-10-01T00:00:00.000000Z', availableUntil: '2026-10-02T00:00:00.000000Z'};
       value = structuredClone(base);
       assert.ok(!Object.hasOwn((await client.readProposalReviewStatus(prior)).value, 'result'));
       for (const result of [{state: 'pending'}, ...['approved', 'rejected', 'changes-requested', 'answered', 'cancelled', 'superseded', 'expired'].map(state => ({...terminal, state}))]) {
         value = {...structuredClone(configured), requestId: id, result};
         assert.deepEqual((await client.readProposalReviewStatus(prior)).value.result, result);
+      }
+      for (const correlationId of ['123e4567-e89b-12d3-a456-426614174000', canonicalId, '0192a870-1234-7abc-8def-123456789abc']) {
+        value = {...structuredClone(configured), requestId: correlationId, result: {...terminal, resultId: correlationId}};
+        const observed = (await client.readProposalReviewStatus(prior)).value;
+        assert.equal(observed.requestId, correlationId);
+        assert.equal(observed.result.resultId, correlationId);
       }
       value = {...structuredClone(configured), result: {state: 'pending'}};
       assert.equal((await client.readProposalReviewStatus(prior)).value.requestId, undefined);
@@ -215,6 +222,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         ...['resultId', 'completedAt', 'availableUntil'].map(field => ({state: 'pending', [field]: terminal[field]})),
         ...['resultId', 'completedAt', 'availableUntil'].map(field => {const result = {...terminal}; delete result[field]; return result;}),
         {...terminal, resultId: 'not-a-uuid'}, {...terminal, resultId: '00000000-0000-0000-0000-000000000000'},
+        ...[canonicalId.toUpperCase(), canonicalId.replaceAll('-', '')].map(resultId => ({...terminal, resultId})),
         {...terminal, completedAt: '2026-10-01'}, {...terminal, availableUntil: 'private-canary'},
         {...terminal, availableUntil: terminal.completedAt}, {...terminal, availableUntil: '2026-09-30T00:00:00Z'},
         {...terminal, state: 'expired', availableUntil: undefined}, {...terminal, state: 'unknown'},

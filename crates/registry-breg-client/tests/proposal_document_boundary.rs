@@ -437,6 +437,12 @@ async fn review_status_reads_require_complete_terminal_evidence_and_parse_instan
     let mut nil = terminal("approved");
     nil["resultId"] = json!("00000000-0000-0000-0000-000000000000");
     cases.push(("nil-result".to_owned(), nil));
+    let canonical_id = "123e4567-e89b-42d3-a456-426614174000";
+    for id in [canonical_id.to_uppercase(), canonical_id.replace('-', "")] {
+        let mut result = terminal("approved");
+        result["resultId"] = json!(id);
+        cases.push((format!("noncanonical-result:{id}"), result));
+    }
     let mut accepted = vec![];
     for (name, result) in cases {
         let mut invalid = review(false);
@@ -458,6 +464,35 @@ async fn review_status_reads_require_complete_terminal_evidence_and_parse_instan
             .is_ok()
         {
             accepted.push(format!("promoted:{name}"));
+        }
+    }
+    for id in [
+        "123e4567-e89b-12d3-a456-426614174000",
+        canonical_id,
+        "0192a870-1234-7abc-8def-123456789abc",
+    ] {
+        let mut valid = review(false);
+        valid["requestId"] = json!(id);
+        valid["result"] = terminal("approved");
+        valid["result"]["resultId"] = json!(id);
+        fixture.answer(valid);
+        for complete in [
+            fixture
+                .client
+                .read_proposal_review_by_id(&binding, ID)
+                .await
+                .unwrap(),
+            fixture
+                .client
+                .read_proposal_review_status(&held)
+                .await
+                .unwrap(),
+        ] {
+            assert_eq!(complete.value.request_id.as_deref(), Some(id));
+            assert_eq!(
+                complete.value.result.unwrap().result_id.as_deref(),
+                Some(id)
+            );
         }
     }
     for state in [
@@ -511,6 +546,7 @@ async fn review_status_reads_require_complete_terminal_evidence_and_parse_instan
             Some(json!("not-a-request")),
             Some(json!("00000000-0000-0000-0000-000000000000")),
             Some(json!("00000000-0000-4000-8000-00000000000A")),
+            Some(json!(canonical_id.replace('-', ""))),
         ] {
             let mut invalid = review(false);
             invalid["result"] = terminal(state);
