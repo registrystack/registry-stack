@@ -2058,7 +2058,7 @@ BREG-SEC-166.
   stay in revisions and the audit journal as pseudonyms; rotating the key
   changes them for later writes only.
 - **Horizon.** A held response stays available for
-  `idempotency.receiptRetentionDays` after its commit: default 7, at least 1,
+  `retention.receiptRetentionDays` after its commit: default 7, at least 1,
   at most 365, fixed on the row when it commits. Reading a spent key checks
   the binding first, erasure second, and the horizon third, so a changed
   request is told it conflicts, any retry of a key whose held response an

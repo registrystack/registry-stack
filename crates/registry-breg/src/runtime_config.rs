@@ -164,6 +164,22 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename audit.retainDays to audit.retentionDays; the value stays as it is",
     },
     RemovedKey {
+        path: "eventDelivery",
+        replacement: "move eventDelivery.payloadRetentionDays to retention.payloadRetentionDays and delete the eventDelivery block; the value stays as it is",
+    },
+    RemovedKey {
+        path: "eventDelivery.payloadRetentionDays",
+        replacement: "rename eventDelivery.payloadRetentionDays to retention.payloadRetentionDays; the value stays as it is",
+    },
+    RemovedKey {
+        path: "idempotency",
+        replacement: "move idempotency.receiptRetentionDays to retention.receiptRetentionDays and delete the idempotency block; the value stays as it is",
+    },
+    RemovedKey {
+        path: "idempotency.receiptRetentionDays",
+        replacement: "rename idempotency.receiptRetentionDays to retention.receiptRetentionDays; the value stays as it is",
+    },
+    RemovedKey {
         path: "cursor.maxAgeSeconds",
         replacement: "rename cursor.maxAgeSeconds to cursor.maximumAgeSeconds; the value stays as it is",
     },
@@ -751,8 +767,7 @@ pub struct RuntimeConfig {
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
-    event_delivery: EventDeliveryConfig,
-    idempotency: IdempotencyConfig,
+    retention: RetentionConfig,
     operational_timeouts: OperationalTimeouts,
     wasm_execution: WasmExecutionConfig,
     metrics_listener: Option<MetricsListenerConfig>,
@@ -786,8 +801,7 @@ impl RuntimeConfig {
         let cursor = CursorConfig::from_raw(raw.cursor)?;
         let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
-        let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
-        let idempotency = IdempotencyConfig::from_raw(raw.idempotency)?;
+        let retention = RetentionConfig::from_raw(raw.retention);
         let review_authorities = raw
             .review_authorities
             .into_iter()
@@ -820,8 +834,7 @@ impl RuntimeConfig {
             event_destinations,
             evidence_providers: raw.evidence_providers,
             review_authorities,
-            event_delivery,
-            idempotency,
+            retention,
             operational_timeouts,
             wasm_execution,
             metrics_listener,
@@ -1060,12 +1073,8 @@ impl RuntimeConfig {
         &self.cursor
     }
 
-    pub fn event_delivery(&self) -> &EventDeliveryConfig {
-        &self.event_delivery
-    }
-
-    pub fn idempotency(&self) -> &IdempotencyConfig {
-        &self.idempotency
+    pub fn retention(&self) -> &RetentionConfig {
+        &self.retention
     }
 
     /// The idempotency policy every write path of this runtime spends keys
@@ -1074,7 +1083,7 @@ impl RuntimeConfig {
     pub fn idempotency_policy(&self) -> Result<crate::idempotency::IdempotencyPolicy> {
         crate::idempotency::IdempotencyPolicy::new(
             self.authentication.oidc.issuer(),
-            self.idempotency.receipt_retention_days(),
+            self.retention.receipt_retention_days(),
         )
         .map_err(|_| RuntimeConfigError::InvalidBounds)
     }
@@ -1104,7 +1113,7 @@ impl RuntimeConfig {
             .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
         ActivatedEventDestinationRegistry::activate(compiled, &self.event_destinations, &resolver)
             .map(|destinations| {
-                destinations.with_payload_retention(self.event_delivery.payload_retention)
+                destinations.with_payload_retention(self.retention.payload_retention)
             })
     }
 
@@ -1235,8 +1244,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("audit", &self.audit)
             .field("cursor", &self.cursor)
             .field("event_destinations", &self.event_destinations)
-            .field("event_delivery", &self.event_delivery)
-            .field("idempotency", &self.idempotency)
+            .field("retention", &self.retention)
             .field("operational_timeouts", &self.operational_timeouts)
             .field("wasm_execution", &self.wasm_execution)
             .field("metrics_listener", &self.metrics_listener)
@@ -2320,41 +2328,30 @@ pub struct CursorConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EventDeliveryConfig {
+pub struct RetentionConfig {
+    receipt_retention_days: u16,
     payload_retention: Duration,
 }
 
-impl EventDeliveryConfig {
-    fn from_raw(raw: RawEventDeliveryConfig) -> Result<Self> {
-        Ok(Self {
+impl RetentionConfig {
+    fn from_raw(raw: RawRetentionConfig) -> Self {
+        Self {
+            receipt_retention_days: raw.receipt_retention_days,
             payload_retention: Duration::from_secs(
                 u64::from(raw.payload_retention_days) * 24 * 60 * 60,
             ),
-        })
-    }
-
-    #[must_use]
-    pub fn payload_retention(&self) -> Duration {
-        self.payload_retention
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IdempotencyConfig {
-    receipt_retention_days: u16,
-}
-
-impl IdempotencyConfig {
-    fn from_raw(raw: RawIdempotencyConfig) -> Result<Self> {
-        Ok(Self {
-            receipt_retention_days: raw.receipt_retention_days,
-        })
+        }
     }
 
     /// How many days a held response is kept after its commit.
     #[must_use]
     pub fn receipt_retention_days(&self) -> u16 {
         self.receipt_retention_days
+    }
+
+    #[must_use]
+    pub fn payload_retention(&self) -> Duration {
+        self.payload_retention
     }
 }
 
@@ -2704,12 +2701,11 @@ struct RawRuntimeConfig {
         schemars(schema_with = "local_id_map_schema::<RawReviewAuthorityConfig>")
     )]
     review_authorities: BTreeMap<String, RawReviewAuthorityConfig>,
-    /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
+    /// Optional retention windows for idempotency receipts and retained
+    /// event payloads. Defaults to a seven-day receipt horizon and the
+    /// server's bounded payload retention policy.
     #[serde(default)]
-    event_delivery: RawEventDeliveryConfig,
-    /// Optional idempotency tuning. Defaults to a seven-day receipt horizon.
-    #[serde(default)]
-    idempotency: RawIdempotencyConfig,
+    retention: RawRetentionConfig,
     /// Optional operational request, shutdown, locking, and migration timeout tuning.
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
@@ -3128,35 +3124,7 @@ struct RawCursorConfig {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawEventDeliveryConfig {
-    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
-    #[serde(default = "default_webhook_payload_retention_days")]
-    #[serde(
-        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
-    )]
-    payload_retention_days: u8,
-}
-
-impl Default for RawEventDeliveryConfig {
-    fn default() -> Self {
-        Self {
-            payload_retention_days: default_webhook_payload_retention_days(),
-        }
-    }
-}
-
-const fn default_webhook_payload_retention_days() -> u8 {
-    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawIdempotencyConfig {
+struct RawRetentionConfig {
     /// Days a held response is kept after its commit. A retry after it is
     /// refused as expired and never executed; the key stays spent.
     #[serde(default = "default_receipt_retention_days")]
@@ -3170,14 +3138,29 @@ struct RawIdempotencyConfig {
         )
     )]
     receipt_retention_days: u16,
+    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
+    #[serde(default = "default_webhook_payload_retention_days")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
+    )]
+    payload_retention_days: u8,
 }
 
-impl Default for RawIdempotencyConfig {
+impl Default for RawRetentionConfig {
     fn default() -> Self {
         Self {
             receipt_retention_days: default_receipt_retention_days(),
+            payload_retention_days: default_webhook_payload_retention_days(),
         }
     }
+}
+
+const fn default_webhook_payload_retention_days() -> u8 {
+    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
 }
 
 const fn default_receipt_retention_days() -> u16 {

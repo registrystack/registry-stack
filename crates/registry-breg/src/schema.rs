@@ -1141,11 +1141,11 @@ mod tests {
                 Value::from(300_u64),
             ),
             (
-                "/properties/eventDelivery/default/payloadRetentionDays",
+                "/properties/retention/default/payloadRetentionDays",
                 Value::from(7_u64),
             ),
             (
-                "/properties/idempotency/default/receiptRetentionDays",
+                "/properties/retention/default/receiptRetentionDays",
                 Value::from(7_u64),
             ),
             (
@@ -1235,14 +1235,14 @@ mod tests {
             &schema,
             "payload retention above runtime maximum",
             |instance| {
-                instance["eventDelivery"] = serde_json::json!({"payloadRetentionDays": 31});
+                instance["retention"] = serde_json::json!({"payloadRetentionDays": 31});
             },
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "receipt horizon above runtime maximum",
             |instance| {
-                instance["idempotency"] = serde_json::json!({"receiptRetentionDays": 366});
+                instance["retention"] = serde_json::json!({"receiptRetentionDays": 366});
             },
         );
         assert_schema_rejects_parser_refused_runtime(

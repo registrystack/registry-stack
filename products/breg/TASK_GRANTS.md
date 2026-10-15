@@ -130,7 +130,7 @@ application. A database concurrency retry makes a fresh status check.
 
 An exact completed retry recovers the existing receipt under current disclosure
 authority. It does not perform a new mutation or require a new positive status
-check. The receipt is held for `idempotency.receiptRetentionDays` after the
+check. The receipt is held for `retention.receiptRetentionDays` after the
 commit (7 days by default); past that horizon the exact retry answers
 `410 idempotency.expired`, still performs no new mutation, and the caller reads
 the proposal or record to learn the outcome. Reusing the idempotency key with a

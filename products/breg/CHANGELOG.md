@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- BREAKING: retention windows other than the audit journal's live in a
+  top-level `retention` block, the shape Scheduling and Messaging use.
+  `idempotency.receiptRetentionDays` becomes `retention.receiptRetentionDays`
+  and `eventDelivery.payloadRetentionDays` becomes
+  `retention.payloadRetentionDays`; defaults and bounds are unchanged, and
+  `audit.retentionDays` stays where it is. Each old key, and each old
+  `idempotency` or `eventDelivery` block, is refused with `config.removed-key`
+  naming the new path. Before:
+
+  ```yaml
+  idempotency:
+    receiptRetentionDays: 7
+  eventDelivery:
+    payloadRetentionDays: 7
+  ```
+
+  After:
+
+  ```yaml
+  retention:
+    receiptRetentionDays: 7
+    payloadRetentionDays: 7
+  ```
+
+  Migration: move both keys into one `retention` block and delete the old
+  blocks; the values stay as they are.
+
 - BREAKING: a `taskGrantStatus` entry names its status resource
   `statusResource` (was `caseworkResource`), since any task authority, not
   only Casework, can answer grant status. The old key is refused with

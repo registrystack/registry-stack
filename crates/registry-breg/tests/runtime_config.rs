@@ -451,7 +451,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         "registry_migration"
     );
     assert_eq!(
-        config.event_delivery().payload_retention(),
+        config.retention().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
     assert_eq!(config.identity().database_id(), "registry-db");
@@ -896,7 +896,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
     assert_eq!(jwks.outage_tolerance, Duration::from_secs(900));
     assert_eq!(config.cursor().max_age(), Duration::from_secs(300));
     assert_eq!(
-        config.event_delivery().payload_retention(),
+        config.retention().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
     assert_eq!(
@@ -1071,22 +1071,22 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for days in [1_u8, 30_u8] {
         let config = parse_runtime_config(&format!(
-            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  payloadRetentionDays: {days}\n"
         ))
         .expect("bounded deployment retention parses");
         assert_eq!(
-            config.event_delivery().payload_retention(),
+            config.retention().payload_retention(),
             Duration::from_secs(u64::from(days) * 24 * 60 * 60)
         );
     }
     for days in [0_u8, 31_u8] {
         let error = parse_runtime_config(&format!(
-            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  payloadRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/eventDelivery/payloadRetentionDays")
+            ("config.out-of-range", "/retention/payloadRetentionDays")
         );
     }
 }
@@ -1095,8 +1095,8 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
 fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config = parse_runtime_config(&base).expect("the idempotency section is optional");
-    assert_eq!(config.idempotency().receipt_retention_days(), 7);
+    let config = parse_runtime_config(&base).expect("the retention section is optional");
+    assert_eq!(config.retention().receipt_retention_days(), 7);
     let policy = config
         .idempotency_policy()
         .expect("the configured issuer scopes caller keys");
@@ -1107,20 +1107,56 @@ fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() 
     assert_eq!(policy.receipt_retention_days(), 7);
     for days in [1_u16, 365_u16] {
         let config = parse_runtime_config(&format!(
-            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
         ))
         .expect("a bounded receipt horizon parses");
-        assert_eq!(config.idempotency().receipt_retention_days(), days);
+        assert_eq!(config.retention().receipt_retention_days(), days);
     }
     for days in [0_u16, 366_u16] {
         let error = parse_runtime_config(&format!(
-            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/idempotency/receiptRetentionDays")
+            ("config.out-of-range", "/retention/receiptRetentionDays")
         );
+    }
+}
+
+#[test]
+fn retention_windows_outside_the_retention_block_are_refused_naming_the_new_path() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (document, pointer, replacement) in [
+        (
+            "eventDelivery:\n  payloadRetentionDays: 7\n",
+            "/eventDelivery",
+            "retention.payloadRetentionDays",
+        ),
+        (
+            "eventDelivery: {}\n",
+            "/eventDelivery",
+            "retention.payloadRetentionDays",
+        ),
+        (
+            "idempotency:\n  receiptRetentionDays: 7\n",
+            "/idempotency",
+            "retention.receiptRetentionDays",
+        ),
+        (
+            "idempotency: {}\n",
+            "/idempotency",
+            "retention.receiptRetentionDays",
+        ),
+    ] {
+        let error = parse_runtime_config(&format!("{base}\n{document}"))
+            .expect_err("the old retention location is refused");
+        let (code, path) = reader_refusal(&error);
+        assert_eq!(code, "config.removed-key", "{document}");
+        assert!(path.starts_with(pointer), "{document}: {path}");
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
     }
 }
 

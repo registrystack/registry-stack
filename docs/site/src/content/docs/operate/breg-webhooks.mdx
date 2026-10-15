@@ -46,7 +46,7 @@ eventDestinations:
     deliveryCeilings:
       attemptTimeoutMilliseconds: 1000
       maximumAttempts: 3
-eventDelivery:
+retention:
   payloadRetentionDays: 7
 ```
 
@@ -165,7 +165,7 @@ its payload is retained. Older deliveries, and deployments awaiting a schema upd
 that reason. `bindingActive` reports whether the exact captured binding is deployed;
 `replayEligible` is true only while that binding and the retained payload are available.
 Successful delivery erases the payload once no sibling delivery needs it, and retained payloads
-expire after `payloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not
+expire after `retention.payloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not
 proof of success: completed
 deliveries are excluded, so confirm effects from the receiver's own record. Replay keeps the event
 id and issues a new generation and idempotency key; if the receiver's earlier effect is uncertain,
@@ -234,4 +234,4 @@ authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
 - [Base Registry Engine API reference](../../reference/breg-api/) for the delivery request shape,
   the signing input, and the CloudEvents headers.
 - [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
-  `eventDestinations` and `eventDelivery` key.
+  `eventDestinations` and `retention` key.

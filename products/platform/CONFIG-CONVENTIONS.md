@@ -405,6 +405,11 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 
+Retention windows other than the audit journal's live in a top-level
+`retention` block (`retention.receiptRetentionDays`,
+`retention.payloadRetentionDays`); the audit journal keeps
+`audit.retentionDays`.
+
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all
 schemas; no key in the refused column).

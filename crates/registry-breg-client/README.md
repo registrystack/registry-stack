@@ -198,7 +198,7 @@ attempt left no effect, so the client then returns the earlier unknown-outcome
 error instead of the refusal.
 
 BReg keeps a key spent for good but holds its response only for the receipt
-horizon (`idempotency.receiptRetentionDays`, 7 days by default). The same
+horizon (`retention.receiptRetentionDays`, 7 days by default). The same
 request under the same key after that horizon gets `idempotency.expired`
 (410) and does not run again: an earlier attempt committed and its response is
 gone. `is_outcome_unknown()` is false for it and the client never resends it;

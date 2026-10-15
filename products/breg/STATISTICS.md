@@ -237,7 +237,7 @@ stored but are unavailable until that exact definition is active again.
 Publication and withdrawal require `Idempotency-Key`. Keys are per caller,
 like every BReg mutation key. An identical retry under the same current
 authority returns the retained status, headers, and body without creating
-another version, for `idempotency.receiptRetentionDays` after the first commit;
+another version, for `retention.receiptRetentionDays` after the first commit;
 after that it returns `410 idempotency.expired` and creates nothing. Binding
 the key to a different request returns `409 idempotency.conflict`.
 

@@ -299,7 +299,7 @@ instead of writing again. A key is spent per caller across every write: the conf
 principal value, and the key find it, so the same key on another write answers
 `409 idempotency.conflict`, and nothing about it depends on `audit.hashKeyRef`. Only
 successes are held; a refused or failed attempt spends nothing. The held response stays available
-for `idempotency.receiptRetentionDays` after the write commits, 7 days unless the runtime
+for `retention.receiptRetentionDays` after the write commits, 7 days unless the runtime
 configuration chooses another value between 1 and 365. A horizon is fixed when the write commits,
 so changing the setting applies to later writes only.
 
@@ -330,7 +330,7 @@ transaction lock, and the configured runtime credential cannot perform it.
 
 Until its receipt is dropped, a spent key keeps the raw issuer, principal value, and key it was sent
 under, beside the record history it produced. Nothing clears them earlier, so schedule the drop to
-match `idempotency.receiptRetentionDays`. The digest row that keeps the key spent is never deleted:
+match `retention.receiptRetentionDays`. The digest row that keeps the key spent is never deleted:
 an immediate action's results and application hang off it, and revision history reads their
 provenance from them. `history erase` replaces the held responses that could replay erased
 revisions with refusal tombstones; it does not forget that the key was spent.

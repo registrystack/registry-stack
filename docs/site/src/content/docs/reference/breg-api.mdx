@@ -294,7 +294,7 @@ require the header.
 - Only successes are held. A refused or failed attempt spends nothing, so correct the request and
   retry it with the same key.
 - A repeat of the same request under the same key returns the held response without writing
-  again, for `idempotency.receiptRetentionDays` after the first attempt committed (7 days by
+  again, for `retention.receiptRetentionDays` after the first attempt committed (7 days by
   default).
 - The same key with a different request returns `409 idempotency.conflict`. The binding covers the
   request body and the package activation, selected access profile, and verified claims it ran

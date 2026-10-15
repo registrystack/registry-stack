@@ -70,7 +70,7 @@ safely:
    [unknown outcomes](../../reference/client-api/#unknown-outcomes-and-the-same-key-retry)
    describes. When the error still reports an unknown outcome, your later retries reuse that key;
    a new key can apply the step twice. Each product holds a key's first answer only for its receipt
-   horizon, 7 days by default in BReg (`idempotency.receiptRetentionDays`). Past it, BReg answers
+   horizon, 7 days by default in BReg (`retention.receiptRetentionDays`). Past it, BReg answers
    an exact retry with `410 idempotency.expired` and runs nothing: the write committed, so read the
    record instead.
 3. When a step acts on a human approval, obtain a task grant for that step close to when it runs,

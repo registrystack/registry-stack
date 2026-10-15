@@ -225,7 +225,7 @@ apply the mutation twice. A refusal that answers a resend does not prove the ear
 effect, so the client returns the earlier unknown-outcome error instead of that refusal.
 
 The receipt horizon is how long a service holds a key's first answer: BReg's
-`idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
+`retention.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
 Messaging's `retention.receiptRetentionDays`,</DocsetProduct> and Scheduling's
 `retention.receiptRetentionDays`. Every service answers a spent key by one rule: a different request
 under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
@@ -843,7 +843,7 @@ operation serializes under `/data/<field>`.
 The client never creates a key, and resends a mutation only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). A retry after an unknown outcome must
 reuse the same binding, body, precondition, representation, and key. BReg holds a response under the
-key only for a committed success, and only for `idempotency.receiptRetentionDays` after that commit.
+key only for a committed success, and only for `retention.receiptRetentionDays` after that commit.
 A resend after a 5xx replays that success within the horizon, runs the operation again when nothing
 committed, and past the horizon answers `410 idempotency.expired` without running it. The key stays
 spent, so that `410` is a known outcome: the write committed.
