@@ -38,6 +38,7 @@ pub struct RunStatus {
 
     pub binding_digest: String,
     pub step: String,
+    #[serde(deserialize_with = "run_state")]
     pub state: String,
     pub outcome: Option<String>,
     pub output: Option<Value>,
@@ -243,6 +244,13 @@ pub struct RetryScheduled {
 
 // Inputs and authored outputs can carry protected source values. Debug is
 // intentionally not derived for those documents.
+
+fn run_state<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    RunListState::deserialize(serde::de::value::StrDeserializer::<D::Error>::new(&value))
+        .map(|state| state.as_str().to_owned())
+        .map_err(|_| serde::de::Error::custom("expected a closed effective run state"))
+}
 
 fn revision<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let value = String::deserialize(deserializer)?;

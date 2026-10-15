@@ -736,6 +736,25 @@ mod problem_tests {
     }
 
     #[test]
+    fn openapi_run_states_match_the_runtime_filter() {
+        let document = openapi();
+        let response = &document["components"]["schemas"]["RunStatus"]["properties"]["state"];
+        let filter = document["paths"]["/v1/runs"]["get"]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|parameter| parameter["name"] == "state")
+            .unwrap();
+        assert_eq!(response, &filter["schema"]);
+        let states = response["enum"].as_array().unwrap();
+        assert_eq!(states.len(), 8);
+        for value in states {
+            let state: RunListState = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(&serde_json::to_value(state).unwrap(), value);
+        }
+    }
+
+    #[test]
     fn every_problem_an_operation_can_answer_is_documented_on_one() {
         let document = openapi();
         let documented: std::collections::BTreeSet<ProblemCode> = operations(&document)
@@ -1323,6 +1342,7 @@ fn summary(operation_id: &str) -> &'static str {
 
 pub fn openapi() -> Value {
     use ProblemCode as P;
+    let run_state = json!({"type":"string","enum":["running","finished","failed","cancelled","cancelled-after-effect","expired","attention","cancel-requested"]});
     let run_param = json!({"name":"run","in":"path","required":true,"schema":{"type":"string","format":"uuid"}});
     let mut paths = serde_json::Map::new();
     let operations: [DocumentedOperation; 14] = [
@@ -1528,7 +1548,7 @@ pub fn openapi() -> Value {
             op["parameters"] = json!([
                 {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
                 {"name":"cursor","in":"query","description":"Opaque nextCursor from the previous page. Keep state and attention filters unchanged; the current caller is authorized again on each page.","schema":{"type":"string","minLength":1,"maxLength":4096}},
-                {"name":"state","in":"query","schema":{"type":"string","enum":["running","finished","failed","cancelled","cancelled-after-effect","expired","attention","cancel-requested"]}},
+                {"name":"state","in":"query","schema":run_state},
                 {"name":"attention","in":"query","description":"True selects effective states attention and failed; false excludes both. Composes with state.","schema":{"type":"boolean"}}
             ]);
         }
@@ -1585,7 +1605,7 @@ pub fn openapi() -> Value {
         .iter()
         .map(|operation| operation.id)
         .collect();
-    let status = json!({"type":"object","required":["runId","workflow","workflowRevision","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflow":{"type":"string"},"workflowRevision":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":{"type":"string"},"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
+    let status = json!({"type":"object","required":["runId","workflow","workflowRevision","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflow":{"type":"string"},"workflowRevision":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":run_state,"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
     let mut schemas = json!({
       "WorkflowContract":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input","outcomes"],"properties":{"workflow":{"type":"string"},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{},"outcomes":{"type":"object","minProperties":1,"maxProperties":64}}},
       "Start":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input"],"properties":{"workflow":{"type":"string","minLength":1,"maxLength":64},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{}}},
