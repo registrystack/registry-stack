@@ -841,6 +841,9 @@ impl MutationTransaction {
             }));
         }
         let action = proposal_action(registry, input.action_id)?;
+        if document.header.state == "rejected" {
+            return Err(MutationError::ProposalRejected);
+        }
         if document.blocked_reason.is_some() || document.header.state != "submitted" {
             return Err(MutationError::PreconditionFailed);
         }
@@ -1046,6 +1049,11 @@ impl MutationTransaction {
                     return Err(MutationError::PreconditionFailed);
                 }
                 let workflow = proposal_store::load(tx, &action.id, id, false).await?;
+                // A rejection is final: every command answers it, before any
+                // blocked reason or revision change could look recoverable.
+                if workflow.state() == crate::proposal_workflow::ProposalState::Rejected {
+                    return Err(MutationError::ProposalRejected);
+                }
                 if !matches!(
                     operation,
                     ProposalOperation::Cancel | ProposalOperation::Rebase
