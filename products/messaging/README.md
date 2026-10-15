@@ -78,8 +78,8 @@ Messaging does not own why or when to send, recipient identity or contact
 directories, consent to be contacted, or any registry mutation. Those stay
 with the caller's source of record.
 
-- No Messaging crate depends on a Base Registry Engine, Casework, Scheduling,
-  Evidence, or Relay crate, and no crate of those products depends on the
+- No Messaging crate depends on a Base Registry Engine, Casework, Coordinator,
+  Scheduling, or Evidence crate, and no crate of those products depends on the
   Messaging runtime or its tooling. Products reach Messaging over its public
   HTTP contract, like any external caller.
   `scripts/check_dependency_direction.py` enforces this on the forward
@@ -301,6 +301,12 @@ never hand-edited.
 | `POST /v1/provider-callbacks/{provider_id}` and `POST /v1/provider-callbacks/{provider_id}/{token}` | the provider's configured callback verifier, no bearer | `204` once the receipt is read; `403 callback.unverified` for any callback that does not verify, `422 callback.unreadable` for one the receipt script cannot read; `429 rate-limit.exceeded` with `Retry-After`, before verification, past the provider's fixed callback rate |
 | `GET /metrics` | metrics listener only | Prometheus text; never served on the public listener |
 
+The `202` from `POST /v1/messages` means Messaging admitted the message to its
+dispatch queue, nothing more: the message can still become `failed`,
+`expired`, `cancelled`, or `unknown`. `submitted` means the provider accepted
+the message, never that it was delivered. Neither acceptance nor `submitted`
+is proof of delivery to the recipient or of legal service.
+
 Every response carries a `traceparent` header. Problems are
 `application/problem+json` with a type under
 `https://id.registrystack.org/problems/registry-messaging/`:
@@ -317,6 +323,7 @@ Every response carries a `traceparent` header. Problems are
 | `idempotency.key-reused` | 409 |
 | `message.dispatch-started` | 409 |
 | `message.terminal` | 409 |
+| `receipt.unresolved` | 409 |
 | `idempotency.expired` | 410 |
 | `request.body-too-large` | 413 |
 | `request.unsupported-media-type` | 415 |
@@ -423,12 +430,20 @@ cargo run -p registry-messaging --features schema --example openapi -- \
 
 ## Observe an original receipt
 
-`POST /v1/messages/receipt` accepts the original request body and `Idempotency-Key`
-under current ordinary read authority. It returns `200` with the retained
-original success receipt for the same verified issuer and configured principal. It never
-repeats the business operation. A same-principal read credential can observe
-work after task authority ends; another service identity cannot impersonate
-that principal. `409 receipt.unresolved` covers unavailable evidence such as
-a missing, expired, or changed receipt and does not prove that no effect occurred.
+`POST /v1/messages/receipt` accepts the original request body and
+`Idempotency-Key`. The caller authenticates as for any Messaging route: its
+client resolves to an access profile, the token carries that profile's
+required scopes, and the profile's `principalClaim` names the owner
+principal. The route returns `200` with the retained original success
+receipt only to the verified issuer and principal that submitted under the
+key, for the same request. It needs no sender profile or template permission,
+does not count against the caller's rate or daily limit, and never renders,
+submits, dispatches, or writes anything. A caller resolving to another
+principal cannot observe the receipt. `409 receipt.unresolved` covers
+unavailable evidence such as a missing, expired, or changed receipt and does
+not prove that no effect occurred.
 
-When a caller must be bound to its issuer and subject, configure the Messaging caller profile with `principalClaim: sub`. Other profiles retain the product’s existing configured principal ownership rule, and cannot substitute a different principal to observe an original receipt.
+To bind ownership to the token's subject, configure the caller's access
+profile with `principalClaim: sub`. A profile that names another claim owns
+its receipts under that claim's value, and cannot substitute a different
+principal to observe one.

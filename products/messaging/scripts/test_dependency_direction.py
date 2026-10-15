@@ -24,7 +24,6 @@ NAMES = {
     "casework-core": "registry-casework-core",
     "scheduling-core": "registry-scheduling-core",
     "evidence-client": "registry-evidence-client",
-    "relay-client": "registry-relay-client",
     "cli-docs": "registry-cli-docs",
     "platform": "registry-platform-httpsec",
     "serde": "serde",
@@ -35,7 +34,7 @@ INTENDED = {
     "client": ["core", "platform"],
     "client-node": ["client", "serde"],
     "client-py": ["client", "serde"],
-    "stack-client": ["client", "evidence-client", "relay-client"],
+    "stack-client": ["client", "evidence-client"],
     "runtime": ["core", "platform"],
     "ctl": ["runtime", "core"],
     "breg": [],
@@ -44,7 +43,6 @@ INTENDED = {
     "casework-core": [],
     "scheduling-core": [],
     "evidence-client": [],
-    "relay-client": [],
     "cli-docs": ["runtime", "ctl", "breg"],
     "platform": ["serde"],
     "serde": [],
@@ -93,7 +91,6 @@ class DependencyDirectionTests(unittest.TestCase):
             "coordinator",
             "scheduling-core",
             "evidence-client",
-            "relay-client",
         ):
             with self.subTest(product=product):
                 failures = "\n".join(MODULE.violations(metadata(client=["core", product])))
@@ -173,7 +170,7 @@ class DependencyDirectionTests(unittest.TestCase):
                 )
 
     def test_a_product_reaching_the_messaging_runtime_is_rejected(self):
-        for product in ("breg", "coordinator", "scheduling-core", "relay-client"):
+        for product in ("breg", "coordinator", "scheduling-core", "evidence-client"):
             with self.subTest(product=product):
                 failures = "\n".join(MODULE.violations(metadata(**{product: ["client"], "client": ["runtime"]})))
                 self.assertIn(

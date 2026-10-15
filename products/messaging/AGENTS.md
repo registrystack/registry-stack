@@ -16,8 +16,8 @@ examples, and product-local verification scripts. Read the workspace
 - Record a deliberate behaviour a reader could mistake for an oversight in
   `contracts/recorded-decisions.yaml`, with the tests that hold it.
 - Preserve the product boundary: no Messaging crate, directly or through any
-  shared dependency, reaches a Base Registry Engine, Casework, Scheduling,
-  Evidence, or Relay crate, and none of those products reach the Messaging
+  shared dependency, reaches a Base Registry Engine, Casework, Coordinator,
+  Scheduling, or Evidence crate, and none of those products reach the Messaging
   runtime or `messagingctl`. The core depends on no other Messaging crate and
   the client never reaches the runtime. Run
   `scripts/check_dependency_direction.py` after dependency changes.

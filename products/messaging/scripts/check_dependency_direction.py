@@ -18,7 +18,6 @@ PRODUCT_PREFIXES = (
     "registry-coordinator",
     "registry-scheduling",
     "registry-evidence",
-    "registry-relay",
 )
 
 MESSAGING_PREFIX = "registry-messaging"
