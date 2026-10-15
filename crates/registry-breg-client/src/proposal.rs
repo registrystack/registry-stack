@@ -1228,6 +1228,7 @@ impl BaseRegistryClient {
         if current.id != proposal.id
             || current.action_id != proposal.action_id
             || current.revision < proposal.revision
+            || current.submission_version < proposal.submission_version
         {
             return Err(refusal());
         }
@@ -1612,6 +1613,40 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(client.read_proposal(&prior).await.unwrap().value).unwrap(),
                 current
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn proposal_reads_refuse_submission_version_rollback() {
+        let mut held = document();
+        held["submissionVersion"] = json!(2);
+        held["revision"] = json!(4);
+        held["links"]["apply"]["availability"]["observedRevision"] = json!(4);
+        let (client, response, server) = proposal_response_client(json!({})).await;
+        let held = proposal(&client, held);
+
+        let mut rollback = document();
+        rollback["revision"] = json!(5);
+        rollback["links"]["apply"]["availability"]["observedRevision"] = json!(5);
+        *response.lock().unwrap() = rollback;
+        assert!(client.read_proposal(&held).await.is_err());
+
+        for (state, version) in [("submitted", 2), ("draft", 3)] {
+            let mut current = document();
+            current["revision"] = json!(5);
+            current["submissionVersion"] = json!(version);
+            current["state"] = json!(state);
+            if state == "draft" {
+                current.as_object_mut().unwrap().remove("effectDigest");
+            }
+            current["links"]["apply"]["availability"]["observedRevision"] = json!(5);
+            *response.lock().unwrap() = current.clone();
+            assert_eq!(
+                serde_json::to_value(client.read_proposal(&held).await.unwrap().value).unwrap(),
+                current,
+                "{state}:{version}"
             );
         }
         server.abort();
