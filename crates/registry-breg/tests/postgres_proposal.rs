@@ -2215,7 +2215,8 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
-    let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
     let review = std::sync::Arc::new(LocalReview {
         calls: 0.into(),
@@ -2247,7 +2248,10 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
         async move {
             let response = reqwest::get(url).await.unwrap();
             let status = response.status();
-            (status, response.json::<Value>().await.unwrap_or(Value::Null))
+            (
+                status,
+                response.json::<Value>().await.unwrap_or(Value::Null),
+            )
         }
     };
     let (status, body) = read("1", "clerk").await;
@@ -2304,9 +2308,18 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
 
     // A version never submitted, a malformed version and a profile without
     // Get authority are all concealed alike.
-    for (version, profile) in [("3", "clerk"), ("0", "clerk"), ("01", "clerk"), ("1", "missing")] {
+    for (version, profile) in [
+        ("3", "clerk"),
+        ("0", "clerk"),
+        ("01", "clerk"),
+        ("1", "missing"),
+    ] {
         let (status, _) = read(version, profile).await;
-        assert_eq!(status, reqwest::StatusCode::NOT_FOUND, "{version} {profile}");
+        assert_eq!(
+            status,
+            reqwest::StatusCode::NOT_FOUND,
+            "{version} {profile}"
+        );
     }
 
     // Once the superseded version's result window lapses it retains nothing
@@ -2345,7 +2358,8 @@ async fn submission_read_reports_the_application_receipt_without_the_applier() {
     let apply = client
         .prepare_proposal(&submitted, "apply", body, &key("receipt-apply"))
         .unwrap();
-    let applied = serde_json::to_value(client.execute_proposal(&apply).await.unwrap().value).unwrap();
+    let applied =
+        serde_json::to_value(client.execute_proposal(&apply).await.unwrap().value).unwrap();
     let response = reqwest::get(format!(
         "{}/v1/proposals/{}/submissions/1?accessProfile=clerk",
         fixture.http.base_url,
