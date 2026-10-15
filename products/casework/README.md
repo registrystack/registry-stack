@@ -116,6 +116,27 @@ when configured, receives an authenticated payload-free wake. A wake carries
 no decision payload; the producer fetches the result and authorizes any later
 mutation independently.
 
+## Refused older spellings
+
+`caseworkctl check` and the runtime refuse the older project spellings below
+at their path, name the replacement, and point at the row of the format table
+in [CHANGELOG.md](CHANGELOG.md). Rewrite the project by hand; there is no
+migration command. The identifier-keyed maps of row F4 are a configuration
+shape only: the served policy lists those items as arrays in identifier order,
+so reordering a map changes neither the served policy nor its digest.
+
+| Row | Before | After |
+| --- | --- | --- |
+| F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
+| F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
+| F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
+| F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
+| F5 | `type: activity` | `type: stage` |
+| F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
+| F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |
+| F8 | `atRisk: {workingDaysBefore: N}`, reminder `workingDaysBefore: N` | `atRisk: {before: {workingDays: N}}`, `reminders: {REMINDER_ID: {before: {workingDays: N}}}` |
+| F9 | routing `when: {activity: review}` | removed; a rule applies whenever a task is created, and one naming a `stage` matches only that stage's tasks |
+
 ## Current-source BReg review
 
 The canonical project pins a BReg Proposal review-context export. Its

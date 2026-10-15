@@ -61,7 +61,7 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
     REMOVED_OIDC_JWKS_SOURCE_KIND,
     RemovedKey {
         path: "authentication.oidc.principalClaim",
-        replacement: "declare accessProfiles[].principalClaim in casework.yaml",
+        replacement: "declare accessProfiles.PROFILE_ID.principalClaim in casework.yaml",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -1939,7 +1939,7 @@ pub enum RuntimeConfigError {
         reason: &'static str,
     },
     #[error(
-        "authentication.oidc.humanIdentity.claim must differ from every accessProfiles[].principalClaim in casework.yaml"
+        "authentication.oidc.humanIdentity.claim must differ from every accessProfiles.PROFILE_ID.principalClaim in casework.yaml"
     )]
     PrincipalClaimConflict,
     #[error(
@@ -1972,7 +1972,7 @@ pub enum RuntimeConfigError {
         reason: &'static str,
     },
     #[error(
-        "reviewCompletionDestinations must configure every destination casework.yaml trustedProducers[].completion.destinationId names"
+        "reviewCompletionDestinations must configure every destination casework.yaml trustedProducers.PRODUCER_ID.completion.destinationId names"
     )]
     UnconfiguredReviewCompletionDestination,
     #[error("plaintext PostgreSQL is test-only")]
@@ -2136,7 +2136,7 @@ impl RuntimeConfigError {
                 "Name a non-empty claim distinct from authentication.oidc.scopeClaim, or remove the member to use its default."
             }
             Self::PrincipalClaimConflict => {
-                "Name a humanIdentity.claim that no accessProfiles[].principalClaim in casework.yaml uses."
+                "Name a humanIdentity.claim that no accessProfiles.PROFILE_ID.principalClaim in casework.yaml uses."
             }
             Self::AllowedClientsRequired => {
                 "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
@@ -2156,7 +2156,7 @@ impl RuntimeConfigError {
                 "Give the destination a non-empty id and an https URL with a host, or an http URL on 127.0.0.1 or [::1] for local development."
             }
             Self::UnconfiguredReviewCompletionDestination => {
-                "Add a reviewCompletionDestinations entry for each destination casework.yaml trustedProducers[].completion.destinationId names."
+                "Add a reviewCompletionDestinations entry for each destination casework.yaml trustedProducers.PRODUCER_ID.completion.destinationId names."
             }
             Self::PlaintextDatabase => {
                 "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."

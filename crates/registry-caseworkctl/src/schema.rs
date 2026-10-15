@@ -349,7 +349,7 @@ mod tests {
             usize::MAX as u64
         );
         assert_eq!(
-            definitions["ClockReminder"]["properties"]["workingDaysBefore"]["maximum"],
+            definitions["WorkingDays"]["properties"]["workingDays"]["maximum"],
             3650
         );
         assert_eq!(

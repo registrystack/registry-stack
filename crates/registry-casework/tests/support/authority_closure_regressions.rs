@@ -122,12 +122,13 @@ async fn accepted_plain_policy_does_not_pin_another_policys_optional_provider_ca
     routed["id"] = json!("routed-review");
     routed["routing"] = json!([{"id":"north","because":"Route north notices","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
     value["reviewPolicies"].as_array_mut().unwrap().push(routed);
-    value["trustedProducers"][0]["reviewPolicies"] = json!(["notice-review", "routed-review"]);
+    value["trustedProducers"]["notice-service"]["reviewPolicies"] =
+        json!(["notice-review", "routed-review"]);
     let f = Fixture::new(value.clone()).await;
     f.create("plain").await;
     // Remove the drained routing policy while a plain review remains open.
     value["reviewPolicies"].as_array_mut().unwrap().pop();
-    value["trustedProducers"][0]["reviewPolicies"] = json!(["notice-review"]);
+    value["trustedProducers"]["notice-service"]["reviewPolicies"] = json!(["notice-review"]);
     let provider = PlainProvider(f.state.clone());
     let declared_project = decode(&value);
     assert!(CaseworkService::new(
@@ -180,15 +181,13 @@ async fn assignment_roles_stay_pinned_and_activation_refuses_changed_deciding_au
     let accepted = f.create("role-pinned").await;
     let task = f.task(accepted.request_id).await;
     let mut value = project_value(false, false);
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({"id":"spare-staff","principalClaim":"sub","requiredScopes":["casework:spare-staff"],"role":"staff"}));
-    value["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p["id"] == "staff")
-        .unwrap()["role"] = json!("supervisor");
-    value["teams"][0]["memberProfiles"] = json!(["spare-staff"]);
-    value["teams"][0]["supervisorProfiles"] = json!(["supervisor", "staff"]);
+    value["accessProfiles"].as_object_mut().unwrap().insert(
+        "spare-staff".into(),
+        json!({"principalClaim":"sub","requiredScopes":["casework:spare-staff"],"role":"staff"}),
+    );
+    value["accessProfiles"]["staff"]["role"] = json!("supervisor");
+    value["teams"]["review-team"]["memberProfiles"] = json!(["spare-staff"]);
+    value["teams"]["review-team"]["supervisorProfiles"] = json!(["supervisor", "staff"]);
     let changed = decode(&value);
     changed.check().unwrap();
     let service = CaseworkService::new(

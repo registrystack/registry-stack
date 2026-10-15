@@ -46,8 +46,8 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
         }],
         clocks: Vec::new(),
         retention: ReviewRetentionPolicy {
-            terminal_days: 30,
-            accountability_days: 30,
+            terminal_retention_days: 30,
+            accountability_retention_days: 30,
         },
         display_schema: json!({
             "type":"object",
@@ -1811,8 +1811,8 @@ fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: V
         }],
         clocks: Vec::new(),
         retention: ReviewRetentionPolicy {
-            terminal_days: 30,
-            accountability_days: 30,
+            terminal_retention_days: 30,
+            accountability_retention_days: 30,
         },
         display_schema,
         result_schema: None,
@@ -2986,8 +2986,8 @@ async fn task_context_response() -> impl IntoResponse {
         }],
         clocks: Vec::new(),
         retention: ReviewRetentionPolicy {
-            terminal_days: 30,
-            accountability_days: 30,
+            terminal_retention_days: 30,
+            accountability_retention_days: 30,
         },
         display_schema: json!({
             "type": "object",
@@ -3069,10 +3069,10 @@ fn current_source_policy() -> ReviewContextPolicy {
 }
 fn fixture_closure(policy: ReviewPolicy) -> registry_casework_client::ReviewPolicyClosure {
     let provider = matches!(policy.context, ReviewContextPolicy::CurrentSource { .. });
-    let queues: Vec<_> = policy
+    let queues: serde_json::Map<_, _> = policy
         .stages
         .iter()
-        .map(|s| json!({"id":s.queue,"label":"Reviews"}))
+        .map(|s| (s.queue.clone(), json!({"label":"Reviews"})))
         .collect();
     let providers = if provider {
         vec![
@@ -3083,9 +3083,9 @@ fn fixture_closure(policy: ReviewPolicy) -> registry_casework_client::ReviewPoli
     };
     let project: registry_casework_core::CaseworkProject = serde_json::from_value(json!({
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1", "kind":"CaseworkProject", "project":{"id":"client-fixture","version":"1"},
-        "accessProfiles":[{"id":"supervisor","role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"]},{"id":"administrator","role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},{"id":"staff","role":"staff","principalClaim":"sub","requiredScopes":["casework:staff"]},{"id":"requester","role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}],
+        "accessProfiles":{"supervisor":{"role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"]},"administrator":{"role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},"staff":{"role":"staff","principalClaim":"sub","requiredScopes":["casework:staff"]},"requester":{"role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
         "queues":queues, "reviewPolicies":[policy.clone()], "contextProviders":providers,
-        "trustedProducers":[{"id":"requester","profile":"requester","issuer":"https://issuer.example","subject":"producer","sourceNamespaces":["registry"],"reviewPolicies":[policy.id],"recoveryDays":30}]
+        "trustedProducers":{"requester":{"profile":"requester","issuer":"https://issuer.example","subject":"producer","sourceNamespaces":["registry"],"reviewPolicies":[policy.id],"retention":{"receiptRetentionDays":30}}}
     })).expect("fixture project");
     assert!(
         project.check().is_ok(),

@@ -2357,7 +2357,8 @@ impl PostgresStore {
         mut audit: crate::audit::AuditOperation,
     ) -> Result<ReviewCreateOutcome, ReviewRuntimeError> {
         let now = Utc::now();
-        let recovery_deadline = now + TimeDelta::days(i64::from(producer.recovery_days));
+        let recovery_deadline =
+            now + TimeDelta::days(i64::from(producer.retention.receipt_retention_days));
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let resource = format!("review-producer:{}", producer.id);
@@ -2513,7 +2514,7 @@ impl PostgresStore {
                     .ok_or(ReviewRuntimeError::Corrupt)?;
                 let calendar = match &clock {
                     ClockPolicy::Subject { .. } => None,
-                    ClockPolicy::Activity { calendar, .. } => Some(
+                    ClockPolicy::Stage { calendar, .. } => Some(
                         snapshot
                             .dependencies
                             .calendars
@@ -2530,8 +2531,9 @@ impl PostgresStore {
         let retained_until = now
             + TimeDelta::days(i64::from(
                 producer
-                    .recovery_days
-                    .max(policy.retention.accountability_days),
+                    .retention
+                    .receipt_retention_days
+                    .max(policy.retention.accountability_retention_days),
             ));
         transaction
             .execute(
@@ -4375,8 +4377,10 @@ impl PostgresStore {
             .transpose()
             .map_err(|_| ReviewRuntimeError::Invalid)?
             .map(|bytes| ContentDigest::for_bytes(&bytes).to_string());
-        let accountability_until =
-            now + TimeDelta::days(i64::from(record.policy.retention.accountability_days));
+        let accountability_until = now
+            + TimeDelta::days(i64::from(
+                record.policy.retention.accountability_retention_days,
+            ));
         let accountability_event_id = Uuid::new_v4();
         transaction
             .execute(
@@ -4650,7 +4654,6 @@ async fn insert_stage_tasks(
             &rules,
             &metadata,
             &RoutingContext {
-                activity: RoutingActivity::Review,
                 stage: Some(stage.id.clone()),
                 fields: values,
             },
@@ -4747,8 +4750,7 @@ async fn insert_initial_review_clocks(
         };
         match clock {
             ClockPolicy::Subject { after, .. } => {
-                let seconds =
-                    parse_elapsed_seconds(&after.elapsed).ok_or(ReviewRuntimeError::Corrupt)?;
+                let seconds = after.seconds();
                 let document = serde_json::to_value(&definition)?;
                 let digest = review_request_hash(&document)?;
                 let correlation = format!("review-policy:{review_policy_id}:{request_id}");
@@ -4765,7 +4767,7 @@ async fn insert_initial_review_clocks(
                 )
                 .await?;
             }
-            ClockPolicy::Activity { .. } => {
+            ClockPolicy::Stage { .. } => {
                 for (task_id, stage_id) in tasks {
                     insert_review_activity_clock(
                         tx,
@@ -4813,7 +4815,7 @@ async fn insert_advanced_review_activity_clocks(
             continue;
         };
         let definition: ReviewClockDefinition = serde_json::from_value(row.get(0))?;
-        if !matches!(definition.clock, ClockPolicy::Activity { .. }) {
+        if !matches!(definition.clock, ClockPolicy::Stage { .. }) {
             continue;
         }
         for (task_id, stage_id) in tasks {
@@ -4856,7 +4858,7 @@ async fn insert_review_activity_clock(
                 .await?;
             if let Some(holiday) = holiday {
                 let holiday: HolidaySetDocument = serde_json::from_value(holiday.get(0))?;
-                let evaluated = registry_casework_core::evaluate_activity_clock(
+                let evaluated = registry_casework_core::evaluate_stage_clock(
                     &definition.clock,
                     calendar,
                     &holiday,
@@ -4946,9 +4948,12 @@ async fn settle_review(
         .await?;
     let result_id = Uuid::new_v4();
     let event_id = Uuid::new_v4();
-    let available_until = now + TimeDelta::days(i64::from(record.policy.retention.terminal_days));
-    let accountability_until =
-        now + TimeDelta::days(i64::from(record.policy.retention.accountability_days));
+    let available_until =
+        now + TimeDelta::days(i64::from(record.policy.retention.terminal_retention_days));
+    let accountability_until = now
+        + TimeDelta::days(i64::from(
+            record.policy.retention.accountability_retention_days,
+        ));
     let retained_until = available_until;
     let status_name = result_status_name(status);
     transaction

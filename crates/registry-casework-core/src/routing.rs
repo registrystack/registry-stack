@@ -14,13 +14,6 @@ pub const MAXIMUM_ROUTING_VALUES: usize = 32;
 pub const MAXIMUM_ROUTING_SOURCE_FIELDS: usize = 128;
 pub const MAXIMUM_ROUTING_SOURCE_STAGES: usize = 32;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum RoutingActivity {
-    Review,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -37,8 +30,6 @@ pub struct RoutingRule {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingCondition {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub activity: Option<RoutingActivity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
     #[serde(
@@ -177,7 +168,6 @@ pub struct RoutingSourceMetadata {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct RoutingContext {
-    pub activity: RoutingActivity,
     pub stage: Option<String>,
     /// Values are keyed by the imported logical field id used in `projection`.
     pub fields: BTreeMap<String, Value>,
@@ -187,7 +177,6 @@ impl fmt::Debug for RoutingContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RoutingContext")
-            .field("activity", &self.activity)
             .field("has_stage", &self.stage.is_some())
             .field("field_count", &self.fields.len())
             .finish()
@@ -225,7 +214,6 @@ pub enum RoutingDiagnosticReason {
     DuplicatePredicateValue,
     InvalidPredicateValue,
     EmptyCondition,
-    StageWithoutReview,
     UnreachableRule,
     InvalidSourceValue,
     UnexpectedSourceState,
@@ -252,7 +240,6 @@ impl RoutingDiagnosticReason {
             Self::DuplicatePredicateValue => "casework.routing.duplicate-predicate-value",
             Self::InvalidPredicateValue => "casework.routing.invalid-predicate-value",
             Self::EmptyCondition => "casework.routing.empty-condition",
-            Self::StageWithoutReview => "casework.routing.stage-without-review",
             Self::UnreachableRule => "casework.routing.unreachable-rule",
             Self::InvalidSourceValue => "casework.routing.invalid-source-value",
             Self::UnexpectedSourceState => "casework.routing.unexpected-source-state",
@@ -284,12 +271,11 @@ impl RoutingDiagnosticReason {
             Self::InvalidPredicateValue => {
                 "a predicate value does not match the field's schema in the source description"
             }
-            Self::EmptyCondition => "`when` names no activity, stage, or field",
-            Self::StageWithoutReview => "a stage is tested only by a review rule",
+            Self::EmptyCondition => "`when` names no stage or field",
             Self::UnreachableRule => "an earlier rule matches every input this rule matches",
             Self::InvalidSourceValue => "the source returned a value its description does not allow",
             Self::UnexpectedSourceState => {
-                "the source returned a stage the activity does not allow"
+                "the source returned a stage the review does not allow"
             }
         }
     }
@@ -319,8 +305,7 @@ impl RoutingDiagnosticReason {
             Self::PredicateValueCount => "Write `equals` with one value, or `oneOf` with 1 to 32 values.",
             Self::DuplicatePredicateValue => "Remove the repeated value.",
             Self::InvalidPredicateValue => "Write values the field's schema allows.",
-            Self::EmptyCondition => "Name the activity, stage, or fields the rule matches.",
-            Self::StageWithoutReview => "Set `activity: review`, or remove `stage`.",
+            Self::EmptyCondition => "Name the stage or fields the rule matches.",
             Self::UnreachableRule => "Move the rule above the broader rule, or remove it.",
             Self::InvalidSourceValue | Self::UnexpectedSourceState => {
                 "Correct the record in the source, or import the source's current description."
@@ -481,8 +466,7 @@ pub fn routing_policy_findings(
                 RoutingDiagnosticReason::UnknownQueue,
             ));
         }
-        if rule.when.activity.is_none() && rule.when.stage.is_none() && rule.when.fields.is_empty()
-        {
+        if rule.when.stage.is_none() && rule.when.fields.is_empty() {
             findings.push(RoutingDiagnostic::new(
                 format!("{base}/when"),
                 RoutingDiagnosticReason::EmptyCondition,
@@ -494,17 +478,7 @@ pub fn routing_policy_findings(
                 RoutingDiagnosticReason::TooManyPredicates,
             ));
         }
-        if rule.when.stage.is_some()
-            && rule
-                .when
-                .activity
-                .is_some_and(|activity| activity != RoutingActivity::Review)
-        {
-            findings.push(RoutingDiagnostic::new(
-                format!("{base}/when/stage"),
-                RoutingDiagnosticReason::StageWithoutReview,
-            ));
-        } else if let (Some(stage), Some(metadata)) = (&rule.when.stage, source) {
+        if let (Some(stage), Some(metadata)) = (&rule.when.stage, source) {
             if !metadata.stages.contains(stage) {
                 findings.push(RoutingDiagnostic::new(
                     format!("{base}/when/stage"),
@@ -589,21 +563,17 @@ pub fn evaluate_routing(
         .collect();
     check_routing_policy(default_queue, projection, rules, &queues, Some(source))?;
 
-    match context.activity {
-        RoutingActivity::Review => {
-            let Some(stage) = context.stage.as_ref() else {
-                return Err(RoutingDiagnostic::new(
-                    "/source/stage",
-                    RoutingDiagnosticReason::UnexpectedSourceState,
-                ));
-            };
-            if stage.is_empty() || stage.len() > 64 {
-                return Err(RoutingDiagnostic::new(
-                    "/source/stage",
-                    RoutingDiagnosticReason::UnexpectedSourceState,
-                ));
-            }
-        }
+    let Some(stage) = context.stage.as_ref() else {
+        return Err(RoutingDiagnostic::new(
+            "/source/stage",
+            RoutingDiagnosticReason::UnexpectedSourceState,
+        ));
+    };
+    if stage.is_empty() || stage.len() > 64 {
+        return Err(RoutingDiagnostic::new(
+            "/source/stage",
+            RoutingDiagnosticReason::UnexpectedSourceState,
+        ));
     }
 
     let descriptors = source
@@ -665,12 +635,9 @@ pub fn evaluate_routing(
 
 fn matches_condition(condition: &RoutingCondition, context: &RoutingContext) -> bool {
     condition
-        .activity
-        .is_none_or(|activity| activity == context.activity)
-        && condition
-            .stage
-            .as_ref()
-            .is_none_or(|stage| context.stage.as_ref() == Some(stage))
+        .stage
+        .as_ref()
+        .is_none_or(|stage| context.stage.as_ref() == Some(stage))
         && condition.fields.iter().all(|(field, predicate)| {
             context
                 .fields
@@ -681,12 +648,9 @@ fn matches_condition(condition: &RoutingCondition, context: &RoutingContext) -> 
 
 fn condition_subsumes(earlier: &RoutingCondition, later: &RoutingCondition) -> bool {
     earlier
-        .activity
-        .is_none_or(|activity| later.activity == Some(activity))
-        && earlier
-            .stage
-            .as_ref()
-            .is_none_or(|stage| later.stage.as_ref() == Some(stage))
+        .stage
+        .as_ref()
+        .is_none_or(|stage| later.stage.as_ref() == Some(stage))
         && earlier.fields.iter().all(|(field, predicate)| {
             later.fields.get(field).is_some_and(|later_predicate| {
                 predicate_values(later_predicate)
@@ -788,7 +752,6 @@ mod tests {
         ];
         let projection = vec!["region".to_owned()];
         let context = RoutingContext {
-            activity: RoutingActivity::Review,
             stage: Some("technical".to_owned()),
             fields: BTreeMap::from([("region".to_owned(), json!("north"))]),
         };
@@ -817,7 +780,6 @@ mod tests {
         let mut rules = vec![rule(
             "review",
             RoutingCondition {
-                activity: Some(RoutingActivity::Review),
                 stage: Some("invented".to_owned()),
                 ..RoutingCondition::default()
             },
@@ -858,7 +820,6 @@ mod tests {
             rule(
                 "review",
                 RoutingCondition {
-                    activity: Some(RoutingActivity::Review),
                     stage: Some("invented".to_owned()),
                     ..RoutingCondition::default()
                 },
@@ -928,7 +889,6 @@ mod tests {
         let stage_rule = rule(
             "staged",
             RoutingCondition {
-                activity: Some(RoutingActivity::Review),
                 stage: Some("technical".to_owned()),
                 ..RoutingCondition::default()
             },
@@ -946,28 +906,32 @@ mod tests {
     #[test]
     fn unreachable_rules_are_refused_but_intentional_overlap_is_ordered() {
         let queues = BTreeSet::from(["triage".to_owned(), "reviewers".to_owned()]);
-        let wildcard_review = rule(
-            "all-review",
+        let technical = rule(
+            "technical",
             RoutingCondition {
-                activity: Some(RoutingActivity::Review),
+                stage: Some("technical".to_owned()),
                 ..RoutingCondition::default()
             },
             "reviewers",
         );
-        let technical = rule(
-            "technical",
+        let northern_technical = rule(
+            "northern-technical",
             RoutingCondition {
-                activity: Some(RoutingActivity::Review),
                 stage: Some("technical".to_owned()),
-                ..RoutingCondition::default()
+                fields: BTreeMap::from([(
+                    "region".to_owned(),
+                    RoutingPredicate::Equals(EqualsPredicate {
+                        equals: json!("north"),
+                    }),
+                )]),
             },
             "reviewers",
         );
         assert_eq!(
             check_routing_policy(
                 "triage",
-                &[],
-                &[wildcard_review, technical],
+                &["region".to_owned()],
+                &[technical, northern_technical],
                 &queues,
                 Some(&metadata()),
             ),
@@ -999,7 +963,6 @@ mod tests {
             &rules,
             &metadata(),
             &RoutingContext {
-                activity: RoutingActivity::Review,
                 stage: Some("technical".to_owned()),
                 fields: BTreeMap::from([("region".to_owned(), json!(false))]),
             },
@@ -1021,7 +984,6 @@ mod tests {
             &[rule(
                 "current-stage",
                 RoutingCondition {
-                    activity: Some(RoutingActivity::Review),
                     stage: Some("technical".to_owned()),
                     ..RoutingCondition::default()
                 },
@@ -1029,7 +991,6 @@ mod tests {
             )],
             &metadata(),
             &RoutingContext {
-                activity: RoutingActivity::Review,
                 stage: Some("legacy-review".to_owned()),
                 fields: BTreeMap::new(),
             },

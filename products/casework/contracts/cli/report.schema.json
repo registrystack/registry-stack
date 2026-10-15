@@ -297,12 +297,6 @@
       ],
       "type": "object"
     },
-    "ActivityClockAnchor": {
-      "enum": [
-        "stage-entered-at"
-      ],
-      "type": "string"
-    },
     "ApplyData": {
       "additionalProperties": false,
       "properties": {
@@ -439,9 +433,6 @@
             "anchor": {
               "$ref": "#/$defs/SubjectClockAnchor"
             },
-            "completeOn": {
-              "$ref": "#/$defs/SubjectClockCompletion"
-            },
             "id": {
               "$ref": "#/$defs/LocalId"
             },
@@ -454,7 +445,6 @@
             "type",
             "id",
             "anchor",
-            "completeOn",
             "after"
           ],
           "type": "object"
@@ -463,10 +453,10 @@
           "additionalProperties": false,
           "properties": {
             "after": {
-              "$ref": "#/$defs/WorkingDaysAfter"
+              "$ref": "#/$defs/WorkingDays"
             },
             "anchor": {
-              "$ref": "#/$defs/ActivityClockAnchor"
+              "$ref": "#/$defs/StageClockAnchor"
             },
             "atRisk": {
               "$ref": "#/$defs/WorkingDaysBefore"
@@ -493,7 +483,7 @@
               "type": "array"
             },
             "type": {
-              "const": "activity",
+              "const": "stage",
               "type": "string"
             }
           },
@@ -523,20 +513,18 @@
     },
     "ClockReminder": {
       "additionalProperties": false,
+      "description": "A named reminder, written `reminders: {ID: {before: {workingDays: N}}}`.",
       "properties": {
+        "before": {
+          "$ref": "#/$defs/WorkingDays"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
-        },
-        "workingDaysBefore": {
-          "format": "uint32",
-          "maximum": 3650,
-          "minimum": 1,
-          "type": "integer"
         }
       },
       "required": [
         "id",
-        "workingDaysBefore"
+        "before"
       ],
       "type": "object"
     },
@@ -918,16 +906,54 @@
       "type": "object"
     },
     "ElapsedDuration": {
-      "additionalProperties": false,
-      "properties": {
-        "elapsed": {
-          "type": "string"
+      "description": "An elapsed budget in exactly one unit; a day is 24 elapsed hours.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "minutes": {
+              "format": "uint32",
+              "maximum": 5256000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "minutes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hours": {
+              "format": "uint32",
+              "maximum": 87600,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "hours"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "days": {
+              "format": "uint32",
+              "maximum": 3650,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "days"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "elapsed"
-      ],
-      "type": "object"
+      ]
     },
     "EnforcementLayer": {
       "additionalProperties": false,
@@ -1463,6 +1489,23 @@
       ],
       "type": "object"
     },
+    "ProducerRetention": {
+      "additionalProperties": false,
+      "description": "How long Casework keeps what a producer needs to recover a submission.",
+      "properties": {
+        "receiptRetentionDays": {
+          "description": "Days a submission receipt stays readable for recovery, at most 365.",
+          "format": "uint32",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "receiptRetentionDays"
+      ],
+      "type": "object"
+    },
     "ProjectIdentity": {
       "additionalProperties": false,
       "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
@@ -1910,11 +1953,8 @@
         "profile": {
           "type": "string"
         },
-        "recoveryDays": {
-          "format": "uint32",
-          "maximum": 3650,
-          "minimum": 1,
-          "type": "integer"
+        "retention": {
+          "$ref": "#/$defs/ProducerRetention"
         },
         "reviewPolicies": {
           "items": {
@@ -1942,7 +1982,7 @@
         "subject",
         "sourceNamespaces",
         "reviewPolicies",
-        "recoveryDays"
+        "retention"
       ],
       "type": "object"
     },
@@ -1965,13 +2005,13 @@
     "ReviewRetentionPolicy": {
       "additionalProperties": false,
       "properties": {
-        "accountabilityDays": {
+        "accountabilityRetentionDays": {
           "format": "uint32",
           "maximum": 3650,
           "minimum": 1,
           "type": "integer"
         },
-        "terminalDays": {
+        "terminalRetentionDays": {
           "format": "uint32",
           "maximum": 3650,
           "minimum": 1,
@@ -1979,8 +2019,8 @@
         }
       },
       "required": [
-        "terminalDays",
-        "accountabilityDays"
+        "terminalRetentionDays",
+        "accountabilityRetentionDays"
       ],
       "type": "object"
     },
@@ -2032,25 +2072,9 @@
       ],
       "type": "string"
     },
-    "RoutingActivity": {
-      "enum": [
-        "review"
-      ],
-      "type": "string"
-    },
     "RoutingCondition": {
       "additionalProperties": false,
       "properties": {
-        "activity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoutingActivity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "fields": {
           "additionalProperties": {
             "$ref": "#/$defs/RoutingPredicate"
@@ -2186,6 +2210,25 @@
       ],
       "type": "object"
     },
+    "StageClockAnchor": {
+      "additionalProperties": false,
+      "description": "The instant a stage clock counts from: `anchor: {type: stage-entered}`.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/StageClockAnchorType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "StageClockAnchorType": {
+      "enum": [
+        "stage-entered"
+      ],
+      "type": "string"
+    },
     "StatusData": {
       "additionalProperties": false,
       "properties": {
@@ -2237,14 +2280,21 @@
       "type": "object"
     },
     "SubjectClockAnchor": {
-      "enum": [
-        "request-accepted-at"
+      "additionalProperties": false,
+      "description": "The instant a subject clock counts from: `anchor: {type: request-accepted}`.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/SubjectClockAnchorType"
+        }
+      },
+      "required": [
+        "type"
       ],
-      "type": "string"
+      "type": "object"
     },
-    "SubjectClockCompletion": {
+    "SubjectClockAnchorType": {
       "enum": [
-        "result-terminal"
+        "request-accepted"
       ],
       "type": "string"
     },
@@ -2654,8 +2704,9 @@
       "additionalProperties": false,
       "type": "object"
     },
-    "WorkingDaysAfter": {
+    "WorkingDays": {
       "additionalProperties": false,
+      "description": "A number of working days: `after: {workingDays: N}`, and the lead time\ninside `before`.",
       "properties": {
         "workingDays": {
           "format": "uint32",
@@ -2671,16 +2722,14 @@
     },
     "WorkingDaysBefore": {
       "additionalProperties": false,
+      "description": "A lead time before a stage clock is due: `{before: {workingDays: N}}`.",
       "properties": {
-        "workingDaysBefore": {
-          "format": "uint32",
-          "maximum": 3650,
-          "minimum": 1,
-          "type": "integer"
+        "before": {
+          "$ref": "#/$defs/WorkingDays"
         }
       },
       "required": [
-        "workingDaysBefore"
+        "before"
       ],
       "type": "object"
     },

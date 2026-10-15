@@ -360,8 +360,8 @@ fn project(issuer: &str) -> CaseworkProject {
             }],
             clocks: Vec::new(),
             retention: ReviewRetentionPolicy {
-                terminal_days: 30,
-                accountability_days: 90,
+                terminal_retention_days: 30,
+                accountability_retention_days: 90,
             },
             display_schema: json!({
                 "type": "object",
@@ -389,7 +389,9 @@ fn project(issuer: &str) -> CaseworkProject {
             initiator_profile: None,
             source_namespaces: vec!["payments".to_owned()],
             review_policies: vec!["payment-batch".to_owned()],
-            recovery_days: 7,
+            retention: registry_casework_core::ProducerRetention {
+                receipt_retention_days: 7,
+            },
             completion: Some(ReviewCompletionDestinationPolicy {
                 destination_id: "payment-results".to_owned(),
                 recipient_binding: RECEIVER_BINDING.to_owned(),

@@ -101,7 +101,7 @@ pub(crate) fn compare_pinned_work(
             }
         }
         for clock in &group.policy.dependencies.clocks {
-            if let ClockPolicy::Activity { steps, .. } = clock {
+            if let ClockPolicy::Stage { steps, .. } = clock {
                 for step in steps {
                     if !queues.contains(step.action.reassign.queue.as_str()) {
                         reasons.insert(format!(

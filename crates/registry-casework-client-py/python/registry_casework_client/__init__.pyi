@@ -214,10 +214,16 @@ class QueueRecord(TypedDict):
     id: str
     label: str
 
-class ElapsedDuration(TypedDict):
-    elapsed: str
+class ElapsedMinutes(TypedDict):
+    minutes: int
 
-RoutingActivity: TypeAlias = Literal["review", "apply"]
+class ElapsedHours(TypedDict):
+    hours: int
+
+class ElapsedDays(TypedDict):
+    days: int
+
+ElapsedDuration: TypeAlias = ElapsedMinutes | ElapsedHours | ElapsedDays
 
 class EqualsPredicate(TypedDict):
     equals: JsonValue
@@ -228,7 +234,6 @@ class OneOfPredicate(TypedDict):
 RoutingPredicate: TypeAlias = EqualsPredicate | OneOfPredicate
 
 class RoutingCondition(TypedDict, total=False):
-    activity: RoutingActivity
     stage: str
     fields: dict[str, RoutingPredicate]
 
@@ -248,22 +253,24 @@ class CalendarPolicy(TypedDict):
     workingWeekdays: list[WorkingWeekday]
     holidaySet: str
 
+class SubjectClockAnchor(TypedDict):
+    type: Literal["request-accepted"]
+
 class SubjectClockPolicy(TypedDict):
     type: Literal["subject"]
     id: str
-    anchor: Literal["request-accepted-at"]
-    completeOn: Literal["result-terminal"]
+    anchor: SubjectClockAnchor
     after: ElapsedDuration
 
-class WorkingDaysAfter(TypedDict):
+class WorkingDays(TypedDict):
     workingDays: int
 
 class WorkingDaysBefore(TypedDict):
-    workingDaysBefore: int
+    before: WorkingDays
 
 class ClockReminder(TypedDict):
     id: str
-    workingDaysBefore: int
+    before: WorkingDays
 
 class ClockReassignment(TypedDict):
     queue: str
@@ -277,20 +284,23 @@ class ClockStep(TypedDict):
     at: Literal["due"]
     action: ClockStepAction
 
-class _ActivityClockPolicyOptional(TypedDict, total=False):
+class StageClockAnchor(TypedDict):
+    type: Literal["stage-entered"]
+
+class _StageClockPolicyOptional(TypedDict, total=False):
     atRisk: WorkingDaysBefore
     reminders: list[ClockReminder]
     steps: list[ClockStep]
 
-class ActivityClockPolicy(_ActivityClockPolicyOptional):
-    type: Literal["activity"]
+class StageClockPolicy(_StageClockPolicyOptional):
+    type: Literal["stage"]
     id: str
-    anchor: Literal["stage-entered-at"]
+    anchor: StageClockAnchor
     calendar: str
-    after: WorkingDaysAfter
+    after: WorkingDays
     dueTime: str
 
-ClockPolicy: TypeAlias = SubjectClockPolicy | ActivityClockPolicy
+ClockPolicy: TypeAlias = SubjectClockPolicy | StageClockPolicy
 
 class Description(TypedDict):
     projectId: str
@@ -732,8 +742,8 @@ class ReviewStagePolicy(TypedDict):
     excludeInitiator: NotRequired[bool]
     excludePreviousStageReviewers: NotRequired[bool]
 class ReviewRetentionPolicy(TypedDict):
-    terminalDays: SafeInteger
-    accountabilityDays: SafeInteger
+    terminalRetentionDays: SafeInteger
+    accountabilityRetentionDays: SafeInteger
 class ReviewOutcomePolicy(TypedDict):
     id: str
     label: str

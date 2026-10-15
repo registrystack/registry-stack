@@ -33,7 +33,7 @@ DATABASE_NAME = "casework_dev"
 RUNTIME_POOL_MAX = 32
 BUILD_PROFILES = ("debug", "release")
 REQUESTER_BINDING = re.compile(
-    r"(?m)^(  - id: requester\n    profile: requester\n)"
+    r"(?m)^(  requester:\n    profile: requester\n)"
     r"    issuer: [^\n]+\n    subject: [^\n]+\n"
 )
 SUBJECT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")

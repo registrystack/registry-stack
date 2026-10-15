@@ -14,7 +14,7 @@ use crate::finding::{
 };
 use crate::CaseworkRole;
 use crate::ReviewPolicy;
-use crate::MAXIMUM_REVIEW_RETENTION_DAYS;
+use crate::MAXIMUM_RECEIPT_RETENTION_DAYS;
 use crate::{clock_policy_findings, routing_policy_findings, CalendarPolicy, ClockPolicy};
 
 pub const CASEWORK_API_VERSION: &str = "id.registrystack.org/formats/casework/project/v1alpha1";
@@ -76,26 +76,80 @@ pub struct CaseworkProject {
     pub api_version: String,
     pub kind: String,
     pub project: ProjectIdentity,
-    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<AccessProfile>")
+    )]
     pub access_profiles: Vec<AccessProfile>,
-    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<QueuePolicy>")
+    )]
     pub queues: Vec<QueuePolicy>,
     #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub context_providers: Vec<crate::ReviewContextProviderPolicy>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<TeamPolicy>")
+    )]
     pub teams: Vec<TeamPolicy>,
     #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub review_policies: Vec<ReviewPolicy>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<ReviewProducerPolicy>")
+    )]
     pub trusted_producers: Vec<ReviewProducerPolicy>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<CalendarPolicy>")
+    )]
     pub calendars: Vec<CalendarPolicy>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<ClockPolicy>")
+    )]
     pub clocks: Vec<ClockPolicy>,
     #[serde(default)]
     pub inbox: InboxPolicy,
     #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub task_templates: Vec<crate::TaskTemplate>,
+}
+
+/// The pointer to a named item of an id-keyed collection (CFG-ID-5).
+fn keyed(collection: &str, id: &str) -> String {
+    format!(
+        "/{collection}/{}",
+        registry_platform_yaml::escape_pointer_segment(id)
+    )
 }
 
 /// The named lists of a project are unique by `id` (CFG-ID-5).
@@ -144,7 +198,71 @@ pub const CASEWORK_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         },
         RemovedKey {
             pointer: "/clocks/*/scope",
-            replacement: "Write the clock's kind as type: subject or type: activity.",
+            replacement: "Write the clock's kind as type: subject or type: stage.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/after/elapsed",
+            replacement: "Write the budget in one unit, such as after: {hours: 48}; after: {minutes: N} and after: {days: N}, each day 24 hours, are also accepted. See row F1 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/reviewPolicies/*/retention/terminalDays",
+            replacement: "Write the same number of days as retention.terminalRetentionDays. See row F2 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/reviewPolicies/*/retention/accountabilityDays",
+            replacement: "Write the same number of days as retention.accountabilityRetentionDays. See row F2 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/trustedProducers/*/recoveryDays",
+            replacement: "Write the same number of days as retention: {receiptRetentionDays: N}, at most 365. See row F3 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/accessProfiles/*/id",
+            replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {role: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/queues/*/id",
+            replacement: "Write queues as a mapping from each id to the rest of its entry, queues: {QUEUE_ID: {label: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/teams/*/id",
+            replacement: "Write teams as a mapping from each id to the rest of its entry, teams: {TEAM_ID: {label: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/trustedProducers/*/id",
+            replacement: "Write trustedProducers as a mapping from each id to the rest of its entry, trustedProducers: {PRODUCER_ID: {profile: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/calendars/*/id",
+            replacement: "Write calendars as a mapping from each id to the rest of its entry, calendars: {CALENDAR_ID: {timezone: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/id",
+            replacement: "Write clocks as a mapping from each id to the rest of its entry, clocks: {CLOCK_ID: {type: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/reviewPolicies/*/outcomes/*/id",
+            replacement: "Write outcomes as a mapping from each id to the rest of its entry, outcomes: {OUTCOME_ID: {label: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/reminders/*/id",
+            replacement: "Write reminders as a mapping from each id to its lead time, reminders: {REMINDER_ID: {before: {workingDays: N}}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/completeOn",
+            replacement: "Remove completeOn; a subject clock completes when the review result is terminal. See row F7 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/atRisk/workingDaysBefore",
+            replacement: "Write the lead time as atRisk: {before: {workingDays: N}}. See row F8 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/reminders/*/workingDaysBefore",
+            replacement: "Write the reminder's lead time as {before: {workingDays: N}}. See row F8 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/reviewPolicies/*/routing/*/when/activity",
+            replacement: "Remove activity; routing applies whenever a task is created, and a rule that names a stage matches only that stage's tasks. See row F9 of the format table in the Casework CHANGELOG.",
         },
     ],
 };
@@ -194,8 +312,36 @@ impl ScalarHook for AuthoredSubstitution {
     }
 
     fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
-        Self::check(site).map(|()| None)
+        Self::check(site)?;
+        retired_clock_value(site).map(|()| None)
     }
+}
+
+/// Refuses a clock value the format table retired, naming its replacement
+/// and its row. A retired key is refused through the format's removed keys;
+/// these are values, so the reader's key table cannot see them.
+fn retired_clock_value(site: &ScalarSite<'_>) -> Result<(), Refusal> {
+    let in_clock = site.keys.first() == Some(&"clocks") && site.keys.len() <= 3;
+    let (value, action) = match (in_clock, site.keys.last(), site.text) {
+        (true, Some(&"type"), "activity") => (
+            "activity",
+            "Write type: stage. See row F5 of the format table in the Casework CHANGELOG.",
+        ),
+        (true, Some(&"anchor"), "request-accepted-at") => (
+            "request-accepted-at",
+            "Write anchor: {type: request-accepted}. See row F6 of the format table in the Casework CHANGELOG.",
+        ),
+        (true, Some(&"anchor"), "stage-entered-at") => (
+            "stage-entered-at",
+            "Write anchor: {type: stage-entered}. See row F6 of the format table in the Casework CHANGELOG.",
+        ),
+        _ => return Ok(()),
+    };
+    Err(Refusal {
+        code: "config.unknown-variant".to_owned(),
+        message: format!("`{value}` is no longer accepted"),
+        suggested_action: action.to_owned(),
+    })
 }
 
 /// Whether `text` holds a `${NAME}`, `${NAME:-default}`, or `${NAME:?message}`
@@ -421,7 +567,7 @@ impl CaseworkProject {
             .filter(|clock| policy.clocks.iter().any(|id| id == clock.id()))
             .cloned()
             .collect();
-        let calendars = self.calendars.iter().filter(|calendar| clocks.iter().any(|clock| matches!(clock, ClockPolicy::Activity { calendar: id, .. } if *id == calendar.id))).cloned().collect();
+        let calendars = self.calendars.iter().filter(|calendar| clocks.iter().any(|clock| matches!(clock, ClockPolicy::Stage { calendar: id, .. } if *id == calendar.id))).cloned().collect();
         crate::ReviewPolicyDependencies {
             access_profiles: self.access_profiles.clone(),
             queues: self.queues.clone(),
@@ -692,14 +838,13 @@ impl CaseworkProject {
         findings.repeated(
             self.teams
                 .iter()
-                .enumerate()
-                .map(|(i, t)| (format!("/teams/{i}/id"), t.id.as_str())),
+                .map(|t| (keyed("teams", &t.id), t.id.as_str())),
             "casework.team.duplicate-id",
             "this team id is already declared",
             "Give each team a unique id.",
         );
-        for (index, team) in self.teams.iter().enumerate() {
-            let at = format!("/teams/{index}");
+        for team in &self.teams {
+            let at = keyed("teams", &team.id);
             if !valid_directory_identifier(&team.id) || !bounded_config_text(&team.label, 160) {
                 findings.push(
                     "casework.team.identity",
@@ -780,17 +925,16 @@ impl CaseworkProject {
         findings.repeated(
             self.queues
                 .iter()
-                .enumerate()
-                .map(|(index, queue)| (format!("/queues/{index}/id"), queue.id.as_str())),
+                .map(|queue| (keyed("queues", &queue.id), queue.id.as_str())),
             "casework.queue.duplicate-id",
             "this queue id is already declared",
             "Give every queue a unique id.",
         );
-        for (index, queue) in self.queues.iter().enumerate() {
+        for queue in &self.queues {
             if !crate::typed::valid_local_identifier(&queue.id) {
                 findings.push(
                     "casework.queue.invalid-id",
-                    format!("/queues/{index}/id"),
+                    keyed("queues", &queue.id),
                     IDENTIFIER_MESSAGE,
                     IDENTIFIER_ACTION,
                 );
@@ -798,7 +942,7 @@ impl CaseworkProject {
             if queue.label.trim().is_empty() || queue.label.len() > 160 {
                 findings.push(
                     "casework.queue.invalid-label",
-                    format!("/queues/{index}/label"),
+                    format!("{}/label", keyed("queues", &queue.id)),
                     "expected a label of 1 to 160 bytes that is not only spaces",
                     "Write a short label for the queue.",
                 );
@@ -807,11 +951,11 @@ impl CaseworkProject {
     }
 
     fn access_profile_findings(&self, findings: &mut Findings) {
-        for (index, profile) in self.access_profiles.iter().enumerate() {
+        for profile in &self.access_profiles {
             if !crate::typed::valid_local_identifier(&profile.id) {
                 findings.push(
                     "casework.access-profile.invalid-id",
-                    format!("/accessProfiles/{index}/id"),
+                    keyed("accessProfiles", &profile.id),
                     IDENTIFIER_MESSAGE,
                     PROFILE_IDENTIFIER_ACTION,
                 );
@@ -820,16 +964,13 @@ impl CaseworkProject {
         findings.repeated(
             self.access_profiles
                 .iter()
-                .enumerate()
-                .map(|(index, profile)| {
-                    (format!("/accessProfiles/{index}/id"), profile.id.as_str())
-                }),
+                .map(|profile| (keyed("accessProfiles", &profile.id), profile.id.as_str())),
             "casework.access-profile.duplicate-id",
             "this access profile id is already declared",
             "Give every access profile a unique id.",
         );
-        for (index, profile) in self.access_profiles.iter().enumerate() {
-            let at = format!("/accessProfiles/{index}");
+        for profile in &self.access_profiles {
+            let at = keyed("accessProfiles", &profile.id);
             if profile.principal_claim.is_empty() {
                 findings.push(
                     "casework.access-profile.empty-principal-claim",
@@ -880,7 +1021,10 @@ impl CaseworkProject {
         for index in profiles_without_a_separate_scope(&self.access_profiles) {
             findings.push(
                 "casework.access-profile.shared-scopes",
-                format!("/accessProfiles/{index}/requiredScopes"),
+                format!(
+                    "{}/requiredScopes",
+                    keyed("accessProfiles", &self.access_profiles[index].id)
+                ),
                 "every scope this profile requires is also required by another profile at the same or a lower role, so their credentials could select this profile",
                 "Require a scope that no other profile at the same or a lower role requires.",
             );
@@ -962,33 +1106,27 @@ impl CaseworkProject {
             );
         }
         findings.repeated(
-            self.trusted_producers
-                .iter()
-                .enumerate()
-                .map(|(index, producer)| {
-                    (
-                        format!("/trustedProducers/{index}/id"),
-                        producer.id.as_str(),
-                    )
-                }),
+            self.trusted_producers.iter().map(|producer| {
+                (
+                    keyed("trustedProducers", &producer.id),
+                    producer.id.as_str(),
+                )
+            }),
             "casework.review-producer.duplicate-id",
             "this review producer id is already declared",
             "Give every review producer a unique id.",
         );
         findings.repeated(
-            self.trusted_producers
-                .iter()
-                .enumerate()
-                .map(|(index, producer)| {
+            self.trusted_producers.iter().map(|producer| {
+                (
+                    keyed("trustedProducers", &producer.id),
                     (
-                        format!("/trustedProducers/{index}"),
-                        (
-                            producer.profile.as_str(),
-                            producer.issuer.as_str(),
-                            producer.subject.as_str(),
-                        ),
-                    )
-                }),
+                        producer.profile.as_str(),
+                        producer.issuer.as_str(),
+                        producer.subject.as_str(),
+                    ),
+                )
+            }),
             "casework.review-producer.duplicate-principal",
             "another review producer already has this profile, issuer, and subject",
             "Give each review producer its own principal.",
@@ -1009,8 +1147,8 @@ impl CaseworkProject {
                 "Declare the review policies they submit under reviewPolicies, or remove trustedProducers.",
             );
         }
-        for (producer_index, producer) in self.trusted_producers.iter().enumerate() {
-            let at = format!("/trustedProducers/{producer_index}");
+        for producer in &self.trusted_producers {
+            let at = keyed("trustedProducers", &producer.id);
             producer.findings(findings, &at);
             if self
                 .access_profiles
@@ -1069,17 +1207,21 @@ impl CaseworkProject {
                     );
                     continue;
                 };
-                if policy.retention.terminal_days < producer.recovery_days {
+                if policy.retention.terminal_retention_days
+                    < producer.retention.receipt_retention_days
+                {
                     findings.add(
                         ConfigFinding::new(
                             "casework.review-producer.recovery-exceeds-retention",
-                            format!("{at}/recoveryDays"),
-                            "recoveryDays is longer than the result retention of a review policy this producer submits",
-                            "Make recoveryDays no longer than that review policy's retention.terminalDays.",
+                            format!("{at}/retention/receiptRetentionDays"),
+                            "receiptRetentionDays is longer than the result retention of a review policy this producer submits",
+                            "Make receiptRetentionDays no longer than that review policy's retention.terminalRetentionDays.",
                         )
                         .with_related(
-                            format!("/reviewPolicies/{declared_index}/retention/terminalDays"),
-                            "terminalDays is written here",
+                            format!(
+                                "/reviewPolicies/{declared_index}/retention/terminalRetentionDays"
+                            ),
+                            "terminalRetentionDays is written here",
                         ),
                     );
                 }
@@ -1194,14 +1336,25 @@ pub struct ReviewProducerPolicy {
     pub initiator_profile: Option<String>,
     pub source_namespaces: Vec<String>,
     pub review_policies: Vec<String>,
-    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
-    )]
-    pub recovery_days: u32,
+    pub retention: ProducerRetention,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<ReviewCompletionDestinationPolicy>,
+}
+
+/// How long Casework keeps what a producer needs to recover a submission.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProducerRetention {
+    /// Days a submission receipt stays readable for recovery, at most 365.
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RECEIPT_RETENTION_DAYS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_RECEIPT_RETENTION_DAYS>")
+    )]
+    pub receipt_retention_days: u32,
 }
 
 impl ReviewProducerPolicy {
@@ -1266,13 +1419,15 @@ impl ReviewProducerPolicy {
                 PROFILE_IDENTIFIER_ACTION,
             );
         }
-        if !(1..=crate::MAXIMUM_REVIEW_RETENTION_DAYS).contains(&self.recovery_days) {
+        if !(1..=crate::MAXIMUM_RECEIPT_RETENTION_DAYS)
+            .contains(&self.retention.receipt_retention_days)
+        {
             findings.push(
                 "casework.review-producer.recovery-days-out-of-range",
-                format!("{at}/recoveryDays"),
+                format!("{at}/retention/receiptRetentionDays"),
                 format!(
                     "expected a whole number of days from 1 to {}",
-                    crate::MAXIMUM_REVIEW_RETENTION_DAYS
+                    crate::MAXIMUM_RECEIPT_RETENTION_DAYS
                 ),
                 "Write a number of days within the bound.",
             );
@@ -1423,31 +1578,6 @@ pub struct QueuePolicy {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub label: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ElapsedDuration {
-    pub elapsed: String,
-}
-
-/// Parse the checkpoint's deliberately small ISO-8601 elapsed-time subset.
-/// Calendar and compound durations belong to the later clock evaluator.
-#[must_use]
-pub fn parse_elapsed_seconds(value: &str) -> Option<i64> {
-    let body = value.strip_prefix("PT")?;
-    let (number, multiplier) = if let Some(number) = body.strip_suffix('H') {
-        (number, 60 * 60)
-    } else if let Some(number) = body.strip_suffix('M') {
-        (number, 60)
-    } else {
-        (body.strip_suffix('S')?, 1)
-    };
-    let amount = number.parse::<i64>().ok()?;
-    (amount > 0)
-        .then(|| amount.checked_mul(multiplier))
-        .flatten()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

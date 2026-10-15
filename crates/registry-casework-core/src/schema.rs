@@ -279,23 +279,23 @@ mod tests {
     }
 
     #[test]
-    fn project_schema_accepts_the_activity_clock_defaults_the_reader_accepts() {
+    fn project_schema_accepts_the_stage_clock_defaults_the_reader_accepts() {
         let documents = project_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/casework/examples/multi-stage-routing-clocks/casework.yaml");
         let authored = std::fs::read_to_string(&path).unwrap();
         let omitted = authored.replace(
-            "    atRisk: {workingDaysBefore: 1}\n    reminders: [{id: due-soon, workingDaysBefore: 1}]\n    steps:\n      - id: supervisor-at-deadline\n        because: The review deadline passed while the review remained active.\n        at: due\n        action: {reassign: {queue: overdue-review}}\n",
+            "    atRisk: {before: {workingDays: 1}}\n    reminders:\n      due-soon: {before: {workingDays: 1}}\n    steps:\n      - id: supervisor-at-deadline\n        because: The review deadline passed while the review remained active.\n        at: due\n        action: {reassign: {queue: overdue-review}}\n",
             "",
         );
         assert_ne!(omitted, authored);
         let decoded = crate::CaseworkProject::read(&path.display().to_string(), omitted.as_bytes())
-            .expect("the project reader applies empty activity-clock defaults");
+            .expect("the project reader applies empty stage-clock defaults");
         assert!(compiled(&document).is_valid(&decoded.document.to_json_value()));
-        let activity = &document["$defs"]["ClockPolicy"]["oneOf"][1];
+        let stage = &document["properties"]["clocks"]["additionalProperties"]["oneOf"][1];
         for optional in ["atRisk", "reminders", "steps"] {
-            assert!(!activity["required"]
+            assert!(!stage["required"]
                 .as_array()
                 .unwrap()
                 .iter()

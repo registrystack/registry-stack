@@ -60,8 +60,8 @@ test('the documented review policy and producer use the owning schema grammar', 
   for (const key of Object.keys(kind)) {
     assert.ok(Object.hasOwn(schema.$defs.ReviewPolicy.properties, key), `unknown policy key ${key}`);
   }
-  assert.equal(kind.retention.terminalDays, 90);
-  assert.equal(kind.retention.accountabilityDays, 365);
+  assert.equal(kind.retention.terminalRetentionDays, 90);
+  assert.equal(kind.retention.accountabilityRetentionDays, 365);
   for (const schema of [kind.displaySchema, kind.resultSchema]) {
     assert.equal(schema.type, 'object');
     assert.equal(schema.additionalProperties, false, 'both schemas stay closed');
@@ -71,26 +71,27 @@ test('the documented review policy and producer use the owning schema grammar', 
     assert.equal(typeof property.type, 'string', 'result fields declare one inline type');
   }
   assert.deepEqual(
-    new Set(kind.outcomes.flatMap((outcome) => Object.keys(outcome))),
-    new Set(['id', 'label', 'settlement', 'reasonRequired', 'publicReason', 'resultRequired']),
+    new Set(Object.values(kind.outcomes).flatMap((outcome) => Object.keys(outcome))),
+    new Set(['label', 'settlement', 'reasonRequired', 'publicReason', 'resultRequired']),
     'outcome keys stay within the policy grammar',
   );
-  for (const outcome of kind.outcomes) {
+  for (const [id, outcome] of Object.entries(kind.outcomes)) {
     assert.ok(
       ['required', 'optional', 'none'].includes(outcome.publicReason),
-      `outcome ${outcome.id} states whether a public reason is given`,
+      `outcome ${id} states whether a public reason is given`,
     );
   }
-  const confirmed = kind.outcomes.find((outcome) => outcome.id === 'confirmed');
+  const confirmed = kind.outcomes.confirmed;
   assert.equal(confirmed.resultRequired, true);
   assert.equal(confirmed.settlement, 'answered');
   assert.equal(kind.stages[0].requiredApprovals, 1);
 
-  const producer = example.trustedProducers[0];
+  const producer = example.trustedProducers.requester;
   for (const key of Object.keys(producer)) {
-    assert.ok(Object.hasOwn(schema.$defs.ReviewProducerPolicy.properties, key), `unknown producer key ${key}`);
+    assert.ok(Object.hasOwn(schema.properties.trustedProducers.additionalProperties.properties, key), `unknown producer key ${key}`);
   }
   assert.equal(producer.profile, 'requester');
+  assert.deepEqual(producer.retention, { receiptRetentionDays: 30 });
   assert.deepEqual(producer.reviewPolicies, ['decision']);
   assert.deepEqual(producer.sourceNamespaces, ['standalone']);
 });

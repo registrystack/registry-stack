@@ -188,12 +188,12 @@ async fn fixture_for_role_with_templates(
     let review_template:TaskTemplate=serde_json::from_value(json!({"id":"review-summary","version":"1","label":"Prepare review summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-review-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
     let mut project:CaseworkProject=serde_json::from_value(json!({
         "apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"tasks","version":"1"},
-        "accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":if role==CaseworkRole::Staff{"supervisor"}else{"staff"},"principalClaim":"sub","requiredScopes":[if role==CaseworkRole::Staff{"casework:supervisor"}else{"casework:staff"}],"role":if role==CaseworkRole::Staff{"supervisor"}else{"staff"}},{"id":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],
-        "queues":[{"id":"review","label":"Review"}],
-        "teams":[{"id":"team","label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}],
+        "accessProfiles":{profile_id:{"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},(if role==CaseworkRole::Staff{"supervisor"}else{"staff"}):{"principalClaim":"sub","requiredScopes":[if role==CaseworkRole::Staff{"casework:supervisor"}else{"casework:staff"}],"role":if role==CaseworkRole::Staff{"supervisor"}else{"staff"}},"administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},"producer":{"principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}},
+        "queues":{"review":{"label":"Review"}},
+        "teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
         "contextProviders":[{"id":"source","deploymentRef":"source","sourceNamespace":"source","capabilities":["human-display","service-status","task-grant-context"],"serviceProfiles":{"service-status":"status-reader","task-grant-context":"task-reader"}}],
-        "reviewPolicies":[{"id":"external-review","version":"1","purpose":"approval","context":{"mode":"current-source","provider":"source","contract":context_contract()},"stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":context_schema(),"outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}]}],
-        "trustedProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"reviewPolicies":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]
+        "reviewPolicies":[{"id":"external-review","version":"1","purpose":"approval","context":{"mode":"current-source","provider":"source","contract":context_contract()},"stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},"displaySchema":context_schema(),"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}],
+        "trustedProducers":{"producer":{"profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"reviewPolicies":["external-review"],"retention":{"receiptRetentionDays":30}}},"taskTemplates":[template,review_template]
     })).unwrap();
     if lifetime > TASK_GRANT_LIFETIME_SECONDS {
         for template in &mut project.task_templates {
@@ -836,8 +836,13 @@ async fn task_grants_do_not_survive_an_approver_profile_role_change() {
 
     let original_app = f.app.clone();
     let mut changed_project = f.project.clone();
-    changed_project.access_profiles[0].role = CaseworkRole::Supervisor;
-    let mut replacement_staff = changed_project.access_profiles[0].clone();
+    let staff = changed_project
+        .access_profiles
+        .iter()
+        .position(|profile| profile.id == "staff")
+        .expect("the fixture declares the staff profile");
+    changed_project.access_profiles[staff].role = CaseworkRole::Supervisor;
+    let mut replacement_staff = changed_project.access_profiles[staff].clone();
     replacement_staff.id = "replacement-staff".into();
     replacement_staff.role = CaseworkRole::Staff;
     replacement_staff.required_scopes = vec!["casework:replacement-staff".into()];
@@ -1878,8 +1883,13 @@ async fn review_task_grants_do_not_survive_an_approver_profile_role_change() {
 
     let original_app = f.app.clone();
     let mut changed_project = f.project.clone();
-    changed_project.access_profiles[0].role = CaseworkRole::Supervisor;
-    let mut replacement_staff = changed_project.access_profiles[0].clone();
+    let staff = changed_project
+        .access_profiles
+        .iter()
+        .position(|profile| profile.id == "staff")
+        .expect("the fixture declares the staff profile");
+    changed_project.access_profiles[staff].role = CaseworkRole::Supervisor;
+    let mut replacement_staff = changed_project.access_profiles[staff].clone();
     replacement_staff.id = "replacement-staff".into();
     replacement_staff.role = CaseworkRole::Staff;
     replacement_staff.required_scopes = vec!["casework:replacement-staff".into()];

@@ -16,6 +16,8 @@ use crate::{ClockPolicy, IssuerPrincipal};
 
 pub const MAXIMUM_REVIEW_POLICIES: usize = 64;
 pub const MAXIMUM_REVIEW_RETENTION_DAYS: u32 = 3_650;
+/// The longest a producer's submission receipt is kept for its recovery.
+pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u32 = 365;
 pub const MAXIMUM_REVIEW_STAGES: usize = 32;
 pub const MAXIMUM_REVIEW_PROFILES_PER_STAGE: usize = 32;
 pub const MAXIMUM_REVIEW_APPROVALS_PER_STAGE: u16 = 32;
@@ -54,13 +56,13 @@ pub struct ReviewRetentionPolicy {
         feature = "schema",
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
     )]
-    pub terminal_days: u32,
+    pub terminal_retention_days: u32,
     #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
     #[cfg_attr(
         feature = "schema",
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
     )]
-    pub accountability_days: u32,
+    pub accountability_retention_days: u32,
 }
 
 impl ReviewRetentionPolicy {
@@ -69,30 +71,35 @@ impl ReviewRetentionPolicy {
     fn findings(&self, findings: &mut Findings) {
         let message =
             format!("expected a whole number of days from 1 to {MAXIMUM_REVIEW_RETENTION_DAYS}");
-        if self.terminal_days == 0 || self.terminal_days > MAXIMUM_REVIEW_RETENTION_DAYS {
+        if self.terminal_retention_days == 0
+            || self.terminal_retention_days > MAXIMUM_REVIEW_RETENTION_DAYS
+        {
             findings.push(
                 "casework.review-policy.retention-out-of-range",
-                "/retention/terminalDays",
+                "/retention/terminalRetentionDays",
                 message.as_str(),
                 "Write a number of days within the bound.",
             );
         }
-        if self.accountability_days > MAXIMUM_REVIEW_RETENTION_DAYS {
+        if self.accountability_retention_days > MAXIMUM_REVIEW_RETENTION_DAYS {
             findings.push(
                 "casework.review-policy.retention-out-of-range",
-                "/retention/accountabilityDays",
+                "/retention/accountabilityRetentionDays",
                 message.as_str(),
                 "Write a number of days within the bound.",
             );
-        } else if self.accountability_days < self.terminal_days {
+        } else if self.accountability_retention_days < self.terminal_retention_days {
             findings.add(
                 ConfigFinding::new(
                     "casework.review-policy.accountability-before-terminal",
-                    "/retention/accountabilityDays",
-                    "accountabilityDays is shorter than terminalDays",
-                    "Make accountabilityDays at least as long as terminalDays.",
+                    "/retention/accountabilityRetentionDays",
+                    "accountabilityRetentionDays is shorter than terminalRetentionDays",
+                    "Make accountabilityRetentionDays at least as long as terminalRetentionDays.",
                 )
-                .with_related("/retention/terminalDays", "terminalDays is written here"),
+                .with_related(
+                    "/retention/terminalRetentionDays",
+                    "terminalRetentionDays is written here",
+                ),
             );
         }
     }
@@ -135,7 +142,7 @@ impl ReviewClockCorrelation {
                 subject_type: subject.subject_type.clone(),
                 id: subject.id.clone(),
             },
-            ClockPolicy::Activity { .. } => Self::Activity {
+            ClockPolicy::Stage { .. } => Self::Activity {
                 task_id,
                 stage_id: stage_id.to_owned(),
             },
@@ -327,8 +334,32 @@ pub struct ReviewPolicy {
         schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
     )]
     pub result_schema: Option<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Written in configuration as a mapping from each outcome id; served
+    /// as a list by id.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::id_keyed_or_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_or_list_schema::<ReviewOutcomePolicy>")
+    )]
     pub outcomes: Vec<ReviewOutcomePolicy>,
+}
+
+impl registry_platform_yaml::Identified for ReviewOutcomePolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// The pointer to an outcome, which configuration keys by its id.
+fn outcome_pointer(outcome: &ReviewOutcomePolicy) -> String {
+    format!(
+        "/outcomes/{}",
+        registry_platform_yaml::escape_pointer_segment(&outcome.id)
+    )
 }
 
 impl ReviewPolicy {
@@ -451,11 +482,11 @@ impl ReviewPolicy {
         match self.purpose {
             ReviewPurpose::Approval => {
                 let mut payload = Findings::default();
-                for (index, outcome) in self.outcomes.iter().enumerate() {
+                for outcome in &self.outcomes {
                     if outcome.settlement == ReviewOutcomeSettlement::Answered {
                         payload.push(
                             "casework.review-policy.answered-outcome-in-approval",
-                            format!("/outcomes/{index}/settlement"),
+                            format!("{}/settlement", outcome_pointer(outcome)),
                             "an approval review policy cannot settle with answered",
                             "Write settlement: rejected or changes-requested, or make the review policy's purpose answer.",
                         );
@@ -506,11 +537,11 @@ impl ReviewPolicy {
                         "Declare an outcome with settlement: answered.",
                     );
                 }
-                for (index, outcome) in self.outcomes.iter().enumerate() {
+                for outcome in &self.outcomes {
                     if outcome.settlement != ReviewOutcomeSettlement::Answered {
                         answer_outcomes.push(
                             "casework.review-policy.unanswered-outcome-in-answer",
-                            format!("/outcomes/{index}/settlement"),
+                            format!("{}/settlement", outcome_pointer(outcome)),
                             "an answer review policy settles only with answered",
                             "Write settlement: answered.",
                         );
@@ -559,19 +590,19 @@ impl ReviewPolicy {
         outcomes.repeated(
             self.outcomes
                 .iter()
-                .enumerate()
-                .map(|(index, outcome)| (format!("/outcomes/{index}/id"), outcome.id.as_str())),
+                .map(|outcome| (outcome_pointer(outcome), outcome.id.as_str())),
             "casework.review-policy.duplicate-outcome-id",
             "this outcome id is already declared",
             "Give every outcome of the review policy a unique id.",
         );
-        for (index, outcome) in self.outcomes.iter().enumerate() {
+        for outcome in &self.outcomes {
+            let at = outcome_pointer(outcome);
             if outcome.settlement == ReviewOutcomeSettlement::Approved
                 && (outcome.reason_required || outcome.result_required)
             {
                 outcomes.push(
                     "casework.review-policy.approval-payload",
-                    format!("/outcomes/{index}"),
+                    at.clone(),
                     "approval outcomes cannot require a reason or result payload",
                     "Use a reason-free and payload-free approval outcome.",
                 );
@@ -579,7 +610,7 @@ impl ReviewPolicy {
             if !valid_identifier(&outcome.id) {
                 outcomes.push(
                     "casework.review-policy.invalid-outcome-id",
-                    format!("/outcomes/{index}/id"),
+                    at.clone(),
                     IDENTIFIER_MESSAGE,
                     IDENTIFIER_ACTION,
                 );
@@ -587,7 +618,7 @@ impl ReviewPolicy {
             if !outcome.label_is_valid() {
                 outcomes.push(
                     "casework.review-policy.invalid-outcome-label",
-                    format!("/outcomes/{index}/label"),
+                    format!("{at}/label"),
                     "expected a label of 1 to 120 bytes that is not only spaces and has no control characters",
                     "Write a short label for the outcome.",
                 );
@@ -595,7 +626,7 @@ impl ReviewPolicy {
             if self.result_schema.is_none() && outcome.result_required {
                 outcomes.push(
                     "casework.review-policy.result-required-without-result-schema",
-                    format!("/outcomes/{index}/resultRequired"),
+                    format!("{at}/resultRequired"),
                     "resultRequired needs a resultSchema on the review policy",
                     "Declare resultSchema on the review policy, or remove resultRequired.",
                 );
@@ -630,7 +661,7 @@ impl ReviewPolicy {
             template.label.clear();
         }
         for clock in &mut dependencies.clocks {
-            if let ClockPolicy::Activity { steps, .. } = clock {
+            if let ClockPolicy::Stage { steps, .. } = clock {
                 for step in steps {
                     step.because.clear();
                 }
@@ -2736,8 +2767,8 @@ mod tests {
             stages,
             clocks: Vec::new(),
             retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+                terminal_retention_days: 90,
+                accountability_retention_days: 365,
             },
             display_schema: json!({
                 "type": "object",
@@ -2785,8 +2816,8 @@ mod tests {
             stages: vec![stage("answer", 1)],
             clocks: Vec::new(),
             retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+                terminal_retention_days: 90,
+                accountability_retention_days: 365,
             },
             display_schema: json!({
                 "type": "object",
@@ -3080,8 +3111,8 @@ mod tests {
         policy.context = crate::ReviewContextPolicy::Submitted;
         policy.clocks = (0..32).map(|index| identifier('c', index)).collect();
         policy.retention = ReviewRetentionPolicy {
-            terminal_days: MAXIMUM_REVIEW_RETENTION_DAYS,
-            accountability_days: MAXIMUM_REVIEW_RETENTION_DAYS,
+            terminal_retention_days: MAXIMUM_REVIEW_RETENTION_DAYS,
+            accountability_retention_days: MAXIMUM_REVIEW_RETENTION_DAYS,
         };
         policy.display_schema = schema.clone();
         policy.result_schema = Some(schema.clone());
@@ -3122,11 +3153,10 @@ mod tests {
     fn subject_clock_correlation_names_the_subject_of_each_request_and_activity_names_the_task() {
         let clock = ClockPolicy::Subject {
             id: "response-budget".to_owned(),
-            anchor: crate::SubjectClockAnchor::RequestAcceptedAt,
-            complete_on: crate::SubjectClockCompletion::ResultTerminal,
-            after: crate::ElapsedDuration {
-                elapsed: "PT1H".to_owned(),
+            anchor: crate::SubjectClockAnchor {
+                kind: crate::SubjectClockAnchorType::RequestAccepted,
             },
+            after: crate::ElapsedDuration::Hours(1),
         };
         let first = SubjectBinding {
             source: "registry".to_owned(),
@@ -3578,7 +3608,8 @@ mod tests {
     #[test]
     fn review_retention_and_outcome_vocabulary_are_bounded() {
         let mut policy = answer_policy();
-        policy.retention.accountability_days = policy.retention.terminal_days - 1;
+        policy.retention.accountability_retention_days =
+            policy.retention.terminal_retention_days - 1;
         assert_eq!(policy.check(), Err(ReviewPolicyError::Retention));
 
         let mut policy = answer_policy();

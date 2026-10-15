@@ -84,7 +84,7 @@ fn a_refused_project_prints_every_reader_line_to_stderr() {
     let queuez_line = project.lines().count();
     let expected = format!(
         "casework: the Casework project is invalid
-error[config.unknown-key] {policy}:{label_line}:5 /queues/0/lable
+error[config.unknown-key] {policy}:{label_line}:5 /queues/decisions/lable
   `lable` is not a member of this mapping
   next: Rename `lable` to `label`, or remove it.
 error[config.unknown-key] {policy}:{queuez_line}:1 /queuez

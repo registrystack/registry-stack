@@ -132,24 +132,24 @@ fn project(root: &std::path::Path, idp: &MockIdp, context: &BregContextExport) -
     let policy = json!({
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1","kind":"CaseworkProject",
         "project":{"id":"facility-review-journey","version":"1"},
-        "accessProfiles":[
-            {"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
-            {"id":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
-            {"id":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
-            {"id":"requester","principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
-        ],
-        "queues":[{"id":"review","label":"Facility reviews"}],
-        "teams":[{"id":"reviewers","label":"Reviewers","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}],
+        "accessProfiles":{
+            "staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
+            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
+            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
+            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
+        },
+        "queues":{"review":{"label":"Facility reviews"}},
+        "teams":{"reviewers":{"label":"Reviewers","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
         "contextProviders":[{"id":"facility","deploymentRef":"facility","sourceNamespace":SOURCE,
             "capabilities":["human-display","service-status"],"serviceProfiles":{"service-status":"casework-review-status"}}],
         "reviewPolicies":[{"id":"facility-address-review","version":"1","purpose":"approval",
             "context":{"mode":"current-source","provider":"facility","contract":context.contract},
             "stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
-            "retention":{"terminalDays":30,"accountabilityDays":90},
-            "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}]}],
-        "trustedProducers":[{"id":"facility-registry","profile":"requester","issuer":idp.issuer(),
+            "retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
+            "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}],
+        "trustedProducers":{"facility-registry":{"profile":"requester","issuer":idp.issuer(),
             "subject":"facility-review-producer","trustedInitiatorIssuer":idp.issuer(),
-            "sourceNamespaces":[SOURCE],"reviewPolicies":["facility-address-review"],"recoveryDays":7}]
+            "sourceNamespaces":[SOURCE],"reviewPolicies":["facility-address-review"],"retention":{"receiptRetentionDays":7}}}
     });
     fs::write(
         root.join("casework.yaml"),

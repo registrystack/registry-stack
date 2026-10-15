@@ -3486,19 +3486,18 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
     .unwrap();
     assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
 
-    fs::write(project.join("casework.yaml"), STANDALONE_YAML).unwrap();
-    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
-    policy
-        .access_profiles
-        .iter_mut()
-        .find(|profile| profile.id == "administrator")
-        .unwrap()
-        .principal_claim = "custom_principal".to_owned();
+    let administrator = "  administrator:\n    principalClaim: sub\n";
+    assert!(STANDALONE_YAML.contains(administrator));
     fs::write(
         project.join("casework.yaml"),
-        serde_norway::to_string(&policy).unwrap(),
+        STANDALONE_YAML.replacen(
+            administrator,
+            "  administrator:\n    principalClaim: custom_principal\n",
+            1,
+        ),
     )
     .unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
     state.clients = vec![
         ReportedClient {
             id: "staff".to_owned(),

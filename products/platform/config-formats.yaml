@@ -1216,10 +1216,10 @@ formats:
     conformance:
       requiredText: /project/id
       optionalText: none
-      integer: /reviewPolicies/0/retention/terminalDays
+      integer: /reviewPolicies/0/retention/terminalRetentionDays
       boolean: none
-      idList: /queues
-      set: /accessProfiles/0/requiredScopes
+      idList: /reviewPolicies
+      set: /accessProfiles/staff/requiredScopes
       reference: /reviewPolicies/0/stages/0/queue
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes

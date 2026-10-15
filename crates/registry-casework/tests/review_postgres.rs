@@ -310,8 +310,8 @@ fn project(version: &str) -> CaseworkProject {
             ],
             clocks: vec!["review-deadline".to_owned()],
             retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+                terminal_retention_days: 90,
+                accountability_retention_days: 365,
             },
             display_schema: json!({
                 "type": "object",
@@ -361,7 +361,9 @@ fn project(version: &str) -> CaseworkProject {
             initiator_profile: None,
             source_namespaces: vec!["registry".to_owned()],
             review_policies: vec!["registry-correction".to_owned()],
-            recovery_days: 30,
+            retention: registry_casework_core::ProducerRetention {
+                receipt_retention_days: 30,
+            },
             completion: Some(ReviewCompletionDestinationPolicy {
                 destination_id: "registry-completion".to_owned(),
                 recipient_binding: "registry-service".to_owned(),
@@ -370,11 +372,10 @@ fn project(version: &str) -> CaseworkProject {
         calendars: Vec::new(),
         clocks: vec![ClockPolicy::Subject {
             id: "review-deadline".to_owned(),
-            anchor: SubjectClockAnchor::RequestAcceptedAt,
-            complete_on: SubjectClockCompletion::ResultTerminal,
-            after: ElapsedDuration {
-                elapsed: "PT1H".to_owned(),
+            anchor: registry_casework_core::SubjectClockAnchor {
+                kind: registry_casework_core::SubjectClockAnchorType::RequestAccepted,
             },
+            after: registry_casework_core::ElapsedDuration::Hours(1),
         }],
         inbox: InboxPolicy::default(),
         task_templates: Vec::new(),
@@ -424,16 +425,18 @@ fn activity_clock_project() -> CaseworkProject {
         ],
         holiday_set: "office-holidays".to_owned(),
     }];
-    project.clocks = vec![ClockPolicy::Activity {
+    project.clocks = vec![ClockPolicy::Stage {
         id: "review-deadline".to_owned(),
-        anchor: ActivityClockAnchor::StageEnteredAt,
+        anchor: registry_casework_core::StageClockAnchor {
+            kind: registry_casework_core::StageClockAnchorType::StageEntered,
+        },
         calendar: "office".to_owned(),
-        after: WorkingDaysAfter { working_days: 1 },
+        after: WorkingDays { working_days: 1 },
         due_time: "17:00".to_owned(),
         at_risk: None,
         reminders: vec![ClockReminder {
             id: "due-soon".to_owned(),
-            working_days_before: 1,
+            before: registry_casework_core::WorkingDays { working_days: 1 },
         }],
         steps: vec![ClockStep {
             id: "overdue".to_owned(),
@@ -2537,16 +2540,15 @@ fn subject_clock_retention_service(fixture: &Fixture) -> CaseworkService {
         vec!["review-deadline".to_owned(), "subject-deadline".to_owned()];
     project.clocks.push(ClockPolicy::Subject {
         id: "subject-deadline".to_owned(),
-        anchor: SubjectClockAnchor::RequestAcceptedAt,
-        complete_on: SubjectClockCompletion::ResultTerminal,
-        after: ElapsedDuration {
-            elapsed: "PT1H".to_owned(),
+        anchor: registry_casework_core::SubjectClockAnchor {
+            kind: registry_casework_core::SubjectClockAnchorType::RequestAccepted,
         },
+        after: registry_casework_core::ElapsedDuration::Hours(1),
     });
     project.trusted_producers[0].completion = None;
     let retention = &project.review_policies[0].retention;
     assert!(
-        retention.terminal_days < retention.accountability_days,
+        retention.terminal_retention_days < retention.accountability_retention_days,
         "the clock rows must be erased at terminalDays, before accountabilityDays"
     );
     project.check().expect("clock retention project");
@@ -8402,7 +8404,7 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
     let fixture = fixture().await;
     let mut revised = project("2");
     if let ClockPolicy::Subject { after, .. } = &mut revised.clocks[0] {
-        after.elapsed = "PT2H".to_owned();
+        *after = registry_casework_core::ElapsedDuration::Hours(2);
     }
     revised.check().expect("revised clock project");
     let revised_service = CaseworkService::new(
@@ -9451,7 +9453,7 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
     current_project.project.version = "activity-clock-2".to_owned();
     current_project.review_policies[0].version = "activity-clock-2".to_owned();
     current_project.review_policies[0].stages = stages;
-    let ClockPolicy::Activity { due_time, .. } = &mut current_project.clocks[0] else {
+    let ClockPolicy::Stage { due_time, .. } = &mut current_project.clocks[0] else {
         panic!("activity clock fixture changed shape");
     };
     *due_time = "18:00".to_owned();

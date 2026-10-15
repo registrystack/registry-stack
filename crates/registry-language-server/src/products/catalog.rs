@@ -457,9 +457,9 @@ const BREG_MODULE_FILES: &[FileRule] = &[
 
 const CASEWORK_DECLARATIONS: &[N] = &[
     N::global("project/id", "Casework project"),
-    N::global("queues/*/id", "Casework queue"),
-    N::global("accessProfiles/*/id", "Casework access profile"),
-    N::global("teams/*/id", "Casework team"),
+    N::global("queues/$key", "Casework queue"),
+    N::global("accessProfiles/$key", "Casework access profile"),
+    N::global("teams/$key", "Casework team"),
     N::global("contextProviders/*/id", "Casework context provider"),
     N::global(
         "contextProviders/*/deploymentRef",
@@ -473,7 +473,7 @@ const CASEWORK_DECLARATIONS: &[N] = &[
         "id",
     ),
     N::scoped(
-        "reviewPolicies/*/outcomes/*/id",
+        "reviewPolicies/*/outcomes/$key",
         "Casework review outcome",
         1,
         "id",
@@ -489,9 +489,9 @@ const CASEWORK_DECLARATIONS: &[N] = &[
             "Casework context field",
         )
     },
-    N::global("trustedProducers/*/id", "Casework trusted producer"),
-    N::global("calendars/*/id", "Casework calendar"),
-    N::global("clocks/*/id", "Casework clock"),
+    N::global("trustedProducers/$key", "Casework trusted producer"),
+    N::global("calendars/$key", "Casework calendar"),
+    N::global("clocks/$key", "Casework clock"),
     N::global("taskTemplates/*/id", "Casework task template"),
 ];
 const CASEWORK_REFERENCES: &[N] = &[

@@ -695,7 +695,7 @@ async fn calculate_review_clocks(
         }
         let holiday_row=tx.query_opt("SELECT document FROM casework_holiday_sets WHERE holiday_set=$1 ORDER BY revision DESC LIMIT 1",&[&calendar.holiday_set]).await?.ok_or(ReviewRuntimeError::Invalid)?;
         let holiday: HolidaySetDocument = serde_json::from_value(holiday_row.get(0))?;
-        let evaluated = evaluate_activity_clock(&definition.clock, calendar, &holiday, row.get(2))
+        let evaluated = evaluate_stage_clock(&definition.clock, calendar, &holiday, row.get(2))
             .map_err(|error| clock_evaluation_error(&definition.clock, error))?;
         let occurrence_id: Uuid = row.get(0);
         let applied=tx.query("SELECT effect_kind,effect_id FROM casework_review_clock_effects WHERE clock_occurrence_id=$1",&[&occurrence_id]).await?.into_iter().map(|r|(r.get::<_,String>(0),r.get::<_,String>(1))).collect();

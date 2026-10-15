@@ -136,7 +136,7 @@ test('review task context uses the exact route and forwards the optional source 
           identity: { id: 'registry-correction', version: '1', digest: POLICY_DIGEST },
           purpose: 'approval', contextStrategy: 'source',
           stages: [{ id: 'review', queue: 'review', decidingProfiles: ['staff'], requiredApprovals: 1, excludeInitiator: false, excludePreviousStageReviewers: false }],
-          retention: { terminalDays: 30, accountabilityDays: 30 },
+          retention: { terminalRetentionDays: 30, accountabilityRetentionDays: 30 },
           displaySchema: { type: 'object', additionalProperties: false, properties: {} },
           outcomes: [{ id: 'approved', label: 'Approve', settlement: 'approved', reasonRequired: false, publicReason: 'optional' }],
         },

@@ -71,17 +71,19 @@ export type DirectoryTargetPage = Page<DirectoryMember>
 /** The Registry-Source-Profile header selects the source profile; the body is empty. */
 export interface QueueRecord { id: string; label: string }
 export type RoutingPredicate = { equals: JsonValue } | { oneOf: ReadonlyArray<JsonValue> }
-export interface RoutingCondition { activity?: 'review' | 'apply'; stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
+export interface RoutingCondition { stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
 export interface RoutingRule { id: string; because: string; when: RoutingCondition; queue: string }
 export type WorkingWeekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
 export interface CalendarPolicy { id: string; timezone: string; workingWeekdays: ReadonlyArray<WorkingWeekday>; holidaySet: string }
-export interface ClockReminder { id: string; workingDaysBefore: SafeInteger }
+export interface WorkingDays { workingDays: SafeInteger }
+export interface ClockReminder { id: string; before: WorkingDays }
+export type ElapsedDuration = { minutes: SafeInteger } | { hours: SafeInteger } | { days: SafeInteger }
 export interface ClockStep { id: string; because: string; at: 'due'; action: { reassign: { queue: string } } }
 export type ClockPolicy = {
-  type: 'subject'; id: string; anchor: 'request-accepted-at'; completeOn: 'result-terminal'; after: { elapsed: string }
+  type: 'subject'; id: string; anchor: { type: 'request-accepted' }; after: ElapsedDuration
 } | {
-  type: 'activity'; id: string; anchor: 'stage-entered-at'; calendar: string; after: { workingDays: SafeInteger }; dueTime: string;
-  atRisk?: { workingDaysBefore: SafeInteger }; reminders?: ReadonlyArray<ClockReminder>; steps?: ReadonlyArray<ClockStep>
+  type: 'stage'; id: string; anchor: { type: 'stage-entered' }; calendar: string; after: WorkingDays; dueTime: string;
+  atRisk?: { before: WorkingDays }; reminders?: ReadonlyArray<ClockReminder>; steps?: ReadonlyArray<ClockStep>
 }
 export interface Description {
   projectId: string
@@ -360,7 +362,7 @@ export interface ReviewAccountabilityRecord {
   decisionReceipt?: ReviewDecisionReceipt
 }
 export interface ReviewStagePolicy { id: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
-export interface ReviewRetentionPolicy { terminalDays: SafeInteger; accountabilityDays: SafeInteger }
+export interface ReviewRetentionPolicy { terminalRetentionDays: SafeInteger; accountabilityRetentionDays: SafeInteger }
 export interface ReviewContextContract { id: string; revision: ContentDigest; schemaDigest: ContentDigest }
 export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }
 export type ReviewContextCapability = 'human-display' | 'service-status' | 'task-grant-context' | 'routing-context'

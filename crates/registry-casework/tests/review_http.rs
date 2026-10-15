@@ -165,8 +165,8 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
                 clocks: Vec::new(),
                 retention: ReviewRetentionPolicy {
-                    terminal_days: 90,
-                    accountability_days: 365,
+                    terminal_retention_days: 90,
+                    accountability_retention_days: 365,
                 },
                 display_schema: json!({
                     "type": "object",
@@ -200,8 +200,8 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
                 clocks: Vec::new(),
                 retention: ReviewRetentionPolicy {
-                    terminal_days: 90,
-                    accountability_days: 365,
+                    terminal_retention_days: 90,
+                    accountability_retention_days: 365,
                 },
                 display_schema: json!({
                     "type": "object",
@@ -237,7 +237,9 @@ fn project(issuer: &str) -> CaseworkProject {
                     "registry-correction".to_owned(),
                     "registry-answer".to_owned(),
                 ],
-                recovery_days: 30,
+                retention: registry_casework_core::ProducerRetention {
+                    receipt_retention_days: 30,
+                },
                 completion: None,
             },
             ReviewProducerPolicy {
@@ -252,7 +254,9 @@ fn project(issuer: &str) -> CaseworkProject {
                     "registry-correction".to_owned(),
                     "registry-answer".to_owned(),
                 ],
-                recovery_days: 30,
+                retention: registry_casework_core::ProducerRetention {
+                    receipt_retention_days: 30,
+                },
                 completion: None,
             },
         ],
