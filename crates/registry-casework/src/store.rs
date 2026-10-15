@@ -120,12 +120,17 @@ pub(crate) async fn pending_migration_refusals(
     transaction: &tokio_postgres::Transaction<'_>,
     _applied: &[i64],
 ) -> Result<Vec<StoreError>, StoreError> {
-    let retired:bool=transaction.query_one("SELECT to_regclass('casework_items') IS NOT NULL OR to_regclass('casework_subjects') IS NOT NULL OR to_regclass('casework_hosted_items') IS NOT NULL OR to_regclass('casework_attempts') IS NOT NULL",&[]).await?.get(0);
-    Ok(if retired {
+    Ok(if retired_schema_present(transaction).await? {
         vec![StoreError::RetiredSchema]
     } else {
         Vec::new()
     })
+}
+
+async fn retired_schema_present(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<bool, StoreError> {
+    Ok(client.query_one("SELECT to_regclass('casework_items') IS NOT NULL OR to_regclass('casework_subjects') IS NOT NULL OR to_regclass('casework_hosted_items') IS NOT NULL OR to_regclass('casework_attempts') IS NOT NULL",&[]).await?.get(0))
 }
 
 impl PostgresStore {
@@ -284,6 +289,12 @@ impl PostgresStore {
     }
     pub async fn ready(&self) -> Result<(), StoreError> {
         let client = self.client().await?;
+        // A retired schema needs a fresh database whatever its ledger says,
+        // so it is named before any version comparison.
+        let connection: &tokio_postgres::Client = &client;
+        if retired_schema_present(connection).await? {
+            return Err(StoreError::RetiredSchema);
+        }
         let ledger_exists: bool = client
             .query_one(
                 "SELECT to_regclass('casework_schema_migrations') IS NOT NULL",

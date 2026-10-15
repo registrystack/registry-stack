@@ -56,6 +56,9 @@
   `casework.review-producer.receipt-retention-out-of-range` and
   `receipt-retention-exceeds-result-retention` instead of
   `recovery-days-out-of-range` and `recovery-exceeds-retention`.
+- The runtime's readiness check refuses a database holding a retired
+  Casework schema with the same fresh-database instruction that `migrate`
+  gives, instead of reporting its migration ledger as newer than the binary.
 - A stage clock whose due time falls inside a daylight-saving gap on a
   given date is due at the first instant after the gap, and one inside a
   fold at the earlier instant, so a due time that passes `check` evaluates on
