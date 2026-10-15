@@ -18,7 +18,6 @@ from registry_discovery_client import (
     renew_unchanged_selection,
     select_evidence_alternative,
     select_evidence_service,
-    validate_selection,
     validate_selection_structure,
 )
 
@@ -257,7 +256,7 @@ class DiscoveryClientTests(unittest.TestCase):
                 selection["evidenceResolution"]["requirementId"],
                 "urn:example:requirement",
             )
-            self.assertEqual(validate_selection(selection)["recordId"], "record-a")
+            self.assertEqual(validate_selection_structure(selection)["recordId"], "record-a")
         finally:
             server.shutdown()
             server.server_close()

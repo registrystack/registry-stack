@@ -364,8 +364,7 @@ client.
 Three local operations act on a stored selection in Python and Node:
 
 - `validate_selection_structure` and `validateSelectionStructure` check closed shape and capability
-  binding, and nothing else. `validate_selection` and `validateSelection` are deprecated aliases
-  kept for compatibility; the operation is structural, not trust.
+  binding, and nothing else. Structural validation grants no trust.
 - `accept_selection` and `acceptSelection` apply an adopter-owned local policy callback and return
   an `AcceptedServiceSelection` carrying `endpoint_url` or `endpointUrl`. A callback that returns
   false raises kind `local-acceptance-refused`.

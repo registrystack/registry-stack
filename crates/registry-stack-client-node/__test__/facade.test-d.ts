@@ -28,6 +28,13 @@ breg.verifyWebhookDelivery({
   body: Buffer.from('{}'),
   key: Buffer.alloc(32),
 }).deliveryTime.toUpperCase()
+// @ts-expect-error Structural validation uses its explicit canonical name.
+void discovery.validateSelection
+declare const selection: discovery.EvidenceServiceSelection
+const checked: discovery.EvidenceServiceSelection = discovery.validateSelectionStructure(selection)
+const accepted: discovery.AcceptedServiceSelection<discovery.EvidenceServiceSelection> =
+  discovery.acceptSelection(checked, (candidate) => candidate.serviceKind === 'evidence')
+void accepted
 void discoveryClient
 void caseworkClient.description('header.payload.signature', 'staff')
 declare const producerReview: casework.ReviewCreateRequest

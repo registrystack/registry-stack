@@ -151,11 +151,6 @@ pub fn validate_selection_structure(selection: Value) -> Result<Value> {
 }
 
 #[napi]
-pub fn validate_selection(selection: Value) -> Result<Value> {
-    validate_selection_structure(selection)
-}
-
-#[napi]
 pub fn renew_unchanged_selection(previous: Value, current: Value) -> Result<Value> {
     let previous: ServiceSelection = decode(previous)?;
     let current: ServiceSelection = decode(current)?;

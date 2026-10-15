@@ -154,10 +154,6 @@ native definition and local policy still supply the purpose, audience,
 issuer/provider identity, configuration revision, selectors, and expected
 outputs.
 
-`validate_selection` remains a compatibility alias, but its behavior has
-always been structural. New code should use `validate_selection_structure` so
-the result cannot be mistaken for a trust decision.
-
 ## Persisted selections and renewal
 
 Persist only the inert selection dictionary, never `AcceptedServiceSelection`.

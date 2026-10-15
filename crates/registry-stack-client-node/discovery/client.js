@@ -275,10 +275,6 @@ function validateSelectionStructure(selection) {
   }
 }
 
-function validateSelection(selection) {
-  return validateSelectionStructure(selection);
-}
-
 function acceptSelection(selection, accepts) {
   const checked = validateSelectionStructure(selection);
   if (typeof accepts !== 'function') throw inputError('query');
@@ -304,6 +300,5 @@ module.exports = {
   selectEvidenceAlternative,
   selectEvidenceService,
   selectExact,
-  validateSelection,
   validateSelectionStructure,
 };

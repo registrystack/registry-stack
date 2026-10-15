@@ -5,11 +5,18 @@ import {
   renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
-  validateSelection,
   validateSelectionStructure,
   type EvidenceServiceSelection,
   type ServiceRecord,
 } from '../client';
+
+import * as discovery from '../client';
+import * as native from '../index';
+
+// @ts-expect-error Structural validation exports only its explicit canonical name.
+void discovery.validateSelection;
+// @ts-expect-error The native binding also removes the ambiguous alias.
+void native.validateSelection;
 
 declare function expectType<T>(value: T): void;
 declare function adopterChooseRecord(items: ServiceRecord[]): ServiceRecord;
@@ -28,7 +35,6 @@ async function useDiscoveryClient(): Promise<void> {
   });
   expectType<string>(selection.originContentDigest);
   expectType<EvidenceServiceSelection>(validateSelectionStructure(selection));
-  expectType<EvidenceServiceSelection>(validateSelection(selection));
   const accepted = acceptSelection(selection, (candidate) => candidate.serviceKind === 'evidence');
   expectType<AcceptedServiceSelection<EvidenceServiceSelection>>(accepted);
   expectType<string>(accepted.endpointUrl);
