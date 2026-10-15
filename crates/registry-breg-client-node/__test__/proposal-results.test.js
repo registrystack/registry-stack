@@ -91,6 +91,20 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       await assert.rejects(client.getProposal(binding, id), error => ['invalid-request', 'protocol'].includes(error.kind));
     }
 
+    await t.test('application result record identifiers retain canonical spelling', async () => {
+      const canonical = '123e4567-e89b-42d3-a456-426614174000';
+      for (const recordId of [canonical, '00000000-0000-0000-0000-000000000000']) {
+        value = document(); value.application.resultLinks[0].recordId = recordId;
+        assert.equal(JSON.parse((await client.getProposal(binding, id)).documentJson).application.resultLinks[0].recordId, recordId);
+      }
+      for (const recordId of [canonical.toUpperCase(), canonical.replaceAll('-', '')]) {
+        value = document(); value.application.resultLinks[0].recordId = recordId;
+        const count = requests.length;
+        await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+        assert.equal(requests.length, count + 1, 'validate the actual received result reference');
+      }
+    });
+
     await t.test('promoted review Status refuses display fields while Context preserves them', async () => {
       value = document(); value.state = 'submitted'; delete value.application;
       for (const [name, suffix, operation] of [['reviewStatus', 'review-status', 'get-review-status'], ['reviewContext', 'review-context', 'get-review-context']]) {

@@ -108,6 +108,21 @@ class ProposalResultTests(unittest.TestCase):
         del self.value['effectDigest']
         self.assertNotIn('application', self.client.get_proposal(self.binding, ID).document)
 
+    def test_application_result_record_identifiers_retain_canonical_spelling(self):
+        canonical = '123e4567-e89b-42d3-a456-426614174000'
+        for record_id in [canonical, '00000000-0000-0000-0000-000000000000']:
+            self.value = document()
+            self.value['application']['resultLinks'][0]['recordId'] = record_id
+            self.assertEqual(self.client.get_proposal(self.binding, ID).document['application']['resultLinks'][0]['recordId'], record_id)
+        for record_id in [canonical.upper(), canonical.replace('-', '')]:
+            self.value = document()
+            self.value['application']['resultLinks'][0]['recordId'] = record_id
+            count = len(self.requests)
+            with self.subTest(record_id=record_id), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.get_proposal(self.binding, ID)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertEqual(len(self.requests), count + 1)
+
     def test_application_status_preserves_current_progress_and_retained_evidence_absence(self):
         for state in ('pending', 'blocked', 'applied', 'cancelled'):
             self.value = status_document(state)

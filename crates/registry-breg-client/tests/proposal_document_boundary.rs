@@ -6,10 +6,14 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use axum::{extract::State, routing::any, Json, Router};
+use axum::{
+    extract::{Path, State},
+    routing::{any, get},
+    Json, Router,
+};
 use registry_breg_client::{
     BRegIdempotencyKey, BRegMetadata, BRegPreparedProposal, BRegProposal, BRegProposalQuery,
-    BaseRegistryClient, BaseRegistryClientConfig,
+    BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig,
 };
 use serde_json::{json, Value};
 
@@ -45,6 +49,17 @@ impl Fixture {
                     "operations":["get-review-context","get-review-status"]}]}})));
         let requests = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
+            .route("/v1/records/items/{id}", get(|Path(id): Path<String>, State((_, requests)): State<(Arc<Mutex<Value>>, Arc<AtomicUsize>)>| async move {
+                requests.fetch_add(1, Ordering::SeqCst);
+                (
+                    [("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+                     ("cache-control", "no-store"), ("vary", "authorization, accept"),
+                     ("etag", "\"breg-record-000000000001\""),
+                     ("link", "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/item>; rel=\"describedby\"")],
+                    Json(json!({"meta":{"registryIdentifier":"directory", "datasetIdentifier":"items", "entityTypeIdentifier":"item"},
+                        "data":{"recordIdentifier":id, "revisionIdentifier":"4", "domainData":{}}})),
+                )
+            }))
             .fallback(any(|State((value, requests)): State<(Arc<Mutex<Value>>, Arc<AtomicUsize>)>| async move {
                 requests.fetch_add(1, Ordering::SeqCst);
                 (
@@ -240,6 +255,92 @@ async fn promoted_proposal_reads_preserve_the_held_action_revision() {
                 .is_ok());
         }
     }
+}
+
+#[tokio::test]
+async fn application_result_ids_are_canonical_and_usable_for_record_reads() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let mut submitted = proposal("submitted");
+    submitted["links"]["apply"] = json!({"method":"POST","path":format!("/v1/proposals/{ID}/apply"),
+        "accessProfile":"writer","operation":"apply","ifMatch":"\"condition\""});
+    let held = fixture.proposal(submitted).await;
+    let attempt = fixture
+        .client
+        .prepare_proposal(
+            &held,
+            "apply",
+            json!({"submissionVersion":1,"effectDigest":DIGEST}),
+            &BRegIdempotencyKey::parse("canonical-result-id").unwrap(),
+        )
+        .unwrap();
+    let canonical = "123e4567-e89b-42d3-a456-426614174000";
+    let mut accepted = vec![];
+    for (id, valid) in [
+        (canonical.to_owned(), true),
+        ("00000000-0000-0000-0000-000000000000".to_owned(), true),
+        (canonical.to_ascii_uppercase(), false),
+        (canonical.replace('-', ""), false),
+    ] {
+        let mut current = proposal("applied");
+        current["revision"] = json!(3);
+        current["effectDigest"] = json!(DIGEST);
+        current["application"] = json!({"applicationId":ID,"submissionVersion":1,"effectDigest":DIGEST,
+            "resultLinks":[{"recordType":"item","recordId":id,"revision":4}]});
+        fixture.answer(current.clone());
+        let observed = fixture.client.get_proposal(&binding, ID).await;
+        if valid {
+            let observed = observed.unwrap().value;
+            let reference = &observed.application().unwrap().result_links[0];
+            assert_eq!(reference.record_id, id);
+            fixture
+                .client
+                .get_record("items", &reference.record_id, &BRegRecordOptions::default())
+                .await
+                .unwrap();
+        } else {
+            if let Ok(observed) = observed {
+                accepted.push(format!(
+                    "get:{}",
+                    observed.value.application().unwrap().result_links[0].record_id
+                ));
+            }
+            let requests = fixture.requests.load(Ordering::SeqCst);
+            let tokens = fixture.token.0.load(Ordering::SeqCst);
+            assert!(fixture
+                .client
+                .get_record("items", &id, &BRegRecordOptions::default())
+                .await
+                .is_err());
+            assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+            assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+        }
+        for (operation, observed) in [
+            ("read", fixture.client.read_proposal(&held).await),
+            ("apply", fixture.client.execute_proposal(&attempt).await),
+        ] {
+            if valid {
+                assert!(observed.is_ok(), "{operation}:{id}");
+            } else if observed.is_ok() {
+                accepted.push(format!("{operation}:{id}"));
+            }
+        }
+        fixture.answer(json!({"items":[current]}));
+        let listed = fixture
+            .client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await;
+        if valid {
+            assert!(listed.is_ok(), "list:{id}");
+        } else if listed.is_ok() {
+            accepted.push(format!("list:{id}"));
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "accepted unusable result record IDs: {accepted:?}"
+    );
 }
 
 #[tokio::test]
