@@ -1331,6 +1331,7 @@ impl MutationTransaction {
                             document.header.submission_version,
                         )
                         .await?;
+                        crate::review_store::close_application_jobs(tx, &action.id, id).await?;
                         proposal_store::save(tx, &action.id, id, previous, &workflow).await?;
                         (workflow, "cancelled")
                     }

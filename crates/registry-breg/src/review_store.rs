@@ -1481,7 +1481,7 @@ pub(crate) async fn install(
                  executor text NOT NULL CHECK (executor <> '' AND octet_length(executor) <= 128),
                  maximum_attempts integer NOT NULL CHECK (maximum_attempts BETWEEN 1 AND 1000),
                  system_grant_revision text NOT NULL CHECK (system_grant_revision ~ '^sha256:[0-9a-f]{64}$'),
-                 state text NOT NULL CHECK (state IN ('queued','applying','applied','blocked')),
+                 state text NOT NULL CHECK (state IN ('queued','applying','applied','blocked','cancelled')),
                  attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 1000),
                  next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  claim_token uuid,
@@ -1520,6 +1520,26 @@ pub(crate) async fn install(
                      ADD CONSTRAINT registry_proposal_application_jobs_action_binding_check
                      CHECK ((action_href IS NULL) = (action_if_match IS NULL));
              EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    // A database installed before Cancel closed application jobs lacks the
+    // `cancelled` state. Widening the check keeps every existing row valid.
+    client
+        .batch_execute(
+            "DO $$ BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                     WHERE conrelid='registry_internal.registry_proposal_application_jobs'::regclass
+                       AND conname='registry_proposal_application_jobs_state_check'
+                       AND pg_catalog.pg_get_constraintdef(oid) LIKE '%cancelled%'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_proposal_application_jobs
+                         DROP CONSTRAINT IF EXISTS registry_proposal_application_jobs_state_check,
+                         ADD CONSTRAINT registry_proposal_application_jobs_state_check
+                         CHECK (state IN ('queued','applying','applied','blocked','cancelled'));
+                 END IF;
+             END $$;",
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -1659,6 +1679,25 @@ pub(crate) async fn enqueue_submission(
             return Err(MutationError::IdempotencyConflict);
         }
     }
+    Ok(())
+}
+
+/// Close every unapplied application job of a Proposal being cancelled, in
+/// the Cancel transaction. A closed job is never claimed or recovered again.
+pub(crate) async fn close_application_jobs(
+    transaction: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+) -> Result<(), MutationError> {
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_proposal_application_jobs
+        SET state='cancelled',claim_token=NULL,updated_at=transaction_timestamp()
+        WHERE action_id=$1 AND proposal_id=$2 AND state IN ('queued','applying','blocked')",
+            &[&action_id, &proposal_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     Ok(())
 }
 

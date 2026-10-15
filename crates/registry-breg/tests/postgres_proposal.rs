@@ -1131,6 +1131,47 @@ async fn attachment_binding_integrity_and_detail_erasure_preserve_record_history
     fixture.finish().await;
 }
 
+/// Cancel closes the queued automatic application job in its own
+/// transaction, so no inert queued work outlives the Proposal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_closes_the_queued_automatic_application_job() {
+    let fixture =
+        client_http::ClientFixture::start(compile(registry_source(true)), claims("author", "zone-a"))
+            .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Cancelled", "cancel-job-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("cancel-job-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let job_state = || async {
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT state FROM registry_internal.registry_proposal_application_jobs",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0)
+    };
+    assert_eq!(job_state().await, "queued");
+    let cancel = client
+        .prepare_proposal(&submitted, "cancel", json!({}), &key("cancel-job-cancel"))
+        .unwrap();
+    let cancelled = client.execute_proposal(&cancel).await.unwrap().value;
+    assert_eq!(cancelled.state(), BRegProposalState::Cancelled);
+    assert_eq!(job_state().await, "cancelled");
+    assert!(!fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    assert_eq!(job_state().await, "cancelled");
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_automatic_uses_current_builtin_grant_and_one_atomic_receipt() {
     let mut source = registry_source(true);
