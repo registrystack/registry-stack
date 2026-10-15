@@ -10,13 +10,13 @@ use axum::{
     routing::post,
     Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use hmac::{Hmac, KeyInit, Mac};
 use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
+use registry_platform_hooks::{
+    receiver::{verify_delivery, DeliveryFreshness, SignedDelivery},
+    EnvelopeLimits, HookEnvelope,
+};
 use serde_json::{json, Value};
-use sha2::Sha256;
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -25,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::oneshot;
@@ -33,17 +33,6 @@ use zeroize::Zeroizing;
 
 const MAX_BODY: usize = 1024 * 1024;
 const MAX_STORAGE: u64 = 16 * 1024 * 1024;
-const SIGNED_HEADERS: [&str; 9] = [
-    "ce-specversion",
-    "ce-id",
-    "ce-source",
-    "ce-type",
-    "ce-time",
-    "ce-dataschema",
-    "x-registry-event-generation",
-    "x-registry-delivery-attempt",
-    "x-registry-delivery-time",
-];
 
 pub(super) struct Receiver {
     stop: Option<oneshot::Sender<()>>,
@@ -335,61 +324,49 @@ fn digest(value: &str) -> bool {
 }
 
 fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)> {
-    let signed = SIGNED_HEADERS
-        .iter()
-        .map(|name| header(headers, name))
-        .collect::<Result<Vec<_>>>()?;
-    if signed[0] != "1.0"
-        || header(headers, "content-type")? != "application/json"
+    // Authenticity is the shared Version 1 receiver's reading; what follows is
+    // this inbox's local policy over the verified attributes.
+    let verified = verify_delivery(
+        SignedDelivery {
+            method: "POST",
+            request_target: "/events",
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            body,
+            key,
+        },
+        DeliveryFreshness::Within {
+            now: SystemTime::now(),
+            skew: Duration::from_secs(30),
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("webhook verification refused: {error}"))?;
+    if verified.content_type != "application/json"
         || header(headers, "accept")? != "application/json"
         || body.is_empty()
-        || body.len() > MAX_BODY
     {
         bail!("webhook profile is invalid");
     }
-    let event_id = uuid::Uuid::parse_str(signed[1]).context("webhook event identity is invalid")?;
-    if event_id.to_string() != signed[1] {
+    let event_id =
+        uuid::Uuid::parse_str(verified.id).context("webhook event identity is invalid")?;
+    if event_id.to_string() != verified.id {
         bail!("webhook event identity must be canonical");
     }
     let event_time =
-        OffsetDateTime::parse(signed[4], &Rfc3339).context("webhook event time is invalid")?;
-    let delivery_time =
-        OffsetDateTime::parse(signed[8], &Rfc3339).context("webhook delivery time is invalid")?;
-    if (OffsetDateTime::now_utc() - delivery_time).abs() > time::Duration::seconds(30) {
-        bail!("webhook delivery time is stale");
-    }
-    let generation = positive(signed[6])?;
-    let attempt = positive(signed[7])?;
-    let idempotency_key = header(headers, "idempotency-key")?;
+        OffsetDateTime::parse(verified.time, &Rfc3339).context("webhook event time is invalid")?;
+    let generation = positive(verified.generation)?;
+    let attempt = positive(verified.attempt)?;
+    let idempotency_key = verified.idempotency_key;
     if !digest(idempotency_key) {
         bail!("webhook idempotency key is invalid");
     }
-    let signature = header(headers, "x-registry-signature")?
-        .strip_prefix("v1=")
-        .context("webhook signature version is invalid")?;
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature)
-        .map_err(|_| anyhow::anyhow!("webhook signature encoding is invalid"))?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).context("webhook key is invalid")?;
-    mac.update(b"breg-webhook-signature-v1");
-    for value in signed.iter().map(|value| value.as_bytes()).chain([
-        b"POST".as_slice(),
-        b"/events".as_slice(),
-        b"application/json".as_slice(),
-        idempotency_key.as_bytes(),
-        body,
-    ]) {
-        mac.update(&(value.len() as u64).to_be_bytes());
-        mac.update(value);
-    }
-    mac.verify_slice(&signature)
-        .map_err(|_| anyhow::anyhow!("webhook signature is invalid"))?;
     let envelope = HookEnvelope::from_canonical_bytes(body, &EnvelopeLimits::default())
         .map_err(|_| anyhow::anyhow!("webhook envelope is invalid"))?;
-    if envelope.id != signed[1]
-        || envelope.event_type != signed[3]
-        || envelope.source != signed[2]
-        || envelope.dataschema != signed[5]
+    if envelope.id != verified.id
+        || envelope.event_type != verified.event_type
+        || envelope.source != verified.source
+        || envelope.dataschema != verified.data_schema
         || envelope.time != event_time
     {
         bail!("webhook envelope does not match its signed delivery attributes");
@@ -398,7 +375,8 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     let object = data
         .as_object()
         .context("webhook envelope data must be an object")?;
-    let registry = signed[2]
+    let registry = verified
+        .source
         .strip_prefix("urn:registrystack:registry:")
         .and_then(|source| source.split_once(":instance:"))
         .filter(|(registry, instance)| !registry.is_empty() && !instance.is_empty())
@@ -414,7 +392,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
                     .expect("fixed native Proposal event schema")
             });
         if !SCHEMA.is_valid(&data)
-            || signed[3]
+            || verified.event_type
                 != format!(
                     "proposal.{}",
                     data["transition"].as_str().unwrap_or_default()
@@ -423,7 +401,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         {
             bail!("webhook Proposal event data shape is invalid");
         }
-        let record = json!({"eventId":signed[1],"eventType":signed[3],"actionId":data["actionId"],
+        let record = json!({"eventId":verified.id,"eventType":verified.event_type,"actionId":data["actionId"],
             "trigger":"proposal-lifecycle","transition":data["transition"],"deliveryId":null,
             "idempotencyKey":idempotency_key,"generation":generation,"attempt":attempt,"status":"received",
             "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data});
@@ -461,13 +439,17 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         data["recordType"]
             .as_str()
             .context("webhook entity is invalid")?,
-        signed[3]
+        verified.event_type
     );
-    if !signed[5].strip_prefix(&prefix).is_some_and(digest) {
+    if !verified
+        .data_schema
+        .strip_prefix(&prefix)
+        .is_some_and(digest)
+    {
         bail!("webhook schema does not match event metadata");
     }
     let record = json!({
-        "eventId":signed[1],"eventType":signed[3],"recordType":data["recordType"],
+        "eventId":verified.id,"eventType":verified.event_type,"recordType":data["recordType"],
         "trigger":data["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
         "generation":generation,"attempt":attempt,"status":"received",
         "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data["values"]
@@ -601,6 +583,21 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::Sha256;
+
+    const SIGNED_HEADERS: [&str; 9] = [
+        "ce-specversion",
+        "ce-id",
+        "ce-source",
+        "ce-type",
+        "ce-time",
+        "ce-dataschema",
+        "x-registry-event-generation",
+        "x-registry-delivery-attempt",
+        "x-registry-delivery-time",
+    ];
     use registry_breg::{
         compiler::{compile_project, CompileProfile},
         contract::{parse_project_json, EventTrigger},
@@ -1151,7 +1148,7 @@ mod tests {
         let data = json!({"actionId":"correct-name","actionRevision":format!("sha256:{}","a".repeat(64)),
             "proposalId":"00000000-0000-4000-8000-000000000002","submissionVersion":1,"revision":1,
             "fromState":"draft","state":"submitted","transition":"submitted","effectDigest":null,
-            "authorityKind":"caller","systemApplyGrantRevision":null});
+            "authorityKind":"caller","systemApplyGrantRevision":null,"turn":"official"});
         let key = URL_SAFE_NO_PAD.encode([7; 32]);
         let body = envelope_bytes(&headers, data.clone());
         sign(&mut headers, &body);
