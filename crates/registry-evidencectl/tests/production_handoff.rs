@@ -781,13 +781,11 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        // Keep the Transit socket below the Unix path limit while naming the
-        // canonical non-symlinked macOS temporary root explicitly.
-        let temporary = tempfile::Builder::new()
-            .prefix("evidence-handoff-")
-            .tempdir_in("/private/tmp")
-            .expect("acceptance tempdir");
-        let root = temporary.path().to_path_buf();
+        // Keep the Transit socket below the Unix path limit. Resolve only the
+        // newly owned root because macOS may expose its temp directory via
+        // a symlinked /var prefix that the publisher correctly refuses.
+        let temporary = tempfile::tempdir().expect("acceptance tempdir");
+        let root = fs::canonicalize(temporary.path()).expect("canonical acceptance tempdir");
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
             .expect("acceptance tempdir mode");
         let project = root.join("authoring");
@@ -838,6 +836,11 @@ impl Fixture {
                         if worker_stop.load(Ordering::Acquire) {
                             break;
                         }
+                        // Darwin inherits O_NONBLOCK from the listener; wait for
+                        // each complete request within the bounded read timeout.
+                        stream
+                            .set_nonblocking(false)
+                            .expect("synthetic Transit blocking accepted stream");
                         serve_transit_request(&root, &mut stream);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
