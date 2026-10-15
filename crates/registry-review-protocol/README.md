@@ -22,7 +22,10 @@ and `digest`; partial pins are invalid. The provider atomically persists the
 concrete `PolicyBinding`, policy snapshot and idempotent acceptance. Retries
 recover that acceptance before consulting current policy. Results repeat the
 accepted exact binding, while the original selector and submission digest stay
-unchanged. JSON values are bounded by canonical byte size,
+unchanged. A new request from the same producer for the same subject and
+policy supersedes every live one: the provider settles each as `superseded`.
+The subject here is its source, type and identifier, not its version. JSON
+values are bounded by canonical byte size,
 nesting depth, and node count so the same contract applies to parsed and
 programmatically constructed values.
 

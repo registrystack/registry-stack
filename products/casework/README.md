@@ -105,9 +105,9 @@ submission digest and carries a terminal status such as `approved`,
 `rejected`, `answered`, `cancelled`, or `superseded`. A decided result names
 its `outcome` and any `publicReason`; a cancelled or superseded one carries
 neither. A completion destination,
-when configured, receives an authenticated payload-free wake; the producer
-fetches the result and authorizes any later mutation independently. A wake
-does not start a Coordinator run or carry a decision payload.
+when configured, receives an authenticated payload-free wake. A wake carries
+no decision payload; the producer fetches the result and authorizes any later
+mutation independently.
 
 ## Current-source BReg review
 
@@ -165,7 +165,11 @@ current Directory, policy, task, and source-disclosure checks:
 4. `GET /v1/review-tasks` filters by an exact five-part SubjectBinding or a
    visible reference and sorts by due date, subject, or reference. Selection
    never discovers arbitrary source records. Follow `nextCursor` unchanged;
-   restart the walk when a live source change makes a cursor stale.
+   restart the walk when a live source change makes a cursor stale. The
+   reference filter and sort match the exact reference the producer or
+   provider supplies. A BReg producer supplies its machine string
+   `breg:{registry}:{action}:{proposal}:{version}`, so staff cannot find a
+   BReg review by a business number such as a licence number.
 5. `POST /v1/directory/clocks/recompute/preview` and `/apply` recompute
    deadlines against the request's pinned policy closure. A subject clock
    covers one request, and a resubmission starts a new budget.
