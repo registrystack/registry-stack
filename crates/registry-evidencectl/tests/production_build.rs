@@ -1208,6 +1208,48 @@ fn project_replacement_during_description_keeps_one_coherent_candidate() {
 }
 
 #[test]
+fn target_authority_is_captured_before_delegated_tool_execution() {
+    for target_in_project in [false, true] {
+        let mut fixture = Fixture::new();
+        if target_in_project {
+            let target_root = fixture.project.join("targets/production");
+            fs::create_dir_all(target_root.parent().unwrap()).unwrap();
+            fs::rename(fixture.target.parent().unwrap(), &target_root).unwrap();
+            fixture.target = target_root.join("target.yaml");
+            fixture.authority = target_root.join("authority.yaml");
+        }
+        let baseline = fixture.root.join("baseline");
+        assert_success(
+            &fixture.build_with(&fixture.project, &fixture.target, &baseline),
+            "baseline captured authority",
+        );
+        let expected = fs::read(baseline.join("compiled-authority.yaml")).unwrap();
+        let replacement = fixture.root.join("replacement-authority.json");
+        let mut changed = authority_document();
+        changed["accessProfiles"]["requester"]["requesterTags"] = json!(["changed-requester"]);
+        write_json(&replacement, &changed);
+
+        let output = fixture
+            .command(&fixture.project, &fixture.target, &fixture.output)
+            .env("FAKE_EVIDENCE_MUTATE_AUTHORITY", &fixture.authority)
+            .env("FAKE_EVIDENCE_REPLACEMENT_AUTHORITY", &replacement)
+            .output()
+            .expect("package with authority replaced during version check starts");
+
+        assert_success(&output, "package retains the captured target authority");
+        assert_eq!(
+            fs::read(&fixture.authority).unwrap(),
+            fs::read(&replacement).unwrap()
+        );
+        assert!(
+            fs::read(fixture.output.join("compiled-authority.yaml")).unwrap() == expected,
+            "target_in_project={target_in_project}: package reread live authority after target capture"
+        );
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
 fn package_without_fixtures_still_delegates_compiled_authority_validation() {
     let fixture = Fixture::new();
     edit_json(&fixture.project.join("evidence.yaml"), |project| {
@@ -1891,6 +1933,9 @@ const FAKE_EVIDENCE: &str = r#"#!/bin/sh
 set -eu
 
 if [ "${1:-}" = '--version' ]; then
+  if [ -n "${FAKE_EVIDENCE_MUTATE_AUTHORITY:-}" ]; then
+    cp "$FAKE_EVIDENCE_REPLACEMENT_AUTHORITY" "$FAKE_EVIDENCE_MUTATE_AUTHORITY"
+  fi
   printf 'evidence %s\n' "$FAKE_EVIDENCE_VERSION"
   exit 0
 fi
