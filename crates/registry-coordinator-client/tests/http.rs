@@ -402,6 +402,62 @@ async fn every_run_status_response_requires_a_deadline_after_admission() {
 }
 
 #[tokio::test]
+async fn run_and_step_failure_paths_reject_invalid_pointers_without_resending() {
+    let server = Server::new(status()).await;
+    let client = server.client();
+    let id = Uuid::parse_str(RUN).unwrap();
+    let mut accepted = Vec::new();
+    for path in ["protected-field-canary", "#/field", "/~", "/~2", "/x~0~"] {
+        let before = server.count();
+        let mut run = status();
+        run["failurePath"] = json!(path);
+        let mut answers = run_status_answers(&server, run, id).await;
+        let mut document = inspection();
+        document["steps"][0]["failurePath"] = json!(path);
+        server.answer(200, "application/json", &document.to_string());
+        answers.push((
+            "inspect step",
+            client
+                .inspect(&token(), id)
+                .await
+                .map(|answer| answer.value.run.state),
+        ));
+        answers.push((
+            "reconcile step",
+            client
+                .reconcile(&token(), id, "response-lost")
+                .await
+                .map(|answer| answer.value.run.state),
+        ));
+        for (operation, answer) in answers {
+            match answer {
+                Ok(_) => accepted.push(operation),
+                Err(error) => {
+                    assert!(
+                        matches!(
+                            error,
+                            CoordinatorClientError::Protocol {
+                                status: 200,
+                                failure:
+                                    registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                            }
+                        ),
+                        "{operation}: {error:?}"
+                    );
+                    assert!(error.is_outcome_unknown(), "{operation}");
+                    assert!(!format!("{error:?}").contains(path));
+                }
+            }
+        }
+        assert_eq!(server.count(), before + 9, "each operation sends once");
+    }
+    assert!(
+        accepted.is_empty(),
+        "malformed pointers accepted by {accepted:?}"
+    );
+}
+
+#[tokio::test]
 async fn inspection_and_reconciliation_require_one_consistent_recovery_decision() {
     let server = Server::new(inspection()).await;
     let client = server.client();
@@ -1322,13 +1378,25 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
 
 #[test]
 fn run_and_step_status_carry_the_failure_path_a_refused_call_input_names() {
+    let long_path = format!("/{}", "x".repeat(512));
     for (member, expected) in [
         (Some(json!("/recordId")), Some("/recordId")),
+        (Some(json!("")), Some("")),
+        (Some(json!("/")), Some("/")),
+        (Some(json!("//")), Some("//")),
+        (Some(json!("/a~1b/~0c/~01")), Some("/a~1b/~0c/~01")),
+        (
+            Some(json!("/設備/line\nbreak/\u{0}")),
+            Some("/設備/line\nbreak/\u{0}"),
+        ),
+        (Some(json!(long_path)), Some(long_path.as_str())),
         (Some(Value::Null), None),
         (None, None),
     ] {
         let mut run = status();
         let mut step = inspection()["steps"][0].clone();
+        run.as_object_mut().unwrap().remove("failurePath");
+        step.as_object_mut().unwrap().remove("failurePath");
         if let Some(member) = member {
             run["failurePath"] = member.clone();
             step["failurePath"] = member;

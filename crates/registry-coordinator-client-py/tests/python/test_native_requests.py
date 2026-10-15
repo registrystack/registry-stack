@@ -220,9 +220,37 @@ class NativeRequestTests(unittest.TestCase):
                     self.assertNotIn("token-canary", rendered(error))
                 self.assertEqual(len(self.observed()), 1)
 
+    def test_run_and_step_failure_paths_reject_malformed_pointers_without_resending(self) -> None:
+        for path in ("protected-field-canary", "#/field", "/~", "/~2", "/x~0~"):
+            run = {**STATUS, "failurePath": path}
+            inspection = {**INSPECTION, "run": run}
+            step_inspection = {**INSPECTION, "steps": [{**INSPECTION["steps"][0], "failurePath": path}]}
+            for document, call in (
+                (run, lambda: self.client.start("token-canary", "attempt-1", START_REQUEST)),
+                (run, lambda: self.client.status("token-canary", RUN)),
+                (run, lambda: self.client.cancel("token-canary", RUN, "response-lost")),
+                (inspection, lambda: self.client.inspect("token-canary", RUN)),
+                (inspection, lambda: self.client.reconcile("token-canary", RUN, "response-lost")),
+                ({"runs": [run]}, lambda: self.client.list("token-canary", 1)),
+                (step_inspection, lambda: self.client.inspect("token-canary", RUN)),
+                (step_inspection, lambda: self.client.reconcile("token-canary", RUN, "response-lost")),
+            ):
+                self.service.script(ok(document))
+                with self.assertRaises(CoordinatorClientError) as refused:
+                    call()
+                error = refused.exception
+                self.assertEqual(error.kind, "protocol")
+                self.assertEqual(error.protocol_failure, "body")
+                self.assertEqual(error.status, 200)
+                self.assertIs(error.outcome_unknown, True)
+                self.assertNotIn("protected-field-canary", rendered(error))
+                self.assertNotIn("token-canary", rendered(error))
+                self.assertEqual(len(self.observed()), 1)
+
     def test_a_run_and_step_status_carry_the_failure_path_a_refused_call_input_names(self) -> None:
         absent = object()
-        for member, expected in (("/recordId", "/recordId"), (None, None), (absent, None)):
+        for member in ("/recordId", "", "/", "//", "/a~1b/~0c/~01", "/設備/line\nbreak/\u0000", "/" + "x" * 512, None, absent):
+            expected = None if member is absent else member
             with self.subTest(member="absent" if member is absent else member):
                 run = {name: value for name, value in STATUS.items() if name != "failurePath"}
                 step = {

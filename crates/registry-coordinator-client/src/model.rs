@@ -70,6 +70,7 @@ struct RunStatusDocument {
     outcome: Option<String>,
     output: Option<Value>,
     failure_code: Option<String>,
+    #[serde(default, deserialize_with = "failure_path")]
     failure_path: Option<String>,
     admitted_at: DateTime<Utc>,
     deadline_at: DateTime<Utc>,
@@ -124,6 +125,7 @@ pub struct StepStatus {
     pub failure_code: Option<String>,
     /// Where a refused call input left its operation contract, as an RFC 6901
     /// pointer that names no value.
+    #[serde(default, deserialize_with = "failure_path")]
     pub failure_path: Option<String>,
 }
 
@@ -365,6 +367,27 @@ pub struct RetryScheduled {
 
 // Inputs and authored outputs can carry protected source values. Debug is
 // intentionally not derived for those documents.
+
+// Response size is bounded by the client; diagnostic paths may include the root.
+fn failure_path<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value.as_deref().is_none_or(|path| {
+        path.is_empty()
+            || path.starts_with('/')
+                && path
+                    .split('~')
+                    .skip(1)
+                    .all(|escaped| escaped.starts_with(['0', '1']))
+    }) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "expected an RFC 6901 JSON Pointer",
+        ))
+    }
+}
 
 fn run_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {
     let value = Uuid::deserialize(deserializer)?;
