@@ -198,7 +198,13 @@ binds `submissionVersion` and `effectDigest`; optional `reason` text is limited
 to 4096 Unicode characters with NUL refused. Proposal conditions are distinct
 from Record ETags. `proposal.document` exposes the validated wire document.
 Read review status or context explicitly through `read_proposal_review_status`
-or `read_proposal_review_context` when their links are promoted.
+or `read_proposal_review_context` when their links are promoted. A Proposal
+document carries a derived `turn` (`party`, `official` or `nobody`) and, once a
+review has decided, a `decision` with its status, `decidedAt` and optional
+`publicReason`. `read_proposal_submission(proposal, version)` reads one
+retained submission version, its review, application receipt and decision,
+with the Proposal Get authority; an expired version is the
+`proposal.submission_expired` problem.
 
 After an uncertain response or restart, fetch the current authorized Proposal
 before recovering the original attempt:

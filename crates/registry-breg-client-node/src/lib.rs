@@ -2933,6 +2933,19 @@ impl BaseRegistryClient {
             .map_err(client_error)
     }
     #[napi]
+    pub async fn read_proposal_submission(
+        &self,
+        proposal: &Proposal,
+        version: u32,
+    ) -> Result<CompleteOutcome> {
+        let response = self
+            .inner
+            .read_proposal_submission(&proposal.inner, version)
+            .await
+            .map_err(client_error)?;
+        complete_value(response.value, response.metadata)
+    }
+    #[napi]
     pub async fn get_proposal(&self, binding: &ProposalGetBinding, id: String) -> Result<Proposal> {
         self.inner
             .get_proposal(&binding.inner, &id)

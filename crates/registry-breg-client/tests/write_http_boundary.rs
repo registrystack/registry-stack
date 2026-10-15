@@ -1761,6 +1761,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::MutationConflict => "The mutation conflicts with current state.",
         Code::PreconditionFailed => "The mutation precondition failed.",
         Code::PreconditionRequired => "The mutation precondition is required.",
+        Code::ProposalRejected => {
+            "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."
+        }
         Code::ProposalSubmissionExpired => {
             "The review result and application receipt of the submission are no longer retained."
         }

@@ -40,7 +40,8 @@
     "target",
     "state",
     "cursor",
-    "top",
+    "limit",
+    "turn",
     "submissionVersion",
     "reviewContextField",
     "effectDigest",
@@ -147,8 +148,13 @@
       "node": ["BaseRegistryClient.listProposals.queryJson"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
-    "top": {
-      "rust": ["BRegProposalQuery.top"],
+    "limit": {
+      "rust": ["BRegProposalQuery.limit"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "turn": {
+      "rust": ["BRegProposalQuery.turn"],
       "node": ["BaseRegistryClient.listProposals.queryJson"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
@@ -468,9 +474,9 @@
     },
     {
       "id": "proposals",
-      "rust": ["start_proposal", "get_proposal", "read_proposal", "list_proposals"],
-      "node": ["startProposal", "getProposal", "readProposal", "listProposals"],
-      "python": ["start_proposal", "get_proposal", "read_proposal", "list_proposals"]
+      "rust": ["start_proposal", "get_proposal", "read_proposal", "read_proposal_submission", "list_proposals"],
+      "node": ["startProposal", "getProposal", "readProposal", "readProposalSubmission", "listProposals"],
+      "python": ["start_proposal", "get_proposal", "read_proposal", "read_proposal_submission", "list_proposals"]
     },
     {
       "id": "proposal-recovery",

@@ -23,7 +23,6 @@ pub enum BRegRecoveryHint {
     Revise,
     Retry,
     CorrectInput,
-    Terminal,
     ReceiptOnly,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -59,6 +58,47 @@ pub enum BRegProposalState {
     Submitted,
     Applied,
     Cancelled,
+    Rejected,
+}
+
+/// Who is expected to act next, derived by BReg from the state, the review
+/// outcome and application progress.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalTurn {
+    Party,
+    Official,
+    Nobody,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalDecisionStatus {
+    Approved,
+    Rejected,
+    ChangesRequested,
+    Answered,
+}
+
+/// The review decision on one submission. The public reason is the only
+/// reviewer text BReg serves.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalDecision {
+    pub status: BRegProposalDecisionStatus,
+    pub decided_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_reason: Option<String>,
+}
+fn valid_decision(decision: &BRegProposalDecision) -> bool {
+    proposal_instant(&decision.decided_at).is_some()
+        && decision.public_reason.as_ref().is_none_or(|reason| {
+            !reason.is_empty()
+                && reason.len() <= registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES
+        })
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -71,6 +111,7 @@ pub enum BRegProposalApplicationState {
     Blocked,
     Applied,
     Cancelled,
+    Rejected,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,6 +310,46 @@ pub struct BRegProposalReviewResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_until: Option<String>,
 }
+/// One retained submission of a Proposal, read by version. A version whose
+/// review result and application receipt are no longer retained is refused
+/// with `proposal.submission_expired`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalSubmission {
+    pub id: String,
+    pub action_id: String,
+    pub submission_version: u32,
+    pub current: bool,
+    pub effect_digest: String,
+    pub review: Option<BRegProposalReviewResult>,
+    pub application: Option<BRegProposalSubmissionApplication>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<BRegProposalDecision>,
+}
+/// Application progress of one submission. An applied submission names its
+/// receipt and no mode.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalSubmissionApplication {
+    pub state: BRegProposalApplicationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<BRegProposalApplicationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<BRegProposalApplicationReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<BRegApplicationRecoveryHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_retry: Option<BRegProposalAutomaticRetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<String>,
+}
+impl fmt::Debug for BRegProposalSubmission {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalSubmission(<redacted>)")
+    }
+}
 impl BRegProposalAttachment {
     pub fn id(&self) -> &str {
         &self.id
@@ -313,6 +394,10 @@ pub struct BRegProposal {
     application: Option<BRegProposalApplication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_status: Option<BRegProposalApplicationStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn: Option<BRegProposalTurn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decision: Option<BRegProposalDecision>,
     #[serde(skip)]
     source: Option<String>,
 }
@@ -349,6 +434,11 @@ impl BRegProposal {
                 .blocked_reason
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
+            || self.state == BRegProposalState::Draft && self.decision.is_some()
+            || self
+                .decision
+                .as_ref()
+                .is_some_and(|decision| !valid_decision(decision))
         {
             return Err(refusal());
         }
@@ -362,7 +452,9 @@ impl BRegProposal {
                     && status.reason.is_some()
                 || matches!(
                     status.state,
-                    BRegProposalApplicationState::Applied | BRegProposalApplicationState::Cancelled
+                    BRegProposalApplicationState::Applied
+                        | BRegProposalApplicationState::Cancelled
+                        | BRegProposalApplicationState::Rejected
                 ) && (status.reason.is_some() || status.automatic_retry.is_some())
                 || status.mode == BRegProposalApplicationMode::Automatic
                     && matches!(
@@ -379,6 +471,9 @@ impl BRegProposal {
                     }
                     BRegProposalApplicationState::Cancelled => {
                         self.state != BRegProposalState::Cancelled
+                    }
+                    BRegProposalApplicationState::Rejected => {
+                        self.state != BRegProposalState::Rejected
                     }
                     _ => self.state != BRegProposalState::Submitted,
                 }
@@ -549,6 +644,15 @@ impl BRegProposal {
     }
     pub fn application_status(&self) -> Option<&BRegProposalApplicationStatus> {
         self.application_status.as_ref()
+    }
+    /// Who is expected to act next. A stored command receipt replayed from
+    /// before the turn was served carries none.
+    pub const fn turn(&self) -> Option<BRegProposalTurn> {
+        self.turn
+    }
+    /// The current submission's review decision, served on reads only.
+    pub fn decision(&self) -> Option<&BRegProposalDecision> {
+        self.decision.as_ref()
     }
     pub const fn revision(&self) -> u64 {
         self.revision
@@ -759,6 +863,7 @@ pub struct BRegProposalQuery {
     pub owner_is_caller: bool,
     pub target: Option<String>,
     pub state: Option<BRegProposalState>,
+    pub turn: Option<BRegProposalTurn>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
@@ -1124,6 +1229,16 @@ impl BaseRegistryClient {
                     .to_owned(),
             ));
         }
+        if let Some(turn) = query.turn {
+            pairs.push((
+                "turn".to_owned(),
+                serde_json::to_value(turn)
+                    .map_err(|_| refusal())?
+                    .as_str()
+                    .ok_or_else(refusal)?
+                    .to_owned(),
+            ));
+        }
         if let Some(cursor) = &query.cursor {
             pairs.push(("cursor".to_owned(), cursor.clone()));
         }
@@ -1152,6 +1267,7 @@ impl BaseRegistryClient {
                 .as_ref()
                 .is_some_and(|action| action != &item.action_id)
                 || query.state.is_some_and(|state| state != item.state)
+                || query.turn.is_some_and(|turn| Some(turn) != item.turn)
             {
                 return Err(refusal());
             }
@@ -1284,6 +1400,56 @@ impl BaseRegistryClient {
         }
         Ok(BRegComplete {
             value: current.bind_profile(self.source_binding(), &link.access_profile)?,
+            metadata: response.metadata,
+        })
+    }
+    /// Read one retained submission version of a Proposal under the access
+    /// profile of its `self` link.
+    pub async fn read_proposal_submission(
+        &self,
+        proposal: &BRegProposal,
+        version: u32,
+    ) -> Result<BRegComplete<BRegProposalSubmission>, BaseRegistryClientError> {
+        if proposal.source.as_deref() != Some(self.source_binding().as_str()) || version == 0 {
+            return Err(refusal());
+        }
+        let current = proposal.links.get("self").ok_or_else(refusal)?;
+        let link = BRegProposalLink {
+            method: "GET".to_owned(),
+            path: format!("/v1/proposals/{}/submissions/{version}", proposal.id),
+            access_profile: current.access_profile.clone(),
+            operation: "get".to_owned(),
+            if_match: None,
+            availability: None,
+        };
+        let response = self.proposal_exchange(&link, None, None).await?;
+        let value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        let submission: BRegProposalSubmission =
+            serde_json::from_value(value).map_err(|_| refusal())?;
+        if submission.id != proposal.id
+            || submission.action_id != proposal.action_id
+            || submission.submission_version != version
+            || !digest(&submission.effect_digest)
+            || submission
+                .review
+                .as_ref()
+                .is_some_and(|review| !valid_review_result(review))
+            || submission.application.as_ref().is_some_and(|application| {
+                application
+                    .application_id
+                    .as_deref()
+                    .is_some_and(|id| !canonical_proposal_id(id))
+            })
+            || submission
+                .decision
+                .as_ref()
+                .is_some_and(|decision| !valid_decision(decision))
+        {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: submission,
             metadata: response.metadata,
         })
     }

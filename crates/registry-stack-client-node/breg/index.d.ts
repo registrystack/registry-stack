@@ -37,6 +37,7 @@ export declare class BaseRegistryClient {
   lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
   startProposal(binding: BRegActionBinding, inputsJson: string, key: string): Promise<BRegProposal>
   readProposal(proposal: BRegProposal): Promise<BRegProposal>
+  readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome>
   getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
   downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
   readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome>
