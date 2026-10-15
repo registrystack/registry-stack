@@ -162,13 +162,17 @@ KEBAB_SEGMENT = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 BOUND = re.compile(r"^(max|min)([A-Z].*)$")
 DURATION_WORDS = frozenset(
     {"Timeout", "Ttl", "Delay", "Interval", "Lifetime", "Duration", "Leeway", "Grace",
-     "Retention", "Window", "Period", "Age"}
+     "Retention", "Window", "Period", "Age", "Elapsed"}
 )
 # A text member whose last word is one of these holds a duration. Period,
 # Window, and Age also name labels (a statistical period, a booking window).
 DURATION_TEXT_WORDS = frozenset(
-    {"Timeout", "Ttl", "Delay", "Interval", "Lifetime", "Duration", "Leeway", "Grace", "Retention"}
+    {"Timeout", "Ttl", "Delay", "Interval", "Lifetime", "Duration", "Leeway", "Grace", "Retention",
+     "Elapsed"}
 )
+# An ISO 8601 duration value (`PT48H`, `P2D`) shows a text member holds a
+# duration whatever its key says.
+ISO_8601_DURATION = re.compile(r"^-?P(?=.)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$")
 UNITS = ("Milliseconds", "Seconds", "Minutes", "Hours", "Days", "WorkingDays", "Bytes", "Degrees")
 TIME_UNITS = ("Milliseconds", "Seconds", "Minutes", "Hours", "Days")
 NONCANONICAL_UNITS = {
@@ -1768,10 +1772,17 @@ class Lint:
                     node.get("format") == "duration"
                     or "PT" in str(node.get("pattern", ""))
                     or re.search(r"\((?:\?:)?[a-z|]*\b(?:ms|s|m|h|d)\b[a-z|]*\)", str(node.get("pattern", "")))
-                    or last in DURATION_TEXT_WORDS
+                    or capitalize(last) in DURATION_TEXT_WORDS
                     or "ISO 8601 duration" in str(node.get("description", ""))
                     or (last in TIME_UNITS and key.endswith(last))
-                ):
+                ) or ("string" in types_of(node) and any(
+                    isinstance(value, str) and ISO_8601_DURATION.match(value)
+                    for value in [
+                        *(node.get("examples") if isinstance(node.get("examples"), list) else []),
+                        *(node.get("enum") if isinstance(node.get("enum"), list) else []),
+                        *[node[word] for word in ("default", "const") if word in node],
+                    ]
+                )):
                     find("CFG-QTY-1", visit, f"{key} holds a duration as text", "Write an integer with the unit as the last word of the key")
                 if numeric and name5 is None:
                     for unit in TIME_UNITS:
