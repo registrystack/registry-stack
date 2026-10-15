@@ -326,8 +326,43 @@ test('inspect and reconcile validate wait budgets and preserve exhausted waits',
   }
 });
 
+test('run and step failure paths reject malformed pointers without resending', async (context) => {
+  let document;
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  for (const failurePath of ['protected-field-canary', '#/field', '/~', '/~2', '/x~0~']) {
+    const run = { ...STATUS, failurePath };
+    const inspection = { ...INSPECTION, run };
+    const stepInspection = { ...INSPECTION, steps: [{ ...INSPECTION.steps[0], failurePath }] };
+    for (const [answer, call] of [
+      [run, () => client.start('token-canary', 'attempt-1', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} })],
+      [run, () => client.status('token-canary', RUN_ID)],
+      [run, () => client.cancel('token-canary', RUN_ID, 'response-lost')],
+      [inspection, () => client.inspect('token-canary', RUN_ID)],
+      [inspection, () => client.reconcile('token-canary', RUN_ID, 'response-lost')],
+      [{ runs: [run] }, () => client.list('token-canary', 1)],
+      [stepInspection, () => client.inspect('token-canary', RUN_ID)],
+      [stepInspection, () => client.reconcile('token-canary', RUN_ID, 'response-lost')],
+    ]) {
+      document = answer;
+      const before = requests.length;
+      await assert.rejects(call, (error) => {
+        assert.equal(error.kind, 'protocol');
+        assert.equal(error.protocolFailure, 'body');
+        assert.equal(error.status, 200);
+        assert.equal(error.outcomeUnknown, true);
+        assert.doesNotMatch(inspectValue(error), /protected-field-canary|token-canary/);
+        return true;
+      });
+      assert.equal(requests.length, before + 1);
+    }
+  }
+});
+
 test('a run and step status carry the failure path a refused call input names', async (context) => {
-  for (const [member, expected] of [['/recordId', '/recordId'], [null, null], [undefined, null]]) {
+  for (const member of ['/recordId', '', '/', '//', '/a~1b/~0c/~01', '/設備/line\nbreak/\u0000', `/${'x'.repeat(512)}`, null, undefined]) {
+    const expected = member ?? null;
     const run = { ...STATUS };
     const step = { ...INSPECTION.steps[0] };
     delete run.failurePath;

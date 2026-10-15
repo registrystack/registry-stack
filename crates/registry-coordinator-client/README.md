@@ -50,6 +50,8 @@ Presentation titles and descriptions do not change it. Exact package bytes have 
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
 Every returned run identity must be nonnil, and its deadline must follow its admission.
 Historical deadlines remain readable; this check does not compare them to the local clock.
+Run and step `failurePath` values preserve valid RFC 6901 pointers, including the empty
+root path. Validation checks their syntax without resolving them against omitted command data.
 Inspection requires `retryAllowed` to be true
 exactly when its blocking `reason` is null. Each wait has a minimum interval from 30 to
 86,400 seconds, a positive observation limit, and a count no greater than that limit.
