@@ -332,6 +332,61 @@ fn proposal_attachment_download_schema_requires_a_positive_u32_submission_versio
 }
 
 #[test]
+fn proposal_commands_declare_the_rejected_conflict_and_documents_require_turn() {
+    let model = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let openapi: serde_json::Value = serde_json::from_slice(
+        &model
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let mut commands = 0;
+    for (path, item) in openapi["paths"].as_object().unwrap() {
+        let Some(operation) = item.get("post") else {
+            continue;
+        };
+        let Some(command) = operation["operationId"]
+            .as_str()
+            .and_then(|id| id.strip_prefix("proposals."))
+        else {
+            continue;
+        };
+        if command == "start" {
+            continue;
+        }
+        commands += 1;
+        assert!(
+            operation["responses"]["409"]["description"].is_string(),
+            "{path} {command} declares 409"
+        );
+        let required = operation["responses"]["200"]["content"]["application/json"]["schema"]
+            ["required"]
+            .as_array()
+            .unwrap();
+        assert!(
+            required.iter().any(|name| name == "turn"),
+            "{path} {command} requires turn"
+        );
+    }
+    assert!(
+        commands >= 7,
+        "every Proposal command is checked: {commands}"
+    );
+    let list = &openapi["paths"]["/v1/proposals"]["get"];
+    let limit = list["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "limit")
+        .unwrap();
+    assert!(limit["description"]
+        .as_str()
+        .is_some_and(|text| text.contains("keep paging while `nextCursor` is present")));
+}
+
+#[test]
 fn explicit_automatic_application_has_a_bounded_revision_bound_system_grant() {
     use registry_breg::contract::parse_project_json;
     use serde_json::json;

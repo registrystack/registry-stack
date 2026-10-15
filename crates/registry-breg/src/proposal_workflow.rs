@@ -121,6 +121,7 @@ impl ProposalWorkflow {
         context: TrustedTransitionContext,
         proposal: PreparedProposal,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
         if self.state != ProposalState::Draft {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -2976,6 +2977,13 @@ mod source_owned_review_tests {
         );
         assert_eq!(
             rejected.clone().edit_draft(later.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            rejected
+                .clone()
+                .submit(later.clone(), proposal(required_review()))
+                .err(),
             Some(WorkflowError::Rejected)
         );
         assert_eq!(

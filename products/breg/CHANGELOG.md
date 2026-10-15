@@ -140,9 +140,11 @@
 - BREAKING: a Review that rejects a Proposal's current submission ends the
   Proposal. It moves to the terminal state `rejected` in the transaction that
   records the result, with a `rejected` lifecycle event whose `authorityKind`
-  is `review`. Edit, Revise, Rebase, Retry, Apply and Cancel answer 409
-  `proposal.rejected`, and each command link reads `review-rejected` with
-  recovery `receipt-only`.
+  is `review`. Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer
+  409 `proposal.rejected`, including after a package activation changes the
+  Action revision, and each command link reads `review-rejected` with
+  recovery `receipt-only`. The OpenAPI documents declare 409 on every
+  Proposal command.
   `applicationStatus.state` reads `rejected`. A changes-requested result keeps
   the Proposal `submitted` and revisable and records a `review-returned`
   event. Proposal `state`, event `transition` and `authorityKind`, and the
@@ -152,10 +154,11 @@
   the new values.
 - BREAKING: every Proposal document and lifecycle event carries `turn`:
   `party`, `official` or `nobody`, whose move the Proposal waits on, derived
-  when it is read and never stored. `turn` is required in the Proposal event
-  schema. `GET /v1/proposals?turn=party` (or `official`, `nobody`) lists only
+  when it is read and never stored. `turn` is required in the Proposal
+  document and Proposal event schemas. `GET /v1/proposals?turn=party` (or `official`, `nobody`) lists only
   Proposals with that turn, and `state=rejected` lists rejected ones; any
-  other value is concealed like every malformed list query.
+  other value is concealed like every malformed list query. A page may hold
+  fewer than `limit` items, so keep paging while `nextCursor` is present.
   The Rust `BRegProposalQuery` gains `turn`. Migration: a receiver that
   validates Proposal events against a pinned copy of the schema refreshes it.
 - Proposal Get, each Proposal in a list, and the per-version submission read

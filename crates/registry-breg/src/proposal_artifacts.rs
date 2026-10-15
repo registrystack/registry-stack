@@ -158,7 +158,11 @@ pub(crate) fn append_proposal_openapi(
                     "turn" => json!({"enum":["party","official","nobody"]}),
                     _ => json!({"type":"string"}),
                 };
-                parameters.push(json!({"name":name,"in":"query","schema":schema}));
+                let mut parameter = json!({"name":name,"in":"query","schema":schema});
+                if name == "limit" {
+                    parameter["description"] = json!("The most items a page holds. A page may hold fewer than `limit` items, so keep paging while `nextCursor` is present.");
+                }
+                parameters.push(parameter);
             }
             document["responses"]["200"]["content"]["application/json"]["schema"] = json!({"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","maxItems":100,"items":proposal_schema()},"nextCursor":{"type":"string"}}});
         } else if matches!(
@@ -279,8 +283,12 @@ fn operation_document(
         );
         parameters.push(json!({"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string"}}));
     }
-    json!({"operationId":id,"x-registry-accessProfiles":profiles,"parameters":parameters,
-        "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":proposal_schema()}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}})
+    let mut document = json!({"operationId":id,"x-registry-accessProfiles":profiles,"parameters":parameters,
+        "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":proposal_schema()}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}});
+    if method == "post" && !collection {
+        document["responses"]["409"] = json!({"description":"The Proposal was rejected, or the idempotency key was reused with a different request"});
+    }
+    document
 }
 
 fn review_document_schema(context: bool) -> Value {

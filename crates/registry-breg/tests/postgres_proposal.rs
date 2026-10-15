@@ -2287,6 +2287,67 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
 /// A rejection ends the Proposal: it reaches `rejected`, records its own
 /// event, and refuses Revise. A request for changes keeps it submitted and
 /// revisable and records `review-returned`.
+/// Posts every Proposal command through the link a rejected Proposal serves,
+/// as a client holding the inert link would, and checks each answers 409
+/// `proposal.rejected` with the detail naming how to try again.
+async fn post_every_command_to_a_rejected_proposal(
+    base_url: &str,
+    document: &Value,
+    input: &Value,
+    label: &str,
+) {
+    assert!(input.is_object(), "{label}: draft input: {input}");
+    let apply = json!({"submissionVersion":document["submissionVersion"],
+        "effectDigest":document["effectDigest"]});
+    for (command, body) in [
+        ("submit", json!({})),
+        ("edit", json!({"input":input})),
+        ("revise", json!({})),
+        ("rebase", json!({"input":input})),
+        ("apply", apply),
+        ("retry", json!({})),
+        ("cancel", json!({})),
+    ] {
+        let link = &document["links"][command];
+        assert_eq!(
+            link["availability"]["reason"], "review-rejected",
+            "{label}: {command}: {document}"
+        );
+        assert_eq!(link["availability"]["recovery"], "receipt-only");
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}{}",
+                base_url.trim_end_matches('/'),
+                link["path"].as_str().unwrap()
+            ))
+            .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+            .header("content-type", "application/json")
+            .header("if-match", link["ifMatch"].as_str().unwrap())
+            .header("idempotency-key", format!("{label}-{command}"))
+            .body(body.to_string())
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(
+            status,
+            reqwest::StatusCode::CONFLICT,
+            "{label}: {command}: {problem}"
+        );
+        assert_eq!(
+            problem["code"], "proposal.rejected",
+            "{label}: {command}: {problem}"
+        );
+        assert!(
+            problem["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("changes-requested")),
+            "{label}: {command}: {problem}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party() {
     for (outcome, state, transition, turn) in [
@@ -2303,6 +2364,10 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
             json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
         let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
         source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+        // The inputs are readable so the test can send a well-formed Edit or
+        // Rebase body to the rejected Proposal.
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+            json!(["target", "value"]);
         let review = std::sync::Arc::new(LocalReview {
             calls: 0.into(),
             mode: 0.into(),
@@ -2310,7 +2375,7 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
         });
         let injected = review.clone();
         let fixture = client_http::ClientFixture::start_with_mutations(
-            compile(source),
+            compile(source.clone()),
             claims("author", "zone-a"),
             move |mutations| {
                 mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
@@ -2319,6 +2384,13 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
         .await;
         let client = &fixture.http.client;
         let draft = start(&fixture, "Reviewed", &format!("{outcome}-start")).await;
+        let draft_input = json!(client
+            .read_proposal(&draft)
+            .await
+            .unwrap()
+            .value
+            .input()
+            .expect("readable draft input"));
         let submit = client
             .prepare_proposal(
                 &draft,
@@ -2477,34 +2549,61 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
                     .is_err(),
                 "the client offers no Revise of a rejected Proposal"
             );
-            // The server refuses the exact inert link too, naming the way to
-            // allow another attempt.
-            let wire = serde_json::to_value(fresh.link("revise").unwrap()).unwrap();
-            assert_eq!(wire["availability"]["reason"], "review-rejected");
-            assert_eq!(wire["availability"]["recovery"], "receipt-only");
-            let response = reqwest::Client::new()
-                .post(format!(
-                    "{}{}",
-                    fixture.http.base_url.trim_end_matches('/'),
-                    wire["path"].as_str().unwrap()
-                ))
-                .query(&[("accessProfile", wire["accessProfile"].as_str().unwrap())])
-                .header("content-type", "application/json")
-                .header("if-match", wire["ifMatch"].as_str().unwrap())
-                .header("idempotency-key", "rejected-revise")
-                .body("{}")
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
-            let problem: Value = response.json().await.unwrap();
-            assert_eq!(problem["code"], "proposal.rejected", "{problem}");
-            assert!(
-                problem["detail"]
-                    .as_str()
-                    .is_some_and(|detail| detail.contains("changes-requested")),
-                "{problem}"
-            );
+            // The server refuses every exact inert link too, naming the way
+            // to allow another attempt.
+            let wire = serde_json::to_value(&fresh).unwrap();
+            post_every_command_to_a_rejected_proposal(
+                &fixture.http.base_url,
+                &wire,
+                &draft_input,
+                "rejected-terminal",
+            )
+            .await;
+            // A package activation that changes the Action revision does not
+            // turn the final answer into a precondition failure.
+            #[cfg(feature = "tooling")]
+            {
+                let mut next = source.clone();
+                next["actions"][0]["execution"]["proposal"]["review"]["policy"]["digest"] =
+                    json!(format!("sha256:{}", "c".repeat(64)));
+                let (registry, identity) =
+                    proposal_activation::activate_successor(&fixture, &next).await;
+                let current = successor_client(&fixture, registry, identity).await;
+                let metadata = current
+                    .client
+                    .registry_contract(Some("clerk"))
+                    .await
+                    .unwrap();
+                let collection = metadata.value.select_proposals("clerk").unwrap();
+                let moved = current
+                    .client
+                    .list_proposals(&collection, &BRegProposalQuery::default())
+                    .await
+                    .unwrap()
+                    .value
+                    .items
+                    .into_iter()
+                    .find(|proposal| proposal.id() == submitted.id())
+                    .unwrap();
+                let wire = serde_json::to_value(&moved).unwrap();
+                assert_ne!(
+                    moved.action_revision(),
+                    metadata
+                        .value
+                        .select_action("correct-name", "clerk")
+                        .unwrap()
+                        .definition_revision(),
+                    "the activation changes the Action revision"
+                );
+                post_every_command_to_a_rejected_proposal(
+                    &current.base_url,
+                    &wire,
+                    &draft_input,
+                    "rejected-after-activation",
+                )
+                .await;
+                drop(current);
+            }
         }
         fixture.finish().await;
     }

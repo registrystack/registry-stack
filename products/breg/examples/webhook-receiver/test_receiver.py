@@ -70,7 +70,7 @@ class WebhookAcceptanceTests(unittest.TestCase):
 
     def event(self, event_id=None, generation=1, attempt=1, delivery_key=None, name="Contact"):
         event_id = event_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         source = "urn:registrystack:registry:example-registry:instance:local"
         schema = "urn:breg:event-schema:example-registry:contact:contact-created-v1:sha256:" + "a" * 64
         document = {
