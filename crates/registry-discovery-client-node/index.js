@@ -783,5 +783,4 @@ module.exports.renewUnchangedSelection = nativeBinding.renewUnchangedSelection
 module.exports.selectEvidenceAlternative = nativeBinding.selectEvidenceAlternative
 module.exports.selectEvidenceService = nativeBinding.selectEvidenceService
 module.exports.selectExact = nativeBinding.selectExact
-module.exports.validateSelection = nativeBinding.validateSelection
 module.exports.validateSelectionStructure = nativeBinding.validateSelectionStructure

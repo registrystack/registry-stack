@@ -27,6 +27,4 @@ export declare function selectEvidenceService(response: any, request: any): any
 
 export declare function selectExact(response: any, request: any): any
 
-export declare function validateSelection(selection: any): any
-
 export declare function validateSelectionStructure(selection: any): any

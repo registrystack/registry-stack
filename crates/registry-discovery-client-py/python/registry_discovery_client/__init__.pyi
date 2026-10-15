@@ -205,9 +205,6 @@ def select_evidence_service(
 def validate_selection_structure(selection: _SelectionT) -> _SelectionT:
     """Validate closed shape and capability binding, not trust or currentness."""
     ...
-def validate_selection(selection: _SelectionT) -> _SelectionT:
-    """Deprecated compatibility alias for validate_selection_structure."""
-    ...
 def accept_selection(
     selection: _SelectionT,
     accepts: Callable[[_SelectionT], bool],

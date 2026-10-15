@@ -51,7 +51,6 @@ def main() -> None:
         "accept_selection",
         "renew_unchanged_selection",
         "select_exact",
-        "validate_selection",
         "validate_selection_structure",
     }:
         if not callable(getattr(client_module, name, None)):
@@ -69,10 +68,10 @@ def main() -> None:
         raise SystemExit("the selection did not remain serializable")
 
     structurally_valid = client_module.validate_selection_structure(selection)
-    if client_module.validate_selection(selection) != structurally_valid:
-        raise SystemExit(
-            "the legacy validation name is not a structural compatibility alias"
-        )
+    if structurally_valid != selection:
+        raise SystemExit("structural validation changed the selection")
+    if hasattr(client_module, "validate_selection"):
+        raise SystemExit("the ambiguous validation alias must not be exported")
 
     local_acceptance_calls = 0
 
