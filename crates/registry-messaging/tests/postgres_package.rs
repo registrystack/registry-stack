@@ -3,7 +3,8 @@
 //! Database-backed activation tests: `messagingctl plan` previews and
 //! `messagingctl apply` records a package, the runtime serves only the
 //! package the shared ledger names active, `package.expectedDigest` pins it,
-//! and a template version renders the same bytes across an upgrade.
+//! and unchanged template content renders the same bytes when an upgrade adds
+//! a later version.
 //!
 //! Every test runs in its own schema inside the database named by
 //! `MESSAGING_TEST_DATABASE_URL`. A test binary that passes because its
@@ -700,11 +701,10 @@ async fn a_pinned_digest_must_match_the_package_before_any_ledger_write() {
     assert_eq!(isolated.ledger().await, [digest]);
 }
 
-/// A template version is immutable content: once a package ships it, an
-/// upgrade that adds a later version must not change what the earlier one
-/// renders, while the ledger keeps both packages in order. Dispatch extends
-/// this by asserting that a message accepted under version 1 still carries
-/// these bytes.
+/// Adding version 2 while leaving version 1's content unchanged preserves
+/// version 1's rendered bytes, while the ledger keeps both packages in order.
+/// Dispatch separately asserts that a message accepted under version 1 keeps
+/// its accepted bytes.
 #[tokio::test]
 async fn a_template_version_renders_the_same_bytes_across_a_package_upgrade() {
     let isolated = isolated_schema().await;

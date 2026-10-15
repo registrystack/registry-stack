@@ -1,18 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 --
--- The Messaging schema: the package ledger, accepted messages, their
--- dispatch jobs, their attempts and delivery receipts, the idempotency
--- records of their submissions, and their bounded retention state.
-
--- The package ledger: one row for each package a deployment activated, in
--- activation order. The digest is the package identity the runtime verified;
--- the runtime version is the binary that activated it.
-CREATE TABLE legacy_messaging_package_ledger (
-    sequence bigint CONSTRAINT messaging_package_ledger_sequence_not_null NOT NULL GENERATED ALWAYS AS IDENTITY CONSTRAINT messaging_package_ledger_pkey PRIMARY KEY,
-    package_digest text CONSTRAINT messaging_package_ledger_package_digest_not_null NOT NULL CONSTRAINT messaging_package_ledger_package_digest_check CHECK (package_digest ~ '^sha256:[0-9a-f]{64}$'),
-    runtime_version text CONSTRAINT messaging_package_ledger_runtime_version_not_null NOT NULL CONSTRAINT messaging_package_ledger_runtime_version_check CHECK (length(runtime_version) BETWEEN 1 AND 64),
-    activated_at timestamptz CONSTRAINT messaging_package_ledger_activated_at_not_null NOT NULL
-);
+-- The Messaging schema: accepted messages, their dispatch jobs, their
+-- attempts and delivery receipts, the idempotency records of their
+-- submissions, and their bounded retention state.
 
 -- A message row carries what the status route, the worker's policy, and
 -- the audit may read: never the recipient, the rendered content, or the
