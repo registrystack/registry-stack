@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- BREAKING: reminder events are delivered as the shared hook envelope that
+  appointment observers receive, so a receiver parses one envelope. The body
+  drops `specversion`; `source` is `urn:registrystack:scheduling:<id>`;
+  `time` is UTC at millisecond precision; it adds `subject` (the appointment's
+  record reference and revision), a per-purpose `dataschema`, and a root
+  `causation`. The request `content-type` is `application/json` (was
+  `application/cloudevents+json`). Migration: parse reminder bodies as the
+  hook envelope the Events and observers section of the README describes.
+
+- BREAKING: `authentication.oidc.scopeClaim` defaults to `scope` (was
+  `registry_scopes`) and `readsScope` to `scheduling:read` (was
+  `scheduling-read`), the values every maintained example sets. A read or
+  explain refusal for a missing scope logs the claim and scope it expected.
+  Migration: a deployment whose issuer emits `registry_scopes` or the
+  `scheduling-read` scope sets `scopeClaim` and `readsScope` explicitly.
+
+- Appointment observers read their allowed projection fields from the
+  policy model instead of a second copy in the runtime.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

@@ -153,11 +153,9 @@ for a loopback host under development loopback. `type: static` with
 `documentRef` reads a pinned key set, which does no rotation of its own:
 rolling a key means replacing the referenced document and restarting
 Scheduling. The removed `jwksUri` key is refused with a diagnostic naming
-`jwksSource` `type: uri` as its replacement. `scopeClaim` defaults to `registry_scopes` for compatibility with
-existing deployments; stock ThunderID emits `scope`, so the maintained example
-and `schedulingctl init` set that explicit override. `readsScope` defaults to
-`scheduling-read` and `explainScope` to `scheduling-explain`; the two must
-differ, because the explain path can name member-level causes the public
+`jwksSource` `type: uri` as its replacement. `scopeClaim` defaults to `scope`,
+the claim stock ThunderID emits. `readsScope` defaults to `scheduling:read`
+and `explainScope` to `scheduling-explain`; the two must differ, because the explain path can name member-level causes the public
 availability read never discloses. `allowedClients` lists the exact client ids
 the runtime admits, and every file writes it, development loopback included:
 a list of at least one distinct client. An omitted member, an empty list, and
@@ -167,9 +165,9 @@ admit every client the issuer verifies, including an application in the same
 realm that has nothing to do with booking, is a startup refusal in every mode
 (`scheduling.runtime.allowed-clients-required`), because a development file
 is copied toward production.
-The native Casework exchange example uses the issuer-compatible
-`scheduling:read` handle and therefore explicitly sets
-`readsScope: scheduling:read`; the compatibility default remains unchanged.
+A read or explain request whose token lacks the required scope is refused
+with `profile.not-authorized`, and the runtime logs, at `info`, the claim it
+read, the scope it expected, and the two keys that select them.
 
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange

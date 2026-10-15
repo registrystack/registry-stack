@@ -494,7 +494,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         scheme = self.openapi["components"]["securitySchemes"]["bearerAuth"]
         self.assertEqual({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
                          {key: scheme[key] for key in ("type", "scheme", "bearerFormat")})
-        self.assertIn("scheduling-read", scheme["description"])
+        self.assertIn("scheduling:read", scheme["description"])
         self.assertIn("scheduling-explain", scheme["description"])
         self.assertIn("no scope", scheme["description"])
         self.assertIn("complete task grant", scheme["description"])

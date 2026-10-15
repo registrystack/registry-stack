@@ -1129,3 +1129,41 @@ authenticated caller that repeats it costs one bounded indexed lookup and its
 audit records per request. This is accepted rather than given a read budget:
 an operator bounds an authenticated flood at the deployment's ingress, as for
 every other route.
+
+## Scope defaults follow the maintained examples
+
+Threat: an operator who omits `authentication.oidc.scopeClaim` or `readsScope`
+gets a deployment that refuses every read its issuer's tokens were meant to
+authorize, and nothing says why, so the fix that gets reached for is the
+widest one at hand.
+
+`scopeClaim` defaults to `scope` and `readsScope` to `scheduling:read`, the
+values every maintained example, template, and native exchange already set
+explicitly. `explainScope` keeps `scheduling-explain`, and the rule that the
+explain scope differs from the read scope is unchanged. A deployment that
+relied on the earlier defaults (`registry_scopes`, `scheduling-read`) now
+fails closed: its readers receive `403 profile.not-authorized` until the file
+names the claim and scope its issuer emits. No token gains a route it did not
+have, because the change selects which single claim and scope are read and
+never widens the match.
+
+A read or explain refusal for a missing scope logs one `info` line naming the
+claim read, the scope expected, and the keys that select them. The line
+carries configuration values only, never the caller's scopes, subject, or
+token; the HTTP answer is unchanged and value-free. Tests:
+`a_development_configuration_loads_and_exposes_its_defaults` pins the
+defaults, `a_scope_refusal_names_the_expected_claim_scope_and_keys` pins the
+sentence, and the existing profile-refusal tests in `auth.rs` still hold.
+
+## Reminder events use the shared hook envelope
+
+A reminder intent is delivered as the shared hook envelope observers receive,
+with `content-type: application/json`. The envelope adds the appointment
+record reference and revision as `subject` and a per-purpose `dataschema`; the
+appointment identifier was already in `data`, so nothing new is disclosed.
+`data` is the payload the runtime committed, unchanged. Authentication is
+unchanged too: the optional bearer credential
+`destinations.reminders.bearerTokenRef` names, and no delivery signature. A
+receiver that needs to authenticate the sender relies on that bearer and on
+TLS. `a_due_intent_renders_as_the_shared_hook_envelope` and the PostgreSQL
+dispatch test pin the shape on the wire.

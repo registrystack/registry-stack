@@ -143,7 +143,7 @@ path, and a task grant does not thereby gain a catalogue read.
 
 | Profile | Routes | The token must carry |
 | --- | --- | --- |
-| Catalogue read | `/v1/scheduling`, `/v1/services`, `/v1/offerings`, `/v1/resources`, `/v1/locations`, `/v1/availability`, owned appointments listed by external reference, one appointment read, its history | The configured read scope, `scheduling-read` by default, in `registry_scopes` |
+| Catalogue read | `/v1/scheduling`, `/v1/services`, `/v1/offerings`, `/v1/resources`, `/v1/locations`, `/v1/availability`, owned appointments listed by external reference, one appointment read, its history | The configured read scope, `scheduling:read` by default, in the configured scope claim, `scope` by default |
 | Explain | `/v1/availability/explain` | The separately configured explain scope, `scheduling-explain` by default, which is never the read scope |
 | Commitment | Hold create and release, appointment create, reschedule, cancel | A complete task grant; no product scope |
 

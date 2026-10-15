@@ -346,12 +346,13 @@
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
         "readsScope": {
-          "default": "scheduling-read",
+          "default": "scheduling:read",
           "description": "The scope every listing and availability read requires.",
           "type": "string"
         },
         "scopeClaim": {
-          "default": "registry_scopes",
+          "default": "scope",
+          "description": "The claim carrying the accepted OAuth scopes.",
           "type": "string"
         }
       },

@@ -354,6 +354,7 @@ pub struct OidcConfig {
     #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
     pub clients: OidcClientsConfig,
+    /// The claim carrying the accepted OAuth scopes.
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
     /// The scope every listing and availability read requires.
@@ -370,10 +371,10 @@ pub struct OidcConfig {
 const SCHEDULING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
 fn default_scope_claim() -> String {
-    "registry_scopes".to_owned()
+    "scope".to_owned()
 }
 fn default_reads_scope() -> String {
-    "scheduling-read".to_owned()
+    "scheduling:read".to_owned()
 }
 fn default_explain_scope() -> String {
     "scheduling-explain".to_owned()
@@ -1895,8 +1896,8 @@ holdPolicy:
         let (_, document) = development(root.path());
         let config = RuntimeConfig::load(write_operator(root.path(), document))
             .expect("configuration is accepted");
-        assert_eq!(config.authentication.oidc.scope_claim, "registry_scopes");
-        assert_eq!(config.authentication.oidc.reads_scope, "scheduling-read");
+        assert_eq!(config.authentication.oidc.scope_claim, "scope");
+        assert_eq!(config.authentication.oidc.reads_scope, "scheduling:read");
         assert_eq!(
             config.authentication.oidc.explain_scope,
             "scheduling-explain"
@@ -2553,7 +2554,7 @@ holdPolicy:
         for (member, patch, code, pointer) in [
             (
                 "oidc",
-                serde_json::json!({"explainScope": "scheduling-read"}),
+                serde_json::json!({"explainScope": "scheduling:read"}),
                 "scheduling.runtime.invalid-oidc-claim",
                 "/authentication/oidc/explainScope",
             ),

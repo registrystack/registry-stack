@@ -34,10 +34,10 @@ a Docker container (migrations are applied and the data is replaced).
 There is no auth-free mode. The script generates a throwaway RSA key pair,
 publishes the public half as the static JWKS document the runtime
 configuration points at, and signs RFC 9068 access tokens (`typ: at+jwt`)
-for three demo callers. Reads carry the `scheduling-read` scope; bookings
-carry no product scope but a complete task grant whose `scheduling`
-permissions name the offering's service, location, and action, which the
-runtime re-checks inside the capacity transaction. Nothing in the run
+for three demo callers. Reads carry the `scheduling:read` scope in the
+`scope` claim; bookings carry no product scope but a complete task grant
+whose `scheduling` permissions name the offering's service, location, and
+action, which the runtime re-checks inside the capacity transaction. Nothing in the run
 directory is a credential beyond the throwaway key pair, and the key pair
 never leaves the run directory.
 

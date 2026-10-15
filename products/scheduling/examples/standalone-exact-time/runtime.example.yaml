@@ -73,11 +73,10 @@ authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:scheduling
-    # The claim carrying the accepted OAuth scopes. The default is
-    # `registry_scopes` for deployments that omit this field; stock ThunderID
-    # emits `scope`.
+    # The claim carrying the accepted OAuth scopes. The default is `scope`,
+    # the claim stock ThunderID emits.
     scopeClaim: scope
-    # The read scope defaults to `scheduling-read` and the explain scope to
+    # The read scope defaults to `scheduling:read` and the explain scope to
     # `scheduling-explain`; the two must differ. `allowedClients` names the
     # client ids the runtime admits. It is required in every file, development
     # loopback included: an omitted or empty list is refused when the file is
