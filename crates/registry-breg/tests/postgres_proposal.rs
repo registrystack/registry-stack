@@ -1242,6 +1242,47 @@ async fn cancel_closes_the_queued_automatic_application_job() {
     fixture.finish().await;
 }
 
+/// Revise closes the superseded version's queued automatic application job,
+/// which the worker could otherwise never claim again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revise_closes_the_superseded_versions_queued_automatic_application_job() {
+    let fixture = client_http::ClientFixture::start(
+        compile(registry_source(true)),
+        claims("author", "zone-a"),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Revised", "revise-job-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("revise-job-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let job_states = || async {
+        fixture
+            .database
+            .admin
+            .query(
+                "SELECT submission_version, state
+                 FROM registry_internal.registry_proposal_application_jobs
+                 ORDER BY submission_version",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.get::<_, i64>(0), row.get::<_, String>(1)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(job_states().await, [(1, "queued".to_owned())]);
+    let revise = client
+        .prepare_proposal(&submitted, "revise", json!({}), &key("revise-job-revise"))
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    assert_eq!(revised.state(), BRegProposalState::Draft);
+    assert_eq!(job_states().await, [(1, "cancelled".to_owned())]);
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_automatic_uses_current_builtin_grant_and_one_atomic_receipt() {
     let mut source = registry_source(true);

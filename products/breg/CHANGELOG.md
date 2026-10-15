@@ -78,9 +78,10 @@
   `revise`. `applicationStatus.recovery` no longer lists the never-emitted
   `terminal`. The Rust, Node.js and Python clients and the generated project
   SDKs accept the new values; update clients with the server.
-- Cancel closes the Proposal's queued, applying or blocked automatic
-  application job in its own transaction, so the job reads `cancelled` instead
-  of remaining inert queued work. Installation widens the job state check on
+- Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
+  queued, applying or blocked automatic application job in the same
+  transaction, so the job reads `cancelled` instead of remaining inert queued
+  work the worker can never claim. Installation widens the job state check on
   an existing database.
 - The Python client exposes `verify_webhook_delivery`, the shared Rust webhook
   verifier the Node client already offers, with keyword-only `method`, `path`,

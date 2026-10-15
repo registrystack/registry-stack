@@ -1682,8 +1682,9 @@ pub(crate) async fn enqueue_submission(
     Ok(())
 }
 
-/// Close every unapplied application job of a Proposal being cancelled, in
-/// the Cancel transaction. A closed job is never claimed or recovered again.
+/// Close every unapplied application job of a Proposal being cancelled, or
+/// whose submitted version is being revised or rebased, in that lifecycle
+/// transaction. A closed job is never claimed or recovered again.
 pub(crate) async fn close_application_jobs(
     transaction: &Transaction<'_>,
     action_id: &str,
