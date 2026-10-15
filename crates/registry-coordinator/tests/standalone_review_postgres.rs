@@ -38,8 +38,10 @@ fn result(status: &str) -> Value {
     let accepted = accepted();
     let mut result = json!({"requestId":REQUEST,"resultId":RESULT,"subject":accepted["subject"],"policy":accepted["policy"],"submissionDigest":accepted["submissionDigest"],
         "status":status,"completedAt":"2026-10-14T00:00:00Z","availableUntil":"2026-11-14T00:00:00Z"});
-    if status == "rejected" {
-        result["outcome"] = json!("notice-not-approved");
+    match status {
+        "approved" => result["outcome"] = json!("approved"),
+        "rejected" => result["outcome"] = json!("notice-not-approved"),
+        _ => {}
     }
     result
 }
