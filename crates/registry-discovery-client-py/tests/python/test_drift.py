@@ -32,7 +32,6 @@ RUNTIME_FUNCTION_NAMES = {
     "select_evidence_alternative",
     "select_evidence_service",
     "select_exact",
-    "validate_selection",
     "validate_selection_structure",
 }
 RUNTIME_NAMES = RUNTIME_CLASS_NAMES | RUNTIME_FUNCTION_NAMES
@@ -158,16 +157,11 @@ class DriftTest(unittest.TestCase):
         self.assertEqual(accepted.endpoint_url, selection["endpointUrl"])
         self.assertEqual(accepted.selection, selection)
 
-    def test_structural_validation_alias_and_renewal_are_live_and_typed(self) -> None:
+    def test_structural_validation_and_renewal_are_live_and_typed(self) -> None:
+        self.assertFalse(hasattr(discovery, "validate_selection"))
+        self.assertNotIn("validate_selection", self.stub_functions)
         selection = discovery.select_exact(RESPONSE, REQUEST)
-        self.assertEqual(
-            discovery.validate_selection(selection),
-            discovery.validate_selection_structure(selection),
-        )
-        legacy_docstring = ast.get_docstring(self.stub_functions["validate_selection"])
-        self.assertIsNotNone(legacy_docstring)
-        self.assertIn("Deprecated", legacy_docstring)
-        self.assertIn("Deprecated", discovery.validate_selection.__doc__)
+        self.assertEqual(discovery.validate_selection_structure(selection), selection)
 
         current = {
             **selection,

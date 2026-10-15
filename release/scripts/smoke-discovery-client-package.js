@@ -11,7 +11,6 @@ const {
   acceptSelection,
   renewUnchangedSelection,
   selectExact,
-  validateSelection,
   validateSelectionStructure,
 } = discovery;
 
@@ -22,7 +21,6 @@ for (const name of [
   'acceptSelection',
   'renewUnchangedSelection',
   'selectExact',
-  'validateSelection',
   'validateSelectionStructure',
 ]) {
   assert.strictEqual(typeof discovery[name], 'function', `the package must export ${name}`);
@@ -71,11 +69,8 @@ assert.deepStrictEqual(selectExact(response, request).matchedCapability, request
 assert.strictEqual(plainJson(selection).recordId, 'record-a');
 
 const structurallyValid = validateSelectionStructure(selection);
-assert.deepStrictEqual(
-  validateSelection(selection),
-  structurallyValid,
-  'the legacy validation name must remain a structural compatibility alias',
-);
+assert.deepStrictEqual(structurallyValid, selection);
+assert.strictEqual(Object.hasOwn(discovery, 'validateSelection'), false);
 
 let localAcceptanceCalls = 0;
 const accepted = acceptSelection(structurallyValid, (candidate) => {

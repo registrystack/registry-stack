@@ -12,9 +12,14 @@ const {
   renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
-  validateSelection,
   validateSelectionStructure,
 } = require('../client');
+
+test('structural validation exports only the canonical name', () => {
+  assert.equal(Object.hasOwn(require('../client'), 'validateSelection'), false);
+  assert.equal(Object.hasOwn(require('../index'), 'validateSelection'), false);
+  assert.equal(typeof validateSelectionStructure, 'function');
+});
 
 function withDerivedBindingId(value) {
   const identity = {
@@ -177,7 +182,6 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
     { kind: 'evidence-type', id: 'urn:example:evidence-type' },
   );
   assert.equal(validateSelectionStructure(selection).recordId, 'record-a');
-  assert.equal(validateSelection(selection).recordId, 'record-a');
 
   await new Promise((resolve) => server.close(resolve));
   assert.equal(JSON.parse(JSON.stringify(selection)).recordId, 'record-a');

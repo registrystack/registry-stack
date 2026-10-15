@@ -407,15 +407,6 @@ fn validate_selection_structure<'py>(
     rust_to_python(py, &selection)
 }
 
-/// Deprecated compatibility alias for structural validation.
-#[pyfunction]
-fn validate_selection<'py>(
-    py: Python<'py>,
-    selection: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    validate_selection_structure(py, selection)
-}
-
 #[pyfunction]
 fn renew_unchanged_selection<'py>(
     py: Python<'py>,
@@ -626,7 +617,6 @@ pub fn registry_discovery_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(select_evidence_alternative, module)?)?;
     module.add_function(wrap_pyfunction!(select_evidence_service, module)?)?;
     module.add_function(wrap_pyfunction!(validate_selection_structure, module)?)?;
-    module.add_function(wrap_pyfunction!(validate_selection, module)?)?;
     module.add_function(wrap_pyfunction!(renew_unchanged_selection, module)?)?;
     module.add_function(wrap_pyfunction!(accept_selection, module)?)?;
     module.add(

@@ -169,9 +169,6 @@ export function selectEvidenceService(
  */
 export function validateSelectionStructure<T extends CommonServiceSelection>(selection: T): T;
 
-/** @deprecated Use validateSelectionStructure. This operation is structural, not trust. */
-export function validateSelection<T extends CommonServiceSelection>(selection: T): T;
-
 export class AcceptedServiceSelection<T extends CommonServiceSelection> {
   private constructor();
   private readonly __acceptedServiceSelectionBrand: void;
