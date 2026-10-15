@@ -362,12 +362,7 @@ impl AccessProfiles {
             .and_then(|client| self.by_client.get(client))
             .and_then(|id| self.profiles.get(id))
             .ok_or(AccessRefusal::Profile)?;
-        let scopes: BTreeSet<&str> = token.scopes.iter().map(String::as_str).collect();
-        if !profile
-            .required_scopes
-            .iter()
-            .all(|scope| scopes.contains(scope.as_str()))
-        {
+        if first_missing_scope(profile, token).is_some() {
             return Err(AccessRefusal::Profile);
         }
         // A malformed actor-kind claim is a malformed credential whatever the
@@ -406,6 +401,42 @@ impl AccessProfiles {
             profile: profile.clone(),
         })
     }
+
+    /// The first scope the token's client profile requires and the token
+    /// does not carry. `None` when the client resolves no profile, or when the
+    /// token carries every scope its profile requires. Both values come from
+    /// the deployment's configuration, never from the token, so a refusal log
+    /// may name them.
+    #[must_use]
+    pub fn missing_scope(&self, token: &VerifiedTokenFacts<'_>) -> Option<MissingScope<'_>> {
+        let profile = token
+            .client_id
+            .and_then(|client| self.by_client.get(client))
+            .and_then(|id| self.profiles.get(id))?;
+        first_missing_scope(profile, token).map(|scope| MissingScope {
+            profile: &profile.id,
+            scope,
+        })
+    }
+}
+
+/// A scope an access profile requires that a verified token lacks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MissingScope<'a> {
+    pub profile: &'a str,
+    pub scope: &'a str,
+}
+
+fn first_missing_scope<'a>(
+    profile: &'a AccessProfile,
+    token: &VerifiedTokenFacts<'_>,
+) -> Option<&'a str> {
+    let scopes: BTreeSet<&str> = token.scopes.iter().map(String::as_str).collect();
+    profile
+        .required_scopes
+        .iter()
+        .map(String::as_str)
+        .find(|scope| !scopes.contains(scope))
 }
 
 fn check_profile(profile: &AccessProfile) -> Result<(), AccessProfileError> {
@@ -691,6 +722,31 @@ mod tests {
             profiles().resolve(&Token::standing("clinic-backend", &[]).facts()),
             Err(AccessRefusal::Profile)
         );
+    }
+
+    #[test]
+    fn a_missing_scope_names_the_profile_and_the_first_scope_the_token_lacks() {
+        let mut two_scopes = sender("clinic-reminders", "clinic-backend");
+        two_scopes.required_scopes = vec!["messaging-send".to_owned(), "messaging-read".to_owned()];
+        let profiles = AccessProfiles::new(vec![two_scopes]).unwrap();
+        assert_eq!(
+            profiles.missing_scope(&Token::standing("clinic-backend", &["messaging-send"]).facts()),
+            Some(MissingScope {
+                profile: "clinic-reminders",
+                scope: "messaging-read",
+            })
+        );
+        assert_eq!(
+            profiles.missing_scope(&Token::standing("clinic-backend", &[]).facts()),
+            Some(MissingScope {
+                profile: "clinic-reminders",
+                scope: "messaging-send",
+            })
+        );
+        let holding = Token::standing("clinic-backend", &["messaging-read", "messaging-send"]);
+        assert_eq!(profiles.missing_scope(&holding.facts()), None);
+        let unlisted = Token::standing("unlisted-client", &[]);
+        assert_eq!(profiles.missing_scope(&unlisted.facts()), None);
     }
 
     #[test]

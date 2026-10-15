@@ -28,7 +28,7 @@ mod settings;
 #[cfg(test)]
 pub(crate) mod stub;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};

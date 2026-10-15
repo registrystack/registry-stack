@@ -1126,3 +1126,14 @@ runtime, so only tokens minted for it qualify; an issuer that puts different
 scopes in the two claims should name `scopeClaim` explicitly.
 `shared_runtime_configuration_blocks_use_the_platform_contract` in
 `config.rs` pins the default.
+
+A refusal because the token lacks a scope its access profile requires logs one
+`info` line naming the configured `scopeClaim`, the first missing scope, and
+the access profile, all deployment configuration, so an operator caught by the
+changed default can see which claim was read. The line carries no token
+contents: not the credential, the scopes it does carry, its client, or its
+subject. A refusal for any other reason (an unlisted client, an actor kind the
+profile does not admit) logs no scope line.
+`a_scope_refusal_logs_the_expected_claim_and_scope_and_no_token_contents` and
+`an_actor_kind_refusal_logs_no_scope_advice` in `auth.rs` capture the log and
+pin both.
