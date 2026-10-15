@@ -64,7 +64,9 @@ fn authored(file: &Path) -> Result<Value> {
         .to_json_value())
 }
 fn write(file: &Path, value: &Value) -> Result<()> {
-    fs::write(file, serde_json::to_vec_pretty(value)?)?;
+    let original = read_source(file)?;
+    let bytes = super::super::prepare_source::yaml_with_comments(value, &original)?;
+    fs::write(file, bytes)?;
     Ok(())
 }
 
@@ -550,6 +552,77 @@ fn task_matches(task: &Value, proposal: &ProposalCapture) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_review_yaml_keeps_schema_hints_notes_and_bindings() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().canonicalize().unwrap();
+        let fixtures: [(&str, &[u8]); 3] = [
+            (
+                "breg-dev-clients.yaml",
+                include_bytes!("../../../../../products/breg/examples/facility/dev-clients.yaml"),
+            ),
+            (
+                "casework-dev-clients.yaml",
+                include_bytes!(
+                    "../../../../../products/casework/examples/canonical-review/dev-clients.yaml"
+                ),
+            ),
+            (
+                "casework.yaml",
+                include_bytes!(
+                    "../../../../../products/casework/examples/canonical-review/casework.yaml"
+                ),
+            ),
+        ];
+        for (name, bytes) in fixtures {
+            fs::write(directory.join(name), bytes).unwrap();
+        }
+        let breg_file = directory.join(fixtures[0].0);
+        let casework_file = directory.join(fixtures[1].0);
+        let project_file = directory.join(fixtures[2].0);
+        let mut breg = authored(&breg_file).unwrap();
+        let mut casework = authored(&casework_file).unwrap();
+        let mut project = authored(&project_file).unwrap();
+        let original_project = project.clone();
+        local_clients(&mut breg, &mut casework, "http://127.0.0.1:28096/").unwrap();
+        bind_producer(
+            &mut project,
+            &json!({"issuer":"http://127.0.0.1:28093", "subject":"owner-requester"}),
+        )
+        .unwrap();
+        for (file, value) in [
+            (&breg_file, &breg),
+            (&casework_file, &casework),
+            (&project_file, &project),
+        ] {
+            let original = fs::read_to_string(file).unwrap();
+            write(file, value).unwrap();
+            let rendered = fs::read_to_string(file).unwrap();
+            assert!(rendered.starts_with(original.lines().next().unwrap()));
+            assert!(rendered.starts_with("# yaml-language-server: $schema="));
+            assert!(rendered.contains("\napiVersion: "));
+            assert_eq!(authored(file).unwrap(), *value);
+            for comment in original.lines().filter(|line| line.trim().starts_with('#')) {
+                assert!(rendered.lines().any(|line| line.trim() == comment.trim()));
+            }
+        }
+        config::clients("dev-clients.yaml", &fs::read(&breg_file).unwrap()).unwrap();
+        assert_eq!(breg["reviewAuthorities"]["casework"]["client"], "requester");
+        assert_eq!(
+            project["reviewPolicies"],
+            original_project["reviewPolicies"]
+        );
+        assert_eq!(
+            project["contextProviders"],
+            original_project["contextProviders"]
+        );
+        assert_eq!(
+            project["trustedProducers"][0],
+            original_project["trustedProducers"][0]
+        );
+        assert_eq!(fs::read_dir(directory).unwrap().count(), fixtures.len());
+    }
 
     #[test]
     fn observation_retries_only_an_explicit_pending_state() {

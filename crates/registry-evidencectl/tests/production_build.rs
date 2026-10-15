@@ -757,17 +757,16 @@ fn a_missing_target_public_key_refuses_production_check_before_delegation() {
 #[test]
 fn invalid_target_scalars_refuse_check_and_package_without_effects() {
     for (pointer, invalid) in [
-        ("/package/expectedDigest", "production-build-secret-canary"),
-        ("/service/issuer", "relative-issuer"),
-        (
-            "/subjectBinding/secretRef",
-            "production-build-secret-canary",
-        ),
-        ("/audit/hashKeyRef", "secret:file/../escape"),
+        ("/package/expectedDigest", json!(SECRET_CANARY)),
+        ("/service/issuer", json!("relative-issuer")),
+        ("/subjectBinding/secretRef", json!(SECRET_CANARY)),
+        ("/audit/hashKeyRef", json!("secret:file/../escape")),
         (
             "/connections/registry-http/authentication/tokenRef",
-            "production-build-secret-canary",
+            json!(SECRET_CANARY),
         ),
+        ("/assuranceProfile", json!([SECRET_CANARY])),
+        ("/service/issuer", json!({"private": SECRET_CANARY})),
     ] {
         let fixture = Fixture::new();
         edit_json(&fixture.target, |target| {
@@ -779,21 +778,29 @@ fn invalid_target_scalars_refuse_check_and_package_without_effects() {
         });
         let target_before = fs::read(&fixture.target).unwrap();
         let project_before = snapshot(&fixture.project);
-        for output in [fixture.check_production("json"), fixture.package("json")] {
-            assert_failed(&output, "invalid typed target scalar");
-            assert_value_free(&output);
-            let report: Value =
-                serde_json::from_slice(&output.stdout).expect("JSON refusal report");
-            let diagnostics = report["diagnostics"].as_array().unwrap();
-            assert!(
-                diagnostics.iter().any(|diagnostic| {
-                    let Some(path) = diagnostic["path"].as_str() else {
-                        return false;
-                    };
-                    path == pointer || path.ends_with(&format!("target.yaml:{pointer}"))
-                }),
-                "{report}"
-            );
+        for format in ["human", "json"] {
+            for output in [
+                fixture.check_production(format),
+                fixture.explain_project(format, &fixture.target),
+                fixture.package(format),
+            ] {
+                assert_failed(&output, "invalid typed target scalar");
+                assert_value_free(&output);
+                if format == "json" {
+                    let report: Value =
+                        serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+                    let diagnostics = report["diagnostics"].as_array().unwrap();
+                    assert!(
+                        diagnostics.iter().any(|diagnostic| {
+                            let Some(path) = diagnostic["path"].as_str() else {
+                                return false;
+                            };
+                            path == pointer || path.ends_with(&format!("target.yaml:{pointer}"))
+                        }),
+                        "{report}"
+                    );
+                }
+            }
         }
         assert!(
             fixture.invocations().is_empty(),
@@ -802,6 +809,108 @@ fn invalid_target_scalars_refuse_check_and_package_without_effects() {
         assert!(!fixture.output.exists());
         assert_eq!(fs::read(&fixture.target).unwrap(), target_before);
         assert_eq!(snapshot(&fixture.project), project_before);
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
+fn production_check_refuses_local_assurance_without_creating_local_secrets() {
+    let fixture = Fixture::new();
+    fixture.use_default_local_signer();
+    let target_before = snapshot(fixture.target.parent().unwrap());
+    let project_before = snapshot(&fixture.project);
+
+    for format in ["human", "json"] {
+        let output = fixture.check_production(format);
+        assert_failed(&output, "production check of a local target");
+        assert_eq!(output.status.code(), Some(1));
+        assert_value_free(&output);
+        let diagnostic = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostic.contains("--production requires production or evidence-grade"),
+            "{diagnostic}"
+        );
+        if format == "json" {
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                "evidence.target.production-assurance-required"
+            );
+            assert!(report["diagnostics"][0]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("target.yaml:/assuranceProfile"));
+        }
+    }
+
+    assert!(fixture.invocations().is_empty());
+    assert!(!fixture.output.exists());
+    assert_eq!(snapshot(fixture.target.parent().unwrap()), target_before);
+    assert_eq!(snapshot(&fixture.project), project_before);
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn unsafe_function_sources_refuse_inspection_before_missing_dependencies() {
+    for (source, expected_code) in [
+        (
+            "missing/../outside.rhai",
+            "evidence.project.function-source",
+        ),
+        ("functions/linked.rhai", "evidence.project.asset-path"),
+    ] {
+        let fixture = Fixture::new();
+        let outside = fixture.root.join("outside.rhai");
+        fs::write(&outside, SECRET_CANARY).expect("private asset outside the project");
+        if source == "functions/linked.rhai" {
+            symlink(&outside, fixture.project.join(source)).expect("linked Function asset");
+        }
+        edit_json(&fixture.project.join("evidence.yaml"), |project| {
+            project["functions"][0]["source"] = json!(source);
+            project["functions"][1]["source"] = json!("functions/missing.rhai");
+        });
+        let project_before = fs::read(fixture.project.join("evidence.yaml")).unwrap();
+        for format in ["human", "json"] {
+            for output in [
+                fixture.check_production(format),
+                fixture.explain_project(format, &fixture.target),
+            ] {
+                assert_failed(
+                    &output,
+                    "unsafe Function asset with another missing dependency",
+                );
+                assert_value_free(&output);
+                if format == "json" {
+                    let report: Value =
+                        serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+                    assert!(
+                        report["diagnostics"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|diagnostic| {
+                                diagnostic["code"] == expected_code
+                                    && diagnostic["path"] == "/functions/0/source"
+                                    && diagnostic["source"]["file"]
+                                        .as_str()
+                                        .is_some_and(|file| file.ends_with("evidence.yaml"))
+                            }),
+                        "{report}"
+                    );
+                }
+            }
+        }
+        assert!(fixture.invocations().is_empty());
+        assert!(!fixture.output.exists());
+        assert_eq!(fs::read(&outside).unwrap(), SECRET_CANARY.as_bytes());
+        assert_eq!(
+            fs::read(fixture.project.join("evidence.yaml")).unwrap(),
+            project_before
+        );
         fixture.assert_no_staging_residue();
     }
 }
@@ -1413,11 +1522,21 @@ impl Fixture {
     }
 
     fn explain_project_with_target(&self, target: &Path) -> Output {
+        self.explain_project("json", target)
+    }
+
+    fn explain_project(&self, format: &str, target: &Path) -> Output {
         Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-            .args(["--format", "json", "explain"])
+            .args(["--format", format, "explain"])
             .arg(&self.project)
             .arg("--target")
             .arg(target)
+            .env("EVIDENCE_BIN", &self.evidence)
+            .env("FAKE_EVIDENCE_LOG", &self.log)
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
             .output()
             .expect("evidencectl explain starts")
     }

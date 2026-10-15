@@ -981,6 +981,115 @@ async fn native_stale_result_lookup_preserves_replacement_claim_and_schedule() {
 }
 
 #[tokio::test]
+async fn first_acceptance_refuses_wrong_policy_id_or_exact_pin() {
+    for case in [
+        "wrong-id",
+        "wrong-version",
+        "wrong-digest",
+        "current-policy",
+    ] {
+        let authority = Authority::start(false, true).await;
+        let selection = match case {
+            "wrong-version" | "wrong-digest" => json!(policy()),
+            _ => json!({"id":policy().id}),
+        };
+        let bindings = authority.registry.clone();
+        let fixture = client_http::ClientFixture::start_with_mutations(
+            registry_with_policy(selection.clone()),
+            claims(),
+            move |service| service.with_review_result_source(bindings),
+        )
+        .await;
+        let id = submitted(&fixture, case).await;
+        let row = fixture.database.admin.query_one(
+            "SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]
+        ).await.unwrap();
+        let request: ReviewCreateRequest = serde_json::from_value(row.get(0)).unwrap();
+        let mut accepted_policy = policy();
+        match case {
+            "wrong-id" => accepted_policy.id = "another-policy".into(),
+            "wrong-version" => accepted_policy.version = "2".into(),
+            "wrong-digest" => {
+                accepted_policy.digest = registry_review_client::ContentDigest::parse(&format!(
+                    "sha256:{}",
+                    "c".repeat(64)
+                ))
+                .unwrap();
+            }
+            "current-policy" => {
+                accepted_policy.version = "2".into();
+                accepted_policy.digest = registry_review_client::ContentDigest::parse(&format!(
+                    "sha256:{}",
+                    "c".repeat(64)
+                ))
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let accepted = ReviewRequestAccepted {
+            request_id: Uuid::new_v4(),
+            subject: request.subject.clone(),
+            policy: accepted_policy,
+            submission_digest: registry_review_client::SubmissionDigest::parse(
+                &row.get::<_, String>(1),
+            )
+            .unwrap(),
+        };
+        // The provider returns an otherwise correlated acceptance. Only its
+        // concrete policy differs, so this exercises the Review client's
+        // selection check before BReg can persist an accepted binding.
+        *authority.state.accepted.lock().unwrap() = Some(accepted.clone());
+        let client = fixture.pool.get_for_test().await.unwrap();
+        assert!(run_one_submission(
+            &**client,
+            AUTHORITY,
+            &authority.client,
+            "producer",
+            &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+            30
+        )
+        .await
+        .unwrap());
+        let delivered = job(&fixture, id).await;
+        if case == "current-policy" {
+            assert_eq!(delivered["state"], "accepted");
+            assert_eq!(delivered["binding"], json!(accepted));
+            assert!(delivered["error"].is_null());
+        } else {
+            assert_eq!(delivered["state"], "uncertain", "{case}");
+            assert_eq!(delivered["error"], "remote-uncertain", "{case}");
+            assert!(delivered["binding"].is_null(), "{case}");
+        }
+        assert!(delivered["lease"].is_null());
+        assert_eq!(result_count(&fixture).await, 0);
+        let target = &fixture.registry.entities()["target"];
+        let names = fixture
+            .database
+            .admin
+            .query(
+                &format!(
+                    "SELECT \"{}\" FROM registry_data.\"{}\"",
+                    target.fields["name"].physical_name, target.physical_table
+                ),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].get::<_, String>(0), "Before");
+        let frozen: Value = fixture.database.admin.query_one(
+            "SELECT expected_policy FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]
+        ).await.unwrap().get(0);
+        assert_eq!(frozen, selection, "acceptance never rewrites the selector");
+        let creates = authority.state.creates.lock().unwrap().clone();
+        assert_eq!(creates.len(), 1);
+        assert_eq!(creates[0].1, request);
+        drop(client);
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
 async fn current_policy_delivery_recovers_original_request_without_rewriting_frozen_identity() {
     let authority = Authority::start(false, false).await;
     let bindings = authority.registry.clone();

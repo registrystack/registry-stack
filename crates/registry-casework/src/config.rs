@@ -921,12 +921,7 @@ impl RuntimeConfig {
         }
     }
 
-    fn check_secret_references(&self, findings: &mut Vec<RuntimeConfigError>) {
-        // With no provider enabled every reference would be refused; the
-        // provider rule reports that once.
-        if self.secret_providers.check().is_err() {
-            return;
-        }
+    fn direct_secret_references(&self) -> Vec<(String, &str)> {
         let mut references: Vec<(String, &str)> = self
             .database
             .references()
@@ -949,33 +944,103 @@ impl RuntimeConfig {
                 authority.signing_key_ref.as_str(),
             ));
         }
-        for (field, raw) in references {
-            if let Err(error) = self.secret_providers.check_reference(&field, raw) {
-                findings.push(error.into());
-            }
-        }
+        references
+    }
+
+    fn binding_secret_references(&self) -> Vec<(Vec<&str>, &str)> {
+        let mut references = Vec::new();
         for (source_id, binding) in &self.context_providers {
             for (member, reference) in [
                 ("clientIdRef", &binding.client_id_ref),
                 ("clientAssertionKeyRef", &binding.client_assertion_key_ref),
             ] {
-                self.check_binding_reference(
-                    findings,
-                    &["contextProviders", source_id, member],
-                    reference,
-                );
+                references.push((
+                    vec!["contextProviders", source_id.as_str(), member],
+                    reference.as_str(),
+                ));
             }
+        }
+        for (destination_id, destination) in &self.review_completion_destinations {
+            match (&destination.bearer_token_ref, &destination.auth) {
+                (Some(reference), None) => {
+                    references.push((
+                        vec![
+                            "reviewCompletionDestinations",
+                            destination_id.as_str(),
+                            "bearerTokenRef",
+                        ],
+                        reference.as_str(),
+                    ));
+                }
+                (None, Some(auth)) => {
+                    references.push((
+                        vec![
+                            "reviewCompletionDestinations",
+                            destination_id.as_str(),
+                            "auth",
+                            "secretRef",
+                        ],
+                        auth.secret_ref.as_str(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        references
+    }
+
+    /// Resolve serving secrets without contacting their consumers or retaining
+    /// their values. Migration credentials may remain off the serving host and
+    /// are resolved only by `caseworkctl apply`. This checks provider/file
+    /// availability and bounded secret text, not key formats or remote services.
+    pub fn check_runtime_secrets(&self, resolver: &SecretResolver) -> Result<(), Report> {
+        let references =
+            self.direct_secret_references()
+                .into_iter()
+                .filter(|(field, _)| field != "database.migrationUrlRef")
+                .map(|(field, reference)| {
+                    let pointer = pointer_to(&field.split('.').collect::<Vec<_>>());
+                    (field, pointer, reference)
+                })
+                .chain(self.binding_secret_references().into_iter().map(
+                    |(segments, reference)| (segments.join("."), pointer_to(&segments), reference),
+                ));
+        let mut diagnostics = Vec::new();
+        for (field, pointer, reference) in references {
+            if let Err(error) = resolver.resolve(reference) {
+                diagnostics.push(Diagnostic::error(
+                    "casework.runtime.secret-unavailable",
+                    pointer,
+                    describe_secret_failure(&field, reference, &error),
+                    "Provision a runtime-readable secret through the configured provider and retry doctor.",
+                ));
+            }
+        }
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(Report::new(diagnostics))
+        }
+    }
+
+    fn check_secret_references(&self, findings: &mut Vec<RuntimeConfigError>) {
+        // With no provider enabled every reference would be refused; the
+        // provider rule reports that once.
+        if self.secret_providers.check().is_err() {
+            return;
+        }
+        for (field, raw) in self.direct_secret_references() {
+            if let Err(error) = self.secret_providers.check_reference(&field, raw) {
+                findings.push(error.into());
+            }
+        }
+        for (segments, raw) in self.binding_secret_references() {
+            self.check_binding_reference(findings, &segments, raw);
         }
         for (destination_id, destination) in &self.review_completion_destinations {
             let at = ["reviewCompletionDestinations", destination_id.as_str()];
             match (&destination.bearer_token_ref, &destination.auth) {
-                (Some(reference), None) => {
-                    self.check_binding_reference(
-                        findings,
-                        &[at[0], at[1], "bearerTokenRef"],
-                        reference,
-                    );
-                }
+                (Some(_), None) => {}
                 (None, Some(auth)) => {
                     if auth
                         .header
@@ -988,11 +1053,6 @@ impl RuntimeConfig {
                             pointer: pointer_to(&segments),
                         });
                     }
-                    self.check_binding_reference(
-                        findings,
-                        &[at[0], at[1], "auth", "secretRef"],
-                        &auth.secret_ref,
-                    );
                 }
                 _ => {
                     let segments = [at[0], at[1], "auth"];
@@ -1623,6 +1683,51 @@ mod tests {
             inputs,
             BTreeSet::from(["casework.yaml".to_owned(), "schemas/review.json".to_owned()])
         );
+    }
+
+    #[test]
+    fn serving_secret_preflight_covers_configured_optional_consumers_with_structural_paths() {
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let mut value = operator_value(root.path(), root.path());
+        value["database"]["trustedRootCertificateRef"] = json!("secret:file/db-ca");
+        value["authentication"]["oidc"]["jwksSource"] =
+            json!({"type":"static", "documentRef":"secret:file/jwks"});
+        value["taskAuthority"] = json!({"issuer":"https://casework.example.test","exchangeAudience":"urn:example:exchange","signingKeyRef":"secret:file/signer","statusClients":{}});
+        value["contextProviders"] = json!({"facility":{
+            "baseUrl":"https://registry.example.test", "statusProfile":"review-status",
+            "tokenEndpoint":"https://identity.example.test/token", "clientIdRef":"secret:file/client-id", "clientAssertionKeyRef":"secret:file/client-key"
+        }});
+        value["reviewCompletionDestinations"] = json!({
+            "bearer":{"url":"https://completion.example.test/reviews","bearerTokenRef":"secret:file/bearer"},
+            "header./receiver":{"url":"https://completion.example.test/reviews","auth":{"header":"x-api-key","secretRef":"secret:file/header"}}
+        });
+        let config = read_operator(&value, root.path());
+        let resolver = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            root.path(),
+        )
+        .unwrap();
+        let report = config.check_runtime_secrets(&resolver).unwrap_err();
+        let paths = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                "/database/runtimeUrlRef",
+                "/database/trustedRootCertificateRef",
+                "/audit/hashKeyRef",
+                "/authentication/oidc/jwksSource/documentRef",
+                "/taskAuthority/signingKeyRef",
+                "/contextProviders/facility/clientIdRef",
+                "/contextProviders/facility/clientAssertionKeyRef",
+                "/reviewCompletionDestinations/bearer/bearerTokenRef",
+                "/reviewCompletionDestinations/header.~1receiver/auth/secretRef"
+            ]
+        );
+        assert!(!report.render_human().contains("secret:file/"));
     }
 
     #[test]

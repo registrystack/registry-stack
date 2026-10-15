@@ -60,7 +60,7 @@ recipient client can never be one the verifier would reject.
 
 ### The consent record
 
-A consent record is a create-only entity that declares `consentRecord`:
+A consent record is a create-only Record type that declares `consentRecord`:
 
 ```yaml
 - id: person-consent-decision
@@ -104,7 +104,7 @@ compiler holds:
   3652, ten years.
 - The key and validity fields are plaintext. The check compares stored
   values, so ciphertext could never match.
-- The record is a leaf: no change request, no `requireConsent` on its own
+- The record is a leaf: no `requireConsent` on its own
   profiles, no incoming read paths, and its subject is not another consent
   record.
 - No profile grants `create` or `batch` on it. Rows are written only by
@@ -144,8 +144,8 @@ Add `requireConsent` to a read permission:
   requiredScopes: [registry:person:read]
   requiredPurposes: [food-assistance]
   permissions:
-    entities:
-      - entity: person
+    records:
+      - recordType: person
         operations: [get, list]
         readableFields: [person-code, legal-name, district]
         allowCount: true
@@ -174,8 +174,8 @@ the reserved `registry:recipients` claim:
   principalClaim: registry_principal
   requiredScopes: ['consent:person:read']
   permissions:
-    entities:
-      - entity: person-consent-decision
+    records:
+      - recordType: person-consent-decision
         rowBoundaries:
           - {field: recipient, claim: 'registry:recipients', operator: in}
         operations: [get, list]
@@ -186,8 +186,8 @@ the reserved `registry:recipients` claim:
 recipient field, in a permission limited to `get` and `list`. The compiler
 refuses it, and every `registry:consent-decisions:` claim, on each other
 surface that names a verified claim: a principal claim, another row boundary,
-an entity access requirement, a lookup `claimMapping`, an action target, an
-`applyTargets` grant, or a `requestPresence` grant. Each refusal is
+a Record type access requirement, a lookup `claimMapping`, or an Action or
+Proposal target boundary. Each refusal is
 `breg.consent.feed-claim`, so no authored selector reaches a consent record without
 the feed's decision bound. The
 compiler adds a second row boundary to the feed on the decision field, filled
@@ -277,9 +277,11 @@ Enforced, and refused at compilation where the shape is configuration:
   count, snapshot including pinned snapshots, revisions, continuation
   cursors, and read paths rooted at a gated entity. A row without consent
   answers `404` exactly like an absent row.
-- Gated permissions are read-only (`breg.consent.require-read-only`). Writes,
-  actions, change requests, and request lifecycle grants use a separate
-  profile.
+- Gated Record permissions are read-only (`breg.consent.require-read-only`).
+  Writes, Actions, and Proposal lifecycle operations require separate authority.
+  A gated profile may grant `get-review-context`: Record and Changes projections
+  still apply current ordinary disclosure and consent to each snapshot, while
+  Input projections require their own explicit context-field grant.
 - Spatial bbox queries are refused on gated permissions
   (`breg.consent.require-spatial-unsupported`): they run under a separate database
   authority role that cannot evaluate consent.

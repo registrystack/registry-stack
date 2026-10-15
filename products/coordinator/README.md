@@ -11,6 +11,10 @@ Coordinator is pre-1.0. Use one source version's binaries, packages, configurati
 layout together. The current protected state schema is version 4, with no in-place migration
 from earlier pilot layouts.
 
+Build the Coordinator service and operator CLI from source using the deployment runbook.
+Their release binaries and container image are not yet distributed; the unified client
+packages include the Coordinator client independently.
+
 ## Create and check a project
 
 From the maintained Registry Stack checkout:
@@ -116,7 +120,8 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
 - [Proposal follow-up](examples/proposal-follow-up/README.md) starts a BReg Proposal draft,
   submits it separately, waits for exact application evidence, and then requests a notice.
 - [Standalone review](examples/standalone-review/README.md) submits a source-neutral Casework
-  request under an exact expected policy and waits for its result.
+  request using an explicit policy pin and waits for its result. An ID-only selector is the
+  ordinary default; these examples also demonstrate the optional exact-pin form.
 - [Reviewed notice](examples/reviewed-notice/README.md) combines standalone review with a fresh
   record and permission check before Messaging.
 - [Review provider](examples/review-provider/README.md) assesses a BReg Proposal automatically

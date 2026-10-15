@@ -2250,6 +2250,62 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(command["docs"])
         self.assertIn("registry-cli-docs", command["rust_packages"])
 
+    def test_native_citizen_journey_inputs_select_the_existing_postgres_lane(self) -> None:
+        for path in (
+            "crates/registry-breg-mcp/tests/native_citizen.rs",
+            "crates/registry-breg-mcp/tests/support/citizen_project.rs",
+            "crates/registry-breg-mcp/src/gateway.rs",
+            "crates/registry-breg-review/tests/support/mod.rs",
+            "crates/registry-breg-review/src/lib.rs",
+            "crates/registry-coordinator/tests/support/breg_service.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(
+                    self.workspace, (path,), pull_request=True, ci_full=True
+                )
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertIn("postgres", outputs["breg_contracts_lanes"])
+
+    def test_native_citizen_journey_runs_with_built_services_and_owned_postgres(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text()
+        job = workflow.split("\n  breg-contracts:\n", 1)[1].split(
+            "\n  breg-wasm:\n", 1
+        )[0]
+        step = job.split(
+            "      - name: Native citizen gateway and review authority journey\n", 1
+        )[1].split("\n      # The native worker", 1)[0]
+        self.assertIn("if: matrix.lane == 'postgres'", step)
+        self.assertIn("shell: bash", step)
+        self.assertIn(
+            "COORDINATOR_TEST_DATABASE_URL: ${{ env.BREG_TEST_DATABASE_URL }}", step
+        )
+        for variable, binary in (
+            ("COORDINATOR_BREG_BIN", "breg"),
+            ("COORDINATOR_BREGCTL_BIN", "bregctl"),
+            ("BREG_REVIEW_NATIVE_BIN", "breg-review"),
+        ):
+            with self.subTest(binary=binary):
+                self.assertIn(
+                    f"{variable}: ${{{{ github.workspace }}}}/target/debug/{binary}", step
+                )
+                self.assertIn(f"--bin {binary}", step)
+        self.assertIn("cargo build --locked", step)
+        self.assertIn("--features registry-breg/postgres-test", step)
+        self.assertIn(
+            "cargo test --locked -p registry-breg-mcp --test native_citizen", step
+        )
+        self.assertIn(
+            "-- --ignored --exact "
+            "native_citizen_gateway_and_review_share_engine_owned_authority "
+            "--test-threads=1",
+            step,
+        )
+        self.assertIn("test result: ok\\. 1 passed", step)
+        self.assertIn(
+            "async fn native_citizen_gateway_and_review_share_engine_owned_authority()",
+            Path("crates/registry-breg-mcp/tests/native_citizen.rs").read_text(),
+        )
+
     def test_review_page_command_change_runs_the_catalog_test(self) -> None:
         # `breg-review`'s Clap tree is built in its lib.rs, which the
         # registry-cli-docs snapshot test holds to the committed catalog, so a

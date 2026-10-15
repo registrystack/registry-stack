@@ -41,6 +41,13 @@ registry owner must separately approve policy changes, supply both `version`
 and `digest` alongside `id` from the provider's exported policy binding. Partial
 pins are refused. An unavailable or mismatched policy never grants approval.
 
+Use an exact pin when the policy version chosen at submission must decide the
+review. With an ID-only selector, provider changes before first acceptance can
+affect pending deliveries throughout the recovery window (30 days by default);
+an operator resubmit restarts that window without replacing an existing acceptance.
+A new submission after changes-requested selects the provider's current policy
+again unless pinned.
+
 Omitting `application` selects automatic application by the built-in executor.
 It receives only the compiled system grant for the exact frozen submission,
 never an author or reviewer identity or a general record grant.

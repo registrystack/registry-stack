@@ -72,6 +72,23 @@ Startup, registration, reads, and no-review changes work without Casework.
 Configure that independent authority in `dev-clients.yaml` before starting the
 session. The authority must serve the shared Review protocol and a compatible
 `facility-address-review` policy, with its own authenticated reviewer access.
+For the local shared issuer, the binding has this shape:
+
+```yaml
+reviewAuthorities:
+  casework:
+    endpoint: http://127.0.0.1:8100/
+    profile: requester
+    producerId: facility-registry
+    recoveryDays: 30
+    client: requester
+```
+
+`casework` matches the authority ID in `registry.yaml`. `profile` selects the
+authority's producer profile, `producerId` names its trusted producer binding,
+and `client` names a registered BReg development client used to authenticate.
+`recoveryDays` bounds uncertain-submission recovery. The composed command
+registers `requester` and writes these values for its selected local port.
 Use a separate registration attempt whose facility has not been deactivated:
 
 ```sh

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A server-rendered page where a signed-in person reviews and submits their
-//! own Base Registry Engine change request.
+//! own Base Registry Engine Proposal.
 //!
 //! The page is an OpenID Connect relying party and a confidential OAuth
 //! client. It signs a person in with the authorization code flow, keeps the
@@ -87,7 +87,7 @@ const ID_TOKEN_ALGORITHMS: [Algorithm; 5] = [
 pub fn command() -> Command {
     Command::new("breg-review")
         .version(registry_platform_buildinfo::DISPLAY_VERSION)
-        .about("Serve the citizen review page for Base Registry Engine change requests")
+        .about("Serve the citizen review page for Base Registry Engine Proposals")
         .arg(
             Arg::new("runtime-config")
                 .long("runtime-config")

@@ -22,6 +22,8 @@ fn assessment_route(args) {
 
 fn human_input(args) {
     let request = args.request;
+    // Optional exact-pin variant. An ID-only selector uses the provider's current policy.
+    // Replace these synthetic pin values with the compiled Casework PolicyBinding.
     let handoff = #{
         policy: #{id: "external-review", version: "1", digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
         subject: request.subject,

@@ -38,7 +38,8 @@ actions:
           type: required
           authority: local-review
           source: reviewed-directory
-          # Synthetic test pin. Replace it with your authority's compiled PolicyBinding.
+          # Optional exact-pin variant, with synthetic test values. Usually select by ID only.
+          # To require an exact policy, replace these values with its compiled PolicyBinding.
           policy: {id: directory-name-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
         reviewContext:
           id: directory-name-context

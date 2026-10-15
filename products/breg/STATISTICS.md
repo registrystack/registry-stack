@@ -36,7 +36,7 @@ statisticalDatasets:
 
 The declaration names no profile. Each access profile grants the dataset
 under its own `permissions.datasets`, beside the record grants it holds under
-`permissions.entities`:
+`permissions.records`:
 
 ```yaml
 accessProfiles:

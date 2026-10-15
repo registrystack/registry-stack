@@ -20,17 +20,23 @@ pub(crate) fn check(
         let target = target
             .ok_or_else(|| anyhow::anyhow!("--production requires an explicit EvidenceTarget"))?;
         let bytes = crate::authored::read_authored_file(target, "EvidenceTarget")?;
-        let target =
+        let target_model =
             registry_evidence_authoring::target::read_target(&target.to_string_lossy(), &bytes)?
                 .value;
         if !matches!(
-            target.assurance_profile,
+            target_model.assurance_profile,
             Some(
                 registry_evidence_authoring::target::TargetAssuranceProfile::Production
                     | registry_evidence_authoring::target::TargetAssuranceProfile::EvidenceGrade
             )
         ) {
-            anyhow::bail!("--production requires production or evidence-grade target assurance");
+            return Err(crate::build::TargetDocumentDiagnostic {
+                code: "evidence.target.production-assurance-required",
+                path: format!("{}:/assuranceProfile", target.display()),
+                message: "--production requires production or evidence-grade target assurance"
+                    .to_owned(),
+            }
+            .into());
         }
     }
     let mut checked = crate::normalized::inspect(project, target, "check")?;
