@@ -155,7 +155,7 @@ class ProposalPageTests(unittest.TestCase):
             client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
             collection = client.registry_contract('reader').select_proposals('reader')
             for cursor in ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x' * 513]:
-                value = {'items': [], 'nextCursor': cursor}
+                value = {'items': [PROPOSAL], 'nextCursor': cursor}
                 count = len(requests)
                 with self.assertRaises(BaseRegistryClientError) as raised:
                     client.list_proposals(collection, {})
@@ -163,6 +163,11 @@ class ProposalPageTests(unittest.TestCase):
                 self.assertEqual(len(requests), count + 1)
             for cursor in [ID, 'x' * 512]:
                 value = {'items': [], 'nextCursor': cursor}
+                with self.assertRaises(BaseRegistryClientError):
+                    client.list_proposals(collection, {})
+                value = {'items': [PROPOSAL], 'nextCursor': cursor}
+                with self.assertRaises(BaseRegistryClientError):
+                    client.list_proposals(collection, {'cursor': cursor})
                 page = client.list_proposals(collection, {})
                 self.assertEqual(page.next_cursor, cursor)
                 value = {'items': []}

@@ -160,3 +160,32 @@ test('an immediate action recovers after a lost response from persisted bytes an
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+
+test('immediate Action application evidence excludes nil while Record IDs retain nil', async () => {
+  let receipt = {action: 'update-item', applicationId: '00000000-0000-0000-0000-000000000000',
+    results: {item: {recordType: 'item', recordId: '00000000-0000-0000-0000-000000000000', revision: 2}}};
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk;
+    requests.push({url: request.url, body});
+    response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store', vary: 'authorization, accept',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
+    const value = request.url.startsWith('/v1/registry') ? metadata
+      : request.url.includes('/target-conditions') ? {preconditions: {targetId: {ifMatch: '"condition"'}}} : receipt;
+    response.end(JSON.stringify(value));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}`});
+    const binding = (await client.registryContract('writer')).selectAction('update-item', 'writer');
+    const conditions = await client.actionTargetConditions(binding, {targetId});
+    const count = requests.length;
+    await assert.rejects(client.invokeAction(binding, {targetId}, 'application-identity', conditions), error => error.kind === 'protocol' && error.outcomeUnknown);
+    assert.equal(requests.length, count + 1);
+    receipt.applicationId = '0192a870-1234-7abc-8def-123456789abc';
+    const observed = await client.invokeAction(binding, {targetId}, 'application-identity', conditions);
+    assert.equal(observed.value.applicationId, receipt.applicationId);
+    assert.equal(observed.value.results.item.recordId, receipt.results.item.recordId);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

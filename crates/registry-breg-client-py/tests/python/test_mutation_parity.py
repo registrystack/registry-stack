@@ -303,6 +303,8 @@ class MutationParityTests(unittest.TestCase):
         metadata_body = self.metadata_body
         self.lose_next_invocation = {"value": False}
         lose_next_invocation = self.lose_next_invocation
+        self.receipt_ids = {"application": APPLICATION_ID, "record": RECORD_ID}
+        receipt_ids = self.receipt_ids
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -330,11 +332,11 @@ class MutationParityTests(unittest.TestCase):
                     self.respond(
                         {
                             "action": "rename-company",
-                            "applicationId": APPLICATION_ID,
+                            "applicationId": receipt_ids["application"],
                             "results": {
                                 "company": {
                                     "recordType": "company",
-                                    "recordId": RECORD_ID,
+                                    "recordId": receipt_ids["record"],
                                     "revision": 2,
                                 }
                             },
@@ -500,6 +502,22 @@ class MutationParityTests(unittest.TestCase):
                 "preconditions": {"targetId": {"ifMatch": ETAG}},
             },
         )
+
+    def test_immediate_action_application_identity_preserves_nil_record_ids(self) -> None:
+        binding = self.contract.select_action("rename-company", "company-writer")
+        conditions = self.client.action_target_conditions(binding, {"targetId": RECORD_ID})
+        inputs = {"targetId": RECORD_ID, "legalName": "Renamed Ltd"}
+        self.receipt_ids.update(application="00000000-0000-0000-0000-000000000000", record="00000000-0000-0000-0000-000000000000")
+        count = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.invoke_action(binding, inputs, "application-identity", conditions)
+        self.assertEqual(raised.exception.kind, "protocol")
+        self.assertTrue(raised.exception.outcome_unknown)
+        self.assertEqual(len(self.requests), count + 1)
+        self.receipt_ids["application"] = "0192a870-1234-7abc-8def-123456789abc"
+        receipt = self.client.invoke_action(binding, inputs, "application-identity", conditions)["value"]
+        self.assertEqual(receipt["applicationId"], self.receipt_ids["application"])
+        self.assertEqual(receipt["results"]["company"]["recordId"], self.receipt_ids["record"])
 
     def test_immediate_action_recovers_after_a_lost_response(self) -> None:
         # The process gives up after the lost answer instead of resending it.

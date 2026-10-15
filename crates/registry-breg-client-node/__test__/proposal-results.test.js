@@ -92,6 +92,53 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       await assert.rejects(client.getProposal(binding, id), error => ['invalid-request', 'protocol'].includes(error.kind));
     }
 
+    await t.test('application identity is canonical and exact receipt recovery survives validation', async () => {
+      value = document(); value.state = 'submitted'; delete value.application;
+      value.links.apply = {method: 'POST', path: `/v1/proposals/${id}/apply`, accessProfile: 'reader', operation: 'apply', ifMatch: '"apply-condition"'};
+      const held = await client.getProposal(binding, id);
+      const attempt = client.prepareProposal(held, 'apply', JSON.stringify({submissionVersion: 2, effectDigest: digest}), 'canonical-application');
+      const canonical = '123e4567-e89b-42d3-a456-426614174000';
+      const receipt = {...value, state: 'applied', revision: 9, application: {...document().application, applicationId: canonical}};
+      receipt.links.apply.availability = {available: false, observedRevision: 9, reason: 'already-applied', recovery: 'receipt-only'};
+      for (const applicationId of [canonical.toUpperCase(), canonical.replaceAll('-', ''), '00000000-0000-0000-0000-000000000000']) {
+        value = structuredClone(receipt); value.application.applicationId = applicationId;
+        await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+        await assert.rejects(client.executeProposal(attempt), error => error.kind === 'protocol' && error.outcomeUnknown);
+      }
+      value = receipt;
+      const committed = await client.executeProposal(attempt);
+      assert.equal(JSON.parse(committed.documentJson).application.applicationId, canonical);
+      const sent = wireRequests.at(-1);
+      const recovered = client.recoverProposal(committed, BRegPreparedProposal.fromBytes(attempt.toBytes()));
+      assert.deepEqual(recovered.toBytes(), attempt.toBytes());
+      await client.executeProposal(recovered);
+      assert.deepEqual(wireRequests.at(-1), sent);
+    });
+
+    await t.test('attachment availability preserves ordinary links and requires unavailable details', async () => {
+      value = document(); value.state = 'draft'; delete value.application; delete value.effectDigest;
+      value.links.edit = {method: 'POST', path: `/v1/proposals/${id}/edit`, accessProfile: 'reader', operation: 'edit', ifMatch: '"edit-condition"'};
+      value.attachments = {support: {id: 'support', required: false, maximumBytes: 1024, contentTypes: ['application/pdf'], classification: 'restricted',
+        links: {upload: {method: 'PATCH', path: `/v1/proposals/${id}/attachments/support`, accessProfile: 'reader', operation: 'upload', ifMatch: '"upload-condition"'}}}};
+      const held = await client.getProposal(binding, id);
+      const attempt = client.prepareProposal(held, 'edit', '{"input":{}}', 'availability-edit');
+      const original = structuredClone(value);
+      for (const missing of ['reason', 'recovery']) {
+        value = structuredClone(original);
+        const availability = {available: false, observedRevision: 8, reason: 'stale-revision', recovery: 'refresh'};
+        delete availability[missing];
+        value.attachments.support.links.upload.availability = availability;
+        await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+        value.revision = availability.observedRevision = 9;
+        await assert.rejects(client.executeProposal(attempt), error => error.kind === 'protocol' && error.outcomeUnknown);
+      }
+      for (const availability of [undefined, {available: true, observedRevision: 8},
+        {available: false, observedRevision: 8, reason: 'stale-revision', recovery: 'refresh'}]) {
+        value = structuredClone(original); value.attachments.support.links.upload.availability = availability;
+        await client.getProposal(binding, id);
+      }
+    });
+
     await t.test('application result record identifiers retain canonical spelling', async () => {
       const canonical = '123e4567-e89b-42d3-a456-426614174000';
       for (const recordId of [canonical, '00000000-0000-0000-0000-000000000000']) {

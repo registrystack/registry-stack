@@ -128,13 +128,16 @@ test('returned Proposal cursors are usable for explicit bounded continuation', a
     const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/tenant/`});
     const collection = (await client.registryContract('author')).selectProposals('author');
     for (const cursor of ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x'.repeat(513)]) {
-      value = {items: [], nextCursor: cursor};
+      value = {items: [proposal], nextCursor: cursor};
       const count = requests.length;
       await assert.rejects(client.listProposals(collection, '{}'), error => error.kind === 'invalid-request');
       assert.equal(requests.length, count + 1, 'refuse the received page without automatically following it');
     }
     for (const cursor of [id, 'x'.repeat(512)]) {
       value = {items: [], nextCursor: cursor};
+      await assert.rejects(client.listProposals(collection, '{}'), error => error.kind === 'invalid-request');
+      value = {items: [proposal], nextCursor: cursor};
+      await assert.rejects(client.listProposals(collection, JSON.stringify({cursor})), error => error.kind === 'invalid-request');
       const page = await client.listProposals(collection, '{}');
       assert.equal(page.nextCursor, cursor);
       value = {items: []};

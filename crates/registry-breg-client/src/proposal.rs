@@ -390,7 +390,7 @@ impl BRegProposal {
         if self.application.as_ref().is_some_and(|application| {
             self.state != BRegProposalState::Applied
                 || self.submission_version == 0
-                || Uuid::parse_str(&application.application_id).is_err()
+                || !canonical_proposal_id(&application.application_id)
                 || application.submission_version != self.submission_version
                 || !digest(&application.effect_digest)
                 || self
@@ -434,11 +434,10 @@ impl BRegProposal {
             if !valid_locator
                 || link.method != expected_method
                 || link.operation != expected_operation
-                || link.availability.as_ref().is_some_and(|availability| {
-                    availability.observed_revision != self.revision
-                        || !availability.available
-                            && (availability.reason.is_none() || availability.recovery.is_none())
-                })
+                || link
+                    .availability
+                    .as_ref()
+                    .is_some_and(|availability| !valid_availability(availability, self.revision))
             {
                 return Err(refusal());
             }
@@ -482,10 +481,9 @@ impl BRegProposal {
                     || &link.operation != operation
                     || !identifier(&link.access_profile)
                     || method != "GET" && !valid_condition(link.if_match.as_deref())
-                    || link
-                        .availability
-                        .as_ref()
-                        .is_some_and(|availability| availability.observed_revision != self.revision)
+                    || link.availability.as_ref().is_some_and(|availability| {
+                        !valid_availability(availability, self.revision)
+                    })
                 {
                     return Err(refusal());
                 }
@@ -1142,10 +1140,11 @@ impl BaseRegistryClient {
             crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
         let mut page: BRegProposalPage = serde_json::from_value(value).map_err(|_| refusal())?;
         if page.items.len() > query.top.unwrap_or(50) as usize
-            || page
-                .next_cursor
-                .as_ref()
-                .is_some_and(|cursor| !valid_cursor(cursor))
+            || page.next_cursor.as_ref().is_some_and(|cursor| {
+                !valid_cursor(cursor)
+                    || page.items.is_empty()
+                    || query.cursor.as_ref() == Some(cursor)
+            })
         {
             return Err(refusal());
         }
@@ -1471,6 +1470,11 @@ fn proposal_instant(value: &str) -> Option<OffsetDateTime> {
 }
 fn canonical_proposal_id(value: &str) -> bool {
     Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
+}
+fn valid_availability(availability: &BRegAvailability, revision: u64) -> bool {
+    availability.observed_revision == revision
+        && (availability.available
+            || availability.reason.is_some() && availability.recovery.is_some())
 }
 fn valid_cursor(cursor: &str) -> bool {
     !cursor.is_empty()
@@ -2188,7 +2192,7 @@ mod tests {
             "é".to_owned(),
             "x".repeat(513),
         ] {
-            *response.lock().unwrap() = json!({"items":[],"nextCursor":cursor});
+            *response.lock().unwrap() = json!({"items":[document()],"nextCursor":cursor});
             assert!(
                 client
                     .list_proposals(&collection, &BRegProposalQuery::default())
@@ -2198,12 +2202,13 @@ mod tests {
             );
         }
         for cursor in [ID.to_owned(), "x".repeat(512)] {
-            *response.lock().unwrap() = json!({"items":[],"nextCursor":cursor});
+            *response.lock().unwrap() = json!({"items":[document()],"nextCursor":cursor});
             let page = client
                 .list_proposals(&collection, &BRegProposalQuery::default())
                 .await
                 .unwrap()
                 .value;
+            *response.lock().unwrap() = json!({"items":[]});
             assert!(client
                 .list_proposals(
                     &collection,

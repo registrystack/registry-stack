@@ -110,6 +110,66 @@ class ProposalResultTests(unittest.TestCase):
         del self.value['effectDigest']
         self.assertNotIn('application', self.client.get_proposal(self.binding, ID).document)
 
+    def test_application_identity_is_canonical_and_preserves_exact_receipt_recovery(self):
+        self.value = document()
+        self.value['state'] = 'submitted'
+        del self.value['application']
+        self.value['links']['apply'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/apply', 'accessProfile': 'reader', 'operation': 'apply', 'ifMatch': '"apply-condition"'}
+        held = self.client.get_proposal(self.binding, ID)
+        attempt = self.client.prepare_proposal(held, 'apply', {'submissionVersion': 2, 'effectDigest': DIGEST}, 'canonical-application')
+        canonical = '123e4567-e89b-42d3-a456-426614174000'
+        receipt = dict(copy.deepcopy(self.value), state='applied', revision=9, application=dict(document()['application'], applicationId=canonical))
+        receipt['links']['apply']['availability'] = {'available': False, 'observedRevision': 9, 'reason': 'already-applied', 'recovery': 'receipt-only'}
+        for application_id in [canonical.upper(), canonical.replace('-', ''), '00000000-0000-0000-0000-000000000000']:
+            self.value = copy.deepcopy(receipt)
+            self.value['application']['applicationId'] = application_id
+            with self.subTest(application_id=application_id), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.get_proposal(self.binding, ID)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            with self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.execute_proposal(attempt)
+            self.assertEqual(raised.exception.kind, 'protocol')
+            self.assertTrue(raised.exception.outcome_unknown)
+        self.value = receipt
+        committed = self.client.execute_proposal(attempt)
+        self.assertEqual(committed.document['application']['applicationId'], canonical)
+        sent = self.requests[-1]
+        recovered = self.client.recover_proposal(committed, BRegPreparedProposal.from_bytes(attempt.to_bytes()))
+        self.assertEqual(recovered.to_bytes(), attempt.to_bytes())
+        self.client.execute_proposal(recovered)
+        self.assertEqual(self.requests[-1], sent)
+
+    def test_attachment_availability_requires_complete_unavailable_details(self):
+        self.value = document()
+        self.value['state'] = 'draft'
+        del self.value['application']
+        del self.value['effectDigest']
+        self.value['links']['edit'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/edit', 'accessProfile': 'reader', 'operation': 'edit', 'ifMatch': '"edit-condition"'}
+        self.value['attachments'] = {'support': {'id': 'support', 'required': False, 'maximumBytes': 1024, 'contentTypes': ['application/pdf'], 'classification': 'restricted',
+            'links': {'upload': {'method': 'PATCH', 'path': '/v1/proposals/' + ID + '/attachments/support', 'accessProfile': 'reader', 'operation': 'upload', 'ifMatch': '"upload-condition"'}}}}
+        held = self.client.get_proposal(self.binding, ID)
+        attempt = self.client.prepare_proposal(held, 'edit', {'input': {}}, 'availability-edit')
+        original = copy.deepcopy(self.value)
+        for missing in ['reason', 'recovery']:
+            self.value = copy.deepcopy(original)
+            availability = {'available': False, 'observedRevision': 8, 'reason': 'stale-revision', 'recovery': 'refresh'}
+            del availability[missing]
+            self.value['attachments']['support']['links']['upload']['availability'] = availability
+            with self.subTest(missing=missing), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.get_proposal(self.binding, ID)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.value['revision'] = availability['observedRevision'] = 9
+            with self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.execute_proposal(attempt)
+            self.assertEqual(raised.exception.kind, 'protocol')
+            self.assertTrue(raised.exception.outcome_unknown)
+        for availability in [None, {'available': True, 'observedRevision': 8},
+                             {'available': False, 'observedRevision': 8, 'reason': 'stale-revision', 'recovery': 'refresh'}]:
+            self.value = copy.deepcopy(original)
+            if availability is not None:
+                self.value['attachments']['support']['links']['upload']['availability'] = availability
+            self.client.get_proposal(self.binding, ID)
+
     def test_application_result_record_identifiers_retain_canonical_spelling(self):
         canonical = '123e4567-e89b-42d3-a456-426614174000'
         for record_id in [canonical, '00000000-0000-0000-0000-000000000000']:
