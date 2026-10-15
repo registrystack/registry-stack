@@ -4,7 +4,7 @@ use registry_coordinator::{definition::Definition, review_provider::policy_bindi
 use serde_json::{json, Value};
 
 pub fn project() -> Value {
-    json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"outcomes":{"accepted":{"status":"approved"}}},"start":"done","steps":{"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}})
+    json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"outcomes":{"accepted":{"status":"approved","outcome":"accepted"}}},"start":"done","steps":{"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}})
 }
 
 pub fn definition(project: &Value) -> Definition {
@@ -51,11 +51,12 @@ fn derived_policy_pins_workflow_and_mapping_without_duplicate_identity() {
 }
 
 #[test]
-fn terminal_mapping_refuses_missing_extra_and_ambiguous_approval_payloads() {
+fn terminal_mapping_refuses_missing_extra_and_ambiguous_payloads() {
     for mapping in [
         json!({}),
-        json!({"accepted":{"status":"approved"},"extra":{"status":"cancelled"}}),
-        json!({"accepted":{"status":"approved","outcome":"claimed-approval"}}),
+        json!({"accepted":{"status":"approved","outcome":"accepted"},"extra":{"status":"cancelled"}}),
+        json!({"accepted":{"status":"approved"}}),
+        json!({"accepted":{"status":"cancelled","outcome":"claimed-cancel"}}),
         json!({"accepted":{"status":"rejected"}}),
     ] {
         let root = tempfile::tempdir().unwrap();

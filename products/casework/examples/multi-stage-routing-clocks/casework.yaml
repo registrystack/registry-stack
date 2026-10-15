@@ -52,8 +52,8 @@ reviewPolicies:
         summary: {type: string, maxLength: 160}
         region: {type: string, enum: [north, south, islands]}
     outcomes:
-      - {id: approved, label: Approve, settlement: approved, reasonRequired: false}
-      - {id: rejected, label: Return for correction, settlement: rejected, reasonRequired: true}
+      - {id: approved, label: Approve, settlement: approved, reasonRequired: false, publicReason: optional}
+      - {id: rejected, label: Return for correction, settlement: rejected, reasonRequired: true, publicReason: required}
 trustedProducers:
   - id: regional-service
     profile: requester

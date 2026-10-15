@@ -340,7 +340,7 @@ def run(args):
         assert display["context"]["projection"]["display"] == {"applicationId": human_record, "recordActive": True, "currentAmount": 1200, "proposedAmount": 1500}
         native.http("POST", task_url + "/claim", staff, headers={**staff_headers, "If-Match": f'"{task["revision"]}"', "Idempotency-Key": str(uuid.uuid4())})
         current = native.http("GET", task_url, staff, headers=staff_headers)
-        native.http("POST", task_url + "/decisions", staff, {"decision": {"type": "approve"}}, {**staff_headers, "If-Match": f'"{current["revision"]}"', "Idempotency-Key": str(uuid.uuid4())}, (204,))
+        native.http("POST", task_url + "/decisions", staff, {"decision": {"type": "approve", "outcome": "approved"}}, {**staff_headers, "If-Match": f'"{current["revision"]}"', "Idempotency-Key": str(uuid.uuid4())}, (204,))
         journey.stop(worker)
         journey.advance_completion_fixture(runtime, [human_view["requestId"]])
         worker = journey.spawn("coordinator", runtime, "review-provider-restarted-wait")

@@ -175,7 +175,14 @@ fn project(issuer: &str) -> CaseworkProject {
                     "properties": {"summary": {"type": "string", "maxLength": 160}}
                 }),
                 result_schema: None,
-                outcomes: Vec::new(),
+                outcomes: vec![ReviewOutcomePolicy {
+                        id: "approved".to_owned(),
+                        label: "Approved".to_owned(),
+                        settlement: ReviewOutcomeSettlement::Approved,
+                        reason_required: false,
+                        public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+                        result_required: false,
+                    }],
             },
             ReviewPolicy {
                 id: "registry-answer".to_owned(),
@@ -212,6 +219,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     label: "Found".to_owned(),
                     settlement: ReviewOutcomeSettlement::Answered,
                     reason_required: false,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
                     result_required: true,
                 }],
             },
@@ -582,6 +590,7 @@ fn answer_decision() -> registry_casework_client::ReviewTaskDecisionRequest {
     registry_casework_client::ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: Some("private-reason-canary".to_owned()),
             result: Some(json!({"answer": "producer-result-canary"})),
         },
@@ -2082,6 +2091,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     let decision = ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: None,
             result: Some(json!({"answer":"The structured answer"})),
         },
@@ -3427,7 +3437,10 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
             2,
             "approve-source-receipt",
             &registry_casework_client::ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
         )
         .await
@@ -3443,7 +3456,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         approved.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert!(approved.outcome.is_none());
+    assert_eq!(approved.outcome.as_deref(), Some("approved"));
     revoked.store(true, Ordering::SeqCst);
     assert_client_status(
         client
@@ -3604,6 +3617,7 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
                 label: label.to_owned(),
                 settlement: ReviewOutcomeSettlement::Answered,
                 reason_required: true,
+                public_reason: registry_casework_core::ReviewPublicReasonRule::Required,
                 result_required: true,
             })
             .collect();
@@ -3635,6 +3649,7 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
                 &registry_casework_client::ReviewTaskDecisionRequest {
                     decision: DecisionKind::Answer {
                         outcome: code.to_owned(),
+                        public_reason: Some("PUBLIC_REASON_CANARY".to_owned()),
                         reason: Some("OWN_REASON_CANARY".to_owned()),
                         result: Some(json!({"answer": "PRODUCER_RESULT_CANARY"})),
                     },
@@ -3994,7 +4009,7 @@ async fn review_task_routes_refuse_a_duplicate_member() {
                 ..strict_route(
                     "POST",
                     format!("/v1/review-tasks/{id}/decisions"),
-                    json!({"decision": {"type": "approve"}}),
+                    json!({"decision": {"type": "approve", "outcome": "approved"}}),
                 )
             },
         ]

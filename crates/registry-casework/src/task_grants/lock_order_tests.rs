@@ -129,7 +129,10 @@ async fn decide(app: Router, task_id: Uuid, token: String) -> StatusCode {
             .header(IDEMPOTENCY_KEY_HEADER, "lock-order-decision")
             .body(Body::from(
                 serde_json::to_vec(&ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None,
+                    },
                 })
                 .unwrap(),
             ))

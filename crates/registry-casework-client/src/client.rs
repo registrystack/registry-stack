@@ -16,8 +16,8 @@ use registry_casework_core::{
     ReviewTaskPage, ReviewTaskState, ReviewValidationError, ReviewValidationReason,
     SupervisoryReviewTaskPage, CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER,
     DIRECTORY_TARGETS_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER,
-    VALIDATION_REASON_HEADER,
+    MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER, VALIDATION_ALLOWED_HEADER,
+    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -1654,6 +1654,12 @@ impl CaseworkClient {
             .iter()
             .cloned()
             .collect();
+        let validation_allowed_values: Vec<HeaderValue> = response
+            .headers()
+            .get_all(VALIDATION_ALLOWED_HEADER)
+            .iter()
+            .cloned()
+            .collect();
         if !exact_media_type(response.headers(), PROBLEM_MEDIA_TYPE) {
             return protocol(status, CaseworkProtocolFailure::Status, trace_id);
         }
@@ -1707,13 +1713,27 @@ impl CaseworkClient {
                 let Some(reason) = review_validation_reason(reason) else {
                     return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
                 };
+                let allowed = match validation_allowed_values.as_slice() {
+                    [] => Vec::new(),
+                    [allowed] => match allowed.to_str().ok().and_then(validation_allowed) {
+                        Some(allowed) => allowed,
+                        None => {
+                            return protocol(status, CaseworkProtocolFailure::Problem, trace_id)
+                        }
+                    },
+                    _ => return protocol(status, CaseworkProtocolFailure::Problem, trace_id),
+                };
                 Some(ReviewValidationError {
                     path: path.to_owned(),
                     reason,
+                    allowed: allowed.into_boxed_slice(),
                 })
             }
             _ => return protocol(status, CaseworkProtocolFailure::Problem, trace_id),
         };
+        if validation.is_none() && !validation_allowed_values.is_empty() {
+            return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
+        }
         CaseworkClientError::Problem {
             status: status.as_u16(),
             code,
@@ -1722,6 +1742,22 @@ impl CaseworkClient {
             validation,
         }
     }
+}
+
+/// Reads the comma-separated declared identifiers of a validation refusal:
+/// one to sixteen review policy identifiers.
+fn validation_allowed(value: &str) -> Option<Vec<String>> {
+    let allowed: Vec<String> = value.split(',').map(str::to_owned).collect();
+    let identifier = |value: &String| {
+        let bytes = value.as_bytes();
+        !bytes.is_empty()
+            && bytes.len() <= 64
+            && bytes[0].is_ascii_lowercase()
+            && bytes[1..].iter().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
+            })
+    };
+    (allowed.len() <= 16 && allowed.iter().all(identifier)).then_some(allowed)
 }
 
 fn decode_response_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, ()> {
@@ -1757,8 +1793,6 @@ fn require_review_task_id(
 }
 
 fn valid_decision_receipt(receipt: &registry_casework_core::ReviewDecisionReceipt) -> bool {
-    use registry_casework_core::ReviewDecisionType;
-
     let id = receipt.policy.id.as_bytes();
     let valid_policy_id = !id.is_empty()
         && id.len() <= MAXIMUM_REVIEW_IDENTITY_BYTES
@@ -1787,12 +1821,8 @@ fn valid_decision_receipt(receipt: &registry_casework_core::ReviewDecisionReceip
                 && label.len() <= 120
                 && label.chars().all(|character| !character.is_control())
         })
-        && match receipt.decision {
-            ReviewDecisionType::Approve => receipt.outcome.is_none(),
-            ReviewDecisionType::Reject
-            | ReviewDecisionType::ChangesRequested
-            | ReviewDecisionType::Answer => receipt.outcome.is_some(),
-        }
+        // Every decision names the declared outcome it settles with.
+        && receipt.outcome.is_some()
 }
 
 fn review_task_matches_ownership(
@@ -2025,6 +2055,8 @@ fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
         "field-not-declared" => ReviewValidationReason::FieldNotDeclared,
         "constraint-invalid" => ReviewValidationReason::ConstraintInvalid,
         "constraint-violated" => ReviewValidationReason::ConstraintViolated,
+        "public-reason-required" => ReviewValidationReason::PublicReasonRequired,
+        "public-reason-not-declared" => ReviewValidationReason::PublicReasonNotDeclared,
         _ => return None,
     })
 }
@@ -2224,7 +2256,7 @@ mod tests {
         };
         assert!(valid_decision_receipt(&receipt(
             ReviewDecisionType::Approve,
-            None
+            Some("approved".to_owned())
         )));
         assert!(valid_decision_receipt(&receipt(
             ReviewDecisionType::Reject,
@@ -2232,7 +2264,7 @@ mod tests {
         )));
         assert!(!valid_decision_receipt(&receipt(
             ReviewDecisionType::Approve,
-            Some("unexpected".to_owned())
+            None
         )));
         assert!(!valid_decision_receipt(&receipt(
             ReviewDecisionType::Answer,
@@ -2255,9 +2287,9 @@ mod tests {
             labelled.outcome_label = Some(invalid_label);
             assert!(!valid_decision_receipt(&labelled));
         }
-        let mut approval = receipt(ReviewDecisionType::Approve, None);
-        approval.outcome_label = Some("Confirm".to_owned());
-        assert!(!valid_decision_receipt(&approval));
+        let mut approval = receipt(ReviewDecisionType::Approve, Some("approved".to_owned()));
+        approval.outcome_label = Some("Approved".to_owned());
+        assert!(valid_decision_receipt(&approval));
     }
 
     #[test]
@@ -2386,6 +2418,14 @@ mod tests {
             (
                 "constraint-violated",
                 ReviewValidationReason::ConstraintViolated,
+            ),
+            (
+                "public-reason-required",
+                ReviewValidationReason::PublicReasonRequired,
+            ),
+            (
+                "public-reason-not-declared",
+                ReviewValidationReason::PublicReasonNotDeclared,
             ),
         ];
         for (word, reason) in reasons {

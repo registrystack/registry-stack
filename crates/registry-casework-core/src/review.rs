@@ -2,7 +2,11 @@ use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 use chrono::{DateTime, Utc};
 use jsonschema::{Draft, JSONSchema};
-use registry_review_protocol::{ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding};
+#[cfg(feature = "schema")]
+use registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES;
+use registry_review_protocol::{
+    check_public_reason, ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -37,6 +41,7 @@ const MAXIMUM_REVIEW_CONSTRAINT_CHOICES: usize = 64;
 const MAXIMUM_REVIEW_CONSTRAINT_TITLE_CHARS: usize = 120;
 
 const RESULT_PATH: &str = "$.result";
+const PUBLIC_REASON_PATH: &str = "$.publicReason";
 const RESULT_CONSTRAINTS_PATH: &str = "$.resultConstraints";
 
 pub type ReviewPolicyDigest = ContentDigest;
@@ -164,8 +169,22 @@ pub struct ReviewOutcomePolicy {
     pub label: String,
     pub settlement: ReviewOutcomeSettlement,
     pub reason_required: bool,
+    /// Whether a decision with this outcome gives text for release to the
+    /// subject's owner. There is no default: the policy author decides what
+    /// an applicant is told.
+    pub public_reason: ReviewPublicReasonRule,
     #[serde(default, skip_serializing_if = "is_false")]
     pub result_required: bool,
+}
+
+/// Whether a decision gives a public reason with an outcome.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewPublicReasonRule {
+    Required,
+    Optional,
+    None,
 }
 
 impl ReviewOutcomePolicy {
@@ -440,7 +459,19 @@ impl ReviewPolicy {
                         );
                     }
                 }
-                tag(ReviewPolicyError::ApprovalPayload, payload);
+                if !self
+                    .outcomes
+                    .iter()
+                    .any(|outcome| outcome.settlement == ReviewOutcomeSettlement::Approved)
+                {
+                    payload.push(
+                        "casework.review-policy.approval-without-approved-outcome",
+                        "/outcomes",
+                        "an approval review policy declares at least one approved outcome",
+                        "Declare an outcome with settlement: approved.",
+                    );
+                }
+                tag(ReviewPolicyError::ApprovalOutcomes, payload);
             }
             ReviewPurpose::Answer => {
                 let mut answer_stages = Findings::default();
@@ -745,6 +776,7 @@ impl ReviewPolicyClosure {
         &self,
         outcome: &str,
         reason: Option<&str>,
+        public_reason: Option<&str>,
         result: Option<&Value>,
         constraints: Option<&Value>,
     ) -> Result<(), ReviewDecisionValidationError> {
@@ -769,6 +801,30 @@ impl ReviewPolicyClosure {
                 ReviewValidationReason::ReasonRequired,
             )
             .into());
+        }
+        if public_reason.is_some_and(|text| check_public_reason(text).is_err()) {
+            return Err(ReviewValidationError::new(
+                PUBLIC_REASON_PATH,
+                ReviewValidationReason::TextInvalid,
+            )
+            .into());
+        }
+        match (outcome_policy.public_reason, public_reason) {
+            (ReviewPublicReasonRule::Required, None) => {
+                return Err(ReviewValidationError::new(
+                    PUBLIC_REASON_PATH,
+                    ReviewValidationReason::PublicReasonRequired,
+                )
+                .into());
+            }
+            (ReviewPublicReasonRule::None, Some(_)) => {
+                return Err(ReviewValidationError::new(
+                    PUBLIC_REASON_PATH,
+                    ReviewValidationReason::PublicReasonNotDeclared,
+                )
+                .into());
+            }
+            _ => {}
         }
         match (result, self.result_schema.as_ref()) {
             (Some(result), Some(schema)) => {
@@ -1142,15 +1198,40 @@ pub struct ReviewClockOccurrence {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+/// A reviewer's decision. Every decision names a declared outcome. A missing
+/// `outcome` reads as empty so the policy check refuses it with the outcomes
+/// the policy declares for that decision, rather than as an unreadable body;
+/// the published schema still requires the field.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(transform = require_decision_outcome))]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DecisionKind {
-    Approve,
+    /// Approval names an approved outcome. It carries no private reason or
+    /// result, which approved outcomes cannot require.
+    Approve {
+        #[serde(default)]
+        outcome: String,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+        public_reason: Option<String>,
+    },
     Reject {
+        #[serde(default)]
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+        public_reason: Option<String>,
         #[serde(
             default,
             deserialize_with = "deserialize_present_value",
@@ -1160,9 +1241,17 @@ pub enum DecisionKind {
         result: Option<Value>,
     },
     ChangesRequested {
+        #[serde(default)]
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+        public_reason: Option<String>,
         #[serde(
             default,
             deserialize_with = "deserialize_present_value",
@@ -1172,9 +1261,17 @@ pub enum DecisionKind {
         result: Option<Value>,
     },
     Answer {
+        #[serde(default)]
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+        public_reason: Option<String>,
         #[serde(
             default,
             deserialize_with = "deserialize_present_value",
@@ -1183,6 +1280,31 @@ pub enum DecisionKind {
         #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_REVIEW_RESULT_BYTES)))]
         result: Option<Value>,
     },
+}
+
+/// Lists `outcome` as required in every decision variant of the published
+/// schema, which `#[serde(default)]` would otherwise mark optional.
+#[cfg(feature = "schema")]
+fn require_decision_outcome(schema: &mut schemars::Schema) {
+    let Some(variants) = schema
+        .get_mut("oneOf")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for variant in variants {
+        let Some(variant) = variant.as_object_mut() else {
+            continue;
+        };
+        let required = variant
+            .entry("required")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(required) = required.as_array_mut() {
+            if !required.iter().any(|name| name == "outcome") {
+                required.push(serde_json::Value::from("outcome"));
+            }
+        }
+    }
 }
 
 /// Preserve an explicitly present JSON `null` so semantic validation can
@@ -1210,19 +1332,45 @@ pub struct Decision {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ReviewSettlement {
-    Approved,
+    Approved {
+        outcome: String,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        public_reason: Option<String>,
+    },
     Rejected {
         outcome: String,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        public_reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result: Option<Value>,
     },
     ChangesRequested {
         outcome: String,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        public_reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result: Option<Value>,
     },
     Answered {
         outcome: String,
+        #[serde(
+            default,
+            rename = "publicReason",
+            skip_serializing_if = "Option::is_none"
+        )]
+        public_reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result: Option<Value>,
     },
@@ -1232,7 +1380,7 @@ impl ReviewSettlement {
     #[must_use]
     pub fn result_status(&self) -> ReviewResultStatus {
         match self {
-            Self::Approved => ReviewResultStatus::Approved,
+            Self::Approved { .. } => ReviewResultStatus::Approved,
             Self::Rejected { .. } => ReviewResultStatus::Rejected,
             Self::ChangesRequested { .. } => ReviewResultStatus::ChangesRequested,
             Self::Answered { .. } => ReviewResultStatus::Answered,
@@ -1377,84 +1525,134 @@ pub fn record_review_decision(
         return Err(ReviewDecisionError::PreviousStageReviewerExcluded);
     }
 
-    match (&policy.purpose, &decision.decision) {
-        (ReviewPurpose::Approval, DecisionKind::Approve) => {}
-        (
-            ReviewPurpose::Approval,
-            DecisionKind::Reject {
+    let (expected, outcome, reason, public_reason, result) =
+        match (&policy.purpose, &decision.decision) {
+            (
+                ReviewPurpose::Approval,
+                DecisionKind::Approve {
+                    outcome,
+                    public_reason,
+                },
+            ) => (
+                ReviewOutcomeSettlement::Approved,
                 outcome,
-                reason,
-                result,
-            },
-        ) => {
-            validate_settlement_outcome(
-                policy,
+                None,
+                public_reason,
+                None,
+            ),
+            (
+                ReviewPurpose::Approval,
+                DecisionKind::Reject {
+                    outcome,
+                    reason,
+                    public_reason,
+                    result,
+                },
+            ) => (
                 ReviewOutcomeSettlement::Rejected,
                 outcome,
                 reason.as_deref(),
+                public_reason,
                 result.as_ref(),
-                progress.result_constraints.as_ref(),
-            )?;
-        }
-        (
-            ReviewPurpose::Approval,
-            DecisionKind::ChangesRequested {
-                outcome,
-                reason,
-                result,
-            },
-        ) => {
-            validate_settlement_outcome(
-                policy,
+            ),
+            (
+                ReviewPurpose::Approval,
+                DecisionKind::ChangesRequested {
+                    outcome,
+                    reason,
+                    public_reason,
+                    result,
+                },
+            ) => (
                 ReviewOutcomeSettlement::ChangesRequested,
                 outcome,
                 reason.as_deref(),
+                public_reason,
                 result.as_ref(),
-                progress.result_constraints.as_ref(),
-            )?;
-        }
-        (
-            ReviewPurpose::Answer,
-            DecisionKind::Answer {
+            ),
+            (
+                ReviewPurpose::Answer,
+                DecisionKind::Answer {
+                    outcome,
+                    reason,
+                    public_reason,
+                    result,
+                },
+            ) => (
+                ReviewOutcomeSettlement::Answered,
                 outcome,
-                reason,
-                result,
-            },
-        ) => validate_settlement_outcome(
-            policy,
-            ReviewOutcomeSettlement::Answered,
-            outcome,
-            reason.as_deref(),
-            result.as_ref(),
-            progress.result_constraints.as_ref(),
-        )?,
-        _ => return Err(ReviewDecisionError::DecisionNotAllowed),
-    }
+                reason.as_deref(),
+                public_reason,
+                result.as_ref(),
+            ),
+            _ => return Err(ReviewDecisionError::DecisionNotAllowed),
+        };
+    validate_settlement_outcome(
+        policy,
+        expected,
+        outcome,
+        reason,
+        public_reason.as_deref(),
+        result,
+        progress.result_constraints.as_ref(),
+    )?;
 
-    let settlement = match &decision.decision {
+    let (settlement, settles_on_record) = match &decision.decision {
         DecisionKind::Reject {
-            outcome, result, ..
-        } => Some(ReviewSettlement::Rejected {
-            outcome: outcome.clone(),
-            result: result.clone(),
-        }),
+            outcome,
+            public_reason,
+            result,
+            ..
+        } => (
+            ReviewSettlement::Rejected {
+                outcome: outcome.clone(),
+                public_reason: public_reason.clone(),
+                result: result.clone(),
+            },
+            true,
+        ),
         DecisionKind::ChangesRequested {
-            outcome, result, ..
-        } => Some(ReviewSettlement::ChangesRequested {
-            outcome: outcome.clone(),
-            result: result.clone(),
-        }),
+            outcome,
+            public_reason,
+            result,
+            ..
+        } => (
+            ReviewSettlement::ChangesRequested {
+                outcome: outcome.clone(),
+                public_reason: public_reason.clone(),
+                result: result.clone(),
+            },
+            true,
+        ),
         DecisionKind::Answer {
-            outcome, result, ..
-        } => Some(ReviewSettlement::Answered {
-            outcome: outcome.clone(),
-            result: result.clone(),
-        }),
-        DecisionKind::Approve => None,
+            outcome,
+            public_reason,
+            result,
+            ..
+        } => (
+            ReviewSettlement::Answered {
+                outcome: outcome.clone(),
+                public_reason: public_reason.clone(),
+                result: result.clone(),
+            },
+            true,
+        ),
+        // The approval that meets the final stage's threshold settles the
+        // request, so its outcome and public reason are the ones released.
+        DecisionKind::Approve {
+            outcome,
+            public_reason,
+        } => (
+            ReviewSettlement::Approved {
+                outcome: outcome.clone(),
+                public_reason: public_reason.clone(),
+            },
+            false,
+        ),
     };
 
     progress.decisions.push(decision);
-    if let Some(settlement) = settlement {
+    if settles_on_record {
         progress.settlement = Some(settlement.clone());
         return Ok(ReviewTransition::Settled { settlement });
     }
@@ -1463,7 +1661,8 @@ pub fn record_review_decision(
         .decisions
         .iter()
         .filter(|decision| {
-            decision.stage_id == stage.id && matches!(&decision.decision, DecisionKind::Approve)
+            decision.stage_id == stage.id
+                && matches!(&decision.decision, DecisionKind::Approve { .. })
         })
         .count();
     let approvals = u16::try_from(approvals).expect("review approval count is policy bounded");
@@ -1474,7 +1673,6 @@ pub fn record_review_decision(
     }
 
     if usize::from(progress.active_stage) + 1 == policy.stages.len() {
-        let settlement = ReviewSettlement::Approved;
         progress.settlement = Some(settlement.clone());
         Ok(ReviewTransition::Settled { settlement })
     } else {
@@ -1492,6 +1690,7 @@ fn validate_settlement_outcome(
     expected: ReviewOutcomeSettlement,
     outcome: &str,
     reason: Option<&str>,
+    public_reason: Option<&str>,
     result: Option<&Value>,
     constraints: Option<&Value>,
 ) -> Result<(), ReviewDecisionError> {
@@ -1501,9 +1700,17 @@ fn validate_settlement_outcome(
         .find(|candidate| candidate.id == outcome)
         .is_none_or(|candidate| candidate.settlement != expected)
     {
-        return Err(ReviewDecisionError::DecisionNotAllowed);
+        return Err(ReviewDecisionError::OutcomeNotAllowed {
+            settlement: expected,
+            declared: policy
+                .outcomes
+                .iter()
+                .filter(|candidate| candidate.settlement == expected)
+                .map(|candidate| candidate.id.clone())
+                .collect(),
+        });
     }
-    policy.validate_outcome(outcome, reason, result, constraints)?;
+    policy.validate_outcome(outcome, reason, public_reason, result, constraints)?;
     Ok(())
 }
 
@@ -1521,8 +1728,8 @@ pub enum ReviewPolicyError {
     ClockIdentity,
     #[error("review stage approval counts must be positive and bounded")]
     StageThreshold,
-    #[error("approval policies can declare only rejected or changes-requested outcomes")]
-    ApprovalPayload,
+    #[error("approval policies declare an approved outcome and cannot settle with answered")]
+    ApprovalOutcomes,
     #[error("answer policies require exactly one single-decision stage")]
     AnswerStages,
     #[error("answer policies can declare only answered outcomes")]
@@ -1567,12 +1774,18 @@ pub enum ReviewValidationReason {
     FieldNotDeclared,
     ConstraintInvalid,
     ConstraintViolated,
+    PublicReasonRequired,
+    PublicReasonNotDeclared,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewValidationError {
     pub path: String,
     pub reason: ReviewValidationReason,
+    /// The declared identifiers the value at `path` may take, when the
+    /// refusal can name them; empty otherwise. A boxed slice keeps client
+    /// error types within the large-error size budget.
+    pub allowed: Box<[String]>,
 }
 
 impl ReviewValidationError {
@@ -1597,7 +1810,14 @@ impl ReviewValidationError {
                 fallback.to_owned()
             },
             reason,
+            allowed: Box::default(),
         }
+    }
+
+    /// Names the declared identifiers the value at `path` may take.
+    pub fn allowing(mut self, allowed: Vec<String>) -> Self {
+        self.allowed = allowed.into_boxed_slice();
+        self
     }
 }
 
@@ -1607,7 +1827,11 @@ impl fmt::Display for ReviewValidationError {
             formatter,
             "review request validation failed at {}",
             self.path
-        )
+        )?;
+        if !self.allowed.is_empty() {
+            write!(formatter, "; use one of: {}", self.allowed.join(", "))?;
+        }
+        Ok(())
     }
 }
 
@@ -1641,6 +1865,15 @@ pub enum ReviewDecisionError {
     PreviousStageReviewerExcluded,
     #[error("the decision is not valid for this review policy")]
     DecisionNotAllowed,
+    #[error(
+        "outcome must name a declared {} outcome of this review policy; use one of: {}",
+        settlement_name(*settlement),
+        declared.join(", ")
+    )]
+    OutcomeNotAllowed {
+        settlement: ReviewOutcomeSettlement,
+        declared: Vec<String>,
+    },
     #[error("rejection and changes-requested reasons must be bounded non-empty text")]
     ReasonInvalid,
 }
@@ -1713,25 +1946,33 @@ fn check_review_json(
 impl DecisionKind {
     /// Policy-independent input bounds, safe to check before token acquisition or I/O.
     pub fn check_input(&self) -> Result<(), ReviewValidationError> {
-        let (outcome, reason, result) = match self {
-            Self::Approve => return Ok(()),
+        let (outcome, reason, public_reason, result) = match self {
+            Self::Approve {
+                outcome,
+                public_reason,
+            } => (outcome, &None, public_reason, &None),
             Self::Reject {
                 outcome,
                 reason,
+                public_reason,
                 result,
             }
             | Self::ChangesRequested {
                 outcome,
                 reason,
+                public_reason,
                 result,
             }
             | Self::Answer {
                 outcome,
                 reason,
+                public_reason,
                 result,
-            } => (outcome, reason, result),
+            } => (outcome, reason, public_reason, result),
         };
-        if !bounded_text(outcome, crate::MAXIMUM_IDENTIFIER_BYTES) {
+        // A missing outcome reads as empty and is refused by the policy
+        // check, which names the outcomes the policy declares.
+        if !outcome.is_empty() && !bounded_text(outcome, crate::MAXIMUM_IDENTIFIER_BYTES) {
             return Err(ReviewValidationError::new(
                 "$.outcome",
                 ReviewValidationReason::TextInvalid,
@@ -1743,6 +1984,15 @@ impl DecisionKind {
         {
             return Err(ReviewValidationError::new(
                 "$.reason",
+                ReviewValidationReason::TextInvalid,
+            ));
+        }
+        if public_reason
+            .as_ref()
+            .is_some_and(|text| check_public_reason(text).is_err())
+        {
+            return Err(ReviewValidationError::new(
+                PUBLIC_REASON_PATH,
                 ReviewValidationReason::TextInvalid,
             ));
         }
@@ -2344,6 +2594,15 @@ fn valid_path_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'$' | b'.' | b'/' | b'_' | b'-' | b'~')
 }
 
+fn settlement_name(settlement: ReviewOutcomeSettlement) -> &'static str {
+    match settlement {
+        ReviewOutcomeSettlement::Approved => "approved",
+        ReviewOutcomeSettlement::Rejected => "rejected",
+        ReviewOutcomeSettlement::ChangesRequested => "changes-requested",
+        ReviewOutcomeSettlement::Answered => "answered",
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -2402,10 +2661,19 @@ mod tests {
             result_schema: None,
             outcomes: vec![
                 ReviewOutcomePolicy {
+                    id: "approved".to_owned(),
+                    label: "Approve".to_owned(),
+                    settlement: ReviewOutcomeSettlement::Approved,
+                    reason_required: false,
+                    public_reason: ReviewPublicReasonRule::Optional,
+                    result_required: false,
+                },
+                ReviewOutcomePolicy {
                     id: "rejected".to_owned(),
                     label: "Reject".to_owned(),
                     settlement: ReviewOutcomeSettlement::Rejected,
                     reason_required: true,
+                    public_reason: ReviewPublicReasonRule::Optional,
                     result_required: false,
                 },
                 ReviewOutcomePolicy {
@@ -2413,6 +2681,7 @@ mod tests {
                     label: "Request changes".to_owned(),
                     settlement: ReviewOutcomeSettlement::ChangesRequested,
                     reason_required: true,
+                    public_reason: ReviewPublicReasonRule::Optional,
                     result_required: false,
                 },
             ],
@@ -2449,6 +2718,7 @@ mod tests {
                 label: "Record answer".to_owned(),
                 settlement: ReviewOutcomeSettlement::Answered,
                 reason_required: false,
+                public_reason: ReviewPublicReasonRule::Optional,
                 result_required: true,
             }],
         }
@@ -2496,7 +2766,10 @@ mod tests {
             stage_id: task.stage_id.clone(),
             reviewer,
             profile_id: "reviewer".to_owned(),
-            decision: DecisionKind::Approve,
+            decision: DecisionKind::Approve {
+                outcome: "approved".to_owned(),
+                public_reason: None,
+            },
         }
     }
 
@@ -2545,7 +2818,10 @@ mod tests {
             )
             .unwrap(),
             ReviewTransition::Settled {
-                settlement: ReviewSettlement::Approved
+                settlement: ReviewSettlement::Approved {
+                    outcome: "approved".to_owned(),
+                    public_reason: None,
+                }
             }
         );
     }
@@ -2722,13 +2998,21 @@ mod tests {
         };
         policy.display_schema = schema.clone();
         policy.result_schema = Some(schema.clone());
+        // An approval policy declares one approved outcome, which can
+        // require neither a reason nor a result; every other outcome carries
+        // the largest metadata.
         policy.outcomes = (0..MAXIMUM_REVIEW_OUTCOMES)
             .map(|index| ReviewOutcomePolicy {
                 id: identifier('o', index),
                 label: "\"".repeat(120),
-                settlement: ReviewOutcomeSettlement::ChangesRequested,
-                reason_required: true,
-                result_required: true,
+                settlement: if index == 0 {
+                    ReviewOutcomeSettlement::Approved
+                } else {
+                    ReviewOutcomeSettlement::ChangesRequested
+                },
+                reason_required: index != 0,
+                public_reason: ReviewPublicReasonRule::Optional,
+                result_required: index != 0,
             })
             .collect();
 
@@ -2931,6 +3215,7 @@ mod tests {
             decision: DecisionKind::Answer {
                 outcome: "approved".to_owned(),
                 reason: None,
+                public_reason: None,
                 result: Some(json!({"code": 4})),
             },
         };
@@ -2940,6 +3225,7 @@ mod tests {
             ReviewTransition::Settled {
                 settlement: ReviewSettlement::Answered {
                     outcome: "approved".to_owned(),
+                    public_reason: None,
                     result: Some(json!({"code": 4})),
                 }
             }
@@ -2966,6 +3252,7 @@ mod tests {
             decision: DecisionKind::Answer {
                 outcome: "approved".to_owned(),
                 reason: None,
+                public_reason: None,
                 result,
             },
         };
@@ -3089,6 +3376,7 @@ mod tests {
             decision: DecisionKind::Answer {
                 outcome: "approved".to_owned(),
                 reason: None,
+                public_reason: None,
                 result: Some(result),
             },
         };
@@ -3155,6 +3443,7 @@ mod tests {
                 decision: DecisionKind::Answer {
                     outcome: "approved".to_owned(),
                     reason: None,
+                    public_reason: None,
                     result: Some(json!({"score": 1.0})),
                 },
             };
@@ -3330,6 +3619,7 @@ mod tests {
 
         let settlement = ReviewSettlement::ChangesRequested {
             outcome: "needs-change".to_owned(),
+            public_reason: None,
             result: None,
         };
         let settled = serde_json::to_value(ReviewTransition::Settled {
@@ -3378,10 +3668,12 @@ mod tests {
                 DecisionKind::Reject {
                     outcome: "rejected".to_owned(),
                     reason: Some("unsafe".to_owned()),
+                    public_reason: None,
                     result: None,
                 },
                 ReviewSettlement::Rejected {
                     outcome: "rejected".to_owned(),
+                    public_reason: None,
                     result: None,
                 },
             ),
@@ -3389,10 +3681,12 @@ mod tests {
                 DecisionKind::ChangesRequested {
                     outcome: "changes-requested".to_owned(),
                     reason: Some("correct target".to_owned()),
+                    public_reason: None,
                     result: None,
                 },
                 ReviewSettlement::ChangesRequested {
                     outcome: "changes-requested".to_owned(),
+                    public_reason: None,
                     result: None,
                 },
             ),
@@ -3414,6 +3708,159 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn approval_policies_declare_an_approved_outcome() {
+        let mut policy = approval_policy(vec![stage("review", 1)]);
+        policy
+            .outcomes
+            .retain(|outcome| outcome.settlement != ReviewOutcomeSettlement::Approved);
+        assert_eq!(policy.check(), Err(ReviewPolicyError::ApprovalOutcomes));
+        let finding = policy
+            .findings()
+            .into_iter()
+            .find(|finding| {
+                finding.code == "casework.review-policy.approval-without-approved-outcome"
+            })
+            .expect("the missing approved outcome is reported");
+        assert_eq!(finding.pointer, "/outcomes");
+        assert_eq!(
+            finding.suggested_action,
+            "Declare an outcome with settlement: approved."
+        );
+    }
+
+    #[test]
+    fn approval_must_name_a_declared_approved_outcome() {
+        let snapshot = approval_policy(vec![stage("review", 1)])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        let request_id = Uuid::from_u128(100);
+        // An empty outcome is what a decision without `outcome` reads as.
+        for outcome in ["", "rejected", "undeclared"] {
+            let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+            let task = task(request_id, 0, "review", 1, "reviewer");
+            let mut decision = approve(&task, person("reviewer"));
+            decision.decision = DecisionKind::Approve {
+                outcome: outcome.to_owned(),
+                public_reason: None,
+            };
+            let error =
+                record_review_decision(&snapshot, &mut progress, &task, decision).unwrap_err();
+            assert_eq!(
+                error,
+                ReviewDecisionError::OutcomeNotAllowed {
+                    settlement: ReviewOutcomeSettlement::Approved,
+                    declared: vec!["approved".to_owned()],
+                }
+            );
+            assert_eq!(
+                error.to_string(),
+                "outcome must name a declared approved outcome of this review policy; use one of: approved"
+            );
+            assert!(progress.decisions.is_empty());
+        }
+    }
+
+    #[test]
+    fn public_reasons_follow_the_outcome_rule() {
+        let request_id = Uuid::from_u128(100);
+        let decide = |rule: ReviewPublicReasonRule, public_reason: Option<&str>| {
+            let mut policy = approval_policy(vec![stage("review", 1)]);
+            policy.outcomes[1].public_reason = rule;
+            let snapshot = policy
+                .closure_with(crate::ReviewPolicyDependencies::default())
+                .unwrap();
+            let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+            let task = task(request_id, 0, "review", 1, "reviewer");
+            let mut decision = approve(&task, person("reviewer"));
+            decision.decision = DecisionKind::Reject {
+                outcome: "rejected".to_owned(),
+                reason: Some("private reviewer note".to_owned()),
+                public_reason: public_reason.map(str::to_owned),
+                result: None,
+            };
+            record_review_decision(&snapshot, &mut progress, &task, decision)
+        };
+        let refused = |reason: ReviewValidationReason| {
+            Err(ReviewDecisionError::Validation(
+                ReviewValidationError::new("$.publicReason", reason).into(),
+            ))
+        };
+        assert_eq!(
+            decide(ReviewPublicReasonRule::Required, None),
+            refused(ReviewValidationReason::PublicReasonRequired)
+        );
+        assert_eq!(
+            decide(ReviewPublicReasonRule::None, Some("Not eligible.")),
+            refused(ReviewValidationReason::PublicReasonNotDeclared)
+        );
+        assert_eq!(
+            decide(
+                ReviewPublicReasonRule::Optional,
+                Some(&"x".repeat(registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES + 1))
+            ),
+            refused(ReviewValidationReason::TextInvalid)
+        );
+        for (rule, public_reason) in [
+            (ReviewPublicReasonRule::Required, Some("Not eligible.")),
+            (ReviewPublicReasonRule::Optional, Some("Not eligible.")),
+            (ReviewPublicReasonRule::Optional, None),
+            (ReviewPublicReasonRule::None, None),
+        ] {
+            assert_eq!(
+                decide(rule, public_reason),
+                Ok(ReviewTransition::Settled {
+                    settlement: ReviewSettlement::Rejected {
+                        outcome: "rejected".to_owned(),
+                        public_reason: public_reason.map(str::to_owned),
+                        result: None,
+                    }
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn the_approval_meeting_the_final_threshold_settles_with_its_outcome() {
+        let mut policy = approval_policy(vec![stage("review", 2)]);
+        policy.outcomes.push(ReviewOutcomePolicy {
+            id: "approved-with-conditions".to_owned(),
+            label: "Approve with conditions".to_owned(),
+            settlement: ReviewOutcomeSettlement::Approved,
+            reason_required: false,
+            public_reason: ReviewPublicReasonRule::Required,
+            result_required: false,
+        });
+        let snapshot = policy
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        let request_id = Uuid::from_u128(100);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let first = task(request_id, 0, "review", 1, "a");
+        record_review_decision(
+            &snapshot,
+            &mut progress,
+            &first,
+            approve(&first, person("a")),
+        )
+        .unwrap();
+        let second = task(request_id, 0, "review", 2, "b");
+        let mut decision = approve(&second, person("b"));
+        decision.decision = DecisionKind::Approve {
+            outcome: "approved-with-conditions".to_owned(),
+            public_reason: Some("Approved; renew the permit within a year.".to_owned()),
+        };
+        assert_eq!(
+            record_review_decision(&snapshot, &mut progress, &second, decision),
+            Ok(ReviewTransition::Settled {
+                settlement: ReviewSettlement::Approved {
+                    outcome: "approved-with-conditions".to_owned(),
+                    public_reason: Some("Approved; renew the permit within a year.".to_owned()),
+                }
+            })
+        );
     }
 
     #[test]

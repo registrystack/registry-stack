@@ -56,7 +56,7 @@ fn accepted(submission: &str) -> Value {
 
 fn result(status: &str) -> Value {
     let accepted = accepted(&digest(PRODUCER));
-    json!({
+    let mut value = json!({
         "resultId": RESULT,
         "requestId": REQUEST,
         "subject": accepted["subject"],
@@ -65,7 +65,12 @@ fn result(status: &str) -> Value {
         "status": status,
         "completedAt": "2026-10-11T10:00:00Z",
         "availableUntil": "2026-11-11T10:00:00Z",
-    })
+    });
+    // A decided result names the declared outcome it settled with.
+    if status == "approved" {
+        value["outcome"] = json!("approved");
+    }
+    value
 }
 
 fn json_answer(status: u16, body: Value) -> ResponseTemplate {

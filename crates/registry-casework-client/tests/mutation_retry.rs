@@ -354,7 +354,10 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
             4,
             "task-decide-1",
             &ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
         )
         .await

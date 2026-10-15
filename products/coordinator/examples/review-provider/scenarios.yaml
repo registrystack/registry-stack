@@ -228,6 +228,7 @@
             "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
             "resultId": "00000000-0000-4000-8000-000000000003",
             "status": "approved",
+            "outcome": "human-approved",
             "completedAt": "2026-10-14T00:01:00Z",
             "availableUntil": "2026-11-14T00:00:00Z"
           }

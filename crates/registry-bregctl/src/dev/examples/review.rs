@@ -529,7 +529,7 @@ async fn approve(origin: &str, proposal: &ProposalCapture, token: &str) -> Resul
         reqwest::Method::POST,
         &format!("{url}/decisions"),
         token,
-        Some(json!({"decision":{"type":"approve"}})),
+        Some(json!({"decision":{"type":"approve","outcome":"approved"}})),
         current["revision"].as_i64(),
         &format!("example-{id}-approve"),
     )

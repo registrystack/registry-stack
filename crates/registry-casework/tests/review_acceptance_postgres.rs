@@ -30,7 +30,7 @@ fn project_value(source: bool, routing: bool) -> Value {
      "reviewPolicies":[{"id":"notice-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
       "stages":[{"id":"review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
       "clocks":["deadline"],"retention":{"terminalDays":30,"accountabilityDays":90},
-      "outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false},{"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true}],
+      "outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},{"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}],
       "displaySchema":{"type":"object","additionalProperties":false,"required":["title","region"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}}],
      "trustedProducers":[{"id":"notice-service","profile":"producer","issuer":"https://issuer.test","subject":"notice-service","trustedInitiatorIssuer":"https://issuer.test","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"recoveryDays":7}]
     });
@@ -451,7 +451,10 @@ async fn current_policy_selection_recovers_before_updates_and_requires_live_auth
             &actor("a", CaseworkRole::Staff),
             task,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -596,7 +599,10 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     let task = f.task(accepted.request_id).await;
     let held = f.claim(task, "a").await;
     let decision = ReviewTaskDecisionRequest {
-        decision: DecisionKind::Approve,
+        decision: DecisionKind::Approve {
+            outcome: "approved".into(),
+            public_reason: None,
+        },
     };
     let transition = f
         .service
@@ -1201,6 +1207,7 @@ async fn submitted_routing_needs_no_provider_and_request_clocks_do_not_share_rou
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Reject {
                     outcome: "rejected".into(),
+                    public_reason: Some("The notice was replaced".into()),
                     reason: Some("Withdraw the original notice".into()),
                     result: None,
                 },

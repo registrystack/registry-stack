@@ -24,8 +24,9 @@ pub(crate) use http::router;
 pub struct ReviewOutcome {
     /// Shared terminal Review status emitted for this completed Workflow outcome.
     pub status: ReviewResultStatus,
-    /// Authored outcome code required for rejected, changes-requested and
-    /// answered statuses; omit it for approved, cancelled and superseded.
+    /// Authored outcome code required for approved, rejected,
+    /// changes-requested and answered statuses; omit it for cancelled and
+    /// superseded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "crate::runtime::optional_external")]
     #[cfg_attr(
@@ -81,7 +82,8 @@ impl ReviewPolicy {
         for outcome in self.outcomes.values() {
             let needs_code = matches!(
                 outcome.status,
-                ReviewResultStatus::Rejected
+                ReviewResultStatus::Approved
+                    | ReviewResultStatus::Rejected
                     | ReviewResultStatus::ChangesRequested
                     | ReviewResultStatus::Answered
             );
@@ -90,7 +92,7 @@ impl ReviewPolicy {
                     code.trim().is_empty() || code.len() > 128 || code.chars().any(char::is_control)
                 })
             {
-                return Err(invalid("rejected, changes-requested and answered outcomes require one bounded outcome code; approved, cancelled and superseded outcomes carry none"));
+                return Err(invalid("approved, rejected, changes-requested and answered outcomes require one bounded outcome code; cancelled and superseded outcomes carry none"));
             }
         }
         Ok(())
@@ -249,6 +251,7 @@ impl RetainedReview {
             submission_digest: self.accepted.submission_digest.clone(),
             status: outcome.status,
             outcome: outcome.outcome.clone(),
+            public_reason: None,
             result: None,
             completed_at,
             available_until,

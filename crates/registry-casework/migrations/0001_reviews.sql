@@ -316,13 +316,14 @@ CREATE TABLE casework_review_decisions (
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
     result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 1048576),
     private_reason text CHECK (private_reason IS NULL OR octet_length(private_reason) <= 2000),
+    public_reason text CHECK (public_reason IS NULL OR octet_length(public_reason) BETWEEN 1 AND 2000),
     decided_at timestamptz NOT NULL,
     UNIQUE (request_id, stage_index, actor_issuer, actor_subject),
     FOREIGN KEY (task_id, request_id, stage_index)
         REFERENCES casework_review_tasks(task_id, request_id, stage_index) ON DELETE CASCADE,
     CHECK (
-        (decision = 'approve' AND outcome IS NULL AND result IS NULL)
-        OR (decision IN ('reject','changes-requested','answer') AND outcome IS NOT NULL)
+        outcome IS NOT NULL
+        AND (decision <> 'approve' OR (result IS NULL AND private_reason IS NULL))
     )
 );
 
@@ -331,12 +332,14 @@ CREATE TABLE casework_review_results (
     request_id uuid NOT NULL UNIQUE REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
     status text NOT NULL CHECK (status IN ('approved','rejected','changes-requested','answered','cancelled','superseded')),
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
+    public_reason text CHECK (public_reason IS NULL OR octet_length(public_reason) BETWEEN 1 AND 2000),
     result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 1048576),
     completed_at timestamptz NOT NULL,
     available_until timestamptz NOT NULL,
     CHECK (available_until > completed_at),
-    CHECK (status NOT IN ('approved','cancelled','superseded') OR (outcome IS NULL AND result IS NULL)),
-    CHECK (status NOT IN ('rejected','changes-requested','answered') OR outcome IS NOT NULL),
+    CHECK (status NOT IN ('cancelled','superseded') OR (outcome IS NULL AND public_reason IS NULL AND result IS NULL)),
+    CHECK (status <> 'approved' OR result IS NULL),
+    CHECK (status NOT IN ('approved','rejected','changes-requested','answered') OR outcome IS NOT NULL),
     UNIQUE (result_id, request_id)
 );
 

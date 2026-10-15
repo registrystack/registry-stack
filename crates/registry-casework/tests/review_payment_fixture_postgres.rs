@@ -375,8 +375,8 @@ fn project(issuer: &str) -> CaseworkProject {
             }),
             result_schema: None,
             outcomes: serde_json::from_value(json!([
-                {"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false},
-                {"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true}
+                {"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},
+                {"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}
             ]))
             .expect("payment outcome policies"),
         }],
@@ -517,7 +517,10 @@ async fn independent_payment_source_uses_casework_but_retains_release_authority(
             &reviewer,
             task_id,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -720,7 +723,10 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         .header("if-match", "\"2\"")
         .header("idempotency-key", "approve-payment-over-http")
         .json(&ReviewTaskDecisionRequest {
-            decision: DecisionKind::Approve,
+            decision: DecisionKind::Approve {
+                outcome: "approved".into(),
+                public_reason: None,
+            },
         })
         .send()
         .await

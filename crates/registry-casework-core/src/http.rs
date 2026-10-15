@@ -43,6 +43,9 @@ pub const IF_MATCH_HEADER: &str = "if-match";
 pub const VALIDATION_PATH_HEADER: &str = "registry-casework-validation-path";
 /// Carries a closed, value-free validation reason beside `VALIDATION_PATH_HEADER`.
 pub const VALIDATION_REASON_HEADER: &str = "registry-casework-validation-reason";
+/// Lists, comma-separated, the declared identifiers the value at
+/// `VALIDATION_PATH_HEADER` may take, when the refusal can name them.
+pub const VALIDATION_ALLOWED_HEADER: &str = "registry-casework-validation-allowed";
 pub const MAXIMUM_CASEWORK_PROFILE_BYTES: usize = 128;
 pub const MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES: usize = 128;
 pub const MAXIMUM_DIRECTORY_IDENTIFIER_BYTES: usize = 128;

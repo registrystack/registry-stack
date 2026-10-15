@@ -429,12 +429,12 @@ fn scenarios() -> String {
     );
     let decided_late = format!(
         "    withdraw:\n    - {{type: success, value: {{outcome: already-terminal, result: {}}}}}\n",
-        result("approved", "")
+        result("approved", ", outcome: approved")
     );
     [
         case(
             "approved",
-            &format!("{{type: event, value: {}}}", result("approved", "")),
+            &format!("{{type: event, value: {}}}", result("approved", ", outcome: approved")),
             NOTICE,
             "    path: [submit-review, await-review, decide, notify, notice-sent]\n    state: completed\n    outcome: {type: named, value: notice-sent}\n    output: {messageId: 00000000-0000-4000-8000-000000000020, resultId: 00000000-0000-4000-8000-000000000011}\n    workflowElapsedSeconds: 0\n",
         ),
@@ -676,7 +676,7 @@ fn refused<'a>(
 
 #[test]
 fn a_stated_event_outside_the_review_result_contract_is_refused_without_its_value() {
-    let approved = result("approved", "");
+    let approved = result("approved", ", outcome: approved");
     for (event, path, hidden) in [
         (
             approved.replace("status: approved", "status: private-verdict"),
@@ -684,7 +684,7 @@ fn a_stated_event_outside_the_review_result_contract_is_refused_without_its_valu
             vec!["private-verdict"],
         ),
         (
-            result("approved", ", outcome: private-reason"),
+            result("cancelled", ", outcome: private-reason"),
             "/cases/0/waits/await-review/value",
             vec!["private-reason"],
         ),

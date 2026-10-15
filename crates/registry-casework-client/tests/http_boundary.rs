@@ -17,7 +17,8 @@ use registry_casework_client::{
     ReviewTaskDraftInput, ReviewValidationReason, SourceContextBinding,
 };
 use registry_casework_core::{
-    ReviewContextPolicy, ReviewPolicy, ReviewPurpose, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewContextPolicy, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewPolicy,
+    ReviewPublicReasonRule, ReviewPurpose, ReviewRetentionPolicy, ReviewStagePolicy,
     SubjectBinding, TaskApprovalRequest,
 };
 use serde_json::{json, Value};
@@ -54,7 +55,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
             "properties":{}
         }),
         result_schema: None,
-        outcomes: Vec::new(),
+        outcomes: approval_outcomes(),
     });
     let app = Router::new()
         .route(
@@ -1659,11 +1660,11 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
     }
 
     let mut decided_by_caller = task(json!("decided"), Some(true));
-    decided_by_caller["decisionReceipt"] = receipt("approve", None);
+    decided_by_caller["decisionReceipt"] = receipt("approve", Some("approved"));
     let mut receipt_for_other_caller = task(json!("decided"), Some(false));
     receipt_for_other_caller["decisionReceipt"] = receipt("reject", Some("declined"));
-    let mut approve_with_outcome = task(json!("decided"), Some(true));
-    approve_with_outcome["decisionReceipt"] = receipt("approve", Some("invalid"));
+    let mut approve_without_outcome = task(json!("decided"), Some(true));
+    approve_without_outcome["decisionReceipt"] = receipt("approve", None);
     let mut reject_without_outcome = task(json!("decided"), Some(true));
     reject_without_outcome["decisionReceipt"] = receipt("reject", None);
     for (read, accepted) in [
@@ -1671,7 +1672,7 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
         (task(json!("decided"), Some(false)), true),
         (task(json!("decided"), None), false),
         (receipt_for_other_caller, false),
-        (approve_with_outcome, false),
+        (approve_without_outcome, false),
         (reject_without_outcome, false),
         (task(json!("open"), Some(false)), false),
         (task(held.clone(), Some(true)), false),
@@ -1706,7 +1707,7 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
             .route("/v1/review-tasks", get(review_task_fixture_response))
             .with_state({
                 let mut listed = task(json!("open"), None);
-                listed["decisionReceipt"] = receipt("approve", None);
+                listed["decisionReceipt"] = receipt("approve", Some("approved"));
                 json!({"items": [listed], "status": "complete"})
             }),
     )
@@ -1735,7 +1736,7 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
             )
             .with_state({
                 let mut mutated = task(held, None);
-                mutated["decisionReceipt"] = receipt("approve", None);
+                mutated["decisionReceipt"] = receipt("approve", Some("approved"));
                 mutated
             }),
     )
@@ -1815,7 +1816,7 @@ fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: V
         },
         display_schema,
         result_schema: None,
-        outcomes: Vec::new(),
+        outcomes: approval_outcomes(),
     });
     json!({
         "taskId": Uuid::nil(),
@@ -2429,7 +2430,7 @@ fn cancel_response(request_id: Uuid, subject_id: &str, outcome: &str, status: &s
     } else {
         status
     };
-    json!({"outcome": outcome, "result": {
+    let mut response = json!({"outcome": outcome, "result": {
         "resultId": Uuid::from_u128(99),
         "requestId": request_id,
         "subject": {
@@ -2448,7 +2449,11 @@ fn cancel_response(request_id: Uuid, subject_id: &str, outcome: &str, status: &s
         "status": status,
         "completedAt": "2026-09-19T00:00:00Z",
         "availableUntil": available_until
-    }})
+    }});
+    if status == "approved" {
+        response["result"]["outcome"] = json!("approved");
+    }
+    response
 }
 
 async fn capture_headers(
@@ -2990,7 +2995,7 @@ async fn task_context_response() -> impl IntoResponse {
             "properties": {"summary": {"type": "string"}}
         }),
         result_schema: None,
-        outcomes: Vec::new(),
+        outcomes: approval_outcomes(),
     });
     let body = json!({
         "taskId": Uuid::nil(),
@@ -3112,4 +3117,16 @@ fn enrich_tasks(value: &mut Value) {
         }
         _ => {}
     }
+}
+
+/// The single approval outcome every fixture approval policy declares.
+fn approval_outcomes() -> Vec<ReviewOutcomePolicy> {
+    vec![ReviewOutcomePolicy {
+        id: "approved".to_owned(),
+        label: "Approve".to_owned(),
+        settlement: ReviewOutcomeSettlement::Approved,
+        reason_required: false,
+        public_reason: ReviewPublicReasonRule::Optional,
+        result_required: false,
+    }]
 }

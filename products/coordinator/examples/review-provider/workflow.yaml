@@ -37,8 +37,8 @@ workflow:
   review:
     resultRetentionSeconds: 86400
     outcomes:
-      automatic-approved: {status: approved}
-      human-approved: {status: approved}
+      automatic-approved: {status: approved, outcome: automatic-approved}
+      human-approved: {status: approved, outcome: human-approved}
       assessment-refused: {status: rejected, outcome: record-inactive}
       human-rejected: {status: rejected, outcome: correction-not-authorized}
       human-changes-requested: {status: changes-requested, outcome: correction-needs-changes}

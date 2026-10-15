@@ -275,7 +275,7 @@ impl Harness {
 }
 
 fn review_project(retention: u32) -> serde_json::Value {
-    json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"resultRetentionSeconds":retention,"outcomes":{"accepted":{"status":"approved"}}},"start":"done","steps":{"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}})
+    json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"resultRetentionSeconds":retention,"outcomes":{"accepted":{"status":"approved","outcome":"accepted"}}},"start":"done","steps":{"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}})
 }
 
 #[tokio::test]
@@ -324,7 +324,8 @@ async fn exact_admission_result_restart_feed_and_current_ownership_share_one_run
     assert_eq!(result.subject, accepted.subject);
     assert_eq!(result.policy, accepted.policy);
     assert_eq!(result.submission_digest, accepted.submission_digest);
-    assert!(result.outcome.is_none() && result.result.is_none());
+    assert_eq!(result.outcome.as_deref(), Some("accepted"));
+    assert!(result.result.is_none());
     let restarted = Store::connect(&h.url, &h.namespace).await.unwrap();
     let reread = restarted
         .review_result_owned(accepted.request_id, &h.actor, &h.producer, &h.workflows())
@@ -1009,7 +1010,7 @@ async fn lookup_during_a_real_call_transition_keeps_the_authorized_review_visibl
     let mut h = Harness::new(86400).await;
     let subject = serde_json::to_value(h.request().subject).unwrap();
     let contract = json!({"id":"urn:registry:breg:review-context:source:correct-name:assessment","revision":format!("sha256:{}","a".repeat(64)),"schemaDigest":format!("sha256:{}","b".repeat(64))});
-    let project = json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"operations":{"assessment":{"uses":"breg.read-review-context/v1","connection":"applications"}},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"outcomes":{"accepted":{"status":"approved"}}},"start":"assess","steps":{"assess":{"type":"call","operation":"assessment","input":{"type":"literal","value":{"actionId":"correct-name","subject":subject,"contract":contract}},"next":"route"},"route":{"type":"choose","choose":{"type":"literal","value":"automatic"},"cases":{"automatic":"done"}},"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}});
+    let project = json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"proposal-assessment","version":"1"},"operations":{"assessment":{"uses":"breg.read-review-context/v1","connection":"applications"}},"workflow":{"input":{"type":"object"},"deadlineSeconds":600,"review":{"outcomes":{"accepted":{"status":"approved","outcome":"accepted"}}},"start":"assess","steps":{"assess":{"type":"call","operation":"assessment","input":{"type":"literal","value":{"actionId":"correct-name","subject":subject,"contract":contract}},"next":"route"},"route":{"type":"choose","choose":{"type":"literal","value":"automatic"},"cases":{"automatic":"done"}},"done":{"type":"finish","outcome":"accepted"}},"outcomes":{"accepted":{"type":"null"}}}});
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join("workflow.yaml"),

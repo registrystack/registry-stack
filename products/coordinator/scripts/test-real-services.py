@@ -1131,7 +1131,7 @@ COMMIT;
                 else:
                     http("POST", task_url + "/claim", staff, headers={**headers, "If-Match": f'"{task["revision"]}"', "Idempotency-Key": str(uuid.uuid4())})
                     current = http("GET", task_url, staff, headers=headers)
-                    decision = {"type": "approve"} if label == "approved" else {"type": "reject", "outcome": "not-authorized"}
+                    decision = {"type": "approve", "outcome": "approved"} if label == "approved" else {"type": "reject", "outcome": "not-authorized"}
                     http("POST", task_url + "/decisions", staff, {"decision": decision},
                         {**headers, "If-Match": f'"{current["revision"]}"', "Idempotency-Key": str(uuid.uuid4())}, (204,))
                 found.add(task["taskId"])
@@ -1491,7 +1491,7 @@ COMMIT;
             assert set(context["context"]["snapshot"]) == {
                 "applicantName", "benefitProgram", "requestedAmount"}
             body = ({"decision": {"type": "reject", "outcome": "missing-evidence"}}
-                    if outcome == "reject" else {"decision": {"type": "approve"}})
+                    if outcome == "reject" else {"decision": {"type": "approve", "outcome": "approved"}})
             current = http("GET", task_url, staff, headers=headers)
             http("POST", task_url + "/decisions", staff, body, {**headers, "If-Match": f'"{current["revision"]}"',
                  "Idempotency-Key": str(uuid.uuid4())}, (204,))

@@ -66,10 +66,12 @@ reviewPolicies:
         label: Confirm
         settlement: answered
         reasonRequired: false
+        publicReason: optional
       - id: rejected
         label: Return for correction
         settlement: answered
         reasonRequired: true
+        publicReason: required
 trustedProducers:
   - id: requester
     profile: requester
