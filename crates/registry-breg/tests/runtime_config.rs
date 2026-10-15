@@ -451,7 +451,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         "registry_migration"
     );
     assert_eq!(
-        config.event_delivery().payload_retention(),
+        config.retention().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
     assert_eq!(config.identity().database_id(), "registry-db");
@@ -896,7 +896,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
     assert_eq!(jwks.outage_tolerance, Duration::from_secs(900));
     assert_eq!(config.cursor().max_age(), Duration::from_secs(300));
     assert_eq!(
-        config.event_delivery().payload_retention(),
+        config.retention().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
     assert_eq!(
@@ -1071,32 +1071,38 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for days in [1_u8, 30_u8] {
         let config = parse_runtime_config(&format!(
-            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
         ))
         .expect("bounded deployment retention parses");
         assert_eq!(
-            config.event_delivery().payload_retention(),
+            config.retention().payload_retention(),
             Duration::from_secs(u64::from(days) * 24 * 60 * 60)
         );
     }
     for days in [0_u8, 31_u8] {
         let error = parse_runtime_config(&format!(
-            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/eventDelivery/payloadRetentionDays")
+            ("config.out-of-range", "/retention/hookPayloadRetentionDays")
         );
     }
+    let error = parse_runtime_config(&format!("{base}\nretention:\n  payloadRetentionDays: 7\n"))
+        .expect_err("the hook payload window has one name");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.unknown-key", "/retention/payloadRetentionDays")
+    );
 }
 
 #[test]
 fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config = parse_runtime_config(&base).expect("the idempotency section is optional");
-    assert_eq!(config.idempotency().receipt_retention_days(), 7);
+    let config = parse_runtime_config(&base).expect("the retention section is optional");
+    assert_eq!(config.retention().receipt_retention_days(), 7);
     let policy = config
         .idempotency_policy()
         .expect("the configured issuer scopes caller keys");
@@ -1107,20 +1113,56 @@ fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() 
     assert_eq!(policy.receipt_retention_days(), 7);
     for days in [1_u16, 365_u16] {
         let config = parse_runtime_config(&format!(
-            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
         ))
         .expect("a bounded receipt horizon parses");
-        assert_eq!(config.idempotency().receipt_retention_days(), days);
+        assert_eq!(config.retention().receipt_retention_days(), days);
     }
     for days in [0_u16, 366_u16] {
         let error = parse_runtime_config(&format!(
-            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/idempotency/receiptRetentionDays")
+            ("config.out-of-range", "/retention/receiptRetentionDays")
         );
+    }
+}
+
+#[test]
+fn retention_windows_outside_the_retention_block_are_refused_naming_the_new_path() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (document, pointer, replacement) in [
+        (
+            "eventDelivery:\n  payloadRetentionDays: 7\n",
+            "/eventDelivery",
+            "retention.hookPayloadRetentionDays",
+        ),
+        (
+            "eventDelivery: {}\n",
+            "/eventDelivery",
+            "retention.hookPayloadRetentionDays",
+        ),
+        (
+            "idempotency:\n  receiptRetentionDays: 7\n",
+            "/idempotency",
+            "retention.receiptRetentionDays",
+        ),
+        (
+            "idempotency: {}\n",
+            "/idempotency",
+            "retention.receiptRetentionDays",
+        ),
+    ] {
+        let error = parse_runtime_config(&format!("{base}\n{document}"))
+            .expect_err("the old retention location is refused");
+        let (code, path) = reader_refusal(&error);
+        assert_eq!(code, "config.removed-key", "{document}");
+        assert!(path.starts_with(pointer), "{document}: {path}");
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
     }
 }
 
@@ -1332,7 +1374,7 @@ fn unknown_keys_inside_a_task_grant_status_entry_are_reported_with_positions() {
          clientAssertionAudience: urn:identity:test\n    \
          clientId: breg-task-status\n    \
          privateKeyRef: secret:file/task-status-key\n    \
-         caseworkResource: urn:casework:test\n    \
+         statusResource: urn:casework:test\n    \
          statusScopes: canary-a\n    \
          scopes: canary-b\n",
         valid_runtime(&fixture.secret_root, &fixture.package_root)
@@ -4532,6 +4574,34 @@ fn an_audit_key_that_is_not_a_secret_reference_is_refused_at_the_reference() {
     }
 }
 
+/// CFG-CHANGE-2: the status resource member is named for what it binds, and
+/// the Casework-named spelling it replaced is refused with the key to write.
+#[test]
+fn a_task_status_casework_resource_is_refused_naming_status_resource() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let status = json!({
+        "sourceIssuer":"urn:casework:source",
+        "baseUrl":"https://unreachable-status.invalid",
+        "tokenEndpoint":"https://identity.example/token",
+        "clientAssertionAudience":"urn:identity:test",
+        "clientId":"breg-task-status",
+        "privateKeyRef":"secret:file/missing-task-status-key",
+        "caseworkResource":"urn:casework:test"
+    });
+    let error = parse_runtime_config_with_env(
+        &format!("{base}\ntaskGrantStatus: {}\n", json!([status])),
+        env_lookup,
+    )
+    .expect_err("the Casework-named spelling is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.removed-key", "/taskGrantStatus/0/caseworkResource")
+    );
+    let rendered = format!("{error} {}", error.render_human(None));
+    assert!(rendered.contains("statusResource"), "{rendered}");
+}
+
 #[test]
 fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     let fixture = RuntimeFixture::new();
@@ -4543,7 +4613,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         "clientAssertionAudience":"urn:identity:test",
         "clientId":"breg-task-status",
         "privateKeyRef":"secret:file/missing-task-status-key",
-        "caseworkResource":"urn:casework:test",
+        "statusResource":"urn:casework:test",
         "caBundleRef":"secret:file/missing-task-status-ca"
     });
     parse_runtime_config(&format!(
@@ -4557,7 +4627,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         ("tokenEndpoint", "https://user@identity.test/token"),
         ("clientId", ""),
         ("clientAssertionAudience", ""),
-        ("caseworkResource", "not-an-absolute-resource"),
+        ("statusResource", "not-an-absolute-resource"),
         ("statusScope", "two scopes"),
         ("statusPath", "/v1/task-grants/status"),
     ] {
@@ -4591,7 +4661,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         );
     }
     let mut invalid = status.clone();
-    invalid["caseworkResource"] = json!("not-an-absolute-resource");
+    invalid["statusResource"] = json!("not-an-absolute-resource");
     let error = parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
         .unwrap_err();
     let diagnostic = &error.diagnostics(None)[0];

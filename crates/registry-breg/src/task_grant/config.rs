@@ -62,7 +62,7 @@ mod tests {
             "clientAssertionAudience":"https://identity.test",
             "clientId":"breg-status",
             "privateKeyRef":"secret:file/status-key",
-            "caseworkResource":"urn:casework:test"
+            "statusResource":"urn:casework:test"
         });
         raw.as_object_mut()
             .unwrap()
@@ -156,7 +156,7 @@ mod tests {
             );
         }
         let mut invalid = config.clone();
-        invalid.casework_resource = ExternalId::new("not-an-absolute-resource").unwrap();
+        invalid.status_resource = ExternalId::new("not-an-absolute-resource").unwrap();
         assert!(TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err());
         let mut retired = serde_json::to_value(config.clone()).unwrap();
         retired["authority"] = serde_json::json!("casework-v1");

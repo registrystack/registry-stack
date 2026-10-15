@@ -199,7 +199,7 @@ def caller_claims(
         "registry_actor_kind": "service",
     }
     if scopes is not None:
-        claims["registry_scopes"] = scopes
+        claims["scope"] = " ".join(scopes)
     if grant:
         claims.update(
             {
@@ -539,7 +539,7 @@ class Verifier:
     def reader_token(self) -> str:
         return mint_token(
             self.signer,
-            caller_claims(READER, "demo-catalogue-reader", scopes=["scheduling-read"]),
+            caller_claims(READER, "demo-catalogue-reader", scopes=["scheduling:read"]),
         )
 
     def booker_token(self, name: str, subject: str) -> str:

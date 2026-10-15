@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- BREAKING: `authentication.oidc.scopeClaim` defaults to `scope` (was
+  `registry_scopes`), the default Scheduling uses and the claim stock
+  ThunderID emits; `messagingctl dev` tokens carry `scope` to match.
+  Migration: a deployment whose issuer emits `registry_scopes` sets
+  `scopeClaim: registry_scopes` explicitly.
+
+- BREAKING: `retention.submissionReceiptRetentionDays` is renamed
+  `retention.receiptRetentionDays`, the name BReg and Scheduling use for the
+  same window, and its maximum is 365 days (was 3650), still at most
+  `recordRetentionDays`. The old key is refused with `config.removed-key`
+  naming the new one. Migration: rename the key and keep a value of at most
+  365.
+
 - `messagingctl dev` pulls its pinned PostgreSQL 17.11 image from Docker Hub
   instead of ECR Public. The tag and digest are unchanged, and Mailpit remains
   pinned to its existing GHCR image.

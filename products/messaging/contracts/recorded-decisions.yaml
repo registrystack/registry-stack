@@ -342,7 +342,7 @@ decisions:
       authenticated caller, not a recipient, and under a profile that admits a
       human or agent actor or reads the principal from a claim other than sub
       they may identify a person, such as a staff member's email address. They
-      are kept for at most submissionReceiptRetentionDays, no longer than the
+      are kept for at most receiptRetentionDays, no longer than the
       message row already holds them, and the spent-key row holds them no
       longer. The residual is that an unkeyed digest lets anyone who reads the
       table and can guess a caller's issuer, subject, and key confirm that the

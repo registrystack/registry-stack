@@ -560,7 +560,7 @@
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
         "scopeClaim": {
-          "default": "registry_scopes",
+          "default": "scope",
           "type": "string"
         }
       },
@@ -761,17 +761,17 @@
           "minimum": 1,
           "type": "integer"
         },
-        "recordRetentionDays": {
-          "default": 90,
-          "description": "How long the content-free message record is kept, at least as long as\nthe payload and at most ten years.",
+        "receiptRetentionDays": {
+          "default": 7,
+          "description": "How long a submission receipt stays replayable under its idempotency\nkey, from one day to the record period and at most 365 days.",
           "format": "uint16",
-          "maximum": 3650,
+          "maximum": 365,
           "minimum": 1,
           "type": "integer"
         },
-        "submissionReceiptRetentionDays": {
-          "default": 7,
-          "description": "How long a submission receipt stays replayable under its idempotency\nkey, from one day to the record period.",
+        "recordRetentionDays": {
+          "default": 90,
+          "description": "How long the content-free message record is kept, at least as long as\nthe payload and at most ten years.",
           "format": "uint16",
           "maximum": 3650,
           "minimum": 1,

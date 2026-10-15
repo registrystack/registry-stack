@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- BREAKING: a `taskGrantStatus` entry names its status resource
+  `statusResource` (was `caseworkResource`), since any task authority, not
+  only Casework, can answer grant status. The old key is refused with
+  `config.removed-key` naming `statusResource`. Migration: rename the key;
+  the value stays as it is.
+
+- BREAKING: `retention.attemptReceiptRetentionDays` is renamed
+  `retention.receiptRetentionDays`, the name BReg and Messaging use for the
+  same window, and its maximum is 365 days (was 65535). The old key is
+  refused with `config.removed-key` naming the new one. Migration: rename the
+  key and keep a value of at most 365.
+
+- BREAKING: reminder events are delivered as the shared hook envelope that
+  appointment observers receive, so a receiver parses one envelope. The body
+  drops `specversion`; `source` is `urn:registrystack:scheduling:<id>`;
+  `time` is UTC at millisecond precision; it adds `subject` (the appointment's
+  record reference and revision), a per-purpose `dataschema`, and a root
+  `causation`. The request `content-type` is `application/json` (was
+  `application/cloudevents+json`). Migration: parse reminder bodies as the
+  hook envelope the Events and observers section of the README describes.
+
+- BREAKING: `authentication.oidc.scopeClaim` defaults to `scope` (was
+  `registry_scopes`), `readsScope` to `scheduling:read` (was
+  `scheduling-read`), the values every maintained example sets, and
+  `explainScope` to `scheduling:explain` (was `scheduling-explain`), so both
+  scope defaults take the colon form. A read or explain refusal for a missing
+  scope logs the claim and scope it expected. Migration: a deployment whose
+  issuer emits `registry_scopes`, the `scheduling-read` scope, or the
+  `scheduling-explain` scope sets `scopeClaim`, `readsScope`, or
+  `explainScope` explicitly.
+
+- Appointment observers read their allowed projection fields from the
+  policy model instead of a second copy in the runtime.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

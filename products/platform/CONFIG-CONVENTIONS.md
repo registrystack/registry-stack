@@ -401,8 +401,14 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Time allowed to drain on shutdown | `shutdownGraceMilliseconds` | `shutdownTimeoutSeconds` |
 | Longest accepted token lifetime | `maximumTokenLifetimeSeconds` | `maxTokenLifetimeSeconds` |
 | How long records of a kind are kept | `retentionDays`, or `<thing>RetentionDays` where one block keeps several kinds | `retainDays`, `retention.<thing>Days` |
+| How long an idempotency receipt stays replayable, from 1 through 365 days | `receiptRetentionDays` | `attemptReceiptRetentionDays`, `submissionReceiptRetentionDays` |
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
+
+Retention windows other than the audit journal's live in a top-level
+`retention` block (`retention.receiptRetentionDays`,
+`retention.hookPayloadRetentionDays`); the audit journal keeps
+`audit.retentionDays`.
 
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all

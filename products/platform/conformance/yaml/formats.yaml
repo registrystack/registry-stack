@@ -87,6 +87,7 @@ formats:
     removedKeys:
       - /audit/retainDays
       - /retention/attemptReceiptDays
+      - /retention/attemptReceiptRetentionDays
       - /retention/hookPayloadDays
       - /authentication/oidc/jwksUri
       - /authentication/oidc/jwksSource/kind
@@ -127,6 +128,7 @@ formats:
       - /retention/payloadDays
       - /retention/recordDays
       - /retention/submissionReceiptDays
+      - /retention/submissionReceiptRetentionDays
       - /audit/retainDays
     retiredApiVersions:
       - registry.registrystack.org/messaging-runtime/v1alpha1

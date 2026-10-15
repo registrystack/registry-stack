@@ -903,7 +903,7 @@ mod tests {
             output.join(AUTHORED_POLICY_FILE),
             "the example selects the package it names"
         );
-        assert_eq!(config.retention.attempt_receipt_retention_days, 7);
+        assert_eq!(config.retention.receipt_retention_days, 7);
         assert!(config.destinations.reminders.is_none());
     }
 

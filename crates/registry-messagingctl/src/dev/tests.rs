@@ -145,7 +145,7 @@ fn a_token_verifies_under_the_session_key_set_with_the_profile_claims() {
     .claims;
     assert_eq!(claims["azp"], "case-system");
     assert_eq!(claims["sub"], "dev-case-system");
-    assert_eq!(claims["registry_scopes"], "messaging:send");
+    assert_eq!(claims["scope"], "messaging:send");
     assert_eq!(claims["registry_actor_kind"], "service");
 
     let operator = config::token(&root, &loaded, "operations-console").unwrap();
@@ -156,7 +156,7 @@ fn a_token_verifies_under_the_session_key_set_with_the_profile_claims() {
     )
     .unwrap()
     .claims;
-    assert_eq!(claims["registry_scopes"], "messaging:operate");
+    assert_eq!(claims["scope"], "messaging:operate");
     assert!(claims.get("registry_actor_kind").is_none());
 }
 

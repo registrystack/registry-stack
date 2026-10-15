@@ -1970,7 +1970,7 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             "retention: payload {} days, record {} days, submission receipt {} days",
             retention["payloadRetentionDays"],
             retention["recordRetentionDays"],
-            retention["submissionReceiptRetentionDays"]
+            retention["receiptRetentionDays"]
         )?;
     }
     Ok(())

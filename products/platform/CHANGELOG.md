@@ -21,6 +21,13 @@
   `InvalidReminderOffset` carry the refused value (and the offset limit), and
   their messages name the fix instead of a caller's configuration keys. Match
   them with `{ .. }` and attach your own configuration pointer.
+
+- BREAKING: `registry-platform-config`'s shared task-grant status block
+  reads `statusResource` (was `caseworkResource`), and
+  `TaskGrantStatusConfig::casework_resource` is renamed `status_resource`,
+  the name `registry-platform-oidc`'s `TaskGrantStatusEndpoint` already uses.
+  Each product that reads the block refuses the old key naming the new one.
+
 - BREAKING: `registry-platform-audit` bounds a `stdout` audit destination
   that stops taking lines. One thread writes the stream, and an append waits
   at most 5 seconds for its line. A destination that holds one line past that

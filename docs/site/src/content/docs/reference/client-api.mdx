@@ -222,9 +222,9 @@ apply the mutation twice. A refusal that answers a resend does not prove the ear
 effect, so the client returns the earlier unknown-outcome error instead of that refusal.
 
 The receipt horizon is how long a service holds a key's first answer: BReg's
-`idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
-Messaging's `retention.submissionReceiptRetentionDays`,</DocsetProduct> and Scheduling's
-`retention.attemptReceiptRetentionDays`. Every service answers a spent key by one rule: a different request
+`retention.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
+Messaging's `retention.receiptRetentionDays`,</DocsetProduct> and Scheduling's
+`retention.receiptRetentionDays`. Every service answers a spent key by one rule: a different request
 under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
 `409 idempotency.key-reused` in the others, whatever the key's age. Past the horizon the same
 request is refused with `410 idempotency.expired` and the key stays spent. In BReg that `410` means
@@ -252,7 +252,7 @@ the key is refused with `410`.</DocsetProduct>
 <DocsetProduct product="registry-messaging">
 
 {/* Evidence: crates/registry-messaging-client/src/error.rs, is_outcome_unknown;
-    crates/registry-messaging/src/config.rs, default_submission_receipt_retention_days;
+    crates/registry-messaging/src/config.rs, default_receipt_retention_days;
     crates/registry-messaging-core/src/problem.rs, IdempotencyExpired;
     crates/registry-messaging/src/messages.rs, replay();
     crates/registry-messaging/src/retention.rs, delete_records();
@@ -840,7 +840,7 @@ operation serializes under `/data/<field>`.
 The client never creates a key, and resends a mutation only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). A retry after an unknown outcome must
 reuse the same binding, body, precondition, representation, and key. BReg holds a response under the
-key only for a committed success, and only for `idempotency.receiptRetentionDays` after that commit.
+key only for a committed success, and only for `retention.receiptRetentionDays` after that commit.
 A resend after a 5xx replays that success within the horizon, runs the operation again when nothing
 committed, and past the horizon answers `410 idempotency.expired` without running it. The key stays
 spent, so that `410` is a known outcome: the write committed.
@@ -1254,11 +1254,11 @@ A submission requires an idempotency key the caller chose: 1 to 128 visible ASCI
 refused before any exchange otherwise. A key is scoped to the caller's verified issuer and subject.
 The client never generates or replaces a key, and resends a submission only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). After a lost response it still reports,
-send the same key with the same submission within `retention.submissionReceiptRetentionDays`, and the runtime
+send the same key with the same submission within `retention.receiptRetentionDays`, and the runtime
 answers the stored receipt instead of accepting a second message. A `403` or `422` answering an exact
 retry does not show that the first attempt failed, so never resubmit under a new key: have the
 operator restore the access, template version, or locale the refusal names, then retry under the
-same key within `retention.submissionReceiptRetentionDays`, as the
+same key within `retention.receiptRetentionDays`, as the
 [replay rule](../apis/registry-messaging/#contract-boundary) explains. A message
 identifier must be the lowercase hyphenated UUID the runtime answered; any other value is refused
 before any exchange. The view carries the recipient's channel with the value `redacted`, and no

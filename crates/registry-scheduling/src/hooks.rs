@@ -38,7 +38,7 @@ use registry_platform_httputil::destination::{
 };
 use registry_scheduling_core::{
     valid_identifier, APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER,
-    APPOINTMENT_RESCHEDULED_TRIGGER,
+    APPOINTMENT_OBSERVER_FIELDS, APPOINTMENT_RESCHEDULED_TRIGGER, CANCELLATION_OBSERVER_FIELDS,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -81,17 +81,6 @@ const RETRY_DELAYS_MS: [i64; MAX_HOOK_ATTEMPTS as usize - 1] = [
     3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000,
     3_600_000,
 ];
-
-const APPOINTMENT_FIELDS: &[&str] = &[
-    "appointmentId",
-    "end",
-    "offering",
-    "policyRevision",
-    "revision",
-    "start",
-    "state",
-];
-const CANCELLATION_FIELDS: &[&str] = &["appointmentId", "revision", "state"];
 
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
@@ -961,8 +950,10 @@ fn projected_claim(
 
 fn projection_fields(trigger: &str) -> Option<&'static [&'static str]> {
     match trigger {
-        APPOINTMENT_CONFIRMED_TRIGGER | APPOINTMENT_RESCHEDULED_TRIGGER => Some(APPOINTMENT_FIELDS),
-        APPOINTMENT_CANCELLED_TRIGGER => Some(CANCELLATION_FIELDS),
+        APPOINTMENT_CONFIRMED_TRIGGER | APPOINTMENT_RESCHEDULED_TRIGGER => {
+            Some(APPOINTMENT_OBSERVER_FIELDS)
+        }
+        APPOINTMENT_CANCELLED_TRIGGER => Some(CANCELLATION_OBSERVER_FIELDS),
         _ => None,
     }
 }

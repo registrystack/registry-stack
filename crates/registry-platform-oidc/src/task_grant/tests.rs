@@ -344,7 +344,7 @@ fn the_shared_status_block_maps_onto_one_endpoint_member_for_member() {
             "clientAssertionAudience":"https://authority.test",
             "clientId":"status-client",
             "privateKeyRef":"secret:file/status-key",
-            "caseworkResource":"urn:authority:test",
+            "statusResource":"urn:authority:test",
             "statusScope":"grants:status",
             "caBundleRef":"secret:file/status-ca"
         }))
