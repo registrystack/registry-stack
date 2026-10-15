@@ -164,6 +164,14 @@ class ProposalResultTests(unittest.TestCase):
         self.assertEqual(proposal.input, self.value['input'])
         self.assertNotIn('undisclosed', proposal.input)
         body = {'input': copy.deepcopy(proposal.input)}
+        count = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as refused:
+            self.client.prepare_proposal(proposal, 'edit', body, 'exact-edit')
+        self.assertEqual(refused.exception.kind, 'invalid-request')
+        self.assertEqual(len(self.requests), count)
+        # Reads preserve exact integers; edits must also fit the storage JCS policy.
+        # This wide neighbor is exactly representable without changing its value.
+        body['input']['wide'] = 9007199254740994
         prepared = self.client.prepare_proposal(proposal, 'edit', body, 'exact-edit')
         saved = prepared.to_bytes()
         self.assertEqual(repr(prepared), 'BRegPreparedProposal(<redacted>)')
@@ -180,7 +188,7 @@ class ProposalResultTests(unittest.TestCase):
         headers = {key.lower(): value for key, value in headers.items()}
         self.assertEqual(path, '/tenant/v1/proposals/' + ID + '/edit?accessProfile=reader')
         self.assertEqual(json.loads(wire), body)
-        self.assertIn(b'9007199254740993', wire)
+        self.assertIn(b'9007199254740994', wire)
         self.assertEqual(headers['if-match'], '"edit-condition"')
         self.assertEqual(headers['idempotency-key'], 'exact-edit')
 

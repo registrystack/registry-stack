@@ -161,6 +161,37 @@ class NativeRequestTests(unittest.TestCase):
                         self.assertIs(error.outcome_unknown, True)
                     self.assertEqual(len(self.observed()), 1)
 
+    def test_inspect_and_reconcile_validate_wait_budgets_and_preserve_exhausted_waits(self) -> None:
+        for interval, observations, limit, valid in (
+            (30, 0, 1, True), (86400, 1, 1, True),
+            (29, 0, 1, False), (86401, 0, 1, False),
+            (30, 0, 0, False), (30, 2, 1, False),
+        ):
+            document = {**INSPECTION, "waits": [{
+                "step": "observe", "acceptedStep": "submit", "completion": "result",
+                "completionRevision": STATUS["workflowRevision"],
+                "timeoutAt": STATUS["deadlineAt"], "nextObservationAt": None,
+                "notBefore": STATUS["admittedAt"], "minimumIntervalSeconds": interval,
+                "observations": observations, "observationLimit": limit,
+            }]}
+            for call in (
+                lambda: self.client.inspect("token-canary", RUN),
+                lambda: self.client.reconcile("token-canary", RUN, "response-lost"),
+            ):
+                self.service.script(ok(document))
+                if valid:
+                    self.assertEqual(call(), {"kind": "complete", "value": document})
+                else:
+                    with self.assertRaises(CoordinatorClientError) as refused:
+                        call()
+                    error = refused.exception
+                    self.assertEqual(error.kind, "protocol")
+                    self.assertEqual(error.protocol_failure, "body")
+                    self.assertEqual(error.status, 200)
+                    self.assertIs(error.outcome_unknown, True)
+                    self.assertNotIn("token-canary", rendered(error))
+                self.assertEqual(len(self.observed()), 1)
+
     def test_a_run_and_step_status_carry_the_failure_path_a_refused_call_input_names(self) -> None:
         absent = object()
         for member, expected in (("/recordId", "/recordId"), (None, None), (absent, None)):

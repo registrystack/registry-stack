@@ -49,7 +49,9 @@ the client does not depend on a provider runtime, core or Review HTTP client.
 Presentation titles and descriptions do not change it. Exact package bytes have a separate
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
 Every returned run identity must be nonnil. Inspection requires `retryAllowed` to be true
-exactly when its blocking `reason` is null. Inconsistent documents are protocol failures;
+exactly when its blocking `reason` is null. Each wait has a minimum interval from 30 to
+86,400 seconds, a positive observation limit, and a count no greater than that limit.
+Inconsistent documents are protocol failures;
 a malformed successful admission or control answer leaves the outcome unknown and is never
 automatically resent. Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
 revisions, deadlines, next observations, persistent floors, and count/limit. Original inputs,

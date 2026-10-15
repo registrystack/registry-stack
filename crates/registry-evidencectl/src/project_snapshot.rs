@@ -535,6 +535,15 @@ fn read_bounded_descriptor(
 ) -> Result<Vec<u8>> {
     let mut file = File::from(descriptor);
     let metadata = file.metadata().context("inspecting authored input")?;
+    read_bounded_file(&mut file, &metadata, bound, relative)
+}
+
+fn read_bounded_file(
+    file: &mut File,
+    metadata: &fs::Metadata,
+    bound: Bound,
+    relative: &Path,
+) -> Result<Vec<u8>> {
     if !metadata.is_file() || metadata.nlink() != 1 {
         return Err(InspectionDiagnostic::at(relative, Inspection::NotPlain).into());
     }
@@ -554,6 +563,16 @@ fn read_bounded_descriptor(
         .take(limit)
         .read_to_end(&mut bytes)
         .context("reading authored input")?;
+    let after = file.metadata().context("reinspecting authored input")?;
+    // Detect ordinary in-place editor writes. Path replacement may unlink the
+    // captured inode without changing its bytes, so neither ctime nor link count
+    // determines content stability. This is not an atomic whole-project capture.
+    if metadata.len() != after.len()
+        || metadata.mtime() != after.mtime()
+        || metadata.mtime_nsec() != after.mtime_nsec()
+    {
+        return Err(InspectionDiagnostic::at(relative, Inspection::Changed).into());
+    }
     if let Bound::Refuse(maximum) = bound {
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
             return Err(InspectionDiagnostic::at(relative, Inspection::TooLarge).into());
@@ -576,6 +595,57 @@ mod tests {
         error
             .chain()
             .any(|cause| cause.downcast_ref::<io::Error>().is_some())
+    }
+
+    #[test]
+    fn project_snapshot_refuses_in_place_changes_after_descriptor_inspection() {
+        for replacement in ["id: x\n", "id: extended\n", "id: second\n"] {
+            for bound in [Bound::ForReader, Bound::Refuse(1024)] {
+                let temporary = temporary();
+                let input = temporary.path().join("evidence.yaml");
+                fs::write(&input, "id: first!\n").unwrap();
+                let mut file = File::open(&input).unwrap();
+                let before_write = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+                file.set_times(fs::FileTimes::new().set_modified(before_write))
+                    .unwrap();
+                let metadata = file.metadata().unwrap();
+
+                // Deterministically place an in-place editor save inside the
+                // capture interval, after inspection and before the bounded read.
+                fs::write(&input, replacement).unwrap();
+                let after_write = before_write + std::time::Duration::from_secs(1);
+                file.set_times(fs::FileTimes::new().set_modified(after_write))
+                    .unwrap();
+                let error =
+                    read_bounded_file(&mut file, &metadata, bound, Path::new("evidence.yaml"))
+                        .unwrap_err();
+                let refusal = error.downcast_ref::<InspectionDiagnostic>().unwrap();
+                assert_eq!(refusal.diagnostic().code, "evidence.project.changed");
+                assert_eq!(refusal.path, "evidence.yaml");
+                assert!(!is_operational(&error));
+                assert!(!error.to_string().contains(replacement.trim()));
+            }
+        }
+    }
+
+    #[test]
+    fn project_snapshot_reads_captured_inode_after_editor_path_replacement() {
+        for bound in [Bound::ForReader, Bound::Refuse(1024)] {
+            let temporary = temporary();
+            let input = temporary.path().join("evidence.yaml");
+            let replacement = temporary.path().join("editor-save.yaml");
+            fs::write(&input, "id: captured\n").unwrap();
+            let mut file = File::open(&input).unwrap();
+            let metadata = file.metadata().unwrap();
+            fs::write(&replacement, "id: replacement\n").unwrap();
+            fs::rename(&replacement, &input).unwrap();
+
+            assert_eq!(
+                read_bounded_file(&mut file, &metadata, bound, Path::new("evidence.yaml")).unwrap(),
+                b"id: captured\n"
+            );
+            assert_eq!(fs::read(&input).unwrap(), b"id: replacement\n");
+        }
     }
 
     #[test]

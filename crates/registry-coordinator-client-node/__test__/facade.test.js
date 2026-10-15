@@ -250,6 +250,41 @@ test('inspect and reconcile preserve consistent recovery decisions and reject co
   }
 });
 
+test('inspect and reconcile validate wait budgets and preserve exhausted waits', async (context) => {
+  let document;
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  for (const [minimumIntervalSeconds, observations, observationLimit, valid] of [
+    [30, 0, 1, true], [86400, 1, 1, true],
+    [29, 0, 1, false], [86401, 0, 1, false],
+    [30, 0, 0, false], [30, 2, 1, false],
+  ]) {
+    document = { ...INSPECTION, waits: [{
+      step: 'observe', acceptedStep: 'submit', completion: 'result',
+      completionRevision: STATUS.workflowRevision,
+      timeoutAt: STATUS.deadlineAt, nextObservationAt: null, notBefore: STATUS.admittedAt,
+      minimumIntervalSeconds, observations, observationLimit,
+    }] };
+    for (const call of [() => client.inspect('token-canary', RUN_ID), () => client.reconcile('token-canary', RUN_ID, 'response-lost')]) {
+      const before = requests.length;
+      if (valid) {
+        assert.deepEqual(await call(), { kind: 'complete', value: document });
+      } else {
+        await assert.rejects(call, (error) => {
+          assert.equal(error.kind, 'protocol');
+          assert.equal(error.protocolFailure, 'body');
+          assert.equal(error.status, 200);
+          assert.equal(error.outcomeUnknown, true);
+          assert.doesNotMatch(inspectValue(error), /token-canary/);
+          return true;
+        });
+      }
+      assert.equal(requests.length, before + 1);
+    }
+  }
+});
+
 test('a run and step status carry the failure path a refused call input names', async (context) => {
   for (const [member, expected] of [['/recordId', '/recordId'], [null, null], [undefined, null]]) {
     const run = { ...STATUS };
