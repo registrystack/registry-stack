@@ -133,37 +133,81 @@ fn reordering_a_named_map_changes_neither_the_served_policy_nor_its_digest() {
     );
 }
 
+/// A project with two review policies, two context providers and two task
+/// templates, each map written in the order `order` gives.
+fn two_of_each(order: [usize; 2]) -> String {
+    let display = json!({"type":"object","additionalProperties":false,"required":["title"],"properties":{"title":{"type":"string","maxLength":160}}});
+    let schema_digest = serde_json::to_string(&ContentDigest::for_bytes(
+        &registry_platform_canonical_json::canonicalize_json(&display).unwrap(),
+    ))
+    .unwrap();
+    let revision = serde_json::to_string(&ContentDigest::for_bytes(b"contract")).unwrap();
+    let ordered = |entries: [String; 2]| format!("{}{}", entries[order[0]], entries[order[1]]);
+    let policy = |id: &str| {
+        format!(
+            "  {id}:\n    version: \"1\"\n    purpose: approval\n    context: {{mode: current-source, provider: {id}-context, contract: {{id: {id}-context-v1, revision: {revision}, schemaDigest: {schema_digest}}}}}\n    stages: [{{id: review, queue: reviews, decidingProfiles: [reviewer], requiredApprovals: 1}}]\n    retention: {{terminalRetentionDays: 30, accountabilityRetentionDays: 90}}\n    outcomes: {{approved: {{label: Approve, settlement: approved, reasonRequired: false, publicReason: optional}}, rejected: {{label: Reject, settlement: rejected, reasonRequired: true, publicReason: required}}}}\n    displaySchema: {display}\n"
+        )
+    };
+    let provider = |id: &str| {
+        format!(
+            "  {id}-context: {{capabilities: [human-display, service-status], sourceNamespace: notice-source, deploymentRef: notice-service, serviceProfiles: {{service-status: status-reader}}}}\n"
+        )
+    };
+    let template = |id: &str| {
+        format!(
+            "  {id}-summary: {{version: \"1\", label: Prepare summary, eligibleTeams: [review-team], eligibleProfiles: [reviewer], source: notice-source, reviewPolicies: [alpha, beta], agent: {{issuer: \"https://agent.example\", subject: {id}-agent}}, client: {id}-client, resource: \"urn:registry:records\", scopes: [\"records:get\"], purpose: prepare-summary, bounds: {{type: breg, permissions: [{{collection: records, operations: [get]}}]}}, subjects: {{}}, lifetimeSeconds: 900}}\n"
+        )
+    };
+    format!(
+        "apiVersion: {CASEWORK_API_VERSION}\nkind: {CASEWORK_KIND}\nproject: {{id: review-project, version: \"1\"}}\n\
+         accessProfiles:\n  reviewer: {{role: staff, principalClaim: principal, requiredScopes: [\"casework:review\"]}}\n  supervisor: {{role: supervisor, principalClaim: principal, requiredScopes: [\"casework:supervise\"]}}\n  administrator: {{role: administrator, principalClaim: principal, requiredScopes: [\"casework:admin\"]}}\n  producer: {{role: requester, principalClaim: principal, requiredScopes: [\"casework:request\"]}}\n\
+         queues: {{reviews: {{label: Reviews}}}}\n\
+         teams: {{review-team: {{label: Review team, serves: [reviews], memberProfiles: [reviewer], supervisorProfiles: [supervisor]}}}}\n\
+         contextProviders:\n{}\
+         reviewPolicies:\n{}\
+         taskTemplates:\n{}\
+         trustedProducers:\n  notice-service: {{profile: producer, issuer: \"https://issuer.example\", subject: notice-service, trustedInitiatorIssuer: \"https://people.example\", sourceNamespaces: [notice-source], reviewPolicies: [alpha, beta], retention: {{receiptRetentionDays: 7}}}}\n",
+        ordered([provider("alpha"), provider("beta")]),
+        ordered([policy("alpha"), policy("beta")]),
+        ordered([template("alpha"), template("beta")]),
+    )
+}
+
 #[test]
-fn reordering_review_policies_and_context_providers_changes_no_served_policy() {
-    const PATH: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../products/casework/examples/canonical-review/casework.yaml"
-    );
-    const CANONICAL: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../products/casework/examples/canonical-review/casework.yaml"
-    ));
-    let decision = CANONICAL.find("  decision:\n").unwrap();
-    let address = CANONICAL.find("  facility-address-review:\n").unwrap();
-    let producers = CANONICAL.find("trustedProducers:\n").unwrap();
-    assert!(decision < address && address < producers);
-    let reordered = format!(
-        "{}{}{}{}",
-        &CANONICAL[..decision],
-        &CANONICAL[address..producers],
-        &CANONICAL[decision..address],
-        &CANONICAL[producers..]
-    );
-    assert_ne!(reordered, CANONICAL);
-    let original = CaseworkProject::read(PATH, CANONICAL.as_bytes())
-        .unwrap()
-        .value;
-    let moved = CaseworkProject::read(PATH, reordered.as_bytes())
-        .unwrap()
-        .value;
-    for policy in ["decision", "facility-address-review"] {
-        let before = original.compile_policy(policy).unwrap();
-        let after = moved.compile_policy(policy).unwrap();
+fn reordering_review_policies_context_providers_and_task_templates_changes_no_served_policy() {
+    let forward = read(&two_of_each([0, 1])).expect("the forward project reads");
+    let reversed = read(&two_of_each([1, 0])).expect("the reversed project reads");
+    for project in [&forward, &reversed] {
+        let ids = |items: Vec<&str>| items.join(",");
+        assert_eq!(
+            ids(project
+                .review_policies
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect()),
+            "alpha,beta"
+        );
+        assert_eq!(
+            ids(project
+                .context_providers
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect()),
+            "alpha-context,beta-context"
+        );
+        assert_eq!(
+            ids(project
+                .task_templates
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect()),
+            "alpha-summary,beta-summary"
+        );
+    }
+    for policy in ["alpha", "beta"] {
+        let before = forward.compile_policy(policy).unwrap();
+        let after = reversed.compile_policy(policy).unwrap();
+        assert_eq!(before.dependencies.task_templates.len(), 2);
         assert_eq!(after.identity.digest, before.identity.digest);
         assert_eq!(
             serde_json::to_value(&after).unwrap(),
