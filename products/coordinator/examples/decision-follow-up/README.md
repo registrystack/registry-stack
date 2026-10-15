@@ -29,7 +29,7 @@ interchangeable measure between models. `needs-review` is a terminal return to
 the caller; it does not create a Casework task or acquire human approval.
 
 For a deployment, provide your BReg endpoint and an explicitly authorized
-`coordinator-actions` profile exposing a `request-information` action with
+`workflow-actions` profile exposing a `request-information` action with
 `applicationId` and `reason` inputs. The action is a project declaration, not a
 built-in Coordinator operation. Configure the shared secret references and
 choose an available reviewed model. Inspect provider data retention and minimize
@@ -57,6 +57,17 @@ execution are not supported. No live provider call is part of the offline check.
 
 The `contracts` import uses the owning BReg-generated Action export. The Operation alias selects
 its exact Action ID and pins its revision, mode, policy, input, output, and declared refusals.
-Regenerate the owner export and review a changed contract before packaging a new workflow version.
+The committed `generated/applications.contract.json` is generated from the synthetic BReg project in
+[`../applications-registry`](../applications-registry/registry.yaml), which declares only what that
+export needs, not a complete deployment. From the repository root,
+regenerate it into a new directory and copy the export over the committed file:
+
+```sh
+bregctl generate actions products/coordinator/examples/applications-registry --output /tmp/applications-actions
+cp /tmp/applications-actions/generated/action-contracts.json \
+  products/coordinator/examples/decision-follow-up/generated/applications.contract.json
+```
+
+Review a changed contract before packaging a new workflow version.
 Functions declare named input schemas and take one object of those inputs; they do not select
 transport credentials or replace the imported Action contract.

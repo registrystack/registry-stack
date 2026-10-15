@@ -383,6 +383,23 @@ struct Snapshot {
     operation_identities: Vec<OperationIdentity>,
 }
 
+/// The first operation a snapshot names that the catalog no longer registers,
+/// so a removed operation is refused by name instead of as a shapeless snapshot.
+fn unregistered_operation(snapshot: &serde_json::Value) -> Option<&str> {
+    let uses = snapshot["workflow"]["operations"]
+        .as_object()
+        .into_iter()
+        .flat_map(|operations| operations.values())
+        .filter_map(|operation| operation["uses"].as_str());
+    let identities = snapshot["operationIdentities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|identity| identity["id"].as_str());
+    uses.chain(identities)
+        .find(|identifier| crate::protocol::Operation::parse(identifier).is_none())
+}
+
 fn operation_identities(workflow: &Workflow) -> Vec<OperationIdentity> {
     let mut identities: Vec<_> = workflow
         .steps
@@ -518,6 +535,13 @@ impl Definition {
         }
         let value = registry_platform_canonical_json::parse_json_strict(snapshot.as_bytes())
             .map_err(|_| fail("definition.snapshot"))?;
+        if let Some(removed) = unregistered_operation(&value) {
+            return Err(CoordinatorError::new(
+                "definition.operation_removed",
+                format!("the sealed workflow snapshot uses operation `{removed}`, which this Coordinator does not provide"),
+            )
+            .suggest(format!("Remove `{removed}` from the workflow project, rerun check, reseal it with coordinatorctl package, and apply the new package.")));
+        }
         let frozen = serde_json::from_value(value).map_err(|_| fail("definition.snapshot"))?;
         Self::restore(frozen)
     }

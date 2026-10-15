@@ -231,6 +231,30 @@ fn declared_refusal_edge_is_frozen_in_the_snapshot_and_restores_exactly() {
 }
 
 #[test]
+fn a_snapshot_using_a_removed_operation_names_it_and_asks_for_a_reseal() {
+    let root = tempfile::tempdir().unwrap();
+    write_project(
+        root.path(),
+        &declared_refusal_project(),
+        "fn command(__named) { let input = __named.arg0;  input }",
+    );
+    let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
+    assert!(snapshot.contains("\"breg.invoke-action/v1\""));
+    let removed = snapshot.replace("\"breg.invoke-action/v1\"", "\"breg.submit-proposal/v1\"");
+    let error = Definition::from_snapshot(&removed)
+        .err()
+        .expect("a removed operation must refuse");
+    assert_eq!(error.code, "definition.operation_removed");
+    assert!(
+        error.message.contains("`breg.submit-proposal/v1`"),
+        "{}",
+        error.message
+    );
+    let next = error.suggested_action.as_deref().unwrap();
+    assert!(next.contains("reseal"), "{next}");
+}
+
+#[test]
 fn declared_refusal_is_available_only_on_its_edge_and_not_after_a_mixed_join() {
     let root = tempfile::tempdir().unwrap();
     let source = "fn command(__named) { let input = __named.arg0;  input } fn identity(__named) { let value = __named.arg0;  value }";

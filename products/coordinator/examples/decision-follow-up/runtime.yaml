@@ -13,13 +13,13 @@ connections:
   applications:
     type: breg
     baseUrl: https://registry.example.test
-    profile: coordinator-actions
+    profile: workflow-actions
     authorization:
       tokenEndpoint: https://identity.example.test/token
-      clientId: coordinator-actions
+      clientId: application-agent
       signingKeyRef: secret:file/client-key
-      resource: urn:example:registry
-      scopes: [registry:actions]
+      resource: urn:example:applications
+      scopes: [applications:act]
   assessor:
     type: evaluation
     protocol: system-one
