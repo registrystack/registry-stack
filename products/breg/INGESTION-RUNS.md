@@ -173,7 +173,7 @@ package activation, `status=blocked` finds the stored-open runs the durable
 binding retired, and `status=open` returns only runs that still match the
 active binding. The page renders against the very binding its own filter
 read, so a package activation cannot fall between the filter and the
-rendering. A listing cursor is the canonical run id the `after` pair parses;
+rendering. A listing cursor is the canonical run id the `cursor` pair parses;
 the maintained clients refuse any other cursor text when the query is built
 and treat a non-canonical page cursor as a protocol failure, so a page
 answer is always continuable. Both surfaces answer only while the serving

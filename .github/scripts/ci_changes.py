@@ -1381,7 +1381,6 @@ def classify(
                 "crates/registry-casework/src/**",
                 "crates/registry-casework-core/src/task_grant.rs",
                 "crates/registry-thunderid-tooling/**",
-                "crates/registry-coordinator/tests/support/breg_service.rs",
             )
             for path in paths
         )

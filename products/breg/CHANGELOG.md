@@ -44,6 +44,23 @@
   `config.removed-key` naming `statusResource`. Migration: rename the key;
   the value stays as it is.
 
+- `GET /v1/proposals/{id}/submissions/{version}` reads one submitted
+  version of a Proposal under Proposal Get authority: its frozen effect
+  digest, its review result, and its application status as separate members,
+  with `current` marking the latest version. The application member never
+  names the applier. Once neither the review result nor the application
+  receipt is retained, the read answers 410 `proposal.submission_expired`.
+  A non-canonical or unknown version is concealed like an unknown Proposal.
+- BREAKING: the Proposal list takes `limit` (1 to 100, default 50) for its
+  page size and refuses `top` with `query.invalid` naming `limit`. An
+  ingestion run listing takes `cursor` and answers `nextCursor`, and refuses
+  `after` with `query.invalid` naming `cursor`. Both refusals come after the
+  caller's authority is checked, so an unauthorized caller still sees
+  concealment. Record, metadata, statistics and GIS lists keep `$top` and
+  `$skiptoken`. The Rust `BRegProposalQuery.top` field is `limit`;
+  `BRegIngestionRunListQuery::after` is `cursor` and
+  `BRegIngestionRunPage::next_after` is `next_cursor`; the Node.js and Python
+  clients take `cursor` and return `nextCursor`.
 - `bregctl dev` pulls the same pinned PostgreSQL image from Docker Hub after
   ECR Public throttled hosted development journeys. Existing owned containers
   at the prior exact ECR reference remain valid.
@@ -97,6 +114,34 @@
   when the published key declares `use: sig`, lists `verify` alone if it lists
   `key_ops`, and carries no private member. The pinned ThunderID 1.0.1 issuer
   publishes such keys, so an existing local session starts as before.
+- BREAKING: a Proposal lifecycle event's `subject.recordReference` is the
+  Proposal's resource path, `/v1/proposals/{id}`, instead of a hashed
+  reference. Record events keep their hashed reference. A receiver that
+  matched Proposal events by the hashed value matches the path instead.
+- BREAKING: `applicationStatus.recovery` is `retry` or `correct-input`.
+  The never-emitted `refresh` and `receipt-only` values are removed from the
+  schema and from the Rust `BRegApplicationRecoveryHint` and Node.js types;
+  a document carrying either is refused as malformed. Apply, Retry and Revise
+  link availability keeps both values.
+- BREAKING: under required Review, `applicationStatus.state` reads
+  `awaiting-review` until an approved result exists, in both application
+  modes. `application-refused` now means only that an executor refused the
+  frozen effects. A rejected, changes-requested, or provider-ended Review is
+  reported by the `apply` link's availability as `review-rejected`,
+  `review-changes-requested` or `review-ended`, each with the new recovery
+  `revise`. `applicationStatus.recovery` no longer lists the never-emitted
+  `terminal`. The Rust, Node.js and Python clients and the generated project
+  SDKs accept the new values; update clients with the server.
+- Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
+  queued, applying or blocked automatic application job in the same
+  transaction, so the job reads `cancelled` instead of remaining inert queued
+  work the worker can never claim. Installation widens the job state check on
+  an existing database.
+- The Python client exposes `verify_webhook_delivery`, the shared Rust webhook
+  verifier the Node client already offers, with keyword-only `method`, `path`,
+  `headers`, `body` and `key`. Refusal raises `BaseRegistryClientError` with
+  kind `webhook-verification`. The durable receiver example verifies with it
+  instead of its own HMAC code.
 
 ## 0.41.0 - 2026-10-13
 

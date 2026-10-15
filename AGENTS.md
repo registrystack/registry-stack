@@ -182,8 +182,9 @@ arguments. No product crate depends on it, and it depends on the engine only
 through `registry-breg-client`. Its ignored `native_citizen` integration test
 composes independently built matching `breg`, `bregctl`, and `breg-review`
 executables over public HTTP and runs in the existing BReg `postgres` CI lane.
-The reused Coordinator fixture owns disposable databases and roles; CI aliases
-the BReg test URL and binary paths to its `COORDINATOR_*` inputs.
+Its own fixture provisions disposable databases and roles through
+`BREG_TEST_DATABASE_URL` and reads the built executables from `BREG_BIN`,
+`BREGCTL_BIN`, and `BREG_REVIEW_NATIVE_BIN`.
 `crates/registry-breg-mcp/clippy.toml` disallows the client methods it must never
 reach, and
 `products/breg/scripts/check-mcp-gateway-boundary.sh` proves that list still

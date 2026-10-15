@@ -3,32 +3,33 @@
 
 #![deny(unsafe_code)]
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use breg_client_sdk::{
-    BRegActionBinding, BRegActionInvocationRequest, BRegActionTargetConditions,
-    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
-    BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext,
-    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-    BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
-    BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
-    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
-    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
-    BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
-    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionBinding,
+    BRegActionInvocationRequest, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
+    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
+    BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation,
+    BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk,
+    BRegIngestionError, BRegIngestionPrefixDigest as CoreIngestionPrefixDigest,
+    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
+    BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
+    BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
     BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
-    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding, BRegWithdrawalReason,
+    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding,
+    BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError, BRegWithdrawalReason,
     BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError, TokenError,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
-    types::{PyBool, PyBytes, PyDict},
+    types::{PyBool, PyBytes, PyDict, PyString},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -834,7 +835,7 @@ fn ingestion_run_request(
 fn ingestion_run_list_query(
     py: Python<'_>,
     limit: Option<u32>,
-    after: Option<String>,
+    cursor: Option<String>,
     status: Option<String>,
     input_digest: Option<String>,
     access_profile: Option<String>,
@@ -850,9 +851,9 @@ fn ingestion_run_list_query(
             .limit(limit)
             .map_err(|error| ingestion_error(py, error))?;
     }
-    if let Some(after) = after {
+    if let Some(cursor) = cursor {
         query = query
-            .after(after)
+            .cursor(cursor)
             .map_err(|error| ingestion_error(py, error))?;
     }
     if let Some(status) = status {
@@ -931,6 +932,98 @@ fn encode_ingestion_chunk(
             inner: Arc::new(inner),
         })
         .map_err(|error| ingestion_error(py, error))
+}
+
+fn webhook_text(py: Python<'_>, value: &Bound<'_, PyAny>, field: &str) -> PyResult<String> {
+    value
+        .cast::<PyString>()
+        .ok()
+        .and_then(|text| text.to_str().ok().map(str::to_owned))
+        .ok_or_else(|| invalid(py, format!("webhook {field} must be a string")))
+}
+
+fn webhook_bytes<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+    field: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    value
+        .cast::<PyBytes>()
+        .cloned()
+        .map_err(|_| invalid(py, format!("webhook {field} must be bytes")))
+}
+
+fn webhook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, String>> {
+    let refused = || invalid(py, "webhook headers must map string names to string values");
+    let headers = value.cast::<PyDict>().map_err(|_| refused())?;
+    let mut result = BTreeMap::new();
+    for (name, value) in headers.iter() {
+        let name = name
+            .cast::<PyString>()
+            .ok()
+            .and_then(|text| text.to_str().ok().map(str::to_owned))
+            .ok_or_else(refused)?;
+        let value = value
+            .cast::<PyString>()
+            .ok()
+            .and_then(|text| text.to_str().ok().map(str::to_owned))
+            .ok_or_else(refused)?;
+        result.insert(name, value);
+    }
+    Ok(result)
+}
+
+fn webhook_verification_error(py: Python<'_>, error: BRegWebhookVerificationError) -> PyErr {
+    let mut mapped = MappedError::binding("webhook-verification", error.to_string());
+    mapped.code = Some(error.code().to_owned());
+    to_py_err(py, mapped)
+}
+
+/// Verify one exact Base Registry Engine Version 1 webhook delivery with the
+/// shared Rust verifier and return its authenticated attributes and body.
+///
+/// `path` is the request target the receiver was called on, `headers` maps
+/// header names (matched without regard to ASCII case) to values, `body` is
+/// the exact request body, and `key` is the destination's HMAC key. Receiver
+/// policy is the caller's: bound `delivery_time` against the receiver clock
+/// and deduplicate before acting on `body`. Refusal raises
+/// `BaseRegistryClientError` with kind `webhook-verification` and a value-free
+/// `code`; input of the wrong shape raises kind `invalid-request`.
+#[pyfunction]
+#[pyo3(signature = (*, method, path, headers, body, key))]
+fn verify_webhook_delivery<'py>(
+    py: Python<'py>,
+    method: &Bound<'py, PyAny>,
+    path: &Bound<'py, PyAny>,
+    headers: &Bound<'py, PyAny>,
+    body: &Bound<'py, PyAny>,
+    key: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let method = webhook_text(py, method, "method")?;
+    let path = webhook_text(py, path, "path")?;
+    let headers = webhook_headers(py, headers)?;
+    let body = webhook_bytes(py, body, "body")?;
+    let key = webhook_bytes(py, key, "key")?;
+    let verified = verify_core_webhook_delivery(CoreWebhookDelivery {
+        method: &method,
+        path: &path,
+        headers: &headers,
+        body: body.as_bytes(),
+        key: key.as_bytes(),
+    })
+    .map_err(|error| webhook_verification_error(py, error))?;
+    let result = PyDict::new(py);
+    result.set_item("id", verified.id)?;
+    result.set_item("source", verified.source)?;
+    result.set_item("type", verified.event_type)?;
+    result.set_item("time", verified.time)?;
+    result.set_item("dataschema", verified.data_schema)?;
+    result.set_item("generation", verified.generation)?;
+    result.set_item("attempt", verified.attempt)?;
+    result.set_item("delivery_time", verified.delivery_time)?;
+    result.set_item("idempotency_key", verified.idempotency_key)?;
+    result.set_item("body", PyBytes::new(py, &verified.body))?;
+    Ok(result)
 }
 
 /// Accumulate the raw source bytes of one ingestion input and derive the
@@ -2960,20 +3053,20 @@ impl BaseRegistryClient {
     }
 
     /// Read one bounded page of ingestion runs for one entity route.
-    #[pyo3(signature = (entity_route, *, limit=None, after=None, status=None, input_digest=None, access_profile=None))]
+    #[pyo3(signature = (entity_route, *, limit=None, cursor=None, status=None, input_digest=None, access_profile=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_ingestion_runs<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         limit: Option<u32>,
-        after: Option<String>,
+        cursor: Option<String>,
         status: Option<String>,
         input_digest: Option<String>,
         access_profile: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query =
-            ingestion_run_list_query(py, limit, after, status, input_digest, access_profile)?;
+            ingestion_run_list_query(py, limit, cursor, status, input_digest, access_profile)?;
         let value = py
             .detach(|| {
                 self.runtime
@@ -3160,6 +3253,7 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module.py().get_type::<BaseRegistryClientError>(),
     )?;
     module.add_function(pyo3::wrap_pyfunction!(encode_ingestion_chunk, module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(verify_webhook_delivery, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

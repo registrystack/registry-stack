@@ -80,6 +80,7 @@ pub enum BRegProblemCode {
     MutationConflict,
     PreconditionFailed,
     PreconditionRequired,
+    ProposalSubmissionExpired,
     QueryCursorInvalid,
     QueryInvalid,
     RequestInvalid,
@@ -97,7 +98,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
@@ -113,6 +114,7 @@ impl BRegProblemCode {
         Self::MutationConflict,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
+        Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
@@ -147,6 +149,7 @@ impl BRegProblemCode {
             Self::MutationConflict => "mutation.conflict",
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
+            Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
@@ -181,6 +184,7 @@ impl BRegProblemCode {
             | Self::StatisticalDatasetVersionConflict => 409,
             Self::IdempotencyExpired
             | Self::IngestionReceiptErased
+            | Self::ProposalSubmissionExpired
             | Self::StatisticalDatasetVersionWithdrawn => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
@@ -252,6 +256,9 @@ impl BRegProblemCode {
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",
             Self::PreconditionRequired => "The mutation precondition is required.",
+            Self::ProposalSubmissionExpired => {
+                "The review result and application receipt of the submission are no longer retained."
+            }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",

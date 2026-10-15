@@ -157,7 +157,7 @@ client.createIngestionRun('people', {
   chunkCount: 2,
   chunkAlgorithmVersion: 'greedy-canonical-http-batch-v1',
 })
-client.listIngestionRuns('people', { accessProfile: 'auditor', limit: 25, after: 'opaque', status: 'open', inputDigest: 'a'.repeat(64) })
+client.listIngestionRuns('people', { accessProfile: 'auditor', limit: 25, cursor: 'opaque', status: 'open', inputDigest: 'a'.repeat(64) })
 client.readIngestionRun('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
 client.readIngestionRun('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
 client.submitIngestionChunk('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', chunk, 'facility-operator')

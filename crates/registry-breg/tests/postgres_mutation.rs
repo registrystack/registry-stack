@@ -23,8 +23,8 @@ use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::idempotency::{IdempotencyPolicy, PermittedResponseHeader};
 use registry_breg::mutation::{
-    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
-    MutationOutcome, MutationPlan, MutationRequest, PatchOperation,
+    install_mutation_schema, MutationBody, MutationError, MutationFaultPoint, MutationOutcome,
+    MutationPlan, MutationRequest, MutationTransaction, PatchOperation,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
@@ -222,7 +222,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
             .expect("test owns a strong keyed audit profile"),
     );
-    let coordinator = MutationCoordinator::new(
+    let coordinator = MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),
@@ -920,7 +920,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         )
         .await
         .expect("test can simulate activation of a same-schema package revision");
-    let changed_package_coordinator = MutationCoordinator::new(
+    let changed_package_coordinator = MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         changed_identity,
@@ -990,8 +990,8 @@ async fn prepared_mutation_registry(
 fn audited_coordinator(
     database: &TestDatabase,
     identity: &registry_breg::postgres::ExpectedRegistryIdentity,
-) -> MutationCoordinator {
-    MutationCoordinator::new(
+) -> MutationTransaction {
+    MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),
@@ -1217,7 +1217,7 @@ async fn two_runtimes_audit_concurrent_mutations_through_their_own_writers() {
     let table = &compiled.entities()["widget"].physical_table;
     let before = durable_counts(&database, table).await;
 
-    let run = |runtime: usize, coordinator: MutationCoordinator| {
+    let run = |runtime: usize, coordinator: MutationTransaction| {
         let pool = pool.clone();
         let create_plan = &create_plan;
         let claims = &claims;
@@ -4527,8 +4527,8 @@ fn coordinator_with_audit_key(
     database: &TestDatabase,
     identity: &registry_breg::postgres::ExpectedRegistryIdentity,
     audit_key: u8,
-) -> MutationCoordinator {
-    MutationCoordinator::new(
+) -> MutationTransaction {
+    MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),

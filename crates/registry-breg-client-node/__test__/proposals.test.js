@@ -72,7 +72,7 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     assert.equal(sent.body, '{}');
     assert.equal(sent.headers['if-match'], '"draft-condition"');
     assert.equal(sent.headers['idempotency-key'], 'submit-once');
-    const page = await client.listProposals(contract.selectProposals('author'), '{"action":"correct","top":1}');
+    const page = await client.listProposals(contract.selectProposals('author'), '{"action":"correct","limit":1}');
     assert.equal(page.items[0].identifier, id);
     assert.equal(page.nextCursor, undefined);
     assert.throws(() => client.prepareProposal(draft, 'submit', '{"input":{}}', 'invalid-body'), error => error.kind === 'invalid-request');

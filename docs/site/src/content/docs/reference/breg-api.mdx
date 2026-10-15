@@ -439,7 +439,8 @@ audit, receipt, and the checkpoint advance commit in one transaction.
 ### List and read runs
 
 `GET /v1/records/{route}/ingestion-runs` lists the caller's runs: `limit` (default 25, at most
-100), keyset `after` a run id, and optional `status` and `inputDigest` filters.
+100), the keyset `cursor` from a previous page's `nextCursor`, and optional `status` and
+`inputDigest` filters.
 `GET /v1/records/{route}/ingestion-runs/{runId}` returns one run document with `nextChunkIndex`,
 so a restarting client rebuilds its plan from API state alone and never resends a committed
 chunk.
@@ -535,8 +536,9 @@ permitted transitions. The execution mode is fixed by the package.
 | Resource | Contract |
 | --- | --- |
 | `/v1/actions/{action}/proposals` | Start a draft for the selected Action under Start authority. |
-| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. |
+| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. |
 | `/v1/proposals/{proposal_id}` | Read the Proposal under current ownership, target, and disclosure grants. |
+| `/v1/proposals/{proposal_id}/submissions/{submission_version}` | Read one exact submission under the same Get authority: its frozen `effectDigest`, its `review` result and its `application` outcome as separate members. Only the current submission reports application progress. Answers 410 `proposal.submission_expired` once the result window has lapsed and no application receipt remains. |
 | Promoted transition links | Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply only when currently authorized. |
 | Promoted review and attachment links | Separate review-status, review-context, slot read/upload, and verification authority. |
 

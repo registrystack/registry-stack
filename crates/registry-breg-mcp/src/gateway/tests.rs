@@ -1028,7 +1028,7 @@ async fn listing_resumes_only_the_callers_own_target_and_refuses_arbitrary_filte
         .unwrap();
     let query = request.query.as_deref().unwrap();
     assert!(
-        query.contains("owner=caller") && query.contains("target=") && query.contains("top=20")
+        query.contains("owner=caller") && query.contains("target=") && query.contains("limit=20")
     );
     let refused = fixture
         .call(&caller, LIST_APPLICATIONS, json!({"owner":CITIZEN_B}))

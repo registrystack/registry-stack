@@ -1,8 +1,10 @@
 import importlib.util
 import json
 import sqlite3
+import sys
 import tempfile
 import threading
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -12,10 +14,33 @@ from pathlib import Path
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
-SPEC = importlib.util.spec_from_file_location("receiver", HERE / "receiver.py")
-RECEIVER = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader
-SPEC.loader.exec_module(RECEIVER)
+BINDING_TESTS = HERE.parents[3] / "crates/registry-breg-client-py/tests/python"
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, HERE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+# Build the in-tree binding and serve it as `registry_client.breg`, the import
+# path an installed registry-stack-client package provides.
+sys.path.insert(0, str(BINDING_TESTS))
+try:
+    from bootstrap import ensure_built
+finally:
+    sys.path.remove(str(BINDING_TESTS))
+ensure_built()
+import registry_breg_client  # noqa: E402
+
+REGISTRY_CLIENT = types.ModuleType("registry_client")
+REGISTRY_CLIENT.breg = registry_breg_client
+sys.modules["registry_client"] = REGISTRY_CLIENT
+sys.modules["registry_client.breg"] = registry_breg_client
+RECEIVER = load("receiver")
+SIGNER = load("sign_delivery")
 
 
 class WebhookAcceptanceTests(unittest.TestCase):
@@ -70,7 +95,7 @@ class WebhookAcceptanceTests(unittest.TestCase):
         return headers, body
 
     def sign(self, headers, body):
-        headers["x-registry-signature"] = RECEIVER._expected_webhook_signature(self.key, headers, body)
+        headers["x-registry-signature"] = SIGNER.webhook_signature(self.key, headers, body)
 
     def post(self, headers, body):
         request = urllib.request.Request(
@@ -116,11 +141,17 @@ class WebhookAcceptanceTests(unittest.TestCase):
         self.assertEqual(self.counts(), (1, 1))
 
     def test_authentication_source_and_delivery_time_are_verified_before_acceptance(self):
-        for mutation in ("signature", "source", "time"):
+        for mutation in ("signature", "key", "body", "source", "time"):
             with self.subTest(mutation=mutation):
                 headers, body = self.event()
                 if mutation == "signature":
                     headers["x-registry-signature"] = "v1=invalid"
+                elif mutation == "key":
+                    headers["x-registry-signature"] = SIGNER.webhook_signature(
+                        b"another-receiver-key-material-32b", headers, body
+                    )
+                elif mutation == "body":
+                    body = body.replace(b'"Contact"', b'"Tampered"')
                 elif mutation == "source":
                     headers["ce-source"] = "urn:other"
                     self.sign(headers, body)
@@ -152,6 +183,8 @@ class SignatureContractTests(unittest.TestCase):
     def test_matches_the_shared_rust_wire_signature_vector(self):
         # This vector belongs to registry-platform-crypto/delivery_signature.rs.
         # Its body is arbitrary signed bytes, not a current event schema sample.
+        key = b"webhook-delivery-signing-key-0123456789abcdef"
+        body = b'{"entity":"case","values":{"label":"value"}}'
         headers = {
             "ce-specversion": "1.0",
             "ce-id": "00000000-0000-4000-8000-000000000001",
@@ -162,13 +195,14 @@ class SignatureContractTests(unittest.TestCase):
             "x-registry-delivery-time": "2026-08-30T00:00:01Z",
             "idempotency-key": "sha256:" + "a" * 64,
         }
-        self.assertEqual(
-            RECEIVER._expected_webhook_signature(
-                b"webhook-delivery-signing-key-0123456789abcdef", headers,
-                b'{"entity":"case","values":{"label":"value"}}', "/hooks/registry"
-            ),
-            "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM",
+        signature = SIGNER.webhook_signature(key, headers, body, "/hooks/registry")
+        self.assertEqual(signature, "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM")
+        verified = RECEIVER.breg.verify_webhook_delivery(
+            method="POST", path="/hooks/registry", body=body, key=key,
+            headers={**headers, "content-type": "application/json",
+                     "x-registry-signature": signature},
         )
+        self.assertEqual(verified["body"], body)
 
 
 if __name__ == "__main__":

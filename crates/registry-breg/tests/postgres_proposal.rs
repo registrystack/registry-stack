@@ -789,6 +789,74 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
 }
 
 #[tokio::test]
+async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
+    let fixture =
+        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
+            &key("limit-list-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    for index in 0..2 {
+        let input = BRegActionInvocationRequest::new(
+            &action,
+            map(json!({"target":record.value.data.record_identifier,"value":"After"})),
+            None,
+        )
+        .unwrap();
+        client
+            .start_proposal(&action, &input, &key(&format!("limit-list-{index}")))
+            .await
+            .unwrap();
+    }
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let page = client
+        .list_proposals(
+            &collection,
+            &BRegProposalQuery {
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(page.items.len(), 1);
+    assert!(page.next_cursor.is_some());
+    let response = reqwest::get(format!(
+        "{}/v1/proposals?accessProfile=clerk&top=1",
+        fixture.http.base_url
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let problem: Value = response.json().await.unwrap();
+    assert_eq!(problem["code"], "query.invalid", "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("`limit`"),
+        "{problem}"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn proposal_list_audit_counts_only_each_actions_returned_items() {
     let mut source = registry_source(false);
     for id in ["correct-alternate", "correct-empty"] {
@@ -1128,6 +1196,90 @@ async fn attachment_binding_integrity_and_detail_erasure_preserve_record_history
     assert_eq!(row.get::<_, i64>(0), before);
     assert_eq!(row.get::<_, i64>(1), 0);
     assert_eq!(row.get::<_, i64>(2), 0);
+    fixture.finish().await;
+}
+
+/// Cancel closes the queued automatic application job in its own
+/// transaction, so no inert queued work outlives the Proposal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_closes_the_queued_automatic_application_job() {
+    let fixture = client_http::ClientFixture::start(
+        compile(registry_source(true)),
+        claims("author", "zone-a"),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Cancelled", "cancel-job-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("cancel-job-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let job_state = || async {
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT state FROM registry_internal.registry_proposal_application_jobs",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0)
+    };
+    assert_eq!(job_state().await, "queued");
+    let cancel = client
+        .prepare_proposal(&submitted, "cancel", json!({}), &key("cancel-job-cancel"))
+        .unwrap();
+    let cancelled = client.execute_proposal(&cancel).await.unwrap().value;
+    assert_eq!(cancelled.state(), BRegProposalState::Cancelled);
+    assert_eq!(job_state().await, "cancelled");
+    assert!(!fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    assert_eq!(job_state().await, "cancelled");
+    fixture.finish().await;
+}
+
+/// Revise closes the superseded version's queued automatic application job,
+/// which the worker could otherwise never claim again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revise_closes_the_superseded_versions_queued_automatic_application_job() {
+    let fixture = client_http::ClientFixture::start(
+        compile(registry_source(true)),
+        claims("author", "zone-a"),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Revised", "revise-job-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("revise-job-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let job_states = || async {
+        fixture
+            .database
+            .admin
+            .query(
+                "SELECT submission_version, state
+                 FROM registry_internal.registry_proposal_application_jobs
+                 ORDER BY submission_version",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.get::<_, i64>(0), row.get::<_, String>(1)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(job_states().await, [(1, "queued".to_owned())]);
+    let revise = client
+        .prepare_proposal(&submitted, "revise", json!({}), &key("revise-job-revise"))
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    assert_eq!(revised.state(), BRegProposalState::Draft);
+    assert_eq!(job_states().await, [(1, "cancelled".to_owned())]);
     fixture.finish().await;
 }
 
@@ -1783,7 +1935,7 @@ async fn ordinary_get_excludes_review_result_and_job_publication_until_observati
     );
     assert_eq!(observed.effect_digest(), submitted.effect_digest());
     let status = observed.application_status().unwrap();
-    assert_eq!(status.state, BRegProposalApplicationState::Pending);
+    assert_eq!(status.state, BRegProposalApplicationState::AwaitingReview);
     assert!(!status.automatic_retry.as_ref().unwrap().scheduled);
     let current = current.unwrap().value;
     assert_eq!(current.state(), BRegProposalState::Submitted);
@@ -1940,6 +2092,296 @@ async fn reviewed_apply_requires_fresh_exact_approval_and_receipt_recovery_is_lo
         review.calls.load(std::sync::atomic::Ordering::SeqCst),
         calls
     );
+    fixture.finish().await;
+}
+
+/// applicationStatus reports application progress only. A review outcome
+/// reaches the caller through Apply availability, never as an application
+/// refusal, in either application mode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_outcomes_read_as_apply_availability_not_application_status() {
+    for automatic in [false, true] {
+        let mut source = registry_source(automatic);
+        source["reviewAuthorities"] =
+            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+        source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+        let review = std::sync::Arc::new(LocalReview {
+            calls: 0.into(),
+            mode: 0.into(),
+            result_id: uuid::Uuid::new_v4(),
+        });
+        let injected = review.clone();
+        let fixture = client_http::ClientFixture::start_with_mutations(
+            compile(source),
+            claims("author", "zone-a"),
+            move |mutations| {
+                mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+            },
+        )
+        .await;
+        let client = &fixture.http.client;
+        let draft = start(&fixture, "Reviewed", &format!("outcome-{automatic}-start")).await;
+        let submit = client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &key(&format!("outcome-{automatic}-submit")),
+            )
+            .unwrap();
+        let submitted = client.execute_proposal(&submit).await.unwrap().value;
+        let row=fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions",&[]).await.unwrap();
+        let create: registry_review_client::ReviewCreateRequest =
+            serde_json::from_value(row.get(0)).unwrap();
+        let accepted = registry_review_client::ReviewRequestAccepted {
+            request_id: uuid::Uuid::new_v4(),
+            subject: create.subject,
+            policy: serde_json::from_value(policy).unwrap(),
+            submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+        };
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+            &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+        let observe = || async {
+            let current =
+                serde_json::to_value(client.read_proposal(&submitted).await.unwrap().value)
+                    .unwrap();
+            (
+                current["applicationStatus"].clone(),
+                current["links"]["apply"]["availability"].clone(),
+                current["links"]["revise"]["availability"]["available"].clone(),
+            )
+        };
+        let (status, apply, _) = observe().await;
+        assert_eq!(status["state"], "awaiting-review");
+        assert!(status.get("reason").is_none() && status.get("recovery").is_none());
+        assert_eq!(apply["reason"], "pending-review");
+        assert_eq!(apply["recovery"], "refresh");
+        let result = review.result(&accepted);
+        fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results
+            (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until)
+            VALUES ('correct-name',$1,1,'local-review',$2,$3,'rejected',$4,$5)",
+            &[&uuid::Uuid::parse_str(submitted.id()).unwrap(),&result.result_id,&serde_json::to_value(&result).unwrap(),&result.completed_at,&result.available_until]).await.unwrap();
+        for (outcome, reason, recovery) in [
+            ("rejected", "review-rejected", "revise"),
+            ("changes-requested", "review-changes-requested", "revise"),
+            ("cancelled", "review-ended", "revise"),
+            ("superseded", "review-ended", "revise"),
+            ("answered", "pending-review", "refresh"),
+        ] {
+            fixture
+                .database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_proposal_review_results SET status=$1",
+                    &[&outcome],
+                )
+                .await
+                .unwrap();
+            let (status, apply, revise) = observe().await;
+            assert_eq!(status["state"], "awaiting-review", "{outcome}");
+            assert!(
+                status.get("reason").is_none() && status.get("recovery").is_none(),
+                "{outcome} is a review outcome, not an application refusal"
+            );
+            assert_eq!(
+                status["mode"],
+                if automatic { "automatic" } else { "manual" }
+            );
+            assert_eq!(apply["available"], false, "{outcome}");
+            assert_eq!(apply["reason"], reason, "{outcome}");
+            assert_eq!(apply["recovery"], recovery, "{outcome}");
+            assert_eq!(revise, true, "{outcome}");
+        }
+        if !automatic {
+            fixture
+                .database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_proposal_review_results SET status='approved'",
+                    &[],
+                )
+                .await
+                .unwrap();
+            let (status, apply, _) = observe().await;
+            assert_eq!(status["state"], "pending");
+            assert_eq!(apply["available"], true);
+        }
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submission_read_reports_each_version_separately_and_is_gone_after_its_windows() {
+    let mut source = registry_source(false);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Historical", "history-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("history-submit-1"))
+        .unwrap();
+    let first = client.execute_proposal(&submit).await.unwrap().value;
+    let first_digest = serde_json::to_value(&first).unwrap()["effectDigest"].clone();
+    let id = first.id().to_owned();
+    let read = |version: &str, profile: &str| {
+        let url = format!(
+            "{}/v1/proposals/{id}/submissions/{version}?accessProfile={profile}",
+            fixture.http.base_url
+        );
+        async move {
+            let response = reqwest::get(url).await.unwrap();
+            let status = response.status();
+            (
+                status,
+                response.json::<Value>().await.unwrap_or(Value::Null),
+            )
+        }
+    };
+    let (status, body) = read("1", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(body["id"], json!(id));
+    assert_eq!(body["submissionVersion"], 1);
+    assert_eq!(body["current"], true);
+    assert_eq!(body["effectDigest"], first_digest);
+    assert_eq!(body["review"], json!({"state":"pending"}));
+    assert_eq!(body["application"]["state"], "awaiting-review");
+
+    let row=fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions",&[]).await.unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(policy).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+        &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+    let result = review.result(&accepted);
+    fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results
+        (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until)
+        VALUES ('correct-name',$1,1,'local-review',$2,$3,'rejected',$4,$5)",
+        &[&uuid::Uuid::parse_str(&id).unwrap(),&result.result_id,&serde_json::to_value(&result).unwrap(),&result.completed_at,&result.available_until]).await.unwrap();
+
+    let current = client.read_proposal(&first).await.unwrap().value;
+    let revise = client
+        .prepare_proposal(&current, "revise", json!({}), &key("history-revise"))
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(&revised, "submit", json!({}), &key("history-submit-2"))
+        .unwrap();
+    let second = client.execute_proposal(&submit).await.unwrap().value;
+    assert_eq!(second.submission_version(), 2);
+
+    // The superseded version keeps its own review outcome and reports no
+    // application progress, which belongs to the current version alone.
+    let (status, body) = read("1", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(body["current"], false);
+    assert_eq!(body["effectDigest"], first_digest);
+    assert_eq!(body["review"]["state"], "rejected");
+    assert_eq!(body["review"]["resultId"], json!(result.result_id));
+    assert!(body["application"].is_null(), "{body}");
+    let (status, body) = read("2", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(body["current"], true);
+    assert_eq!(body["review"], json!({"state":"pending"}));
+    assert_eq!(body["application"]["state"], "awaiting-review");
+
+    // A version never submitted, a malformed version and a profile without
+    // Get authority are all concealed alike.
+    for (version, profile) in [
+        ("3", "clerk"),
+        ("0", "clerk"),
+        ("01", "clerk"),
+        ("1", "missing"),
+    ] {
+        let (status, _) = read(version, profile).await;
+        assert_eq!(
+            status,
+            reqwest::StatusCode::NOT_FOUND,
+            "{version} {profile}"
+        );
+    }
+
+    // Once the superseded version's result window lapses it retains nothing
+    // to report, and the read says so instead of concealing the version.
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_results
+             SET completed_at=transaction_timestamp()-interval '2 minutes',
+                 available_until=transaction_timestamp()-interval '1 minute'
+             WHERE submission_version=1",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (status, body) = read("1", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::GONE);
+    assert_eq!(body["code"], "proposal.submission_expired");
+    let (status, _) = read("2", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submission_read_reports_the_application_receipt_without_the_applier() {
+    let fixture =
+        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Receipt", "receipt-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("receipt-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let body = json!({"submissionVersion":submitted.submission_version(),"effectDigest":submitted.effect_digest().unwrap()});
+    let apply = client
+        .prepare_proposal(&submitted, "apply", body, &key("receipt-apply"))
+        .unwrap();
+    let applied =
+        serde_json::to_value(client.execute_proposal(&apply).await.unwrap().value).unwrap();
+    let response = reqwest::get(format!(
+        "{}/v1/proposals/{}/submissions/1?accessProfile=clerk",
+        fixture.http.base_url,
+        submitted.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let read = response.json::<Value>().await.unwrap();
+    assert_eq!(read["current"], true);
+    assert!(read["review"].is_null(), "{read}");
+    assert_eq!(read["application"]["state"], "applied");
+    assert_eq!(
+        read["application"]["applicationId"],
+        applied["application"]["applicationId"]
+    );
+    // Who applied and when stay private to the receipt (D24): no profile is
+    // granted them by default.
+    for hidden in ["appliedAt", "appliedBy", "author"] {
+        assert!(!read.to_string().contains(hidden), "{read}");
+    }
     fixture.finish().await;
 }
 

@@ -636,6 +636,76 @@ pub(super) async fn get(
     }
 }
 
+/// One exact submission, read under the Proposal's Get authority. A version
+/// that is not canonical, never existed or is outside the caller's authority
+/// is concealed like an unknown Proposal.
+pub(super) async fn submission(
+    State(service): State<Arc<HttpService>>,
+    Path((id, version)): Path<(String, String)>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    Authenticated(claims): Authenticated,
+    RawQuery(raw_query): RawQuery,
+) -> Response {
+    let Some(mutations) = &service.mutations else {
+        return concealed();
+    };
+    let Ok(id) = Uuid::parse_str(&id) else {
+        return concealed();
+    };
+    let Some(version) = version
+        .parse::<u32>()
+        .ok()
+        .filter(|parsed| *parsed > 0 && parsed.to_string() == version)
+    else {
+        return concealed();
+    };
+    let Ok(selected) = selected_profile(raw_query.as_deref()) else {
+        return concealed();
+    };
+    let action_id = match mutations.proposal_action_id(id).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return concealed(),
+        Err(error) => return proposal_problem(error),
+    };
+    let Some(action) = service
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|a| a.id == action_id)
+    else {
+        return concealed();
+    };
+    let Some(authority) = authorize(
+        &service.registry,
+        action,
+        &claims,
+        selected.as_deref(),
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
+        Some(id),
+    ) else {
+        return known_action_refusal(
+            mutations,
+            action,
+            &claims,
+            selected.as_deref(),
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
+            HttpMethod::Get,
+            &correlation,
+        )
+        .await;
+    };
+    match mutations
+        .proposal_submission_read(id, version, &authority, &correlation)
+        .await
+    {
+        Ok(Some(value)) => json_response(value, None),
+        Ok(None) => fixed_problem(ProblemCode::ProposalSubmissionExpired),
+        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(error) => proposal_problem(error),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn transition(
     State(service): State<Arc<HttpService>>,
@@ -1097,6 +1167,7 @@ pub(super) async fn list(
         ..Default::default()
     };
     let mut seen = BTreeSet::new();
+    let mut renamed_top = false;
     if let Some(raw) = raw_query {
         if raw.len() > MAX_RAW_QUERY_BYTES {
             return concealed();
@@ -1128,10 +1199,11 @@ pub(super) async fn list(
                     Ok(id) => query.after = Some(id),
                     Err(_) => return concealed(),
                 },
-                "top" => match value.parse::<usize>() {
+                "limit" => match value.parse::<usize>() {
                     Ok(limit) if (1..=100).contains(&limit) => query.limit = limit,
                     _ => return concealed(),
                 },
+                "top" => renamed_top = true,
                 _ => return concealed(),
             }
         }
@@ -1154,6 +1226,14 @@ pub(super) async fn list(
         .collect::<Vec<_>>();
     if authorities.is_empty() {
         return concealed();
+    }
+    // Refused only after authority, so an unauthorized caller still sees the
+    // same concealment as any other refused query.
+    if renamed_top {
+        return problem_with_detail(
+            ProblemCode::QueryInvalid,
+            "The Proposal list takes `limit` for its page size; `top` is not accepted.",
+        );
     }
     match mutations
         .list_proposals(&authorities, &query, &claims, &correlation)

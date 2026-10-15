@@ -145,9 +145,9 @@ pub(crate) fn append_proposal_openapi(
         );
         if operation == ProposalOperation::List {
             let parameters = document["parameters"].as_array_mut().unwrap();
-            for name in ["action", "owner", "target", "state", "cursor", "top"] {
+            for name in ["action", "owner", "target", "state", "cursor", "limit"] {
                 let schema = match name {
-                    "top" => json!({"type":"integer","minimum":1,"maximum":100,"default":50}),
+                    "limit" => json!({"type":"integer","minimum":1,"maximum":100,"default":50}),
                     "owner" => json!({"const":"caller"}),
                     "target" => json!({"type":"string","format":"uuid"}),
                     "state" => json!({"enum":["draft","submitted","applied","cancelled"]}),
@@ -176,8 +176,40 @@ pub(crate) fn append_proposal_openapi(
             document["requestBody"] =
                 json!({"required":true,"content":{"application/json":{"schema":schema}}});
         }
+        if operation == ProposalOperation::Get {
+            let mut submission =
+                operation_document("proposals.get-submission", "get", &profiles, false);
+            submission["parameters"].as_array_mut().unwrap().push(json!({"name":"submission_version","in":"path","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
+            submission["responses"]["200"]["content"]["application/json"]["schema"] =
+                proposal_submission_schema();
+            submission["responses"]["410"] = json!({"description":"The submission's review result and application receipt are no longer retained"});
+            merge_operation(
+                paths,
+                "/v1/proposals/{proposal_id}/submissions/{submission_version}".to_owned(),
+                "get",
+                submission,
+            );
+        }
         merge_operation(paths, path, method, document);
     }
+}
+
+fn proposal_submission_schema() -> Value {
+    let review = json!({"type":"object","additionalProperties":false,"required":["state"],"properties":{
+        "state":{"enum":["pending","approved","rejected","changes-requested","answered","cancelled","superseded","expired"]},
+        "resultId":{"type":"string","format":"uuid"},"completedAt":{"type":"string","format":"date-time"},
+        "availableUntil":{"type":"string","format":"date-time"}}});
+    let mut application = proposal_schema()["properties"]["applicationStatus"].clone();
+    application["properties"]["applicationId"] = json!({"type":"string","format":"uuid"});
+    application["required"] = json!(["state"]);
+    json!({"type":"object","additionalProperties":false,
+        "required":["id","actionId","submissionVersion","current","effectDigest","review","application"],
+        "properties":{"id":{"type":"string","format":"uuid"},"actionId":{"type":"string"},
+            "submissionVersion":{"type":"integer","minimum":1,"maximum":u32::MAX},
+            "current":{"type":"boolean"},
+            "effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+            "review":{"anyOf":[review,{"type":"null"}]},
+            "application":{"anyOf":[application,{"type":"null"}]}}})
 }
 
 fn merge_operation(

@@ -61,6 +61,9 @@ For explicit application by a separately authorized caller:
 
 For durable work without external review, declare `review.type: none`.
 Review, application mode, and retention are separate choices.
+Such a Proposal has no review outcome: follow it to `applied` or `cancelled`.
+A blocked application is a turn change, not an outcome. The caller corrects
+the work with Retry, Revise or Rebase, or cancels it.
 
 ## Govern targets and plans
 
@@ -169,6 +172,62 @@ work carries retained application evidence. Blocked work carries a safe reason,
 recovery hint, and currently authorized links. Observation cannot establish
 whether an earlier uncertain Start or Submit executed; recover that command
 with its original prepared request and idempotency key.
+
+`applicationStatus` reports application progress only. Under required Review it
+reads `awaiting-review` until an approved result exists, then `pending`,
+`applying`, `blocked`, `applied` or `cancelled`. Its `application-refused`
+reason means an executor refused the frozen effects; a review outcome never
+appears there. The `apply` link's availability reports Review instead:
+`pending-review` with recovery `refresh` while no decision applies,
+`review-rejected` or `review-changes-requested` after that decision, and
+`review-ended` when the provider cancelled or superseded the review without a
+withdrawal by BReg. Each of the last three carries recovery `revise`.
+
+### After a Review result
+
+A result settles only the submission version it was recorded for. The
+Proposal stays `submitted` until it is applied or cancelled.
+
+| Result | What follows |
+|---|---|
+| `approved`, automatic application | The built-in executor applies the frozen effects. `applicationStatus` reads `applied`, or `blocked` with a recovery hint when an executor refuses them. |
+| `approved`, manual application | The `apply` link becomes available. An authorized caller applies before the approval's `availableUntil`. |
+| `rejected` | Apply reads `review-rejected` with recovery `revise`. Revise submits a new version for fresh Review, or Cancel ends the work. |
+| `changes-requested` | Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
+| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A cancel or supersession BReg caused by withdrawing is not an outcome and reads as none. |
+
+Revise after an approved, not yet applied, manual submission discards the
+approval. The approval binds the earlier version only, and the revised version
+needs its own Review before it can be applied. Apply first if the approved
+change must take effect.
+
+Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
+queued, applying or blocked automatic application job in the same transaction.
+The job reads `cancelled`; it never applies a superseded version.
+
+### Read one submission
+
+`GET /v1/proposals/{id}/submissions/{version}` reads one submitted version
+under Proposal Get authority. It returns that version's frozen `effectDigest`,
+its review result and its application status as separate members, and
+`current` says whether it is still the Proposal's latest version. An unknown
+or non-canonical version is concealed like an unknown Proposal. Once neither
+the review result nor the application receipt is retained, the read answers
+410 `proposal.submission_expired`.
+
+Settle a followed Proposal only from this per-version read, or from the
+current Proposal Get for the current version. Never settle it from a Casework
+result for the Proposal subject. Revise and Rebase are allowed while a review
+submission is uncertain or cancelling, so a late Casework result for an
+earlier version can still arrive after BReg has moved on.
+
+### Who applied a Proposal
+
+The application receipt records who applied the Proposal, as a keyed actor
+pseudonym scoped to the database and issuer, and when. The audit journal
+records the same pseudonym on the application request. No Proposal read
+serves either value, and the pseudonym names a person only to whoever holds
+the audit hash key and can recompute it for a known issuer and subject.
 
 Mutation refusals intentionally share a generic 412 for unavailable authority
 and failed preconditions. To show or test why Apply is unavailable, first read

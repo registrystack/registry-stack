@@ -19,7 +19,7 @@ const statusDocument = state => {
   value.state = ['applied', 'cancelled'].includes(state) ? state : 'submitted';
   if (state !== 'applied') delete value.application;
   value.applicationStatus = {state, mode: 'automatic'};
-  if (['pending', 'blocked'].includes(state)) {
+  if (['awaiting-review', 'pending', 'blocked'].includes(state)) {
     value.applicationStatus.automaticRetry = {scheduled: state === 'pending', attempts: state === 'pending' ? 0 : 1, maximumAttempts: 3};
   }
   if (state === 'blocked') Object.assign(value.applicationStatus, {reason: 'dependency-outage', recovery: 'retry'});
@@ -59,7 +59,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
     const count = requests.length;
     assert.throws(() => client.prepareProposal(proposal, 'apply', '{}', 'ungranted'), error => error.kind === 'invalid-request');
     assert.equal(requests.length, count);
-    for (const state of ['pending', 'blocked', 'applied', 'cancelled']) {
+    for (const state of ['awaiting-review', 'pending', 'blocked', 'applied', 'cancelled']) {
       value = statusDocument(state);
       const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
       assert.deepEqual(observed.applicationStatus, value.applicationStatus, state);

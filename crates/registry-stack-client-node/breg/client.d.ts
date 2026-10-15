@@ -598,7 +598,7 @@ export interface BRegIngestionRunInput {
 export interface BRegIngestionRunListInput {
   accessProfile?: string | null
   limit?: SafeInteger | null
-  after?: string | null
+  cursor?: string | null
   status?: BRegIngestionRunStatus | null
   inputDigest?: string | null
 }
@@ -637,7 +637,7 @@ export interface BRegIngestionRun {
 export interface BRegIngestionRunPage {
   readonly runs: ReadonlyArray<BRegIngestionRun>
   readonly hasMore: boolean
-  readonly nextAfter: string | null
+  readonly nextCursor: string | null
 }
 
 export interface BRegIngestionReceiptBatch {
@@ -934,8 +934,8 @@ export declare class BaseRegistryClient {
 }
 
 export type BRegProposalTransition = 'edit' | 'submit' | 'revise' | 'rebase' | 'retry' | 'cancel' | 'apply'
-export type BRegAvailabilityReason = 'pending-review' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied'
-export type BRegRecoveryHint = 'refresh' | 'retry' | 'correct-input' | 'terminal' | 'receipt-only'
+export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied'
+export type BRegRecoveryHint = 'refresh' | 'revise' | 'retry' | 'correct-input' | 'terminal' | 'receipt-only'
 export type BRegAvailability =
   | { readonly available: true; readonly observedRevision: number }
   | { readonly available: false; readonly observedRevision: number; readonly reason: BRegAvailabilityReason; readonly recovery: BRegRecoveryHint }
@@ -951,10 +951,10 @@ export interface BRegProposalApplication {
   readonly resultLinks: ReadonlyArray<{readonly recordType: string; readonly recordId: string; readonly revision: number}>
 }
 export interface BRegProposalApplicationStatus {
-  readonly state: 'pending' | 'applying' | 'blocked' | 'applied' | 'cancelled'
+  readonly state: 'awaiting-review' | 'pending' | 'applying' | 'blocked' | 'applied' | 'cancelled'
   readonly mode: 'automatic' | 'manual'
   readonly reason?: 'contract-changed' | 'dependency-outage' | 'lease-expired' | 'application-refused' | 'attempts-exhausted'
-  readonly recovery?: 'refresh' | 'retry' | 'correct-input' | 'terminal' | 'receipt-only'
+  readonly recovery?: 'retry' | 'correct-input'
   readonly automaticRetry?: {readonly scheduled: boolean; readonly attempts: number; readonly maximumAttempts: number}
 }
 export interface BRegProposalReviewDocument {

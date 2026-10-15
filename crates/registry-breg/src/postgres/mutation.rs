@@ -25,8 +25,8 @@ use crate::model::CompiledRegistry;
 use crate::mutation::MutationFaultPoint;
 use crate::mutation::{
     valid_strong_etag, BatchMutationItem, BatchMutationRequest, IngestionChunkBinding,
-    MutationBody, MutationCoordinator, MutationError, MutationOutcome, MutationPlan,
-    MutationRequest, PatchOperation,
+    MutationBody, MutationError, MutationOutcome, MutationPlan, MutationRequest,
+    MutationTransaction, PatchOperation,
 };
 
 use super::cancellation::QueryCancellationGuard;
@@ -48,7 +48,7 @@ struct ProposalReadBarrier {
 pub struct PostgresRecordMutationService {
     pool: RuntimePool,
     registry: Arc<CompiledRegistry>,
-    coordinator: MutationCoordinator,
+    coordinator: MutationTransaction,
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
@@ -469,7 +469,7 @@ impl PostgresRecordMutationService {
         audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
-        let coordinator = MutationCoordinator::new_with_event_destinations(
+        let coordinator = MutationTransaction::new_with_event_destinations(
             lock_key,
             lock_timeout,
             expected.clone(),
@@ -1148,7 +1148,7 @@ impl PostgresRecordMutationService {
         Ok(json!({
             "runs": runs,
             "hasMore": page.has_more,
-            "nextAfter": next_after,
+            "nextCursor": next_after,
         }))
     }
 

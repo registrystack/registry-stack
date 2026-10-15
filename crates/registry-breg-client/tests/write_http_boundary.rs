@@ -1761,6 +1761,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::MutationConflict => "The mutation conflicts with current state.",
         Code::PreconditionFailed => "The mutation precondition failed.",
         Code::PreconditionRequired => "The mutation precondition is required.",
+        Code::ProposalSubmissionExpired => {
+            "The review result and application receipt of the submission are no longer retained."
+        }
         Code::QueryCursorInvalid => "The query cursor is invalid.",
         Code::QueryInvalid => "The query request is invalid.",
         Code::RequestInvalid => "The request is invalid.",
@@ -2428,7 +2431,7 @@ fn ingestion_announcement(profile: &str) -> BRegIngestionRunRequest {
 
 #[tokio::test]
 async fn ingestion_exchanges_select_the_announced_run_access_profile() {
-    let page = json!({"runs": [], "hasMore": false, "nextAfter": null});
+    let page = json!({"runs": [], "hasMore": false, "nextCursor": null});
     let fixture = test_client(vec![
         ingestion_response(
             StatusCode::CREATED,

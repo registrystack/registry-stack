@@ -133,7 +133,7 @@ fn validate_recovery_actor(
     Ok(())
 }
 
-impl MutationCoordinator {
+impl MutationTransaction {
     pub(crate) async fn read_proposal_attachment(
         &self,
         attachment: &crate::attachment_store::StoredAttachment,
@@ -453,6 +453,12 @@ impl MutationCoordinator {
 
     /// Internal ownership admission survives audit-key rotation. Audit events
     /// continue to use the separately keyed, database-scoped actor reference.
+    ///
+    /// Never project this value in a response, event, export or log. It is
+    /// an unkeyed hash of the database, issuer and subject, so anyone who
+    /// knows the first two can confirm a subject by hashing guesses, and
+    /// subject spaces such as national identifiers are small enough to
+    /// enumerate. A projected owner commitment needs its own keyed derivation.
     pub(crate) fn proposal_owner_reference(&self, principal: &str) -> String {
         crate::idempotency::sha256_reference(
             "breg-proposal-owner-v1",
@@ -1174,6 +1180,7 @@ impl MutationCoordinator {
                                 document.header.submission_version,
                             )
                             .await?;
+                            crate::review_store::close_application_jobs(tx, &action.id, id).await?;
                         }
                         proposal_store::save(tx, &action.id, id, previous, &workflow).await?;
                         if operation == ProposalOperation::Rebase {
@@ -1325,6 +1332,7 @@ impl MutationCoordinator {
                             document.header.submission_version,
                         )
                         .await?;
+                        crate::review_store::close_application_jobs(tx, &action.id, id).await?;
                         proposal_store::save(tx, &action.id, id, previous, &workflow).await?;
                         (workflow, "cancelled")
                     }
@@ -1441,11 +1449,9 @@ impl MutationCoordinator {
         let document =
             proposal_store::load_document(tx, id, proposal_store::DocumentLock::None).await?;
         let workflow = proposal_store::load(tx, &action.id, id, false).await?;
-        let reference = record_reference(
-            self.audit.profile(),
-            &action.definition_revision,
-            &id.to_string(),
-        )?;
+        // A Proposal event names its public resource, as Scheduling names an
+        // appointment; record hooks keep their hashed record reference.
+        let reference = format!("/v1/proposals/{id}");
         let event_source = self.event_source();
         crate::proposal_events::insert_proposal_lifecycle_event(
             tx,
@@ -2381,6 +2387,99 @@ impl MutationCoordinator {
         Ok(())
     }
 
+    /// One exact submission of a Proposal: its frozen effect digest, its review
+    /// result and its application outcome, each reported separately. Only the
+    /// current submission has application progress; an earlier one reports
+    /// only a committed receipt. `None` means the submission existed but its
+    /// review result window has lapsed or its detail was erased, and no
+    /// application receipt remains to report.
+    pub(crate) async fn proposal_submission_value(
+        &self,
+        tx: &Transaction<'_>,
+        document: &ProposalDocument,
+        version: u32,
+    ) -> Result<Option<Value>, MutationError> {
+        let version = i64::from(version);
+        let Some(submission) = tx
+            .query_opt(
+                "SELECT effect_digest, erased_at IS NOT NULL
+                 FROM registry_internal.registry_proposal_submissions
+                 WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+                &[&document.action_id, &document.proposal_id, &version],
+            )
+            .await
+            .map_err(map_database_error)?
+        else {
+            return Err(MutationError::PreconditionFailed);
+        };
+        let erased: bool = submission.get(1);
+        let workflow = if document.header.current_proposal_erased {
+            None
+        } else {
+            Some(proposal_store::load(tx, &document.action_id, document.proposal_id, false).await?)
+        };
+        let frozen = workflow
+            .as_ref()
+            .and_then(|workflow| workflow.current_proposal())
+            .filter(|_| {
+                document.header.state != "draft" && document.header.submission_version == version
+            });
+        let review = tx
+            .query_opt(
+                "SELECT status,result_id,
+        to_char(completed_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+        to_char(available_until AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+        available_until<=transaction_timestamp()
+        FROM registry_internal.registry_proposal_review_results
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+                &[&document.action_id, &document.proposal_id, &version],
+            )
+            .await
+            .map_err(map_database_error)?;
+        let review_lapsed = review.as_ref().is_some_and(|row| row.get::<_, bool>(4));
+        let review = match review {
+            Some(row) => json!({
+                "state":if row.get::<_,bool>(4) {"expired".to_owned()} else {row.get::<_,String>(0)},
+                "resultId":row.get::<_,Uuid>(1),"completedAt":row.get::<_,String>(2),
+                "availableUntil":row.get::<_,String>(3)}),
+            None if document.header.state == "submitted"
+                && frozen.is_some_and(|frozen| {
+                    matches!(
+                        frozen.review_requirement(),
+                        CompiledProposalReview::Required { .. }
+                    )
+                }) =>
+            {
+                json!({"state":"pending"})
+            }
+            None => Value::Null,
+        };
+        let receipt = tx
+            .query_opt(
+                "SELECT application_id
+        FROM registry_internal.registry_proposal_applications
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+                &[&document.action_id, &document.proposal_id, &version],
+            )
+            .await
+            .map_err(map_database_error)?;
+        let application = match (receipt, frozen) {
+            // Who applied and when stay with the receipt: no profile reads them.
+            (Some(row), _) => json!({"state":"applied","applicationId":row.get::<_,Uuid>(0)}),
+            (None, Some(frozen)) => proposal_application_status(tx, document, frozen).await?,
+            (None, None) => Value::Null,
+        };
+        if (review_lapsed || erased) && application.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(json!({
+            "id":document.proposal_id,"actionId":document.action_id,
+            "submissionVersion":version,"current":frozen.is_some(),
+            "effectDigest":submission.get::<_,String>(0),
+            "review":review,"application":application
+        })))
+    }
+
     pub(crate) async fn proposal_review_value(
         &self,
         tx: &Transaction<'_>,
@@ -2524,6 +2623,11 @@ impl MutationCoordinator {
             proposal_review_result(tx, document).await?["state"] != "approved"
         } else {
             false
+        };
+        let review_outcome = if pending_review {
+            review_outcome(tx, document).await?
+        } else {
+            None
         };
         let review_available = match &action.execution {
             CompiledActionExecution::Proposal { proposal } => match &proposal.review {
@@ -2719,6 +2823,9 @@ impl MutationCoordinator {
                 } else if !review_available {
                     link["availability"]["reason"] = json!("dependency-outage");
                     link["availability"]["recovery"] = json!("retry");
+                } else if let Some(reason) = review_outcome {
+                    link["availability"]["reason"] = json!(reason);
+                    link["availability"]["recovery"] = json!("revise");
                 } else {
                     link["availability"]["reason"] = json!("pending-review");
                     link["availability"]["recovery"] = json!("refresh");
@@ -2849,7 +2956,16 @@ async fn proposal_application_status(
         return Ok(value);
     }
     if !automatic {
-        value["state"] = json!("pending");
+        let awaiting_review = matches!(
+            frozen.review_requirement(),
+            CompiledProposalReview::Required { .. }
+        ) && proposal_review_result(tx, document).await?["state"]
+            != "approved";
+        value["state"] = json!(if awaiting_review {
+            "awaiting-review"
+        } else {
+            "pending"
+        });
         return Ok(value);
     }
     let row = tx
@@ -2878,7 +2994,7 @@ async fn proposal_application_status(
         let review = tx
             .query_opt(
                 "SELECT s.proposal_digest,s.authority,s.expected_policy,
-            s.on_approved_mode,s.executor,s.withdrawn,s.state,r.status
+            s.on_approved_mode,s.executor,r.status
             FROM registry_internal.registry_proposal_review_submissions s
             LEFT JOIN registry_internal.registry_proposal_review_results r
               USING(action_id,proposal_id,submission_version)
@@ -2901,23 +3017,23 @@ async fn proposal_application_status(
         {
             return Err(MutationError::PreconditionFailed);
         }
-        let result: Option<String> = review.get(7);
+        let result: Option<String> = review.get(5);
         if result.as_deref() == Some("approved") {
             return Err(MutationError::PreconditionFailed);
         }
-        let blocked = document.blocked_reason.is_some()
-            || review.get::<_, bool>(5)
-            || review.get::<_, String>(6) == "failed"
-            || result.is_some();
-        value["state"] = json!(if blocked { "blocked" } else { "pending" });
+        // Without a job no executor has run, so nothing here is an
+        // application refusal. A review outcome, a failed review submission
+        // or a withdrawal is reported by the Apply, Retry and Revise links.
+        let blocked = document.blocked_reason.is_some();
+        value["state"] = json!(if blocked {
+            "blocked"
+        } else {
+            "awaiting-review"
+        });
         value["automaticRetry"] = json!({"scheduled":false,"attempts":0,
             "maximumAttempts":frozen.application_policy().maximum_attempts()});
         if blocked {
-            value["reason"] = json!(if document.blocked_reason.is_some() {
-                "contract-changed"
-            } else {
-                "application-refused"
-            });
+            value["reason"] = json!("contract-changed");
             value["recovery"] = json!("correct-input");
         }
         return Ok(value);
@@ -2990,6 +3106,39 @@ fn proposal_action<'a>(
         return Err(MutationError::InvalidRequest);
     }
     Ok(action)
+}
+
+/// Name a retained review outcome that ends the current submission's path to
+/// Apply. Only Revise produces a submission that can be applied after it. A
+/// Casework `cancelled` or `superseded` the producer caused by withdrawing is
+/// not an outcome of review, so it reads as no outcome here.
+async fn review_outcome(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+) -> Result<Option<&'static str>, MutationError> {
+    let row = tx
+        .query_opt(
+            "SELECT r.status,s.withdrawn
+        FROM registry_internal.registry_proposal_review_results r
+        JOIN registry_internal.registry_proposal_review_submissions s
+          USING(action_id,proposal_id,submission_version)
+        WHERE r.action_id=$1 AND r.proposal_id=$2 AND r.submission_version=$3",
+            &[
+                &document.action_id,
+                &document.proposal_id,
+                &document.header.submission_version,
+            ],
+        )
+        .await
+        .map_err(map_database_error)?;
+    Ok(row.and_then(
+        |row| match (row.get::<_, String>(0).as_str(), row.get::<_, bool>(1)) {
+            ("rejected", _) => Some("review-rejected"),
+            ("changes-requested", _) => Some("review-changes-requested"),
+            ("cancelled" | "superseded", false) => Some("review-ended"),
+            _ => None,
+        },
+    ))
 }
 
 async fn proposal_review_result(
@@ -3172,14 +3321,14 @@ async fn load_proposal_row(
 #[cfg(test)]
 mod disclosure_tests {
     use super::*;
-    fn coordinator(database: &str, activation: &str, key: u8, issuer: &str) -> MutationCoordinator {
+    fn coordinator(database: &str, activation: &str, key: u8, issuer: &str) -> MutationTransaction {
         let (audit, _capture) = crate::audit::test_support::capturing(
             registry_platform_audit::AuditProfile::production_from_secret_bytes(
                 vec![key; 32].into(),
             )
             .unwrap(),
         );
-        MutationCoordinator::new(
+        MutationTransaction::new(
             crate::postgres::RegistryLockKey::derive("proposal-test").unwrap(),
             std::time::Duration::from_secs(1),
             crate::postgres::ExpectedRegistryIdentity {

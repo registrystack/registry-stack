@@ -13,7 +13,7 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationPlan, MutationRequest,
+    MutationBody, MutationError, MutationPlan, MutationRequest, MutationTransaction,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
@@ -68,7 +68,7 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         .expect("bounded runtime pool builds");
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x71; 32].into())
         .expect("test owns a strong keyed audit profile");
-    let coordinator = MutationCoordinator::new(
+    let coordinator = MutationTransaction::new(
         RegistryLockKey::derive(PACKAGE_ID).expect("registry lock key is bounded"),
         Duration::from_secs(5),
         identity,
