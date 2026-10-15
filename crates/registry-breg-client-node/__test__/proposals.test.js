@@ -32,7 +32,7 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     response.setHeader('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');
     if (request.url.startsWith('/tenant/v1/registry')) return response.end(JSON.stringify(metadata));
     if (request.url.startsWith('/tenant/v1/proposals?')) return response.end(JSON.stringify({items: [proposal]}));
-    if (request.url.includes('/submit?')) return response.end(JSON.stringify({...proposal, revision: 2, state: 'submitted'}));
+    if (request.url.includes('/submit?')) return response.end(JSON.stringify({...proposal, revision: 2, state: 'submitted', effectDigest: revision}));
     response.end(JSON.stringify(proposal));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -133,6 +133,7 @@ test('Proposal Start accepts exact Draft replay and refuses otherwise valid term
     assert.deepEqual(requests.at(-1), requests.at(-2));
     for (const state of ['submitted', 'applied', 'cancelled']) {
       value = structuredClone(proposal); value.state = state; value.submissionVersion = 1; value.links = {self: value.links.self};
+      if (state === 'submitted') value.effectDigest = revision;
       assert.equal(JSON.parse((await client.getProposal(get, id)).documentJson).state, state, 'ordinary reads permit this representation');
       const count = requests.length;
       await assert.rejects(client.startProposal(start, '{}', `wrong-start-${state}`), error => error.kind === 'invalid-request');

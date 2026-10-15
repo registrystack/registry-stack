@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -308,7 +309,13 @@ impl BRegProposal {
     }
     fn validate(&self) -> Result<(), BaseRegistryClientError> {
         if Uuid::parse_str(&self.id).is_err()
+            || self.submission_version == 0
             || self.revision == 0
+            || self.state == BRegProposalState::Submitted && self.effect_digest.is_none()
+            || self.state == BRegProposalState::Draft && self.effect_digest.is_some()
+            || self.state == BRegProposalState::Applied
+                && self.effect_digest.is_some()
+                && self.application.is_none()
             || !identifier(&self.action_id)
             || !digest(&self.action_revision)
             || self
@@ -490,8 +497,8 @@ impl BRegProposal {
                     )
                     || value
                         .uploaded_at
-                        .as_ref()
-                        .is_some_and(|value| value.len() > 64)
+                        .as_deref()
+                        .is_none_or(|value| proposal_instant(value).is_none())
             }) {
                 return Err(refusal());
             }
@@ -847,23 +854,7 @@ impl BaseRegistryClient {
                 .policy
                 .as_ref()
                 .is_some_and(|policy| policy.check().is_err())
-            || document.result.as_ref().is_some_and(|result| {
-                !matches!(
-                    result.state.as_str(),
-                    "pending"
-                        | "approved"
-                        | "rejected"
-                        | "changes-requested"
-                        | "answered"
-                        | "cancelled"
-                        | "superseded"
-                        | "expired"
-                ) || result
-                    .result_id
-                    .as_deref()
-                    .is_some_and(|id| Uuid::parse_str(id).is_err())
-            })
-            || !valid_review_projection(&document.context, is_context)
+            || !valid_review_projection(&document, is_context)
         {
             return Err(refusal());
         }
@@ -979,23 +970,7 @@ impl BaseRegistryClient {
                 .policy
                 .as_ref()
                 .is_some_and(|policy| policy.check().is_err())
-            || document.result.as_ref().is_some_and(|result| {
-                !matches!(
-                    result.state.as_str(),
-                    "pending"
-                        | "approved"
-                        | "rejected"
-                        | "changes-requested"
-                        | "answered"
-                        | "cancelled"
-                        | "superseded"
-                        | "expired"
-                ) || result
-                    .result_id
-                    .as_deref()
-                    .is_some_and(|id| Uuid::parse_str(id).is_err())
-            })
-            || !valid_review_projection(&document.context, operation == "reviewContext")
+            || !valid_review_projection(&document, operation == "reviewContext")
         {
             return Err(refusal());
         }
@@ -1377,12 +1352,55 @@ fn transition_progress(
         && current.state == state
         && version == Some(current.submission_version)
 }
-fn valid_review_projection(context: &BRegProposalReviewContext, is_context: bool) -> bool {
+fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bool) -> bool {
     if is_context {
-        context.contract.is_some() && context.fields.is_some()
+        document.context.contract.is_some()
+            && document.context.fields.is_some()
+            && document.result.is_none()
     } else {
-        context.fields.is_none()
+        document.context.fields.is_none()
+            && document.result.is_some() == document.policy.is_some()
+            && document.result.as_ref().is_none_or(valid_review_result)
     }
+}
+fn valid_review_result(result: &BRegProposalReviewResult) -> bool {
+    if result.state == "pending" {
+        return result.result_id.is_none()
+            && result.completed_at.is_none()
+            && result.available_until.is_none();
+    }
+    // Expiry changes only the public state of retained terminal evidence.
+    // As in the shared Review result contract, retention must follow completion;
+    // the client does not reinterpret the server's state using its own clock.
+    matches!(
+        result.state.as_str(),
+        "approved"
+            | "rejected"
+            | "changes-requested"
+            | "answered"
+            | "cancelled"
+            | "superseded"
+            | "expired"
+    ) && result
+        .result_id
+        .as_deref()
+        .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|id| !id.is_nil()))
+        && result
+            .completed_at
+            .as_deref()
+            .and_then(proposal_instant)
+            .is_some_and(|completed| {
+                result
+                    .available_until
+                    .as_deref()
+                    .and_then(proposal_instant)
+                    .is_some_and(|until| until > completed)
+            })
+}
+fn proposal_instant(value: &str) -> Option<OffsetDateTime> {
+    (value.len() <= 64)
+        .then(|| OffsetDateTime::parse(value, &Rfc3339).ok())
+        .flatten()
 }
 fn valid_cursor(cursor: &str) -> bool {
     !cursor.is_empty()
@@ -1520,8 +1538,11 @@ mod tests {
         value["state"] = json!(state);
         value["submissionVersion"] = json!(version);
         value["revision"] = json!(revision);
-        if state == "applied" {
-            value["effectDigest"] = json!(REVISION);
+        if state == "draft" {
+            value.as_object_mut().unwrap().remove("effectDigest");
+        } else if state == "applied" {
+            value["application"] = json!({"applicationId":ID,"submissionVersion":version,
+                "effectDigest":REVISION,"resultLinks":[]});
         }
         let mut link = value["links"]["apply"].clone();
         link["path"] = json!(format!("/v1/proposals/{ID}/{operation}"));
@@ -1561,6 +1582,12 @@ mod tests {
             let mut current = document();
             current["revision"] = json!(revision);
             current["state"] = json!(state);
+            if state == "draft" {
+                current.as_object_mut().unwrap().remove("effectDigest");
+            } else if state == "applied" {
+                current["application"] = json!({"applicationId":ID,"submissionVersion":version,
+                    "effectDigest":REVISION,"resultLinks":[]});
+            }
             current["submissionVersion"] = json!(version);
             current["links"]["apply"]["availability"]["observedRevision"] = json!(revision);
             if version == 2 {
@@ -1849,6 +1876,9 @@ mod tests {
             ] {
                 let mut unrelated = current.clone();
                 unrelated[field] = value;
+                if field == "state" {
+                    unrelated["effectDigest"] = json!(REVISION);
+                }
                 if field == "revision" {
                     unrelated["links"]["rebase"]["availability"]["observedRevision"] = json!(4);
                 }
@@ -2483,7 +2513,7 @@ mod tests {
     }
     fn document() -> Value {
         json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
-        "submissionVersion":1,"revision":2,"state":"submitted","links":{
+        "submissionVersion":1,"revision":2,"state":"submitted","effectDigest":REVISION,"links":{
             "self":{"method":"GET","path":format!("/v1/proposals/{ID}"),"accessProfile":"author","operation":"get"},
             "apply":{"method":"POST","path":format!("/v1/proposals/{ID}/apply"),"accessProfile":"author","operation":"apply","ifMatch":"\"original-condition\"",
                 "availability":{"available":true,"observedRevision":2}}
@@ -2541,6 +2571,8 @@ mod tests {
             .unwrap();
         let mut terminal = document();
         terminal["state"] = json!("applied");
+        terminal["application"] = json!({"applicationId":ID,"submissionVersion":1,
+            "effectDigest":REVISION,"resultLinks":[]});
         terminal["revision"] = json!(3);
         terminal["links"]["apply"]["ifMatch"] = json!("\"current-condition\"");
         terminal["links"]["apply"]["availability"] = json!({"available":false,"observedRevision":3,"reason":"already-applied","recovery":"receipt-only"});
@@ -2590,6 +2622,7 @@ mod tests {
                 .unwrap();
             let mut current = original;
             current["state"] = json!("draft");
+            current.as_object_mut().unwrap().remove("effectDigest");
             current["submissionVersion"] = json!(2);
             current["revision"] = json!(3);
             current["links"][operation]["ifMatch"] = json!("\"new-condition\"");
@@ -2617,6 +2650,9 @@ mod tests {
             ] {
                 let mut unrelated = current.clone();
                 unrelated[key] = value;
+                if key == "state" {
+                    unrelated["effectDigest"] = json!(REVISION);
+                }
                 if key == "revision" {
                     unrelated["links"][operation]["availability"]["observedRevision"] = json!(4);
                 }
@@ -2744,6 +2780,12 @@ mod tests {
         for returned in states {
             let mut item = document();
             item["state"] = serde_json::to_value(returned).unwrap();
+            if returned == BRegProposalState::Draft {
+                item.as_object_mut().unwrap().remove("effectDigest");
+            } else if returned == BRegProposalState::Applied {
+                item["application"] = json!({"applicationId":ID,"submissionVersion":1,
+                    "effectDigest":REVISION,"resultLinks":[]});
+            }
             *response.lock().unwrap() = json!({"items":[item]});
             for requested in states {
                 let query = BRegProposalQuery {

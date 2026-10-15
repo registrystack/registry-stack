@@ -374,8 +374,14 @@ fn application_record(identifier: Uuid, application: &Application, headers: &Hea
         links["edit"] = json!({"method":"POST","path":format!("/v1/proposals/{identifier}/edit"),"operation":"edit","accessProfile":PROFILE,
             "ifMatch":etag(application.revision),"availability":{"available":true,"observedRevision":application.revision}});
     }
-    json!({"id":identifier,"actionId":"correct-address","actionRevision":revision["revision"],"revision":application.revision,
-        "submissionVersion":1,"state":state,"input":application.data,"links":links})
+    let mut value = json!({"id":identifier,"actionId":"correct-address","actionRevision":revision["revision"],"revision":application.revision,
+        "submissionVersion":1,"state":state,"input":application.data,"links":links});
+    if state != "draft" {
+        if let Some(digest) = application.request.get("effectDigest") {
+            value["effectDigest"] = digest.clone();
+        }
+    }
+    value
 }
 
 async fn metadata(

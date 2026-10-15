@@ -167,6 +167,8 @@ class ProposalStartTests(unittest.TestCase):
             self.assertEqual(requests[-1], requests[-2])
             for state in ['submitted', 'applied', 'cancelled']:
                 value = dict(PROPOSAL, state=state, submissionVersion=1)
+                if state == 'submitted':
+                    value['effectDigest'] = REVISION
                 self.assertEqual(client.get_proposal(get, ID).document['state'], state)
                 count = len(requests)
                 with self.assertRaises(BaseRegistryClientError) as raised:

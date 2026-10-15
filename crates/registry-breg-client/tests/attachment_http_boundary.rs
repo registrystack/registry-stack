@@ -338,7 +338,7 @@ async fn retained_attachment_download_uses_its_value_bound_and_current_upload_po
     retained["attachments"][SLOT]["contentTypes"] = json!(["text/plain"]);
     retained["attachments"][SLOT]["value"] = json!({
         "submissionVersion":2,"sha256":"a".repeat(64),"contentType":"application/pdf",
-        "byteSize":PDF.len(),"verificationStatus":"notRequired"
+        "byteSize":PDF.len(),"uploadedAt":"2026-09-19T00:01:00Z","verificationStatus":"notRequired"
     });
     let too_large = [PDF, b"x"].concat();
     let oversized = MockResponse::bytes(StatusCode::OK, "application/pdf", &too_large)

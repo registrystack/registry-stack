@@ -570,9 +570,8 @@ pub fn metadata() -> Value {
 }
 
 fn draft_record(identifier: &str, draft: &Draft) -> Value {
-    json!({"id":identifier,"actionId":ACTION,"actionRevision":METADATA_REVISION,"revision":draft.revision,
+    let mut value = json!({"id":identifier,"actionId":ACTION,"actionRevision":METADATA_REVISION,"revision":draft.revision,
     "submissionVersion":draft.submission_version,"state":if draft.submitted {"submitted"} else {"draft"},
-    "effectDigest":EFFECT_DIGEST,
     "input":{"address":draft.target,"newAddressLine":HOSTILE_STREET,"newLocality":PROPOSED_LOCALITY,"newPostalCode":"PS-205","reason":"relocation","unit":null},
     "links":{
         "self":{"method":"GET","path":format!("/v1/proposals/{identifier}"),"operation":"get","accessProfile":PROFILE},
@@ -580,7 +579,11 @@ fn draft_record(identifier: &str, draft: &Draft) -> Value {
             "ifMatch":action_etag(draft.action_generation),"availability":{"available":!draft.submitted,"observedRevision":draft.revision,
                 "reason":if draft.submitted {json!("pending-review")} else {Value::Null},
                 "recovery":if draft.submitted {json!("receipt-only")} else {Value::Null}}}
-    }})
+    }});
+    if draft.submitted {
+        value["effectDigest"] = json!(EFFECT_DIGEST);
+    }
+    value
 }
 
 fn address_record(identifier: &str, address: &Address) -> Value {

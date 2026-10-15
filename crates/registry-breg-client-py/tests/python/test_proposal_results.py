@@ -105,6 +105,7 @@ class ProposalResultTests(unittest.TestCase):
         self.value['application']['resultLinks'] = []
         self.assertEqual(self.client.get_proposal(self.binding, ID).document['application']['resultLinks'], [])
         del self.value['application']
+        del self.value['effectDigest']
         self.assertNotIn('application', self.client.get_proposal(self.binding, ID).document)
 
     def test_application_status_preserves_current_progress_and_retained_evidence_absence(self):
@@ -140,6 +141,7 @@ class ProposalResultTests(unittest.TestCase):
         self.value = document()
         self.value.update(state='draft', input={'wide': 9007199254740993, 'decimal': '12.3400', 'nullable': None})
         del self.value['application']
+        del self.value['effectDigest']
         self.value['links']['edit'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/edit', 'accessProfile': 'reader', 'operation': 'edit', 'ifMatch': '"edit-condition"'}
         proposal = self.client.get_proposal(self.binding, ID)
         self.assertEqual(proposal.input, self.value['input'])
@@ -191,11 +193,88 @@ class ProposalResultTests(unittest.TestCase):
         self.value['context']['contract'] = {'id': 'urn:registry:breg:review-context:directory:correct:review', 'revision': DIGEST, 'schemaDigest': DIGEST}
         self.assertEqual(self.client.read_proposal_review_context(prior)['value']['context']['fields'], {'private': 'private-canary'})
 
+    def test_documents_require_version_and_state_appropriate_frozen_evidence(self):
+        for state in ('draft', 'submitted', 'applied', 'cancelled'):
+            self.value = document()
+            self.value.update(state=state, submissionVersion=0)
+            del self.value['application']
+            if state == 'draft':
+                del self.value['effectDigest']
+            with self.subTest(state=state), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.get_proposal(self.binding, ID)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+        self.value = document()
+        self.value['state'] = 'submitted'
+        del self.value['application']
+        del self.value['effectDigest']
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.get_proposal(self.binding, ID)
+        self.value.update(state='draft', effectDigest=DIGEST)
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.get_proposal(self.binding, ID)
+        del self.value['effectDigest']
+        self.assertEqual(self.client.get_proposal(self.binding, ID).document['state'], 'draft')
+        self.value = document()
+        del self.value['application']
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.get_proposal(self.binding, ID)
+
+    def test_review_status_pending_terminal_expired_and_context_without_results(self):
+        self.value['state'] = 'submitted'
+        del self.value['application']
+        for name, suffix, operation in [('reviewStatus', 'review-status', 'get-review-status'), ('reviewContext', 'review-context', 'get-review-context')]:
+            self.value['links'][name] = {'method': 'GET', 'path': '/v1/proposals/' + ID + '/' + suffix, 'accessProfile': 'reader', 'operation': operation}
+        prior = self.client.get_proposal(self.binding, ID)
+        base = {'id': ID, 'actionId': 'correct', 'actionRevision': DIGEST, 'submissionVersion': 2, 'revision': 8, 'effectDigest': DIGEST,
+                'subject': {'source': 'directory', 'subjectType': 'proposal', 'id': ID, 'version': '2', 'digest': DIGEST},
+                'context': {'reference': 'breg:directory:correct:' + ID + ':2'}, 'reviewable': True}
+        configured = dict(base, authority='review-provider', policy={'id': 'review', 'version': '1', 'digest': DIGEST})
+        terminal = {'state': 'approved', 'resultId': TARGET, 'completedAt': '2026-10-01T00:00:00.000000Z', 'availableUntil': '2026-10-02T00:00:00.000000Z'}
+        self.value = copy.deepcopy(base)
+        self.assertNotIn('result', self.client.read_proposal_review_status(prior)['value'])
+        for result in [{'state': 'pending'}] + [dict(terminal, state=state) for state in ('approved', 'rejected', 'changes-requested', 'answered', 'cancelled', 'superseded', 'expired')]:
+            self.value = dict(copy.deepcopy(configured), result=result)
+            with self.subTest(result=result):
+                self.assertEqual(self.client.read_proposal_review_status(prior)['value']['result'], result)
+        invalid_results = [{'state': 'pending', field: terminal[field]} for field in ('resultId', 'completedAt', 'availableUntil')]
+        for field in ('resultId', 'completedAt', 'availableUntil'):
+            result = dict(terminal)
+            del result[field]
+            invalid_results.append(result)
+        expired = dict(terminal, state='expired')
+        del expired['availableUntil']
+        invalid_results += [dict(terminal, resultId='not-a-uuid'), dict(terminal, resultId='00000000-0000-0000-0000-000000000000'),
+                            dict(terminal, completedAt='2026-10-01'), dict(terminal, availableUntil='private-canary'),
+                            dict(terminal, availableUntil=terminal['completedAt']), dict(terminal, availableUntil='2026-09-30T00:00:00Z'),
+                            expired, dict(terminal, state='unknown')]
+        for result in invalid_results:
+            self.value = dict(copy.deepcopy(configured), result=result)
+            count = len(self.requests)
+            with self.subTest(invalid_result=result), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.read_proposal_review_status(prior)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertNotIn('private-canary', str(raised.exception))
+            self.assertEqual(len(self.requests), count + 1)
+        for invalid in [dict(base, result={'state': 'pending'}), configured]:
+            self.value = copy.deepcopy(invalid)
+            with self.assertRaises(BaseRegistryClientError):
+                self.client.read_proposal_review_status(prior)
+        self.value = copy.deepcopy(configured)
+        self.value['context']['contract'] = {'id': 'urn:registry:breg:review-context:directory:correct:review', 'revision': DIGEST, 'schemaDigest': DIGEST}
+        self.value['context']['fields'] = {'private': 'private-canary'}
+        self.assertEqual(self.client.read_proposal_review_context(prior)['value']['context']['fields'], {'private': 'private-canary'})
+        self.value['result'] = {'state': 'pending'}
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.read_proposal_review_context(prior)
+        self.assertEqual(raised.exception.kind, 'invalid-request')
+        self.assertNotIn('private-canary', str(raised.exception))
+
     def test_non_rebase_transitions_and_attachment_writes_preserve_action_revision(self):
         successor = 'sha256:' + 'b' * 64
         self.value = document()
         self.value['state'] = 'draft'
         del self.value['application']
+        del self.value['effectDigest']
         self.value['links']['edit'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/edit', 'accessProfile': 'reader', 'operation': 'edit', 'ifMatch': '"edit-condition"'}
         self.value['attachments'] = {'support': {'id': 'support', 'required': False, 'maximumBytes': 1024, 'contentTypes': ['application/pdf'], 'classification': 'restricted',
             'links': {name: {'method': method, 'path': '/v1/proposals/' + ID + '/attachments/support', 'accessProfile': 'reader', 'operation': name, 'ifMatch': '"attachment-condition"'}
@@ -230,12 +309,13 @@ class ProposalResultTests(unittest.TestCase):
         self.value = document()
         self.value.update(state='draft', submissionVersion=1)
         del self.value['application']
+        del self.value['effectDigest']
         self.value['links']['submit'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/submit', 'accessProfile': 'reader', 'operation': 'submit', 'ifMatch': '"submit-condition"'}
         prior = self.client.get_proposal(self.binding, ID)
         initial = copy.deepcopy(self.value)
         attempt = self.client.prepare_proposal(prior, 'submit', {}, 'exact-submit')
         saved = attempt.to_bytes()
-        receipt = dict(copy.deepcopy(initial), revision=9, state='submitted')
+        receipt = dict(copy.deepcopy(initial), revision=9, state='submitted', effectDigest=DIGEST)
         for invalid in [initial, dict(receipt, revision=8), dict(receipt, revision=10),
                         dict(receipt, state='draft'), dict(receipt, state='applied'), dict(receipt, submissionVersion=2)]:
             self.value = invalid
@@ -249,7 +329,8 @@ class ProposalResultTests(unittest.TestCase):
         sent = self.requests[-1]
         self.assertEqual(self.client.execute_proposal(attempt).document['revision'], 9)
         self.assertEqual(self.requests[-1], sent)
-        self.value = dict(copy.deepcopy(receipt), revision=10, state='applied')
+        self.value = dict(copy.deepcopy(receipt), revision=10, state='applied',
+                          application=dict(document()['application'], submissionVersion=1))
         self.value['links']['submit']['availability'] = {'available': False, 'observedRevision': 10, 'reason': 'already-applied', 'recovery': 'receipt-only'}
         current = self.client.read_proposal(prior)
         count = len(self.requests)
@@ -277,12 +358,15 @@ class ProposalResultTests(unittest.TestCase):
             self.value = document()
             self.value.update(state=state, submissionVersion=before)
             del self.value['application']
+            if state == 'draft':
+                del self.value['effectDigest']
             self.value['links']['rebase'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/rebase', 'accessProfile': 'reader', 'operation': 'rebase', 'ifMatch': '"rebase-condition"',
                                            'availability': {'available': True, 'observedRevision': 8}}
             prior = self.client.get_proposal(self.binding, ID)
             attempt = self.client.prepare_proposal(prior, 'rebase', {'input': {}}, 'rebase-' + state)
             saved = attempt.to_bytes()
             self.value.update(state='draft', submissionVersion=after, revision=9, actionRevision='sha256:' + 'b' * 64)
+            self.value.pop('effectDigest', None)
             self.value['links']['rebase']['availability']['observedRevision'] = 9
             rebased = self.client.execute_proposal(attempt)
             restored = BRegPreparedProposal.from_bytes(saved)
@@ -304,10 +388,23 @@ class ProposalResultTests(unittest.TestCase):
         self.value = document()
         self.value['state'] = 'draft'
         del self.value['application']
+        del self.value['effectDigest']
         self.value['attachments'] = {'support': {'id': 'support', 'required': False, 'maximumBytes': 4, 'contentTypes': ['text/plain'], 'classification': 'restricted',
-            'value': {'submissionVersion': 2, 'sha256': hashlib.sha256(self.download_bytes).hexdigest(), 'contentType': 'application/pdf', 'byteSize': len(self.download_bytes), 'verificationStatus': 'notRequired'},
+            'value': {'submissionVersion': 2, 'uploadedAt': '2026-10-15T00:00:00.000000Z', 'sha256': hashlib.sha256(self.download_bytes).hexdigest(), 'contentType': 'application/pdf', 'byteSize': len(self.download_bytes), 'verificationStatus': 'notRequired'},
             'links': {'download': {'method': 'GET', 'path': '/v1/proposals/' + ID + '/attachments/support?submissionVersion=2', 'accessProfile': 'reader', 'operation': 'download'},
                       'upload': {'method': 'PATCH', 'path': '/v1/proposals/' + ID + '/attachments/support', 'accessProfile': 'reader', 'operation': 'upload', 'ifMatch': '"attachment-condition"'}}}}
+        disclosed = copy.deepcopy(self.value)
+        for uploaded_at in [None, 'private-canary', '2026-10-15']:
+            self.value = copy.deepcopy(disclosed)
+            if uploaded_at is None:
+                del self.value['attachments']['support']['value']['uploadedAt']
+            else:
+                self.value['attachments']['support']['value']['uploadedAt'] = uploaded_at
+            with self.subTest(uploaded_at=uploaded_at), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.get_proposal(self.binding, ID)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertNotIn('private-canary', str(raised.exception))
+        self.value = disclosed
         retained = self.client.get_proposal(self.binding, ID)
         self.assertEqual(self.client.download_proposal_attachment(retained, 'support')['body'], self.download_bytes)
         count = len(self.requests)
