@@ -560,7 +560,7 @@
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
         "scopeClaim": {
-          "default": "registry_scopes",
+          "default": "scope",
           "type": "string"
         }
       },

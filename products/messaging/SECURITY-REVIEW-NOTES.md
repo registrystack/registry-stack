@@ -1110,3 +1110,15 @@ unchanged; a deployment that had set more than 365 days is refused at startup
 and keeps the raw issuer, subject, and key for less time once it lowers the
 value. `a_removed_key_names_the_key_that_replaced_it` and the out-of-range
 cases in `config.rs` pin the name and the bound.
+
+## The scope claim defaults to `scope`
+
+`authentication.oidc.scopeClaim` defaults to `scope` (was `registry_scopes`),
+the claim Scheduling reads by default and stock ThunderID emits. A deployment
+that relied on the old default now reads the `scope` claim, so a token that
+carries its scopes only in `registry_scopes` matches no access profile's
+required scopes and is refused until the file names `scopeClaim:
+registry_scopes`. The change selects which single claim is read and never
+widens the match, so no token gains a route it did not have.
+`shared_runtime_configuration_blocks_use_the_platform_contract` in
+`config.rs` pins the default.

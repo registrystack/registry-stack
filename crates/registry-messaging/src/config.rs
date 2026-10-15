@@ -308,7 +308,7 @@ pub struct OidcConfig {
 }
 
 fn default_scope_claim() -> String {
-    "registry_scopes".to_owned()
+    "scope".to_owned()
 }
 
 /// Where the audit journal is written and the key its hashes are made with.
@@ -1423,7 +1423,7 @@ impl RuntimeConfigError {
                 "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use."
             }
             Self::EmptyScopeClaim => {
-                "Name the claim that carries the caller's scopes, or remove the member to use registry_scopes."
+                "Name the claim that carries the caller's scopes, or remove the member to use scope."
             }
             Self::AllowedClientsRequired => {
                 "List every client identifier this deployment admits in authentication.oidc.allowedClients."
@@ -1726,7 +1726,7 @@ pub(crate) mod tests {
     fn shared_runtime_configuration_blocks_use_the_platform_contract() {
         let config = load(base()).unwrap();
         assert_eq!(config.retention, RetentionConfig::default());
-        assert_eq!(config.authentication.oidc.scope_claim, "registry_scopes");
+        assert_eq!(config.authentication.oidc.scope_claim, "scope");
         assert!(config.metrics_listener.is_none());
         assert_eq!(
             config.listener.bind.socket_addr(),

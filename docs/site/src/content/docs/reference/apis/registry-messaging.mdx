@@ -28,7 +28,7 @@ those operations assume.
 
 Every caller request presents `Authorization: Bearer <token>` holding an RFC 9068 access token,
 `typ: at+jwt`, issued by the one issuer the deployment names, for its audience, to a client the
-deployment admits. The token's scopes are read from `registry_scopes` unless the deployment names
+deployment admits. The token's scopes are read from `scope` unless the deployment names
 another claim. Liveness and readiness take no token, and provider callbacks take none either: a
 callback verifier authenticates them instead.
 

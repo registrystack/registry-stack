@@ -113,7 +113,7 @@ carrying the `postgres-test` feature.
 client an access profile names must be listed; a profile no admitted client
 could reach is refused at load. An omitted member, an empty list, and a
 repeated client are refused when the file is read, and so is the
-`unrestricted` keyword the sibling runtimes accept on development loopback. `scopeClaim` defaults to `registry_scopes`. `jwksSource`
+`unrestricted` keyword the sibling runtimes accept on development loopback. `scopeClaim` defaults to `scope`. `jwksSource`
 defaults to issuer discovery and can instead select
 `{type: static, documentRef: secret:...}` or `{type: uri, uri: HTTPS_URL}`.
 The former `jwksUri` member is refused. `assertionIssuers` maps an allowed client to at least one and at most

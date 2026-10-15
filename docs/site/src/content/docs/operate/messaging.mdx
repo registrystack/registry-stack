@@ -235,7 +235,7 @@ loopback or private address, and must not be the public listener's socket.
 `allowedClients` lists at least one distinct client, and every client an access profile names must
 be listed. Messaging refuses an omitted member, an empty list, a repeated client, and the
 `unrestricted` keyword its sibling runtimes accept on development loopback. The
-scope claim is `registry_scopes` unless `scopeClaim` names another. Signing keys come from issuer
+scope claim is `scope` unless `scopeClaim` names another. Signing keys come from issuer
 discovery by default; declare `jwksSource: {type: static, documentRef: secret:file/<name>}` when the
 runtime cannot reach the issuer's discovery document. With discovery, `serve` fails at startup
 with `the OIDC issuer could not be initialized` when the issuer is unreachable.
