@@ -22,9 +22,12 @@
       "additionalProperties": false,
       "properties": {
         "display": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "x-registry-foreign": "json"
+          },
           "description": "Business values remain JSON; the selected policy owns their schema.",
           "type": "object",
+          "x-registry-foreign": "json",
           "x-registry-passthrough": "Synthetic business fields are validated against the selected compiled ReviewPolicy displaySchema."
         },
         "policy": {

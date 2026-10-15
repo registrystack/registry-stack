@@ -156,7 +156,10 @@ fn fixture_references_and_display_are_checked_under_the_compiled_policy() {
         &project,
     )
     .unwrap();
-    assert_eq!(decoded.value.review.display["reference"], "BATCH/2026-01");
+    assert_eq!(
+        decoded.value.review.display["reference"].as_value(),
+        "BATCH/2026-01"
+    );
     for (pointer, value) in [
         ("/review/policy", json!("unknown")),
         ("/expect/queue", json!("unknown")),
@@ -201,6 +204,7 @@ fn maintained_submitted_fixture_and_current_source_policy_validate_offline() {
     let display = json!({
         "currentAddressLine": "10 Harbour Road",
         "facilityId": facility_id,
+        "supportingDocument": null,
         "changes": [{
             "recordId": facility_id,
             "operation": "patch",
@@ -219,12 +223,50 @@ fn maintained_submitted_fixture_and_current_source_policy_validate_offline() {
     let mut document = fixture();
     document["review"] = json!({"policy":"facility-address-review","display":display});
     document["expect"] = json!({"queue":"facility-addresses","outcomes":["approved","rejected"]});
+    let absent_document = CaseworkFixture::read_against(
+        "fixture.yaml",
+        &serde_json::to_vec(&document).unwrap(),
+        &project,
+    )
+    .unwrap();
+    assert!(absent_document.value.review.display["supportingDocument"]
+        .as_value()
+        .is_null());
+
+    document["review"]["display"]["supportingDocument"] = json!({
+        "type": "document",
+        "slotId": "supporting-document",
+        "sha256": "a".repeat(64),
+        "contentType": "application/pdf",
+        "byteSize": 123,
+        "download": {
+            "method": "GET",
+            "operation": "get-review-context",
+            "accessProfile": "proposal-reviewer",
+            "path": format!(
+                "/v1/proposals/{facility_id}/attachments/supporting-document?submissionVersion=1&reviewContextField=supportingDocument&effectDigest=sha256%3A{}&contextSchemaDigest=sha256%3A{}",
+                "b".repeat(64),
+                "c".repeat(64),
+            ),
+        },
+    });
     CaseworkFixture::read_against(
         "fixture.yaml",
         &serde_json::to_vec(&document).unwrap(),
         &project,
     )
     .unwrap();
+    let mut invalid_configuration = document.clone();
+    invalid_configuration["expect"]["queue"] = Value::Null;
+    let error = CaseworkFixture::read(
+        "fixture.yaml",
+        &serde_json::to_vec(&invalid_configuration).unwrap(),
+    )
+    .unwrap_err();
+    assert!(error
+        .diagnostics()
+        .iter()
+        .any(|item| { item.code == "config.null-value" && item.path == "/expect/queue" }));
     for invalid_display in [
         json!({
             "currentAddressLine": "10 Harbour Road",
