@@ -1999,7 +1999,7 @@ mod tests {
             "fields":[
                 {"id":"from","type":"reference","target":"contact","required":true,"classification":"internal"},
                 {"id":"to","type":"reference","target":"contact","required":true,"classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"maximumLength":40,"classification":"internal"}
+                {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}
             ]
         }));
         let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
@@ -2084,6 +2084,8 @@ journeys:
         assert!(registry.actions().is_empty());
         assert!(registry.entities()["contact-link"].tombstone);
         assert!(registry.entities()["contact"].access_profiles["directory-editor"].revision_access);
+        let claims = registry_breg::authority::authority_inventory(&registry).unwrap();
+        assert_eq!(claims.direct_claims["jurisdiction"].uses.len(), 3);
         registry_breg::fixtures::validate_fixture_journeys(
             &fs::read(temporary.path().join("tests/journeys.yaml")).unwrap(),
             &registry,
@@ -2510,9 +2512,12 @@ journeys:
             &ports[2],
         ]);
         assert_ne!(std::env::current_dir().unwrap(), owned.project);
-        assert!(attempts(&owned.project.join(".breg/dev/examples"))
-            .unwrap()
-            .is_empty());
+        let attempts_dir = owned.project.join(".breg/dev/examples");
+        match fs::symlink_metadata(&attempts_dir) {
+            Ok(_) => assert!(attempts(&attempts_dir).unwrap().is_empty()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("cannot inspect initial example attempts: {error}"),
+        }
         assert_eq!(observed_count(&owned.project), 0);
         child(&owned.project, "first-record", None, Some("create"));
         let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
