@@ -1387,6 +1387,16 @@ fn recovery_deserialization_preserves_optional_operation_and_rejects_missing_blo
 }
 
 #[test]
+fn operation_identity_refuses_a_zero_version() {
+    use registry_coordinator_client::OperationIdentity;
+
+    let mut operation = inspection()["recovery"]["operation"].clone();
+    assert!(serde_json::from_value::<OperationIdentity>(operation.clone()).is_ok());
+    operation["version"] = json!(0);
+    assert!(serde_json::from_value::<OperationIdentity>(operation).is_err());
+}
+
+#[test]
 fn dto_contract_tracks_the_runtime_generated_schema() {
     let api: Value = serde_json::from_str(include_str!(
         "../../../products/coordinator/generated/openapi/coordinator.openapi.json"

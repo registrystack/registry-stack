@@ -177,6 +177,7 @@ pub enum RecoverySemantics {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OperationIdentity {
     pub id: String,
+    #[serde(deserialize_with = "operation_version")]
     pub version: u32,
     pub product: String,
     pub effect: EffectKind,
@@ -400,6 +401,17 @@ fn run_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::
     let value = Uuid::deserialize(deserializer)?;
     if value.is_nil() {
         Err(serde::de::Error::custom("expected a nonnil run identity"))
+    } else {
+        Ok(value)
+    }
+}
+
+fn operation_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value = u32::deserialize(deserializer)?;
+    if value == 0 {
+        Err(serde::de::Error::custom(
+            "expected a positive catalog operation version",
+        ))
     } else {
         Ok(value)
     }
