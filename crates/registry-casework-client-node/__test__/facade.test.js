@@ -13,6 +13,63 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CaseworkClientError, 'function');
 });
 
+test('review result feed preserves distinct identifiers and refuses nil correlation identifiers', async (context) => {
+  const nil = '00000000-0000-0000-0000-000000000000';
+  const entry = {
+    eventId: '00000000-0000-0000-0000-000000000008',
+    requestId: '00000000-0000-0000-0000-000000000007',
+    resultId: '00000000-0000-0000-0000-000000000099',
+    completedAt: '2026-09-19T00:00:00Z',
+  };
+  const pages = [
+    { items: [entry], nextCursor: entry.eventId },
+    ...['requestId', 'resultId'].map((field) => ({
+      items: [{ ...entry, [field]: nil }], nextCursor: entry.eventId,
+    })),
+  ];
+  const observations = [];
+  const server = http.createServer((request, response) => {
+    observations.push({ path: request.url, headers: request.headers });
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify(pages.shift()));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const { CaseworkClient, CaseworkClientError } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/tenant/` });
+  const query = { cursor: entry.eventId, limit: 1 };
+
+  const page = await client.reviewResults('one-call-secret', 'requester', query);
+  assert.deepEqual(page.value.items, [entry]);
+  assert.equal(page.value.nextCursor, entry.eventId);
+  for (const field of ['requestId', 'resultId']) {
+    await assert.rejects(() => client.reviewResults('one-call-secret', 'requester', query), (error) => {
+      assert.ok(error instanceof CaseworkClientError, field);
+      assert.equal(error.kind, 'protocol', field);
+      assert.equal(error.protocolFailure, 'body', field);
+      assert.equal(error.status, 200, field);
+      assert.equal(error.traceId, '0123456789abcdef0123456789abcdef', field);
+      assert.doesNotMatch(error.message, /one-call-secret|00000000-/);
+      return true;
+    });
+  }
+  assert.equal(observations.length, 3);
+  assert.equal(pages.length, 0);
+  for (const observation of observations) {
+    assert.equal(observation.path, `/tenant/v1/review-results?cursor=${entry.eventId}&limit=1`);
+    assert.equal(observation.headers['registry-review-profile'], 'requester');
+  }
+});
+
 test('a configuration value the sanitizer refuses is a configuration error', () => {
   const { CaseworkClient, CaseworkClientError } = require('../client');
   const baseUrl = 'https://casework.example/';

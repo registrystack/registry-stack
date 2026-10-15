@@ -450,6 +450,140 @@ async fn result_feed_rejects_an_invalid_page_size_before_http() {
     server.abort();
 }
 
+#[tokio::test]
+async fn result_feed_refuses_nil_correlation_identifiers_anywhere_in_a_page() {
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let mut accepted = Vec::new();
+    for field in ["requestId", "resultId"] {
+        for position in 0..2 {
+            for continued in [false, true] {
+                let mut entries = vec![feed_entry_json(8), feed_entry_json(9)];
+                entries[position][field] = json!(Uuid::nil());
+                let body = json!({
+                    "items": entries,
+                    "nextCursor": continued.then_some(Uuid::from_u128(9))
+                });
+                let observations = Arc::new(Mutex::new(Vec::new()));
+                let app = Router::new().route(
+                    "/v1/review-results",
+                    get({
+                        let observations = observations.clone();
+                        move |request: Request<Body>| {
+                            capture(&observations, &request);
+                            let body = body.clone();
+                            async move { json_response(StatusCode::OK, body) }
+                        }
+                    }),
+                );
+                let (client, server) = serve(app).await;
+
+                let result = client
+                    .requester_results(
+                        ReviewAuth::new(&token, "producer"),
+                        &ReviewResultsQuery {
+                            cursor: Some(Uuid::from_u128(6)),
+                            limit: Some(2),
+                        },
+                    )
+                    .await;
+                if !matches!(
+                    result,
+                    Err(ReviewClientError::Protocol {
+                        status: 200,
+                        failure: ReviewProtocolFailure::Body,
+                        trace_id: Some(ref trace_id),
+                    }) if trace_id == "0123456789abcdef0123456789abcdef"
+                ) {
+                    accepted.push(format!(
+                        "nil {field} at position {position}, continued={continued}"
+                    ));
+                }
+                assert_eq!(observations.lock().expect("observations").len(), 1);
+                server.abort();
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "unusable pages accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn result_feed_preserves_independent_identifiers_and_caller_controlled_pagination() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let responses = Arc::new(Mutex::new(VecDeque::from([
+        json!({"items": [feed_entry_json(8)], "nextCursor": Uuid::from_u128(8)}),
+        json!({"items": [feed_entry_json(9)]}),
+        json!({"items": []}),
+    ])));
+    let app = Router::new().route(
+        "/v1/review-results",
+        get({
+            let observations = observations.clone();
+            let responses = responses.clone();
+            move |request: Request<Body>| {
+                capture(&observations, &request);
+                let body = responses
+                    .lock()
+                    .expect("responses")
+                    .pop_front()
+                    .expect("page");
+                async move { json_response(StatusCode::OK, body) }
+            }
+        }),
+    );
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let mut query = ReviewResultsQuery {
+        cursor: None,
+        limit: Some(1),
+    };
+
+    for (index, event_id) in [8, 9].into_iter().enumerate() {
+        let page = client
+            .requester_results(ReviewAuth::new(&token, "producer"), &query)
+            .await
+            .expect("usable feed page")
+            .value;
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].event_id, Uuid::from_u128(event_id));
+        assert_eq!(page.items[0].request_id, Uuid::from_u128(7));
+        assert_eq!(page.items[0].result_id, Uuid::from_u128(99));
+        assert_eq!(page.next_cursor, (index == 0).then_some(Uuid::from_u128(8)));
+        assert_eq!(observations.lock().expect("observations").len(), index + 1);
+        query.cursor = page
+            .next_cursor
+            .or_else(|| page.items.last().map(|entry| entry.event_id));
+    }
+    let empty = client
+        .requester_results(ReviewAuth::new(&token, "producer"), &query)
+        .await
+        .expect("empty terminal page")
+        .value;
+    assert!(empty.items.is_empty());
+    assert!(empty.next_cursor.is_none());
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 3);
+    assert_eq!(observations[0].1, "/v1/review-results?limit=1");
+    assert_eq!(
+        observations[1].1,
+        "/v1/review-results?cursor=00000000-0000-0000-0000-000000000008&limit=1"
+    );
+    assert_eq!(
+        observations[2].1,
+        "/v1/review-results?cursor=00000000-0000-0000-0000-000000000009&limit=1"
+    );
+    assert!(responses.lock().expect("responses").is_empty());
+    server.abort();
+}
+
+fn feed_entry_json(event_id: u128) -> serde_json::Value {
+    json!({
+        "eventId": Uuid::from_u128(event_id),
+        "requestId": Uuid::from_u128(7),
+        "resultId": Uuid::from_u128(99),
+        "completedAt": "2026-09-19T00:00:00Z"
+    })
+}
+
 async fn capture_request(
     State(observations): State<Observations>,
     Path(request_id): Path<Uuid>,

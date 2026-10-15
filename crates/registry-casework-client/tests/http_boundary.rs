@@ -190,6 +190,11 @@ async fn review_result_feed_refuses_unbounded_or_invalid_continuations() {
         "completedAt": "2026-09-19T00:00:00Z"
     });
     let cursor = Uuid::from_u128(8).to_string();
+    let nil_identifiers = ["eventId", "requestId", "resultId"].map(|field| {
+        let mut invalid_entry = entry.clone();
+        invalid_entry[field] = json!(Uuid::nil());
+        json!({"items": [invalid_entry, entry.clone()], "nextCursor": cursor})
+    });
     let responses = Arc::new(Mutex::new(VecDeque::from([
         json!({"items": vec![entry.clone(); 100], "nextCursor": cursor}),
         json!({"items": vec![entry.clone(); 101]}),
@@ -198,6 +203,7 @@ async fn review_result_feed_refuses_unbounded_or_invalid_continuations() {
         json!({"items": [], "nextCursor": "cursor\n8"}),
         json!({"items": [], "nextCursor": "not-an-event-uuid"}),
     ])));
+    responses.lock().expect("responses").extend(nil_identifiers);
     let app = Router::new()
         .route(
             "/v1/review-results",
@@ -226,12 +232,15 @@ async fn review_result_feed_refuses_unbounded_or_invalid_continuations() {
         .await
         .expect("bounded result feed page");
     assert_eq!(boundary.value.items.len(), 100);
+    assert_eq!(boundary.value.items[0].event_id, Uuid::from_u128(8));
+    assert_eq!(boundary.value.items[0].request_id, Uuid::from_u128(7));
+    assert_eq!(boundary.value.items[0].result_id, Uuid::from_u128(99));
     assert_eq!(
         boundary.value.next_cursor,
         Some(Uuid::parse_str(&cursor).unwrap())
     );
 
-    for _ in 0..5 {
+    for _ in 0..8 {
         assert!(matches!(
             client
                 .review_results(CaseworkAuth::new(&token, "requester"), &query)
