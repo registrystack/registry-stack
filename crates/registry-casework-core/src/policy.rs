@@ -9,9 +9,9 @@ use crate::finding::{
     ConfigFinding, Findings, ELAPSED_ACTION, ELAPSED_MESSAGE, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE,
 };
 use crate::{
-    evaluate_elapsed_budget, evaluate_working_day_deadline, parse_elapsed_seconds, ElapsedBudget,
-    ElapsedDuration, HolidaySetRevision, ReviewTiming, WorkingCalendar, WorkingDayDeadlineRule,
-    MAXIMUM_WORKING_DAY_OFFSET,
+    evaluate_elapsed_budget, evaluate_working_day_deadline, parse_elapsed_seconds,
+    CalendarEvaluationError, ElapsedBudget, ElapsedDuration, HolidaySetRevision, ReviewTiming,
+    WorkingCalendar, WorkingDayDeadlineRule, MAXIMUM_WORKING_DAY_OFFSET,
 };
 
 pub const MAXIMUM_CLOCKS: usize = 32;
@@ -330,7 +330,7 @@ pub struct StepOccurrence {
     pub reassign_queue: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ClockPolicyError {
     #[error("a clock or calendar identifier is invalid")]
     Identifier,
@@ -338,12 +338,47 @@ pub enum ClockPolicyError {
     Bounds,
     #[error("a clock references an unknown calendar or queue")]
     Reference,
-    #[error("a clock duration or calendar is invalid")]
+    #[error(
+        "a clock's elapsed duration is invalid, or the clock is not the kind this \
+         evaluation reads; write a positive whole number of hours, minutes or \
+         seconds, such as PT48H"
+    )]
     Value,
     #[error("the supplied holiday-set revision does not match the clock calendar")]
     HolidaySet,
     #[error("the source timing facts cannot be evaluated")]
     Timing,
+    /// The shared calendar refused the clock. `at` is the clock field the
+    /// reason concerns, as a pointer relative to the clock, when there is one.
+    #[error(
+        "the clock calendar cannot be evaluated{}: {reason}",
+        .at.as_deref().map(|at| format!(" at {at}")).unwrap_or_default()
+    )]
+    Calendar {
+        at: Option<String>,
+        reason: CalendarEvaluationError,
+    },
+}
+
+/// Attach the Casework clock field a neutral calendar refusal concerns.
+fn clock_calendar_error(
+    reason: CalendarEvaluationError,
+    reminder: Option<usize>,
+) -> ClockPolicyError {
+    let at = match (&reason, reminder) {
+        (CalendarEvaluationError::InvalidDueTime { .. }, _) => Some("/dueTime".to_owned()),
+        (CalendarEvaluationError::InvalidWorkingDayOffset { .. }, _) => {
+            Some("/after/workingDays".to_owned())
+        }
+        (CalendarEvaluationError::InvalidWarningOffset { .. }, _) => {
+            Some("/atRisk/workingDaysBefore".to_owned())
+        }
+        (CalendarEvaluationError::InvalidReminderOffset { .. }, Some(index)) => {
+            Some(format!("/reminders/{index}/workingDaysBefore"))
+        }
+        _ => None,
+    };
+    ClockPolicyError::Calendar { at, reason }
 }
 
 /// Every problem in the authored calendars and clocks, located by pointers
@@ -720,9 +755,9 @@ pub fn evaluate_activity_clock(
         },
         anchor,
     )
-    .map_err(|_| ClockPolicyError::Value)?;
+    .map_err(|reason| clock_calendar_error(reason, None))?;
     let mut occurrences = Vec::with_capacity(reminders.len());
-    for reminder in reminders {
+    for (index, reminder) in reminders.iter().enumerate() {
         let evaluated = evaluate_working_day_deadline(
             &calendar,
             &WorkingDayDeadlineRule {
@@ -733,7 +768,7 @@ pub fn evaluate_activity_clock(
             },
             anchor,
         )
-        .map_err(|_| ClockPolicyError::Value)?;
+        .map_err(|reason| clock_calendar_error(reason, Some(index)))?;
         occurrences.push(ReminderOccurrence {
             id: reminder.id.clone(),
             at: evaluated
@@ -856,6 +891,145 @@ mod tests {
         assert_eq!(evaluation.steps[0].at, evaluation.due_at);
         assert_eq!(evaluation.steps[0].reassign_queue, "overdue-review");
         assert_eq!(evaluation.calendar_revision, 7);
+    }
+
+    fn new_york_every_day() -> CalendarPolicy {
+        CalendarPolicy {
+            id: "office".to_owned(),
+            timezone: "America/New_York".to_owned(),
+            working_weekdays: vec![
+                WorkingWeekday::Monday,
+                WorkingWeekday::Tuesday,
+                WorkingWeekday::Wednesday,
+                WorkingWeekday::Thursday,
+                WorkingWeekday::Friday,
+                WorkingWeekday::Saturday,
+                WorkingWeekday::Sunday,
+            ],
+            holiday_set: "office-holidays".to_owned(),
+        }
+    }
+
+    fn no_holidays() -> HolidaySetDocument {
+        HolidaySetDocument {
+            holiday_set: "office-holidays".to_owned(),
+            revision: 1,
+            dates: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_due_time_that_passes_check_evaluates_across_daylight_saving_gaps_and_folds() {
+        let queues = BTreeSet::from(["overdue-review".to_owned()]);
+        let mut clock = deadline();
+        let ClockPolicy::Activity {
+            after,
+            due_time,
+            reminders,
+            ..
+        } = &mut clock
+        else {
+            unreachable!()
+        };
+        after.working_days = 2;
+        "02:30".clone_into(due_time);
+        reminders[0].working_days_before = 1;
+        assert_eq!(
+            clock_policy_findings(&[new_york_every_day()], &[clock.clone()], &queues),
+            []
+        );
+
+        // 02:30 does not exist on 2026-03-08 in New York; the warning and
+        // reminder move to 03:00 EDT, the first instant after the gap.
+        let spring = evaluate_activity_clock(
+            &clock,
+            &new_york_every_day(),
+            &no_holidays(),
+            instant("2026-03-07T12:00:00-05:00"),
+        )
+        .expect("a gap resolves forward");
+        assert_eq!(spring.due_at, instant("2026-03-09T02:30:00-04:00"));
+        assert_eq!(
+            spring.at_risk_at,
+            Some(instant("2026-03-08T03:00:00-04:00"))
+        );
+        assert_eq!(spring.reminders[0].at, instant("2026-03-08T03:00:00-04:00"));
+
+        // 01:30 happens twice on 2026-11-01 in New York; the earlier wins.
+        "01:30".clone_into(match &mut clock {
+            ClockPolicy::Activity { due_time, .. } => due_time,
+            ClockPolicy::Subject { .. } => unreachable!(),
+        });
+        let autumn = evaluate_activity_clock(
+            &clock,
+            &new_york_every_day(),
+            &no_holidays(),
+            instant("2026-10-31T12:00:00-04:00"),
+        )
+        .expect("a fold resolves to the earlier instant");
+        assert_eq!(
+            autumn.at_risk_at,
+            Some(instant("2026-11-01T01:30:00-04:00"))
+        );
+    }
+
+    #[test]
+    fn a_value_refusal_names_the_duration_fix_and_not_the_calendar() {
+        assert_eq!(
+            ClockPolicyError::Value.to_string(),
+            "a clock's elapsed duration is invalid, or the clock is not the kind this \
+             evaluation reads; write a positive whole number of hours, minutes or \
+             seconds, such as PT48H"
+        );
+    }
+
+    #[test]
+    fn a_calendar_refusal_keeps_its_reason_and_names_the_clock_field() {
+        let mut clock = deadline();
+        let ClockPolicy::Activity { reminders, .. } = &mut clock else {
+            unreachable!()
+        };
+        reminders.push(ClockReminder {
+            id: "overdue-soon".to_owned(),
+            working_days_before: MAXIMUM_WORKING_DAY_OFFSET + 1,
+        });
+        let error = evaluate_activity_clock(
+            &clock,
+            &office_calendar(),
+            &no_holidays(),
+            instant("2026-09-04T15:00:00+07:00"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ClockPolicyError::Calendar {
+                at: Some("/reminders/1/workingDaysBefore".to_owned()),
+                reason: CalendarEvaluationError::InvalidReminderOffset {
+                    value: MAXIMUM_WORKING_DAY_OFFSET + 1,
+                    limit: MAXIMUM_WORKING_DAY_OFFSET,
+                },
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "the clock calendar cannot be evaluated at /reminders/1/workingDaysBefore: \
+             the reminder offset 3651 is out of range; use 1 to 3650 working days before the due date"
+        );
+
+        let mut zone = office_calendar();
+        zone.timezone = "Not/A_Zone".to_owned();
+        assert_eq!(
+            evaluate_activity_clock(
+                &deadline(),
+                &zone,
+                &no_holidays(),
+                instant("2026-09-04T15:00:00+07:00"),
+            ),
+            Err(ClockPolicyError::Calendar {
+                at: None,
+                reason: CalendarEvaluationError::InvalidTimezone,
+            })
+        );
     }
 
     #[test]

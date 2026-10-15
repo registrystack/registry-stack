@@ -26,7 +26,7 @@
     - ['`reconcile.raced`', '409', 'The run''s progress changed while it was being reconciled. Inspect it again.']
     - ['`reconcile.refused`', '409', 'Reconcile applies only to a held mutation with a prepared command, its original binding and no active lease.']
     - ['`reconcile.unsupported`', '409', 'The held operation has no original-result lookup.']
-    - ['`request.body-too-large`', '413', 'The request body exceeds the accepted size.']
+    - ['`request.body-too-large`', '413', 'The request body exceeds the accepted size: 65536 bytes for a JSON request, or 1048576 bytes for a signed event delivery.']
     - ['`request.invalid`', '400', 'The request could not be read as a Coordinator request.']
     - ['`request.limit-out-of-range`', '400', 'The list limit must be between 1 and 100.']
     - ['`request.method-not-allowed`', '405', 'The route exists but not for this method.']

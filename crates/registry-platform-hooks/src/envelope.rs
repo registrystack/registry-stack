@@ -28,9 +28,12 @@ use crate::error::{bounded_token, redacted_message};
 
 /// The payload bound the envelope carries, in bytes.
 ///
-/// The same 2 MiB payload bound the delivery store enforces on a stored
-/// envelope. A per-delivery bound can only tighten this, never widen it.
-pub const MAX_ENVELOPE_BYTES: usize = 2_097_152;
+/// The 1 MiB Version 1 signable bound
+/// (`registry_platform_crypto::delivery_signature::MAX_BODY_BYTES`), so every
+/// envelope a product emits can be signed and verified on a delivery path. The
+/// delivery store's 2 MiB payload column is a looser outer bound. A
+/// per-delivery bound can only tighten this, never widen it.
+pub const MAX_ENVELOPE_BYTES: usize = 1_048_576;
 
 /// The causation hop ceiling.
 ///
@@ -56,7 +59,7 @@ impl EnvelopeLimits {
     ///
     /// A request above [`MAX_ENVELOPE_BYTES`] is clamped to it rather than
     /// refused: a per-delivery bound is a tightening, and a caller that asks
-    /// for more gets the store's bound, never more than it.
+    /// for more gets the envelope bound, never more than it.
     #[must_use]
     pub const fn tightened_to(bytes: usize) -> Self {
         Self {
@@ -832,7 +835,7 @@ mod tests {
         let limits = EnvelopeLimits::default();
         let oversized = vec![b' '; MAX_ENVELOPE_BYTES + 1];
         let error = HookEnvelope::from_canonical_bytes(&oversized, &limits)
-            .expect_err("the outbox bound is the ceiling");
+            .expect_err("the envelope bound is the ceiling");
         assert!(matches!(
             error,
             HookEnvelopeError::PayloadTooLarge { size, max }
@@ -926,9 +929,24 @@ mod tests {
     }
 
     #[test]
-    fn the_envelope_ceiling_constant_mirrors_the_outbox_table() {
-        assert_eq!(MAX_ENVELOPE_BYTES, 2_097_152);
-        assert_eq!(EnvelopeLimits::default().max_envelope_bytes, 2_097_152);
+    fn the_envelope_ceiling_is_the_signable_bound_inside_the_outbox_column() {
+        assert_eq!(MAX_ENVELOPE_BYTES, 1_048_576);
+        assert_eq!(EnvelopeLimits::default().max_envelope_bytes, 1_048_576);
+        const {
+            assert!(
+                MAX_ENVELOPE_BYTES <= 2_097_152,
+                "the outbox column holds it"
+            )
+        };
+    }
+
+    #[cfg(feature = "receiver")]
+    #[test]
+    fn the_envelope_ceiling_matches_the_version_1_signable_bound() {
+        assert_eq!(
+            MAX_ENVELOPE_BYTES,
+            registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
+        );
     }
 
     #[test]
@@ -936,7 +954,7 @@ mod tests {
         assert_eq!(
             EnvelopeLimits::tightened_to(MAX_ENVELOPE_BYTES + 1).max_envelope_bytes,
             MAX_ENVELOPE_BYTES,
-            "a widened request is clamped to the store's bound"
+            "a widened request is clamped to the envelope bound"
         );
         assert_eq!(
             EnvelopeLimits::tightened_to(usize::MAX).max_envelope_bytes,
@@ -948,7 +966,7 @@ mod tests {
             "a tightened request is honored"
         );
 
-        // The clamp is enforced, not just reported: bytes over the store's
+        // The clamp is enforced, not just reported: bytes over the envelope
         // bound are still refused after asking for a wider ceiling.
         let widened = EnvelopeLimits::tightened_to(MAX_ENVELOPE_BYTES * 2);
         let oversized = vec![b' '; MAX_ENVELOPE_BYTES + 1];

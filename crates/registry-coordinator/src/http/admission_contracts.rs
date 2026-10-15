@@ -76,11 +76,11 @@ fn event_path(paths: &mut Map<String, Value>) {
         ("ce-dataschema", json!({"type":"string","minLength":1})),
         (
             "X-Registry-Event-Generation",
-            json!({"type":"string","pattern":"^[0-9]{1,10}$"}),
+            json!({"type":"string","pattern":"^[1-9][0-9]{0,18}$"}),
         ),
         (
             "X-Registry-Delivery-Attempt",
-            json!({"type":"string","pattern":"^[0-9]{1,10}$"}),
+            json!({"type":"string","pattern":"^[1-9][0-9]{0,18}$"}),
         ),
         (
             "X-Registry-Delivery-Time",
@@ -95,7 +95,7 @@ fn event_path(paths: &mut Map<String, Value>) {
     }
     paths.insert("/v1/events/{workflow}/{trigger}".into(), json!({"post":{
         "operationId":"admitEvent","summary":"Start a workflow from an authenticated product event",
-        "description":"Accept at most 65536 canonical JSON bytes using the platform HookEnvelope and v1 delivery signature. Envelope headers must match the body and the authored source, event type and data schema. Delivery time must be within 30 seconds; an older event may be redelivered. The exact source, event identity and trigger bind admission across retries. Every downstream call uses its own product authorization.",
+        "description":"Accept at most 1048576 canonical JSON bytes, the v1 signable bound, using the platform HookEnvelope and v1 delivery signature; the admitted event value is then held to the 131072-byte structured value profile. Envelope headers must match the body and the authored source, event type and data schema. Delivery time must be within 30 seconds; an older event may be redelivered. The exact source, event identity and trigger bind admission across retries. Every downstream call uses its own product authorization.",
         "security":[{"eventSource":[]}],"parameters":parameters,
         "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/HookEnvelope"}}}},
         "responses":responses

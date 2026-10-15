@@ -29,3 +29,7 @@ First release of Registry Coordinator.
 - Maintained examples cover standalone Casework review, product events, and external job
   completion. Native service checks compose BReg, Casework, Scheduling, and Messaging; the
   deferred-appointment journey retains a real 961-second wait and original receipt recovery. Offline scenarios and message acceptance do not establish provider delivery.
+- Signed event intake accepts deliveries up to the 1 MiB Version 1 signable bound, verifies them
+  through the shared hooks receiver, and answers a larger one with `request.body-too-large`.
+  Delivery counters are canonical positive decimals up to the signed 64-bit range. The admitted
+  event value still fits the 128 KiB structured value profile.

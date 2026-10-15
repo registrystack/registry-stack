@@ -18,11 +18,15 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use registry_platform_config::{sha256_uri, SecretProvidersConfig, SecretReference};
-use registry_platform_crypto::delivery_signature::{
-    verify_v1, SignatureFields, MIN_HMAC_SHA256_KEY_BYTES,
-};
+use registry_platform_crypto::delivery_signature::{MAX_BODY_BYTES, MIN_HMAC_SHA256_KEY_BYTES};
 use registry_platform_dispatch::idempotency_key;
-use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
+use registry_platform_hooks::{
+    receiver::{
+        verify_delivery as verify_signed_delivery, DeliveryFreshness, SignedDelivery,
+        VerifiedDelivery,
+    },
+    EnvelopeLimits, HookEnvelope,
+};
 use registry_platform_yaml::{ExternalId, LocalId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,8 +38,10 @@ use crate::{
     CoordinatorError, Result,
 };
 
-/// Matches the bounded Coordinator HTTP ingress and structured-value profile.
-pub const MAXIMUM_EVENT_BYTES: usize = 65_536;
+/// The Version 1 signable bound, so every event a producer can sign can be
+/// verified. The admitted event value is then held to the structured-value
+/// profile.
+pub const MAXIMUM_EVENT_BYTES: usize = MAX_BODY_BYTES;
 /// Delivery time is refreshed by the producer for every attempt. Event commit
 /// time is immutable and may be older after an outage or operator replay.
 pub const DELIVERY_SKEW: Duration = Duration::from_secs(30);
@@ -255,56 +261,47 @@ pub fn verify_delivery(
     key: &[u8],
     now: SystemTime,
 ) -> Result<VerifiedEvent> {
-    if body.is_empty() || body.len() > MAXIMUM_EVENT_BYTES || method != Method::POST {
+    if body.len() > MAXIMUM_EVENT_BYTES {
+        return Err(body_too_large());
+    }
+    if body.is_empty() || method != Method::POST {
         return Err(invalid_event());
     }
-    let specversion = header(headers, "ce-specversion")?;
-    let content_type = header(headers, "content-type")?;
-    let id = header(headers, "ce-id")?;
-    let event_source = header(headers, "ce-source")?;
-    let event_type = header(headers, "ce-type")?;
-    let time = header(headers, "ce-time")?;
-    let data_schema = header(headers, "ce-dataschema")?;
-    let generation = header(headers, "x-registry-event-generation")?;
-    let attempt = header(headers, "x-registry-delivery-attempt")?;
-    let delivery_time = header(headers, "x-registry-delivery-time")?;
-    let delivery_key = header(headers, "idempotency-key")?;
-    let signature = header(headers, "x-registry-signature")?;
-    if specversion != "1.0"
-        || content_type != "application/json"
+    let VerifiedDelivery {
+        id,
+        source: event_source,
+        event_type,
+        time,
+        data_schema,
+        content_type,
+        idempotency_key: delivery_key,
+        ..
+    } = verify_signed_delivery(
+        SignedDelivery {
+            method: method.as_str(),
+            request_target,
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            body,
+            key,
+        },
+        DeliveryFreshness::Within {
+            now,
+            skew: DELIVERY_SKEW,
+        },
+    )
+    .map_err(|_| unauthenticated())?;
+    if content_type != "application/json"
         || event_source != source.source.as_ref()
         || trigger.source != source_name
         || event_type != trigger.event_type
         || data_schema != trigger.data_schema
-        || !positive(generation)
-        || !positive(attempt)
         || delivery_key.is_empty()
         || delivery_key.len() > 256
     {
         return Err(unauthenticated());
     }
-    verify_v1(
-        key,
-        SignatureFields {
-            id,
-            source: event_source,
-            event_type,
-            time,
-            data_schema,
-            generation,
-            attempt,
-            delivery_time,
-            method: method.as_str(),
-            request_target,
-            content_type,
-            idempotency_key: delivery_key,
-            body,
-        },
-        signature,
-        now,
-        DELIVERY_SKEW,
-    )
-    .map_err(|_| unauthenticated())?;
     let envelope = HookEnvelope::from_canonical_bytes(
         body,
         &EnvelopeLimits::tightened_to(MAXIMUM_EVENT_BYTES),
@@ -344,22 +341,6 @@ pub fn verify_delivery(
             operator: false,
         },
     })
-}
-
-fn header<'a>(headers: &'a HeaderMap, name: &'static str) -> Result<&'a str> {
-    let mut values = headers.get_all(name).iter();
-    let first = values.next().ok_or_else(unauthenticated)?;
-    if values.next().is_some() {
-        return Err(unauthenticated());
-    }
-    first.to_str().map_err(|_| unauthenticated())
-}
-
-fn positive(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 10
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-        && value.parse::<u32>().is_ok_and(|number| number > 0)
 }
 
 /// A successful hook answer is empty: it proposes no source-product change.
@@ -462,6 +443,14 @@ fn invalid_event() -> CoordinatorError {
     CoordinatorError::new(
         "event-invalid",
         "the committed event does not satisfy the accepted canonical envelope and typed contract",
+    )
+}
+fn body_too_large() -> CoordinatorError {
+    CoordinatorError::new(
+        "request.body-too-large",
+        format!(
+            "the signed event delivery exceeds the {MAXIMUM_EVENT_BYTES}-byte Version 1 signable bound; send a smaller event"
+        ),
     )
 }
 fn unauthenticated() -> CoordinatorError {

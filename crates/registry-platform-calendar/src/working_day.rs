@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc, Weekday};
 use chrono_tz::Tz;
 
-use crate::{local_instant, parse_date, CalendarEvaluationError};
+use crate::{parse_date, resolved_local_instant, CalendarEvaluationError};
 
 /// Ten years is the maximum authored working-day offset evaluated locally.
 pub const MAXIMUM_WORKING_DAY_OFFSET: u32 = 3_650;
@@ -52,7 +52,12 @@ pub struct WorkingDayDeadline {
 /// Evaluate a working-day deadline without reading mutable calendar or runtime state.
 ///
 /// The offset excludes the anchor's local date. Warning and reminder offsets
-/// exclude the due date and retain the configured local `dueTime`.
+/// exclude the due date and retain the configured local due time.
+///
+/// Daylight-saving transitions follow one rule with no knob: a due time that
+/// falls inside a gap on its date moves to the first instant after the gap,
+/// and a due time that falls inside a fold takes the earlier of its two
+/// instants. The due, warning, and reminder instants each follow it.
 pub fn evaluate_working_day_deadline(
     calendar: &WorkingCalendar<'_>,
     rule: &WorkingDayDeadlineRule<'_>,
@@ -72,20 +77,30 @@ pub fn evaluate_working_day_deadline(
     if !working_weekdays.iter().any(|working| *working) {
         return Err(CalendarEvaluationError::NoWorkingWeekdays);
     }
-    if !(1..=MAXIMUM_WORKING_DAY_OFFSET).contains(&rule.after_working_days) {
-        return Err(CalendarEvaluationError::InvalidWorkingDayOffset);
+    let out_of_range = |days: u32| !(1..=MAXIMUM_WORKING_DAY_OFFSET).contains(&days);
+    if out_of_range(rule.after_working_days) {
+        return Err(CalendarEvaluationError::InvalidWorkingDayOffset {
+            value: rule.after_working_days,
+            limit: MAXIMUM_WORKING_DAY_OFFSET,
+        });
     }
-    if rule
+    if let Some(value) = rule
         .warning_working_days_before
-        .is_some_and(|days| !(1..=MAXIMUM_WORKING_DAY_OFFSET).contains(&days))
+        .filter(|days| out_of_range(*days))
     {
-        return Err(CalendarEvaluationError::InvalidWarningOffset);
+        return Err(CalendarEvaluationError::InvalidWarningOffset {
+            value,
+            limit: MAXIMUM_WORKING_DAY_OFFSET,
+        });
     }
-    if rule
+    if let Some(value) = rule
         .reminder_working_days_before
-        .is_some_and(|days| !(1..=MAXIMUM_WORKING_DAY_OFFSET).contains(&days))
+        .filter(|days| out_of_range(*days))
     {
-        return Err(CalendarEvaluationError::InvalidReminderOffset);
+        return Err(CalendarEvaluationError::InvalidReminderOffset {
+            value,
+            limit: MAXIMUM_WORKING_DAY_OFFSET,
+        });
     }
 
     let timezone = calendar
@@ -102,7 +117,7 @@ pub fn evaluate_working_day_deadline(
         &working_weekdays,
         &holidays,
     )?;
-    let due_at = local_instant(due_date, due_time, timezone)?;
+    let due_at = resolved_local_instant(due_date, due_time, timezone)?;
     let warning_at = rule
         .warning_working_days_before
         .map(|days| {
@@ -113,7 +128,7 @@ pub fn evaluate_working_day_deadline(
                 &working_weekdays,
                 &holidays,
             )
-            .and_then(|date| local_instant(date, due_time, timezone))
+            .and_then(|date| resolved_local_instant(date, due_time, timezone))
         })
         .transpose()?;
     let reminder_at = rule
@@ -126,7 +141,7 @@ pub fn evaluate_working_day_deadline(
                 &working_weekdays,
                 &holidays,
             )
-            .and_then(|date| local_instant(date, due_time, timezone))
+            .and_then(|date| resolved_local_instant(date, due_time, timezone))
         })
         .transpose()?;
 
@@ -156,7 +171,9 @@ fn parse_holidays(dates: &[&str]) -> Result<BTreeSet<NaiveDate>, CalendarEvaluat
 }
 
 fn parse_due_time(value: &str) -> Result<NaiveTime, CalendarEvaluationError> {
-    crate::parse_hh_mm(value).ok_or(CalendarEvaluationError::InvalidDueTime)
+    crate::parse_hh_mm(value).ok_or_else(|| CalendarEvaluationError::InvalidDueTime {
+        value: value.to_owned(),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -351,7 +368,9 @@ mod tests {
                 },
                 anchor,
             ),
-            Err(CalendarEvaluationError::InvalidDueTime)
+            Err(CalendarEvaluationError::InvalidDueTime {
+                value: "24:00".to_owned()
+            })
         );
         assert_eq!(
             evaluate_working_day_deadline(
@@ -362,7 +381,10 @@ mod tests {
                 },
                 anchor,
             ),
-            Err(CalendarEvaluationError::InvalidWorkingDayOffset)
+            Err(CalendarEvaluationError::InvalidWorkingDayOffset {
+                value: 0,
+                limit: MAXIMUM_WORKING_DAY_OFFSET
+            })
         );
         assert_eq!(
             evaluate_working_day_deadline(
@@ -373,7 +395,10 @@ mod tests {
                 },
                 anchor,
             ),
-            Err(CalendarEvaluationError::InvalidWorkingDayOffset)
+            Err(CalendarEvaluationError::InvalidWorkingDayOffset {
+                value: MAXIMUM_WORKING_DAY_OFFSET + 1,
+                limit: MAXIMUM_WORKING_DAY_OFFSET
+            })
         );
         assert_eq!(
             evaluate_working_day_deadline(
@@ -384,7 +409,10 @@ mod tests {
                 },
                 anchor,
             ),
-            Err(CalendarEvaluationError::InvalidWarningOffset)
+            Err(CalendarEvaluationError::InvalidWarningOffset {
+                value: 0,
+                limit: MAXIMUM_WORKING_DAY_OFFSET
+            })
         );
         assert_eq!(
             evaluate_working_day_deadline(
@@ -395,7 +423,10 @@ mod tests {
                 },
                 anchor,
             ),
-            Err(CalendarEvaluationError::InvalidReminderOffset)
+            Err(CalendarEvaluationError::InvalidReminderOffset {
+                value: 0,
+                limit: MAXIMUM_WORKING_DAY_OFFSET
+            })
         );
     }
 
@@ -429,28 +460,98 @@ mod tests {
     }
 
     #[test]
-    fn daylight_saving_gaps_and_folds_are_explicit() {
+    fn a_due_time_in_a_gap_moves_to_the_first_instant_after_it() {
         let mut value = calendar("America/New_York", &[]);
         value.working_weekdays = ALL_WEEKDAYS;
         let spring = WorkingDayDeadlineRule {
-            after_working_days: 1,
+            after_working_days: 2,
             due_time: "02:30",
+            warning_working_days_before: Some(1),
+            reminder_working_days_before: Some(1),
+        };
+        let result =
+            evaluate_working_day_deadline(&value, &spring, instant("2026-03-07T12:00:00-05:00"))
+                .expect("a gap resolves forward");
+        // 02:00 EST jumps to 03:00 EDT on 2026-03-08.
+        assert_eq!(
+            result.warning_at,
+            Some(instant("2026-03-08T03:00:00-04:00"))
+        );
+        assert_eq!(result.reminder_at, result.warning_at);
+        assert_eq!(result.due_at, instant("2026-03-09T02:30:00-04:00"));
+
+        // Samoa skipped 2011-12-30 entirely; every time that day resolves to
+        // the first instant of 2011-12-31.
+        let mut samoa = calendar("Pacific/Apia", &[]);
+        samoa.working_weekdays = ALL_WEEKDAYS;
+        let skipped = WorkingDayDeadlineRule {
+            after_working_days: 1,
+            due_time: "17:00",
             warning_working_days_before: None,
             reminder_working_days_before: None,
         };
         assert_eq!(
-            evaluate_working_day_deadline(&value, &spring, instant("2026-03-07T12:00:00-05:00"),),
-            Err(CalendarEvaluationError::NonexistentLocalTime)
+            evaluate_working_day_deadline(&samoa, &skipped, instant("2011-12-29T12:00:00-10:00"))
+                .expect("a skipped day resolves forward")
+                .due_at,
+            instant("2011-12-31T00:00:00+14:00")
         );
+    }
 
+    #[test]
+    fn a_due_time_in_a_fold_takes_the_earlier_instant() {
+        let mut value = calendar("America/New_York", &[]);
+        value.working_weekdays = ALL_WEEKDAYS;
         let autumn = WorkingDayDeadlineRule {
+            after_working_days: 1,
             due_time: "01:30",
-            ..spring
+            warning_working_days_before: None,
+            reminder_working_days_before: None,
         };
         assert_eq!(
-            evaluate_working_day_deadline(&value, &autumn, instant("2026-10-31T12:00:00-04:00"),),
-            Err(CalendarEvaluationError::AmbiguousLocalTime)
+            evaluate_working_day_deadline(&value, &autumn, instant("2026-10-31T12:00:00-04:00"))
+                .expect("a fold resolves to the earlier instant")
+                .due_at,
+            instant("2026-11-01T01:30:00-04:00")
         );
+    }
+
+    /// Every product reads the same sentence, so a refusal names the value
+    /// and its limit and no caller's configuration keys.
+    #[test]
+    fn rule_refusals_name_the_value_and_limit_and_no_caller_s_vocabulary() {
+        let refusals = [
+            CalendarEvaluationError::InvalidDueTime {
+                value: "24:00".to_owned(),
+            },
+            CalendarEvaluationError::InvalidWorkingDayOffset {
+                value: 0,
+                limit: MAXIMUM_WORKING_DAY_OFFSET,
+            },
+            CalendarEvaluationError::InvalidWarningOffset {
+                value: 0,
+                limit: MAXIMUM_WORKING_DAY_OFFSET,
+            },
+            CalendarEvaluationError::InvalidReminderOffset {
+                value: 0,
+                limit: MAXIMUM_WORKING_DAY_OFFSET,
+            },
+        ]
+        .map(|refusal| refusal.to_string());
+        assert_eq!(
+            refusals,
+            [
+                "the due time \"24:00\" is not a valid HH:MM local time; write two-digit hours and minutes, such as 17:00",
+                "the working-day offset 0 is out of range; use 1 to 3650 working days",
+                "the warning offset 0 is out of range; use 1 to 3650 working days before the due date",
+                "the reminder offset 0 is out of range; use 1 to 3650 working days before the due date",
+            ]
+        );
+        for refusal in refusals {
+            for vocabulary in ["after.", "atRisk", "reminders[", "dueTime", "workingDays"] {
+                assert!(!refusal.contains(vocabulary), "{refusal}");
+            }
+        }
     }
 
     #[test]

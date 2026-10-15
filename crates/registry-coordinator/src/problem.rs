@@ -406,7 +406,9 @@ impl ProblemCode {
             Self::ReconcileUnsupported => {
                 "The held operation has no original-result lookup."
             }
-            Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
+            Self::RequestBodyTooLarge => {
+                "The request body exceeds the accepted size: 65536 bytes for a JSON request, or 1048576 bytes for a signed event delivery."
+            }
             Self::RequestInvalid => "The request could not be read as a Coordinator request.",
             Self::RequestLimitOutOfRange => "The list limit must be between 1 and 100.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",

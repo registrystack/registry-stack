@@ -107,7 +107,7 @@ registry-platform-config.workspace = true
 registry-platform-yaml.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-dispatch = { workspace = true, features = ["postgres"] }
-registry-platform-hooks.workspace = true
+registry-platform-hooks = { workspace = true, features = ["receiver"] }
 registry-platform-httputil.workspace = true
 registry-platform-script.workspace = true
 registry-review-protocol.workspace = true

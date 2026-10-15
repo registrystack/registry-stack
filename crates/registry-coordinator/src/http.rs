@@ -115,22 +115,33 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/complete-execution-recovery", post(complete_execution))
         .route("/v1/retention", post(retain))
         .route(
-            "/v1/events/{workflow}/{trigger}",
-            post(crate::event_trigger::receive),
-        )
-        .route(
             registry_review_protocol::REVIEW_COMPLETIONS_PATH,
             post(review_completion),
         )
+        .with_state(state.clone());
+    let signed_events = Router::new()
+        .route(
+            "/v1/events/{workflow}/{trigger}",
+            post(crate::event_trigger::receive),
+        )
         .with_state(state);
-    http_edge(routes)
+    http_edge(routes, signed_events)
 }
-fn http_edge(router: Router) -> Router {
+/// Every route takes at most 128 KiB, except the signed event route, which
+/// takes up to the Version 1 signable bound so every event a producer can sign
+/// reaches the verifier.
+fn http_edge(router: Router, signed_events: Router) -> Router {
+    let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
     router
-        .fallback(route_not_found)
-        .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(131_072))
         .layer(registry_platform_httpsec::request_body_limit(131_072))
+        .merge(
+            signed_events
+                .layer(DefaultBodyLimit::max(signable))
+                .layer(registry_platform_httpsec::request_body_limit(signable)),
+        )
+        .fallback(route_not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(http_boundary))
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
@@ -592,12 +603,15 @@ mod problem_tests {
     async fn request_edge_rejections_answer_problem_documents_under_the_request_trace() {
         use tower::ServiceExt as _;
         let app = || {
-            http_edge(Router::new().route(
-                "/v1/echo",
-                post(|body: BoundedBody| async move {
-                    answer(request_body::<Value>(body).map(|_| json!({})))
-                }),
-            ))
+            http_edge(
+                Router::new().route(
+                    "/v1/echo",
+                    post(|body: BoundedBody| async move {
+                        answer(request_body::<Value>(body).map(|_| json!({})))
+                    }),
+                ),
+                Router::new(),
+            )
         };
         let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
         for (method, uri, length, status, code) in [
@@ -632,6 +646,46 @@ mod problem_tests {
             assert_eq!(body["code"], code, "{method} {uri}");
             assert_eq!(body["status"], status);
             assert_eq!(body["traceId"], "0af7651916cd43dd8448eb211c80319c");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_signed_event_route_alone_accepts_bodies_up_to_the_signable_bound() {
+        use tower::ServiceExt as _;
+        let app = || {
+            http_edge(
+                Router::new().route(
+                    "/v1/echo",
+                    post(|body: axum::body::Bytes| async move { body.len().to_string() }),
+                ),
+                Router::new().route(
+                    "/v1/events/{workflow}/{trigger}",
+                    post(|body: axum::body::Bytes| async move { body.len().to_string() }),
+                ),
+            )
+        };
+        let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
+        for (uri, length, status) in [
+            ("/v1/echo", 131_072, StatusCode::OK),
+            ("/v1/echo", 131_073, StatusCode::PAYLOAD_TOO_LARGE),
+            ("/v1/events/workflow/trigger", signable, StatusCode::OK),
+            (
+                "/v1/events/workflow/trigger",
+                signable + 1,
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(vec![b' '; length]))
+                .unwrap();
+            let response = app().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), status, "{uri} {length}");
+            if status == StatusCode::PAYLOAD_TOO_LARGE {
+                assert_eq!(document(response).await["code"], "request.body-too-large");
+            }
         }
     }
 

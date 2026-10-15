@@ -8,14 +8,22 @@ semantics, so the same evaluator serves any runtime that must derive a
 commitment-bearing time from authored calendar content.
 
 Two evaluators live here. The working-day evaluator shifts a date across
-working weekdays and holidays to a local `dueTime`, as used by Registry
+working weekdays and holidays to a local due time, as used by Registry
 Casework clocks. The weekly-opening evaluator expands a bounded weekly pattern
 into concrete half-open UTC intervals, with exception layering where a blocking
 closure wins over an ordinary opening and an exceptional reopening requires
 explicit authority, names the closure it reopens, and stays inside it.
 
-A local time that falls in a daylight-saving gap or fold is an explicit error,
-never a silent shift to the nearest instant, so no caller can derive an
-invisible duplicate or shifted commitment. An interval that spans a transition
-keeps its real elapsed length. Authored spans are bounded to ten years so
+Daylight-saving transitions follow one rule per evaluator, with no knob. A
+working-day deadline is a single calculated instant: a due time inside a gap
+moves to the first instant after the gap, and a due time inside a fold takes
+the earlier of its two instants, so a deadline authored once evaluates on every
+date. An interval endpoint inside a gap or fold is an explicit error, never a
+silent shift, so no caller can derive an invisible duplicate or shifted
+capacity commitment. An interval that spans a transition keeps its real
+elapsed length.
+
+Refusals are neutral: they name the value, its limit, and the fix, and never a
+caller's configuration keys. Each product attaches its own configuration
+pointer to the refusal it reports. Authored spans are bounded to ten years so
 expansion cannot run away on mistyped effective dates.

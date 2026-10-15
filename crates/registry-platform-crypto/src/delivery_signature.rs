@@ -21,6 +21,11 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 /// The Version 1 signing domain, as deployed receivers verify it.
 ///
+/// This is the shared Version 1 domain for every product that signs or
+/// verifies a hook delivery, not a Base Registry Engine domain: Scheduling and
+/// Coordinator deliveries carry it too. The `breg-` prefix is kept only for
+/// wire compatibility.
+///
 /// Wire bytes: the spelling is fixed by the receivers that already accept
 /// it, not by what this module or its callers are named.
 const SIGNATURE_DOMAIN: &[u8] = b"breg-webhook-signature-v1";
