@@ -492,49 +492,83 @@ async fn restore_fences_cancellation_and_release_of_sealed_and_unsealed_results(
 #[tokio::test]
 async fn revoked_sources_do_not_disclose_or_starve_the_authorized_result_feed() {
     let mut h = Harness::new(86400).await;
-    h.producer.sources.push("source-b".into());
-    let revoked = h.admit(h.request(), "source-a").await;
-    h.worker().tick().await.unwrap();
-    let mut request = h.request();
-    request.subject.source = "source-b".into();
-    let retained = h.admit(request, "source-b").await;
-    h.worker().tick().await.unwrap();
-    let narrowed = ReviewProducer {
-        sources: vec!["source-b".into()],
-        ..h.producer.clone()
-    };
+    h.producer.sources.push("other-proposals".into());
+    let mut results = Vec::new();
+    for (index, source) in ["registry-proposals", "other-proposals", "other-proposals"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut request = h.request();
+        request.subject.source = source.into();
+        let accepted = h.admit(request, &format!("feed-source-{index}")).await;
+        h.worker().tick().await.unwrap();
+        results.push(h.result(accepted.request_id).await);
+    }
     let page = h
         .store
-        .review_results_owned(&h.actor, &narrowed, &h.workflows(), None, 1)
+        .review_results_owned(&h.actor, &h.producer, &h.workflows(), None, 1)
         .await
         .unwrap();
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].request_id, retained.request_id);
-    assert!(page.next_cursor.is_none());
+    assert_eq!(page.items[0].result_id, results[0].result_id);
+    let removed_source_cursor = page.next_cursor.unwrap();
+    let continued = h
+        .store
+        .review_results_owned(
+            &h.actor,
+            &h.producer,
+            &h.workflows(),
+            Some(removed_source_cursor),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(continued.items.len(), 2);
+
+    let narrowed = ReviewProducer {
+        sources: vec!["other-proposals".into()],
+        ..h.producer.clone()
+    };
+    for cursor in [removed_source_cursor, Uuid::new_v4()] {
+        assert_eq!(
+            h.store
+                .review_results_owned(&h.actor, &narrowed, &h.workflows(), Some(cursor), 20)
+                .await
+                .unwrap_err()
+                .code,
+            "request.invalid"
+        );
+    }
     assert_eq!(
         h.store
-            .review_result_owned(revoked.request_id, &h.actor, &narrowed, &h.workflows())
+            .review_request_owned(results[0].request_id, &h.actor, &narrowed, &h.workflows())
+            .await
+            .unwrap_err()
+            .code,
+        "run-absent"
+    );
+    assert_eq!(
+        h.store
+            .review_result_owned(results[0].request_id, &h.actor, &narrowed, &h.workflows())
             .await
             .err()
             .unwrap()
             .code,
         "run-absent"
     );
-    // A previously issued cursor remains a valid continuation anchor after
-    // its source is revoked, without disclosing that source's result again.
     let page = h
         .store
-        .review_results_owned(
-            &h.actor,
-            &narrowed,
-            &h.workflows(),
-            Some(revoked.request_id),
-            1,
-        )
+        .review_results_owned(&h.actor, &narrowed, &h.workflows(), None, 1)
         .await
         .unwrap();
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].request_id, retained.request_id);
+    assert_eq!(page.items[0].result_id, results[1].result_id);
+    let continued = h
+        .store
+        .review_results_owned(&h.actor, &narrowed, &h.workflows(), page.next_cursor, 20)
+        .await
+        .unwrap();
+    assert_eq!(continued.items.len(), 1);
+    assert_eq!(continued.items[0].result_id, results[2].result_id);
+    assert!(continued.next_cursor.is_none());
     h.cleanup().await;
 }
 

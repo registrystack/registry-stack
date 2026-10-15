@@ -43,6 +43,7 @@ impl Store {
                 self.security.database_id.as_bytes(),
                 actor.issuer.as_bytes(),
                 actor.subject.as_bytes(),
+                actor.client_id.as_bytes(),
             ],
         ))
     }

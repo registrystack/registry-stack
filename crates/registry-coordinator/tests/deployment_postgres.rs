@@ -3032,6 +3032,124 @@ async fn serve_runtime(
 }
 
 #[tokio::test]
+async fn clients_sharing_a_subject_keep_distinct_run_ownership_and_admission_keys() {
+    let mut f = TwoFlowFixture::start().await;
+    for client in ["producer-a", "producer-wide"] {
+        f.doc["deployment"]["authentication"]["policies"][client]["actions"] = json!([
+            "start",
+            "status",
+            "inspect",
+            "retry-same",
+            "cancel",
+            "reconcile"
+        ]);
+    }
+    let delayed = f.pin(&f.delayed_project, "client-owned-delayed");
+    let (_, runtime, workflows) = f.runtime("client-owned.yaml", json!([delayed]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
+    let http = reqwest::Client::new();
+    let first = f.token("producer-a", "shared-subject", "coordinator:start");
+    let second = f.token("producer-wide", "shared-subject", "coordinator:start");
+    let operator = f.token("operator", "operator", "coordinator:operate");
+    let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
+    let (status, admitted) =
+        start_run(&http, &origin, &first, "shared-key", DELAYED, input.clone()).await;
+    assert_eq!(status, 200, "{admitted}");
+    let first_run = admitted["runId"].as_str().unwrap().to_owned();
+    let audit = f.root_path.join("audit.jsonl");
+    assert_run_flow_refused(&http, &origin, &second, &first_run, &audit).await;
+    assert!(list_flows(&http, &origin, &second).await.is_empty());
+
+    // Identical subject, workflow, command and key still identify separate work
+    // for two independently configured clients. Each can recover its own run.
+    let (status, admitted) = start_run(
+        &http,
+        &origin,
+        &second,
+        "shared-key",
+        DELAYED,
+        input.clone(),
+    )
+    .await;
+    assert_eq!(status, 200, "{admitted}");
+    let second_run = admitted["runId"].as_str().unwrap().to_owned();
+    assert_ne!(first_run, second_run);
+    for (credential, expected) in [(&first, &first_run), (&second, &second_run)] {
+        let (status, recovered) = start_run(
+            &http,
+            &origin,
+            credential,
+            "shared-key",
+            DELAYED,
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, 200, "{recovered}");
+        assert_eq!(recovered["runId"], expected.as_str());
+        assert_status_audit(
+            &http, &origin, credential, expected, &audit, 200, "accepted",
+        )
+        .await;
+        let listed: Value = http
+            .get(format!("{origin}/v1/runs"))
+            .bearer_auth(credential)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(listed["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["runs"][0]["runId"], expected.as_str());
+    }
+    assert_run_flow_refused(&http, &origin, &first, &second_run, &audit).await;
+    assert_eq!(
+        list_flows(&http, &origin, &operator).await,
+        [DELAYED, DELAYED]
+    );
+    assert_status_audit(
+        &http, &origin, &operator, &first_run, &audit, 200, "accepted",
+    )
+    .await;
+
+    // Cursor binding uses the same client-specific ownership as row access.
+    let (status, _) = start_run(&http, &origin, &first, "another-key", DELAYED, input).await;
+    assert_eq!(status, 200);
+    let page: Value = http
+        .get(format!("{origin}/v1/runs?limit=1"))
+        .bearer_auth(&first)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let cursor = page["nextCursor"].as_str().unwrap();
+    for (credential, expected_status) in [(&first, 200), (&second, 400)] {
+        let response = http
+            .get(format!("{origin}/v1/runs?limit=1&cursor={cursor}"))
+            .bearer_auth(credential)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+        if expected_status == 400 {
+            assert_eq!(
+                response.json::<Value>().await.unwrap()["code"],
+                "request.invalid"
+            );
+        }
+    }
+    server.abort();
+    drop(migration);
+    f.stop().await;
+}
+
+#[tokio::test]
 async fn plan_refuses_missing_and_wrong_product_bindings_before_reporting_installability() {
     let f = TwoFlowFixture::start().await;
     let delayed = f.pin(&f.delayed_project, "plan-binding-delayed");
