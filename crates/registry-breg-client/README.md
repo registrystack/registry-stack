@@ -236,9 +236,11 @@ authorized operator; do not infer failure or submit the mutation under a new key
 
 Use `select_proposal_get` on the current `registry_contract`, then use
 `get_proposal` for an authorized representation. Its optional `applicationStatus`
-reports the retained frozen submission's pending, applying, blocked, applied or
-cancelled state, with closed recovery reasons and bounded automatic retry
-progress. Applied state includes the separate exact application evidence. Match
+reports the retained frozen submission's awaiting-review, pending, applying,
+blocked, applied or cancelled state, with closed recovery reasons and bounded
+automatic retry progress. A review outcome is never an application reason: the
+`apply` link's availability reports `review-rejected`,
+`review-changes-requested` or `review-ended`, each with recovery `revise`. Applied state includes the separate exact application evidence. Match
 Proposal ID, Action revision, submission version and effect digest before using
 that evidence to continue a dependent workflow. A blocked state does not claim
 that application can never occur.

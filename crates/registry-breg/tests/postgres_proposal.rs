@@ -1782,7 +1782,7 @@ async fn ordinary_get_excludes_review_result_and_job_publication_until_observati
     );
     assert_eq!(observed.effect_digest(), submitted.effect_digest());
     let status = observed.application_status().unwrap();
-    assert_eq!(status.state, BRegProposalApplicationState::Pending);
+    assert_eq!(status.state, BRegProposalApplicationState::AwaitingReview);
     assert!(!status.automatic_retry.as_ref().unwrap().scheduled);
     let current = current.unwrap().value;
     assert_eq!(current.state(), BRegProposalState::Submitted);
@@ -1940,6 +1940,118 @@ async fn reviewed_apply_requires_fresh_exact_approval_and_receipt_recovery_is_lo
         calls
     );
     fixture.finish().await;
+}
+
+/// applicationStatus reports application progress only. A review outcome
+/// reaches the caller through Apply availability, never as an application
+/// refusal, in either application mode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_outcomes_read_as_apply_availability_not_application_status() {
+    for automatic in [false, true] {
+        let mut source = registry_source(automatic);
+        source["reviewAuthorities"] =
+            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+        source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+        let review = std::sync::Arc::new(LocalReview {
+            calls: 0.into(),
+            mode: 0.into(),
+            result_id: uuid::Uuid::new_v4(),
+        });
+        let injected = review.clone();
+        let fixture = client_http::ClientFixture::start_with_mutations(
+            compile(source),
+            claims("author", "zone-a"),
+            move |mutations| {
+                mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+            },
+        )
+        .await;
+        let client = &fixture.http.client;
+        let draft = start(&fixture, "Reviewed", &format!("outcome-{automatic}-start")).await;
+        let submit = client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &key(&format!("outcome-{automatic}-submit")),
+            )
+            .unwrap();
+        let submitted = client.execute_proposal(&submit).await.unwrap().value;
+        let row=fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions",&[]).await.unwrap();
+        let create: registry_review_client::ReviewCreateRequest =
+            serde_json::from_value(row.get(0)).unwrap();
+        let accepted = registry_review_client::ReviewRequestAccepted {
+            request_id: uuid::Uuid::new_v4(),
+            subject: create.subject,
+            policy: serde_json::from_value(policy).unwrap(),
+            submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+        };
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+            &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+        let observe = || async {
+            let current = serde_json::to_value(client.read_proposal(&submitted).await.unwrap().value)
+                .unwrap();
+            (
+                current["applicationStatus"].clone(),
+                current["links"]["apply"]["availability"].clone(),
+                current["links"]["revise"]["availability"]["available"].clone(),
+            )
+        };
+        let (status, apply, _) = observe().await;
+        assert_eq!(status["state"], "awaiting-review");
+        assert!(status.get("reason").is_none() && status.get("recovery").is_none());
+        assert_eq!(apply["reason"], "pending-review");
+        assert_eq!(apply["recovery"], "refresh");
+        let result = review.result(&accepted);
+        fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results
+            (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until)
+            VALUES ('correct-name',$1,1,'local-review',$2,$3,'rejected',$4,$5)",
+            &[&uuid::Uuid::parse_str(submitted.id()).unwrap(),&result.result_id,&serde_json::to_value(&result).unwrap(),&result.completed_at,&result.available_until]).await.unwrap();
+        for (outcome, reason, recovery) in [
+            ("rejected", "review-rejected", "revise"),
+            ("changes-requested", "review-changes-requested", "revise"),
+            ("cancelled", "review-ended", "revise"),
+            ("superseded", "review-ended", "revise"),
+            ("answered", "pending-review", "refresh"),
+        ] {
+            fixture
+                .database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_proposal_review_results SET status=$1",
+                    &[&outcome],
+                )
+                .await
+                .unwrap();
+            let (status, apply, revise) = observe().await;
+            assert_eq!(status["state"], "awaiting-review", "{outcome}");
+            assert!(
+                status.get("reason").is_none() && status.get("recovery").is_none(),
+                "{outcome} is a review outcome, not an application refusal"
+            );
+            assert_eq!(status["mode"], if automatic { "automatic" } else { "manual" });
+            assert_eq!(apply["available"], false, "{outcome}");
+            assert_eq!(apply["reason"], reason, "{outcome}");
+            assert_eq!(apply["recovery"], recovery, "{outcome}");
+            assert_eq!(revise, true, "{outcome}");
+        }
+        if !automatic {
+            fixture
+                .database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_proposal_review_results SET status='approved'",
+                    &[],
+                )
+                .await
+                .unwrap();
+            let (status, apply, _) = observe().await;
+            assert_eq!(status["state"], "pending");
+            assert_eq!(apply["available"], true);
+        }
+        fixture.finish().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

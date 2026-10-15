@@ -20,6 +20,7 @@ const MAXIMUM_PROPOSAL_INPUT_BYTES: usize = 3 * 1024 * 1024;
 #[serde(rename_all = "kebab-case")]
 pub enum BRegRecoveryHint {
     Refresh,
+    Revise,
     Retry,
     CorrectInput,
     Terminal,
@@ -30,6 +31,9 @@ pub enum BRegRecoveryHint {
 #[serde(rename_all = "kebab-case")]
 pub enum BRegAvailabilityReason {
     PendingReview,
+    ReviewRejected,
+    ReviewChangesRequested,
+    ReviewEnded,
     StaleRevision,
     ContractChanged,
     DependencyOutage,
@@ -61,6 +65,7 @@ pub enum BRegProposalState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalApplicationState {
+    AwaitingReview,
     Pending,
     Applying,
     Blocked,
@@ -84,6 +89,17 @@ pub enum BRegProposalApplicationReason {
     ApplicationRefused,
     AttemptsExhausted,
 }
+/// What a caller does about application progress. Review outcomes are
+/// reported by Apply availability, never here.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegApplicationRecoveryHint {
+    Refresh,
+    Retry,
+    CorrectInput,
+    ReceiptOnly,
+}
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -103,7 +119,7 @@ pub struct BRegProposalApplicationStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<BRegProposalApplicationReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery: Option<BRegRecoveryHint>,
+    pub recovery: Option<BRegApplicationRecoveryHint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automatic_retry: Option<BRegProposalAutomaticRetry>,
 }
@@ -344,6 +360,8 @@ impl BRegProposal {
                 || self.state == BRegProposalState::Draft
                 || status.reason.is_some() != status.recovery.is_some()
                 || status.state == BRegProposalApplicationState::Blocked && status.reason.is_none()
+                || status.state == BRegProposalApplicationState::AwaitingReview
+                    && status.reason.is_some()
                 || matches!(
                     status.state,
                     BRegProposalApplicationState::Applied | BRegProposalApplicationState::Cancelled
@@ -351,7 +369,8 @@ impl BRegProposal {
                 || status.mode == BRegProposalApplicationMode::Automatic
                     && matches!(
                         status.state,
-                        BRegProposalApplicationState::Pending
+                        BRegProposalApplicationState::AwaitingReview
+                            | BRegProposalApplicationState::Pending
                             | BRegProposalApplicationState::Applying
                             | BRegProposalApplicationState::Blocked
                     )
@@ -2464,7 +2483,9 @@ mod tests {
             _ => "submitted",
         });
         let mut status = json!({"state":state,"mode":mode});
-        if mode == "automatic" && matches!(state, "pending" | "applying" | "blocked") {
+        if mode == "automatic"
+            && matches!(state, "awaiting-review" | "pending" | "applying" | "blocked")
+        {
             status["automaticRetry"] = json!({"scheduled":state == "pending", "attempts":if state == "pending" { 0 } else { 1 }, "maximumAttempts":3});
         }
         if state == "blocked" {
@@ -2479,8 +2500,29 @@ mod tests {
     }
 
     #[test]
+    fn apply_availability_names_each_review_outcome_with_revise() {
+        for (reason, expected) in [
+            ("review-rejected", BRegAvailabilityReason::ReviewRejected),
+            (
+                "review-changes-requested",
+                BRegAvailabilityReason::ReviewChangesRequested,
+            ),
+            ("review-ended", BRegAvailabilityReason::ReviewEnded),
+        ] {
+            let decoded: BRegAvailability = serde_json::from_value(json!({
+                "available":false,"observedRevision":3,"reason":reason,"recovery":"revise"
+            }))
+            .unwrap();
+            assert_eq!(decoded.reason, Some(expected));
+            assert_eq!(decoded.recovery, Some(BRegRecoveryHint::Revise));
+        }
+    }
+
+    #[test]
     fn application_status_preserves_current_progress_and_retained_evidence_absence() {
         for (state, mode) in [
+            ("awaiting-review", "automatic"),
+            ("awaiting-review", "manual"),
             ("pending", "automatic"),
             ("applying", "automatic"),
             ("blocked", "automatic"),
@@ -2644,6 +2686,23 @@ mod tests {
             }),
             ("unknown status state", |v| {
                 v["applicationStatus"]["state"] = json!("ready");
+            }),
+            ("awaiting review is not an application refusal", |v| {
+                *v = application_status_document("awaiting-review", "automatic");
+                v["applicationStatus"]["reason"] = json!("application-refused");
+                v["applicationStatus"]["recovery"] = json!("correct-input");
+            }),
+            ("awaiting review needs a submitted proposal", |v| {
+                *v = application_status_document("awaiting-review", "manual");
+                v["state"] = json!("draft");
+            }),
+            ("application status has no terminal recovery", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]["recovery"] = json!("terminal");
+            }),
+            ("application status has no revise recovery", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]["recovery"] = json!("revise");
             }),
         ];
         for (label, mutate) in cases {

@@ -1159,10 +1159,10 @@ pub fn proposal_schema() -> Value {
 fn proposal_application_status_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["state","mode"],
     "properties":{
-        "state":{"enum":["pending","applying","blocked","applied","cancelled"]},
+        "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled"]},
         "mode":{"enum":["automatic","manual"]},
         "reason":{"enum":["contract-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
-        "recovery":{"enum":["refresh","retry","correct-input","terminal","receipt-only"]},
+        "recovery":{"enum":["refresh","retry","correct-input","receipt-only"]},
         "automaticRetry":{"type":"object","additionalProperties":false,
             "required":["scheduled","attempts","maximumAttempts"],"properties":{
                 "scheduled":{"type":"boolean"},"attempts":{"type":"integer","minimum":0,"maximum":1000},
@@ -1205,8 +1205,8 @@ fn proposal_attachment_schema() -> Value {
 pub fn availability_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
         "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
-            "reason":{"enum":["pending-review","stale-revision","contract-changed","dependency-outage","invalid-input","already-applied"]},
-            "recovery":{"enum":["refresh","retry","correct-input","terminal","receipt-only"]}},
+            "reason":{"enum":["pending-review","review-rejected","review-changes-requested","review-ended","stale-revision","contract-changed","dependency-outage","invalid-input","already-applied"]},
+            "recovery":{"enum":["refresh","revise","retry","correct-input","terminal","receipt-only"]}},
         "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 

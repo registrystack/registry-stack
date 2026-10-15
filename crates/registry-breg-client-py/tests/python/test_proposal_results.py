@@ -31,7 +31,7 @@ def status_document(state):
     if state != 'applied':
         del value['application']
     status = {'state': state, 'mode': 'automatic'}
-    if state in ('pending', 'blocked'):
+    if state in ('awaiting-review', 'pending', 'blocked'):
         status['automaticRetry'] = {'scheduled': state == 'pending', 'attempts': 0 if state == 'pending' else 1, 'maximumAttempts': 3}
     if state == 'blocked':
         status.update(reason='dependency-outage', recovery='retry')
@@ -186,7 +186,7 @@ class ProposalResultTests(unittest.TestCase):
             self.assertEqual(len(self.requests), count + 1)
 
     def test_application_status_preserves_current_progress_and_retained_evidence_absence(self):
-        for state in ('pending', 'blocked', 'applied', 'cancelled'):
+        for state in ('awaiting-review', 'pending', 'blocked', 'applied', 'cancelled'):
             self.value = status_document(state)
             with self.subTest(state=state):
                 observed = self.client.get_proposal(self.binding, ID).document

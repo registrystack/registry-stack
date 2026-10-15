@@ -170,6 +170,16 @@ recovery hint, and currently authorized links. Observation cannot establish
 whether an earlier uncertain Start or Submit executed; recover that command
 with its original prepared request and idempotency key.
 
+`applicationStatus` reports application progress only. Under required Review it
+reads `awaiting-review` until an approved result exists, then `pending`,
+`applying`, `blocked`, `applied` or `cancelled`. Its `application-refused`
+reason means an executor refused the frozen effects; a review outcome never
+appears there. The `apply` link's availability reports Review instead:
+`pending-review` with recovery `refresh` while no decision applies,
+`review-rejected` or `review-changes-requested` after that decision, and
+`review-ended` when the provider cancelled or superseded the review without a
+withdrawal by BReg. Each of the last three carries recovery `revise`.
+
 Mutation refusals intentionally share a generic 412 for unavailable authority
 and failed preconditions. To show or test why Apply is unavailable, first read
 the authorized Proposal and inspect `links.apply.availability.reason`, such as

@@ -480,8 +480,8 @@ fn schema_type(schema: &Value, python: bool) -> String {
 }
 
 const TYPESCRIPT_CONTRACT: &str = r#"
-export type EngineReason = 'pending-review' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied';
-export type RecoveryHint = 'refresh' | 'retry' | 'correct-input' | 'terminal' | 'receipt-only';
+export type EngineReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied';
+export type RecoveryHint = 'refresh' | 'revise' | 'retry' | 'correct-input' | 'terminal' | 'receipt-only';
 export type Availability<R extends string = EngineReason> =
   | { readonly available: true; readonly observedRevision: number }
   | { readonly available: false; readonly observedRevision: number; readonly reason: R; readonly recovery: RecoveryHint };
@@ -577,8 +577,8 @@ export class ProjectClient {
 }
 "#;
 const PYTHON_CONTRACT: &str = r#"
-EngineReason = Literal['pending-review', 'stale-revision', 'contract-changed', 'dependency-outage', 'invalid-input', 'already-applied']
-RecoveryHint = Literal['refresh', 'retry', 'correct-input', 'terminal', 'receipt-only']
+EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'contract-changed', 'dependency-outage', 'invalid-input', 'already-applied']
+RecoveryHint = Literal['refresh', 'revise', 'retry', 'correct-input', 'terminal', 'receipt-only']
 class Availability(TypedDict):
     available: bool
     observedRevision: int

@@ -59,6 +59,15 @@
   Proposal's resource path, `/v1/proposals/{id}`, instead of a hashed
   reference. Record events keep their hashed reference. A receiver that
   matched Proposal events by the hashed value matches the path instead.
+- BREAKING: under required Review, `applicationStatus.state` reads
+  `awaiting-review` until an approved result exists, in both application
+  modes. `application-refused` now means only that an executor refused the
+  frozen effects. A rejected, changes-requested, or provider-ended Review is
+  reported by the `apply` link's availability as `review-rejected`,
+  `review-changes-requested` or `review-ended`, each with the new recovery
+  `revise`. `applicationStatus.recovery` no longer lists the never-emitted
+  `terminal`. The Rust, Node.js and Python clients and the generated project
+  SDKs accept the new values; update clients with the server.
 - The Python client exposes `verify_webhook_delivery`, the shared Rust webhook
   verifier the Node client already offers, with keyword-only `method`, `path`,
   `headers`, `body` and `key`. Refusal raises `BaseRegistryClientError` with

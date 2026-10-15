@@ -39,6 +39,16 @@
     },
     "input": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -80,6 +90,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -136,6 +149,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -174,7 +188,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -379,6 +393,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -485,6 +500,16 @@
     },
     "output": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -526,6 +551,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -582,6 +610,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -620,7 +649,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -825,6 +854,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -970,6 +1000,16 @@
     },
     "input": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -1011,6 +1051,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -1067,6 +1110,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -1105,7 +1149,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -1310,6 +1354,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -1416,6 +1461,16 @@
     },
     "output": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -1457,6 +1512,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -1513,6 +1571,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -1551,7 +1610,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -1756,6 +1815,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -2415,6 +2475,16 @@
     },
     "input": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -2456,6 +2526,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -2512,6 +2585,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -2550,7 +2624,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -2755,6 +2829,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -2861,6 +2936,16 @@
     },
     "output": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -2902,6 +2987,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -2958,6 +3046,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -2996,7 +3085,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -3201,6 +3290,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -3365,6 +3455,16 @@
     },
     "input": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -3406,6 +3506,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -3462,6 +3565,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -3500,7 +3604,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -3705,6 +3809,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
@@ -3811,6 +3916,16 @@
     },
     "output": {
       "$defs": {
+        "BRegApplicationRecoveryHint": {
+          "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
+          "enum": [
+            "refresh",
+            "retry",
+            "correct-input",
+            "receipt-only"
+          ],
+          "type": "string"
+        },
         "BRegAvailability": {
           "additionalProperties": false,
           "properties": {
@@ -3852,6 +3967,9 @@
         "BRegAvailabilityReason": {
           "enum": [
             "pending-review",
+            "review-rejected",
+            "review-changes-requested",
+            "review-ended",
             "stale-revision",
             "contract-changed",
             "dependency-outage",
@@ -3908,6 +4026,7 @@
         },
         "BRegProposalApplicationState": {
           "enum": [
+            "awaiting-review",
             "pending",
             "applying",
             "blocked",
@@ -3946,7 +4065,7 @@
             "recovery": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/BRegRecoveryHint"
+                  "$ref": "#/$defs/BRegApplicationRecoveryHint"
                 },
                 {
                   "type": "null"
@@ -4151,6 +4270,7 @@
         "BRegRecoveryHint": {
           "enum": [
             "refresh",
+            "revise",
             "retry",
             "correct-input",
             "terminal",
