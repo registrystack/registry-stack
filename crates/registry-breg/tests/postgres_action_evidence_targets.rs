@@ -82,9 +82,13 @@ async fn setup_with_age(
     document["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "apiName":"localRegister", "type":"reference", "target":"local-register", "required":true,"classification":"restricted"
     }));
+    document["actions"][0]["plan"]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("local-register"));
     document["actions"][0]["commitGuards"]["targets"] =
         json!([{"input":"local-register","field":"active","equals":true}]);
-    document["actions"][0]["handler"]["writes"].as_array_mut().unwrap().push(json!({
+    document["actions"][0]["plan"]["writes"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "target":{"fromInput":"local-register"},"operation":"patch","fields":["checked"]
     }));
     document["accessProfiles"][0]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({
