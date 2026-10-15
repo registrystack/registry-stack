@@ -18,6 +18,8 @@ use std::{
 };
 const TARGETS_DIRECTORY: &str = "targets";
 const MOCKS_DIRECTORY: &str = "mocks";
+const MAX_SNAPSHOT_ENTRIES: usize = 1024;
+const MAX_SNAPSHOT_DEPTH: usize = 16;
 #[derive(Debug)]
 pub(crate) struct ProjectSnapshot {
     _temporary: tempfile::TempDir,
@@ -50,12 +52,30 @@ enum Bound {
     Refuse(u64),
 }
 
+#[derive(Clone, Copy)]
+enum Selection {
+    All,
+    Yaml,
+}
+
 /// The snapshot being captured: its root, every directory created under it,
-/// and the number of plain files copied.
+/// and the number of files, links and directories copied below its root.
 struct Capture {
     root: PathBuf,
     directories: Vec<PathBuf>,
-    files: usize,
+    entries: usize,
+}
+
+impl Capture {
+    fn record_entry(&mut self, relative: &Path) -> Result<()> {
+        if relative.components().count() > MAX_SNAPSHOT_DEPTH
+            || self.entries >= MAX_SNAPSHOT_ENTRIES
+        {
+            return Err(InspectionDiagnostic::at(relative, Inspection::TreeTooLarge).into());
+        }
+        self.entries += 1;
+        Ok(())
+    }
 }
 
 pub(crate) fn capture_project(project: &Path) -> Result<ProjectSnapshot> {
@@ -102,7 +122,7 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
     let mut capture = Capture {
         directories: vec![root.clone()],
         root,
-        files: 0,
+        entries: 0,
     };
 
     for (relative, bound) in [
@@ -128,21 +148,24 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
         ("queries", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         ("codelists", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
     ] {
-        capture_flat_directory_at(
+        capture_directory_at(
             &project_descriptor,
             &mut capture,
             OsStr::new(relative),
             Path::new(relative),
             bound,
+            Selection::All,
         )?;
     }
     capture_access(&project_descriptor, &mut capture)?;
     for directory in [TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
-        capture_yaml_tree_at(
+        capture_directory_at(
             &project_descriptor,
             &mut capture,
             OsStr::new(directory),
             Path::new(directory),
+            Bound::ForReader,
+            Selection::Yaml,
         )?;
     }
     capture_root_yaml(&project_descriptor, &mut capture)?;
@@ -150,7 +173,7 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
     let Capture {
         root,
         mut directories,
-        files: _,
+        entries: _,
     } = capture;
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     let snapshot = ProjectSnapshot {
@@ -172,33 +195,37 @@ fn capture_access(project: &rustix::fd::OwnedFd, capture: &mut Capture) -> Resul
     else {
         return Ok(());
     };
+    capture.record_entry(relative)?;
     let destination = capture.root.join(relative);
     fs::DirBuilder::new().mode(0o700).create(&destination)?;
     capture.directories.push(destination);
-    capture_flat_directory_at(
+    capture_directory_at(
         &access,
         capture,
         OsStr::new("clients"),
         &relative.join("clients"),
         Bound::ForReader,
+        Selection::All,
     )?;
     Ok(())
 }
 
-fn capture_flat_directory_at(
+fn capture_directory_at(
     parent: &rustix::fd::OwnedFd,
     capture: &mut Capture,
     name: &OsStr,
     relative: &Path,
     bound: Bound,
+    selection: Selection,
 ) -> Result<()> {
     let Some(directory) = open_snapshot_directory(parent, name, relative)? else {
         return Ok(());
     };
+    capture.record_entry(relative)?;
     let destination = capture.root.join(relative);
     fs::DirBuilder::new().mode(0o700).create(&destination)?;
     capture.directories.push(destination);
-    capture_directory_contents(&directory, capture, relative, bound)
+    capture_directory_contents(&directory, capture, relative, bound, selection)
 }
 
 fn capture_directory_contents(
@@ -206,19 +233,29 @@ fn capture_directory_contents(
     capture: &mut Capture,
     relative: &Path,
     bound: Bound,
+    selection: Selection,
 ) -> Result<()> {
+    use rustix::fs::{AtFlags, FileType};
+
     for name in directory_entries(directory)? {
         let entry_relative = relative.join(&name);
-        if entry_relative.components().count() > 16 || capture.files > 1024 {
-            return Err(InspectionDiagnostic::at(&entry_relative, Inspection::TooLarge).into());
-        }
-        let metadata = rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(io::Error::from)?;
-        if rustix::fs::FileType::from_raw_mode(metadata.st_mode).is_dir() {
-            capture_flat_directory_at(directory, capture, &name, &entry_relative, bound)?;
+        let metadata = match rustix::fs::statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(rustix::io::Errno::NOENT) => continue,
+            Err(error) => {
+                return Err(io::Error::from(error)).context("inspecting project snapshot input")
+            }
+        };
+        let file_type = FileType::from_raw_mode(metadata.st_mode);
+        if file_type.is_dir() {
+            capture_directory_at(directory, capture, &name, &entry_relative, bound, selection)?;
             continue;
         }
-        capture_snapshot_entry_at(directory, capture, &name, &entry_relative, bound)?;
+        // Targets and mocks retain YAML documents and every link for authoring
+        // validation. Public keys and mock bodies remain with their consumers.
+        if matches!(selection, Selection::All) || file_type.is_symlink() || is_yaml_name(&name) {
+            capture_snapshot_entry_at(directory, capture, &name, &entry_relative, bound)?;
+        }
     }
     Ok(())
 }
@@ -244,49 +281,6 @@ fn is_yaml_name(name: &OsStr) -> bool {
         Path::new(name).extension().and_then(OsStr::to_str),
         Some("yaml" | "yml")
     )
-}
-
-/// Capture the YAML files of `targets/` or `mocks/`, at any depth, with every
-/// link there, so the check reads each YAML file by its envelope and refuses
-/// each link. Other files, such as public keys and mock response bodies, are
-/// read by the commands that use them and are not copied.
-fn capture_yaml_tree_at(
-    parent: &rustix::fd::OwnedFd,
-    capture: &mut Capture,
-    name: &OsStr,
-    relative: &Path,
-) -> Result<()> {
-    use rustix::fs::{AtFlags, FileType};
-
-    let Some(directory) = open_snapshot_directory(parent, name, relative)? else {
-        return Ok(());
-    };
-    let destination = capture.root.join(relative);
-    fs::DirBuilder::new().mode(0o700).create(&destination)?;
-    capture.directories.push(destination);
-    for entry in directory_entries(&directory)? {
-        let entry_relative = relative.join(&entry);
-        let metadata = match rustix::fs::statat(&directory, &entry, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(metadata) => metadata,
-            Err(rustix::io::Errno::NOENT) => continue,
-            Err(error) => {
-                return Err(io::Error::from(error)).context("inspecting project snapshot input")
-            }
-        };
-        let file_type = FileType::from_raw_mode(metadata.st_mode);
-        if file_type.is_dir() {
-            capture_yaml_tree_at(&directory, capture, &entry, &entry_relative)?;
-        } else if file_type.is_symlink() || is_yaml_name(&entry) {
-            capture_snapshot_entry_at(
-                &directory,
-                capture,
-                &entry,
-                &entry_relative,
-                Bound::ForReader,
-            )?;
-        }
-    }
-    Ok(())
 }
 
 /// Capture the YAML files at the project root other than the marker and the
@@ -391,6 +385,7 @@ fn capture_snapshot_entry_at(
     };
     let destination = capture.root.join(relative);
     let file_type = FileType::from_raw_mode(metadata.st_mode);
+    capture.record_entry(relative)?;
     if file_type.is_symlink() {
         let target = rustix::fs::readlinkat(parent, name, Vec::new()).map_err(io::Error::from)?;
         symlink(OsStr::from_bytes(target.to_bytes()), &destination)?;
@@ -410,7 +405,6 @@ fn capture_snapshot_entry_at(
         let bytes = read_bounded_descriptor(descriptor, bound, relative)?;
         fs::write(&destination, bytes)?;
         fs::set_permissions(&destination, fs::Permissions::from_mode(0o400))?;
-        capture.files += 1;
     } else {
         return Err(InspectionDiagnostic::at(relative, Inspection::NotPlain).into());
     }
@@ -433,6 +427,8 @@ enum Inspection {
     NotPlain,
     /// A file is larger than its directory takes.
     TooLarge,
+    /// The captured tree exceeds its depth or total entry ceiling.
+    TreeTooLarge,
     /// An entry changed while the project was being captured.
     Changed,
 }
@@ -461,6 +457,11 @@ impl InspectionDiagnostic {
                 "evidence.project.file-too-large",
                 "the file is larger than its project directory takes",
                 "Split or reduce the file; the authoring project reference lists each directory's limit.",
+            ),
+            Inspection::TreeTooLarge => (
+                "evidence.project.tree-too-large",
+                "the project snapshot exceeds its entry or depth limit",
+                "Reduce captured project assets to at most 1024 files, links and directories, with paths of at most 16 components inside the project.",
             ),
             Inspection::Changed => (
                 "evidence.project.changed",
@@ -571,6 +572,138 @@ mod tests {
     }
 
     #[test]
+    fn project_snapshot_yaml_selection_preserves_documents_and_links_only() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir(&project).unwrap();
+        put_marker(&project);
+        for directory in [TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+            let nested = project.join(directory).join("local/nested");
+            fs::create_dir_all(&nested).unwrap();
+            for name in ["document.yaml", "document.yml"] {
+                fs::write(nested.join(name), "kind: Example\n").unwrap();
+            }
+            fs::write(nested.join("body.json"), "{}").unwrap();
+            fs::write(nested.join("public.pem"), "public key fixture").unwrap();
+            symlink("missing", nested.join("linked.pem")).unwrap();
+        }
+
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        for directory in [TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+            let nested = snapshot.root().join(directory).join("local/nested");
+            for name in ["document.yaml", "document.yml"] {
+                assert_eq!(
+                    fs::read_to_string(nested.join(name)).unwrap(),
+                    "kind: Example\n"
+                );
+            }
+            assert!(!nested.join("body.json").exists());
+            assert!(!nested.join("public.pem").exists());
+            assert_eq!(
+                fs::read_link(nested.join("linked.pem")).unwrap(),
+                Path::new("missing")
+            );
+        }
+    }
+
+    #[test]
+    fn project_snapshot_depth_limit_applies_to_assets_targets_and_mocks() {
+        for directory in ["functions", TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+            let temporary = temporary();
+            let project = temporary.path().join("project");
+            let mut relative = PathBuf::from(directory);
+            for _ in 1..MAX_SNAPSHOT_DEPTH - 1 {
+                relative.push("nested");
+            }
+            fs::create_dir_all(project.join(&relative)).unwrap();
+            put_marker(&project);
+            fs::write(
+                project.join(&relative).join("document.yaml"),
+                "kind: Example\n",
+            )
+            .unwrap();
+            let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+            assert!(snapshot
+                .root()
+                .join(&relative)
+                .join("document.yaml")
+                .exists());
+            drop(snapshot);
+
+            relative.push("nested");
+            fs::create_dir(project.join(&relative)).unwrap();
+            relative.push("document.yaml");
+            fs::write(project.join(&relative), "kind: Example\n").unwrap();
+            let error = capture_project_in(&project, temporary.path()).unwrap_err();
+            let refusal = error.downcast_ref::<InspectionDiagnostic>().unwrap();
+            assert!(matches!(refusal.condition, Inspection::TreeTooLarge));
+            assert_eq!(refusal.path, relative.to_string_lossy());
+            assert!(!is_operational(&error));
+            assert!(fs::read_dir(temporary.path()).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("evidencectl-project-snapshot-")));
+        }
+    }
+
+    #[test]
+    fn project_snapshot_entry_limit_is_shared_by_assets_targets_mocks_and_root_yaml() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join("functions")).unwrap();
+        fs::create_dir(project.join(TARGETS_DIRECTORY)).unwrap();
+        fs::create_dir(project.join(MOCKS_DIRECTORY)).unwrap();
+        put_marker(&project);
+        // Marker, three directories, two YAML documents and one retained link.
+        for index in 0..MAX_SNAPSHOT_ENTRIES - 7 {
+            fs::write(project.join(format!("functions/{index:04}.rhai")), "()").unwrap();
+        }
+        fs::write(
+            project.join("targets/target.yaml"),
+            "kind: EvidenceTarget\n",
+        )
+        .unwrap();
+        fs::write(project.join("mocks/source.yml"), "kind: EvidenceMockPlan\n").unwrap();
+        symlink("missing", project.join("targets/linked.pem")).unwrap();
+
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        assert!(snapshot.root().join("targets/target.yaml").exists());
+        assert!(snapshot.root().join("mocks/source.yml").exists());
+        drop(snapshot);
+
+        fs::write(project.join("extra.yaml"), "kind: Example\n").unwrap();
+        let error = capture_project(&project).unwrap_err();
+        let diagnostic = &error.downcast_ref::<Report>().unwrap().diagnostics()[0];
+        assert_eq!(diagnostic.code, "evidence.project.tree-too-large");
+        assert!(diagnostic
+            .source
+            .as_ref()
+            .unwrap()
+            .file
+            .ends_with("/extra.yaml"));
+    }
+
+    #[test]
+    fn project_snapshot_entry_limit_counts_empty_directories() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join(TARGETS_DIRECTORY)).unwrap();
+        put_marker(&project);
+        for index in 0..MAX_SNAPSHOT_ENTRIES - 2 {
+            fs::create_dir(project.join(format!("targets/{index:04}"))).unwrap();
+        }
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        drop(snapshot);
+
+        fs::create_dir(project.join(MOCKS_DIRECTORY)).unwrap();
+        let error = capture_project_in(&project, temporary.path()).unwrap_err();
+        let refusal = error.downcast_ref::<InspectionDiagnostic>().unwrap();
+        assert!(matches!(refusal.condition, Inspection::TreeTooLarge));
+        assert_eq!(refusal.path, MOCKS_DIRECTORY);
+    }
+
+    #[test]
     fn symlinked_access_parent_cannot_disclose_external_client_names() {
         const CANARY: &str = "EXTERNAL_CLIENT_NAME_CANARY";
         let temporary = temporary();
@@ -653,18 +786,19 @@ mod tests {
         let mut capture = Capture {
             root: snapshot.clone(),
             directories: vec![snapshot.clone(), snapshot.join("functions")],
-            files: 0,
+            entries: 0,
         };
         capture_directory_contents(
             &functions,
             &mut capture,
             Path::new("functions"),
             Bound::ForReader,
+            Selection::All,
         )
         .unwrap();
 
         assert!(snapshot.join("functions/captured.yaml").exists());
         assert!(!snapshot.join(format!("functions/{CANARY}.yaml")).exists());
-        assert_eq!(capture.files, 1);
+        assert_eq!(capture.entries, 1);
     }
 }
