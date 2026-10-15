@@ -197,7 +197,8 @@ handler answer bytes are erased immediately after successful delivery. The
 delivered row retains the answer's digest, its
 proposal disposition, and the bounded value-free summary, never the answer
 itself. Pending and dead-letter payloads have a deployment-selectable
-retention period capped at 30 days. After expiry, replay is impossible.
+retention period, `eventDelivery.payloadRetentionDays` in the runtime
+configuration, which defaults to 7 days and is capped at 30. After expiry, replay is impossible.
 Digests and value-free operational metadata follow the normal audit
 retention policy. Audit and operational logs contain no projected values,
 raw record ids, destination URLs, or secrets. Payload erasure commits only
