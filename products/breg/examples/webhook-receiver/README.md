@@ -1,13 +1,17 @@
 # Durable webhook acceptance example
 
-This receiver uses the Python standard library and the public
-[BReg webhook contract](../../EVENTS-AND-WEBHOOKS.md). It verifies signed
-CloudEvents, the expected registry/instance/event contract and delivery-time
-bound, then commits exact event content and the delivery binding to its own
-SQLite inbox before returning `204`. Storage failure returns `503` for retry.
+This receiver uses the Python standard library, the public
+[BReg webhook contract](../../EVENTS-AND-WEBHOOKS.md), and
+`registry_client.breg.verify_webhook_delivery` from the `registry-stack-client`
+package. That function authenticates the signed CloudEvents with the shared
+Rust verifier. The receiver then checks the expected registry/instance/event
+contract and delivery-time bound, and commits exact event content and the
+delivery binding to its own SQLite inbox before returning `204`. Storage
+failure returns `503` for retry.
 
-Set the registry, instance, Record type, event ID and repeated `--field` names
-to those of your configured webhook. Supply the same
+Install a `registry-stack-client` release whose `breg` namespace provides
+`verify_webhook_delivery`. Set the registry, instance, Record type, event ID and
+repeated `--field` names to those of your configured webhook. Supply the same
 raw HMAC key bytes used by the runtime destination in an owner-only key file.
 Use an owner-only directory for the inbox, then run:
 
@@ -36,12 +40,18 @@ completion of an external effect. Delivery grants no registry authority and
 may arrive out of order; read or write current records with a separately
 authorized client through the ordinary API.
 
-Run the behavioral tests with:
+Run the behavioral tests from a source checkout with:
 
 ```sh
 python3 products/breg/examples/webhook-receiver/test_receiver.py -v
 ```
 
-The tests send signed requests through a temporary loopback listener and
-exercise durable acceptance, retry across restart, replay identity, conflicting
-duplicates, authentication/time/source refusals and storage recovery.
+The tests build the in-tree `registry-breg-client-py` binding with Cargo and
+load it as `registry_client.breg`, so they need no installed package. On macOS,
+first prepare the AWS-LC FIPS runtime library path as
+[`crates/CLIENTS.md`](../../../../crates/CLIENTS.md) describes for Python
+bindings. `sign_delivery.py` is the standard-library sender side of the
+signature, used only to produce synthetic requests. The tests send signed
+requests through a temporary loopback listener and exercise durable acceptance,
+retry across restart, replay identity, conflicting duplicates,
+authentication/time/source refusals and storage recovery.

@@ -55,6 +55,11 @@
   when the published key declares `use: sig`, lists `verify` alone if it lists
   `key_ops`, and carries no private member. The pinned ThunderID 1.0.1 issuer
   publishes such keys, so an existing local session starts as before.
+- The Python client exposes `verify_webhook_delivery`, the shared Rust webhook
+  verifier the Node client already offers, with keyword-only `method`, `path`,
+  `headers`, `body` and `key`. Refusal raises `BaseRegistryClientError` with
+  kind `webhook-verification`. The durable receiver example verifies with it
+  instead of its own HMAC code.
 
 ## 0.41.0 - 2026-10-13
 

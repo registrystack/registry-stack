@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
-import hmac
 import http.server
 import json
 import os
@@ -15,53 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-WEBHOOK_SIGNATURE_DOMAIN = b"breg-webhook-signature-v1"
+from registry_client import breg
+
 WEBHOOK_RECEIVER_MAX_BODY_BYTES = 1024 * 1024
 
 
 class ReceiverError(RuntimeError):
     pass
-
-
-def _length_prefixed(value: bytes) -> bytes:
-    return len(value).to_bytes(8, "big") + value
-
-
-def _expected_webhook_signature(
-    key: bytes, headers: dict[str, str], body: bytes, request_target: str = "/events"
-) -> str:
-    # Keep this receiver-side verifier synchronized with the versioned Registry
-    # BReg signature contract. It has no access to runtime destination config.
-    signed = bytearray(WEBHOOK_SIGNATURE_DOMAIN)
-    for value in (
-        headers["ce-specversion"].encode("ascii"),
-        headers["ce-id"].encode("ascii"),
-        headers["ce-source"].encode("ascii"),
-        headers["ce-type"].encode("ascii"),
-        headers["ce-time"].encode("ascii"),
-        headers["ce-dataschema"].encode("ascii"),
-        headers["x-registry-event-generation"].encode("ascii"),
-        headers["x-registry-delivery-attempt"].encode("ascii"),
-        headers["x-registry-delivery-time"].encode("ascii"),
-        b"POST",
-        request_target.encode("ascii"),
-        b"application/json",
-        headers["idempotency-key"].encode("ascii"),
-        body,
-    ):
-        signed.extend(_length_prefixed(value))
-    encoded = base64.urlsafe_b64encode(hmac.new(key, signed, hashlib.sha256).digest()).rstrip(b"=")
-    return "v1=" + encoded.decode("ascii")
-
-
-def _parse_positive_header(headers: dict[str, str], name: str) -> int:
-    value = headers.get(name, "")
-    if not value.isascii() or not value.isdecimal():
-        raise ReceiverError("the receiver refused webhook metadata")
-    parsed = int(value)
-    if parsed <= 0:
-        raise ReceiverError("the receiver refused webhook metadata")
-    return parsed
 
 
 def _verify_webhook_request(
@@ -88,6 +45,13 @@ def _verify_webhook_request(
     }
     if path != "/events" or not required.issubset(headers):
         raise ReceiverError("the receiver refused the webhook request shape")
+    # The shared Rust verifier authenticates the signed attributes, request
+    # target, content type, idempotency key and exact body, and checks that
+    # generation and attempt are positive decimals. The checks below apply this
+    # receiver's own contract and clock policy to the authenticated values.
+    verified = breg.verify_webhook_delivery(
+        method="POST", path=path, headers=headers, body=body, key=key
+    )
     if (
         headers["accept"] != "application/json"
         or headers["content-type"] != "application/json"
@@ -117,9 +81,9 @@ def _verify_webhook_request(
         raise ReceiverError("the receiver refused unzoned event time")
     if abs((datetime.now(timezone.utc) - delivery_time).total_seconds()) > 30:
         raise ReceiverError("the receiver refused stale delivery time")
-    generation = _parse_positive_header(headers, "x-registry-event-generation")
-    attempt = _parse_positive_header(headers, "x-registry-delivery-attempt")
-    idempotency_key = headers["idempotency-key"]
+    generation = int(verified["generation"])
+    attempt = int(verified["attempt"])
+    idempotency_key = verified["idempotency_key"]
     if not idempotency_key.startswith("sha256:") or len(idempotency_key) != 71:
         raise ReceiverError("the receiver refused the idempotency key")
     if len(body) == 0 or len(body) > WEBHOOK_RECEIVER_MAX_BODY_BYTES:
@@ -177,9 +141,6 @@ def _verify_webhook_request(
         or set(document["values"]) != set(contract["event_values"])
     ):
         raise ReceiverError("the receiver refused the event data contract")
-    expected_signature = _expected_webhook_signature(key, headers, body)
-    if not hmac.compare_digest(headers["x-registry-signature"], expected_signature):
-        raise ReceiverError("the receiver refused the webhook signature")
     return event_uuid, generation, attempt, idempotency_key
 
 
@@ -286,7 +247,10 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
             _verify_webhook_request(
                 self.server.webhook_key, self.path, headers, body, self.server.contract
             )
-        except (ReceiverError, KeyError, TypeError, ValueError, UnicodeError):
+        except (
+            ReceiverError, breg.BaseRegistryClientError, KeyError, TypeError, ValueError,
+            UnicodeError,
+        ):
             status = 400
         else:
             try:

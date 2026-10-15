@@ -134,6 +134,37 @@ def encode_ingestion_chunk(
     prefix_digest: str,
 ) -> BRegIngestionChunk: ...
 
+WebhookVerificationRefusalCode = Literal[
+    "missing-header",
+    "malformed-signature",
+    "signature-mismatch",
+    "unsupported-version",
+]
+
+class VerifiedWebhookDelivery(TypedDict):
+    id: str
+    source: str
+    type: str
+    time: str
+    dataschema: str
+    generation: str
+    attempt: str
+    delivery_time: str
+    idempotency_key: str
+    body: bytes
+
+def verify_webhook_delivery(
+    *,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+    body: bytes,
+    key: bytes,
+) -> VerifiedWebhookDelivery:
+    """Authenticate one exact Base Registry Engine Version 1 webhook delivery.
+    Apply delivery-time skew and deduplication policy before acting on the body."""
+    ...
+
 class BRegActionTargetConditions:
     @property
     def document(self) -> dict[str, JsonValue]: ...

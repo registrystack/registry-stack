@@ -35,7 +35,7 @@ def module(name, path):
 
 
 native = module("coordinator_native_event_fixture", SCRIPTS / "test-real-services.py")
-receiver = module("breg_existing_signature_fixture", REPO / "products/breg/examples/webhook-receiver/receiver.py")
+receiver = module("breg_webhook_signer", REPO / "products/breg/examples/webhook-receiver/sign_delivery.py")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -220,7 +220,7 @@ def alternate_delivery(key):
                "ce-dataschema": value["dataschema"], "x-registry-event-generation": "1", "x-registry-delivery-attempt": "1",
                "x-registry-delivery-time": now, "idempotency-key": "sha256:" + uuid.uuid4().hex + uuid.uuid4().hex}
     path = "/v1/events/scheduling-event-observer/confirmed"
-    headers["x-registry-signature"] = receiver._expected_webhook_signature(key, headers, body, path)
+    headers["x-registry-signature"] = receiver.webhook_signature(key, headers, body, path)
     return {"headers": headers, "body": body, "path": path}
 
 
@@ -240,7 +240,7 @@ def replay(key, delivery, url, *, invalid_signature=False):
     headers["x-registry-delivery-attempt"] = "1"
     headers["x-registry-delivery-time"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     headers["idempotency-key"] = "sha256:" + uuid.uuid4().hex + uuid.uuid4().hex
-    headers["x-registry-signature"] = receiver._expected_webhook_signature(key, headers, delivery["body"], delivery["path"])
+    headers["x-registry-signature"] = receiver.webhook_signature(key, headers, delivery["body"], delivery["path"])
     if invalid_signature:
         headers["x-registry-signature"] = "v1=" + "A" * 43
     return request("POST", url + delivery["path"], body=delivery["body"], headers=headers,
