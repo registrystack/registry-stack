@@ -288,7 +288,7 @@ impl S3Fixture {
         });
         let secrets = tempfile::Builder::new()
             .prefix("breg-synthetic-s3-")
-            .tempdir_in("/private/tmp")
+            .tempdir()
             .unwrap();
         for (name, bytes) in [
             ("access", b"synthetic-access".as_slice()),

@@ -21,6 +21,23 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     let docker = installed_or_env("DOCKER_BIN", "docker");
     let fixture = Project::new();
     fixture.generate_evidence_keys();
+    assert_success(
+        &evidencectl()
+            .args([
+                "access",
+                "client",
+                "add",
+                "local-tutorial-caller",
+                "--access-profile",
+                "standalone-service",
+                "--generate-local-key",
+                "--project",
+            ])
+            .arg(&fixture.root)
+            .output()
+            .expect("register local tutorial client"),
+        "register local tutorial client",
+    );
     let (evidence_port, issuer_port) = unused_port_pair();
 
     let name_prefix = format!("evidence-gate-{}", std::process::id());
