@@ -1203,9 +1203,11 @@ async fn attachment_binding_integrity_and_detail_erasure_preserve_record_history
 /// transaction, so no inert queued work outlives the Proposal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancel_closes_the_queued_automatic_application_job() {
-    let fixture =
-        client_http::ClientFixture::start(compile(registry_source(true)), claims("author", "zone-a"))
-            .await;
+    let fixture = client_http::ClientFixture::start(
+        compile(registry_source(true)),
+        claims("author", "zone-a"),
+    )
+    .await;
     let client = &fixture.http.client;
     let draft = start(&fixture, "Cancelled", "cancel-job-start").await;
     let submit = client
@@ -2099,8 +2101,9 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
         fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
             &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
         let observe = || async {
-            let current = serde_json::to_value(client.read_proposal(&submitted).await.unwrap().value)
-                .unwrap();
+            let current =
+                serde_json::to_value(client.read_proposal(&submitted).await.unwrap().value)
+                    .unwrap();
             (
                 current["applicationStatus"].clone(),
                 current["links"]["apply"]["availability"].clone(),
@@ -2139,7 +2142,10 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
                 status.get("reason").is_none() && status.get("recovery").is_none(),
                 "{outcome} is a review outcome, not an application refusal"
             );
-            assert_eq!(status["mode"], if automatic { "automatic" } else { "manual" });
+            assert_eq!(
+                status["mode"],
+                if automatic { "automatic" } else { "manual" }
+            );
             assert_eq!(apply["available"], false, "{outcome}");
             assert_eq!(apply["reason"], reason, "{outcome}");
             assert_eq!(apply["recovery"], recovery, "{outcome}");

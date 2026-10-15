@@ -2484,7 +2484,10 @@ mod tests {
         });
         let mut status = json!({"state":state,"mode":mode});
         if mode == "automatic"
-            && matches!(state, "awaiting-review" | "pending" | "applying" | "blocked")
+            && matches!(
+                state,
+                "awaiting-review" | "pending" | "applying" | "blocked"
+            )
         {
             status["automaticRetry"] = json!({"scheduled":state == "pending", "attempts":if state == "pending" { 0 } else { 1 }, "maximumAttempts":3});
         }

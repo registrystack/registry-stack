@@ -2865,7 +2865,8 @@ async fn proposal_application_status(
         let awaiting_review = matches!(
             frozen.review_requirement(),
             CompiledProposalReview::Required { .. }
-        ) && proposal_review_result(tx, document).await?["state"] != "approved";
+        ) && proposal_review_result(tx, document).await?["state"]
+            != "approved";
         value["state"] = json!(if awaiting_review {
             "awaiting-review"
         } else {
@@ -3036,14 +3037,14 @@ async fn review_outcome(
         )
         .await
         .map_err(map_database_error)?;
-    Ok(row.and_then(|row| {
-        match (row.get::<_, String>(0).as_str(), row.get::<_, bool>(1)) {
+    Ok(row.and_then(
+        |row| match (row.get::<_, String>(0).as_str(), row.get::<_, bool>(1)) {
             ("rejected", _) => Some("review-rejected"),
             ("changes-requested", _) => Some("review-changes-requested"),
             ("cancelled" | "superseded", false) => Some("review-ended"),
             _ => None,
-        }
-    }))
+        },
+    ))
 }
 
 async fn proposal_review_result(
