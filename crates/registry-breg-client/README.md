@@ -260,6 +260,12 @@ cursor explicitly. `read_proposal_review_status` and
 `read_proposal_review_context` use the Proposal's separately promoted review
 links. `upload_proposal_attachment`, `download_proposal_attachment`, and
 `delete_proposal_attachment` use its governed slot links, not record fields.
+Mutation receipts retain the selected slot. Disclosed upload metadata must match
+those exact bytes, media type and length; deletion must not retain a disclosed
+value. Get and readable-attachment grants are separate from write authority, so a
+successful write may omit value metadata. An omitted value does not independently
+prove its stored content. An invalid receipt leaves the mutation outcome unknown;
+retain the original condition, bytes and key for same-command recovery.
 
 ## Response security
 

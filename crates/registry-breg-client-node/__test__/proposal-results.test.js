@@ -28,6 +28,7 @@ const statusDocument = state => {
 
 test('Proposal response boundaries preserve disclosure and exact Action revision bindings', async t => {
   let value = document();
+  let replyStatus = 200;
   let downloadBytes;
   const requests = [];
   const wireRequests = [];
@@ -44,7 +45,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       response.end(downloadBytes);
       return;
     }
-    response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store', 'vary': 'authorization, accept',
+    response.writeHead(replyStatus, {'content-type': 'application/json', 'cache-control': 'no-store', 'vary': 'authorization, accept',
       traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
     response.end(JSON.stringify(request.url.startsWith('/v1/registry') ? metadata : value));
   });
@@ -198,20 +199,20 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       const prior = await client.getProposal(binding, id);
       const current = structuredClone(value); current.revision++;
       const attempt = client.prepareProposal(prior, 'edit', '{"input":{}}', 'edit-binding');
-      for (const send of [() => client.executeProposal(attempt),
-        () => client.uploadProposalAttachment(prior, 'support', 'application/pdf', Buffer.from('%PDF-fixture'), 'upload-binding'),
-        () => client.deleteProposalAttachment(prior, 'support', 'remove-binding')]) {
+      for (const [operation, send] of [['edit', () => client.executeProposal(attempt)],
+        ['upload', () => client.uploadProposalAttachment(prior, 'support', 'application/pdf', Buffer.from('%PDF-fixture'), 'upload-binding')],
+        ['remove', () => client.deleteProposalAttachment(prior, 'support', 'remove-binding')]]) {
         value = structuredClone(current);
         assert.equal(JSON.parse((await send()).documentJson).actionRevision, digest);
         value.actionRevision = successor;
         const count = requests.length;
-        await assert.rejects(send(), error => error.kind === 'invalid-request');
+        await assert.rejects(send(), error => error.kind === 'protocol' && error.outcomeUnknown);
         assert.equal(requests.length, count + 1, 'validate the actual received mutation response');
         for (const mutate of [item => {item.revision--;}, item => {item.revision++;},
           item => {item.state = 'submitted';}, item => {item.submissionVersion++;}]) {
           value = structuredClone(current); mutate(value);
           const before = requests.length;
-          await assert.rejects(send(), error => error.kind === 'invalid-request');
+          await assert.rejects(send(), error => error.kind === 'protocol' && error.outcomeUnknown);
           assert.equal(requests.length, before + 1);
         }
       }
@@ -223,6 +224,26 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         await assert.rejects(client.readProposal(prior), error => error.kind === 'invalid-request');
         assert.equal(requests.length, count + 1, 'validate the actual received refresh response');
       }
+    });
+    await t.test('Start receipt failures keep unknown outcome and the original command', async () => {
+      const startAction = structuredClone(require('../../registry-breg-client/tests/fixtures/attachments.json').metadata.actions[0]);
+      startAction.access.selectedProfile = 'reader'; metadata.actions = [startAction];
+      const action = (await client.registryContract('reader')).selectAction('correct', 'reader');
+      const draft = document(); draft.state = 'draft'; delete draft.application; delete draft.effectDigest;
+      const wrongProfile = structuredClone(draft); wrongProfile.links.self.accessProfile = 'other';
+      replyStatus = 201;
+      try {
+        for (const invalid of [{}, {...draft, actionRevision: `sha256:${'b'.repeat(64)}`}, wrongProfile, {...draft, state: 'submitted', effectDigest: digest}]) {
+          value = invalid;
+          const count = requests.length;
+          await assert.rejects(client.startProposal(action, '{}', 'recover-start'), error => error.kind === 'protocol' && error.outcomeUnknown && error.status === 201);
+          assert.equal(requests.length, count + 1, 'malformed Start success is not resent');
+          const sent = wireRequests.at(-1);
+          value = structuredClone(draft);
+          assert.equal(JSON.parse((await client.startProposal(action, '{}', 'recover-start')).documentJson).state, 'draft');
+          assert.deepEqual(wireRequests.at(-1), sent);
+        }
+      } finally { replyStatus = 200; }
     });
     await t.test('Submit validates the exact receipt while replay and saved recovery retain the original request', async () => {
       value = document(); value.state = 'draft'; value.submissionVersion = 1; delete value.application; delete value.effectDigest;
@@ -236,7 +257,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         {...receipt, state: 'draft'}, {...receipt, state: 'applied'}, {...receipt, submissionVersion: 2}]) {
         value = invalid;
         const count = requests.length;
-        await assert.rejects(client.executeProposal(attempt), error => error.kind === 'invalid-request');
+        await assert.rejects(client.executeProposal(attempt), error => error.kind === 'protocol' && error.outcomeUnknown);
         assert.equal(requests.length, count + 1);
       }
       value = receipt;
@@ -312,6 +333,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       await assert.rejects(client.uploadProposalAttachment(retained, 'support', 'text/plain', Buffer.from('12345'), 'too-large'), error => error.kind === 'invalid-request');
       assert.equal(requests.length, count, 'new uploads keep current policy before I/O');
       value.revision++;
+      Object.assign(value.attachments.support.value, {sha256: createHash('sha256').update('ok').digest('hex'), contentType: 'text/plain', byteSize: 2});
       await client.uploadProposalAttachment(retained, 'support', 'text/plain', Buffer.from('ok'), 'allowed-upload');
       downloadBytes = Buffer.concat([downloadBytes, Buffer.from('x')]);
       await assert.rejects(client.downloadProposalAttachment(retained, 'support'), error => error.kind === 'transport' && error.transportKind === 'response-too-large');

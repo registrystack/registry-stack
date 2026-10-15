@@ -42,6 +42,8 @@ def status_document(state):
 class ProposalResultTests(unittest.TestCase):
     def setUp(self):
         self.value = document()
+        self.reply_status = 200
+        self.metadata = copy.deepcopy(METADATA)
         self.requests = []
         self.download_bytes = None
         owner = self
@@ -71,8 +73,8 @@ class ProposalResultTests(unittest.TestCase):
                     self.end_headers()
                     self.wfile.write(owner.download_bytes)
                     return
-                payload = json.dumps(METADATA if self.path.startswith('/tenant/v1/registry') else owner.value).encode()
-                self.send_response(200)
+                payload = json.dumps(owner.metadata if self.path.startswith('/tenant/v1/registry') else owner.value).encode()
+                self.send_response(owner.reply_status)
                 for key, value in [('content-type', 'application/json'), ('cache-control', 'no-store'), ('vary', 'authorization, accept'),
                                    ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'), ('content-length', str(len(payload)))]:
                     self.send_header(key, value)
@@ -312,7 +314,8 @@ class ProposalResultTests(unittest.TestCase):
             count = len(self.requests)
             with self.assertRaises(BaseRegistryClientError) as raised:
                 send()
-            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertEqual(raised.exception.kind, 'protocol')
+            self.assertTrue(raised.exception.outcome_unknown)
             self.assertEqual(len(self.requests), count + 1)
             for field, value in [('revision', 8), ('revision', 10), ('state', 'submitted'), ('submissionVersion', 3)]:
                 self.value = copy.deepcopy(current)
@@ -320,7 +323,8 @@ class ProposalResultTests(unittest.TestCase):
                 count = len(self.requests)
                 with self.subTest(operation=operation, field=field, value=value), self.assertRaises(BaseRegistryClientError) as raised:
                     send()
-                self.assertEqual(raised.exception.kind, 'invalid-request')
+                self.assertEqual(raised.exception.kind, 'protocol')
+                self.assertTrue(raised.exception.outcome_unknown)
                 self.assertEqual(len(self.requests), count + 1)
         for version in [current['submissionVersion'], current['submissionVersion'] + 1]:
             self.value = dict(copy.deepcopy(current), submissionVersion=version)
@@ -331,6 +335,35 @@ class ProposalResultTests(unittest.TestCase):
                 self.client.read_proposal(prior)
             self.assertEqual(raised.exception.kind, 'invalid-request')
             self.assertEqual(len(self.requests), count + 1)
+
+    def test_start_receipt_failure_preserves_unknown_outcome_and_original_command(self):
+        from pathlib import Path
+        fixture = json.loads((Path(__file__).resolve().parents[3] / 'registry-breg-client/tests/fixtures/attachments.json').read_text())
+        start_action = copy.deepcopy(fixture['metadata']['actions'][0])
+        start_action['access']['selectedProfile'] = 'reader'
+        self.metadata['actions'] = [start_action]
+        action = self.client.registry_contract('reader').select_action('correct', 'reader')
+        draft = document()
+        draft['state'] = 'draft'
+        del draft['application']
+        del draft['effectDigest']
+        wrong_profile = copy.deepcopy(draft)
+        wrong_profile['links']['self']['accessProfile'] = 'other'
+        self.reply_status = 201
+        for invalid in [{}, dict(draft, actionRevision='sha256:' + 'b' * 64), wrong_profile,
+                        dict(draft, state='submitted', effectDigest=DIGEST)]:
+            self.value = invalid
+            count = len(self.requests)
+            with self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.start_proposal(action, {}, 'recover-start')
+            self.assertEqual(raised.exception.kind, 'protocol')
+            self.assertTrue(raised.exception.outcome_unknown)
+            self.assertEqual(raised.exception.status, 201)
+            self.assertEqual(len(self.requests), count + 1)
+            sent = self.requests[-1]
+            self.value = copy.deepcopy(draft)
+            self.assertEqual(self.client.start_proposal(action, {}, 'recover-start').document['state'], 'draft')
+            self.assertEqual(self.requests[-1], sent)
 
     def test_submit_exact_receipt_replay_and_saved_recovery_after_later_progress(self):
         self.value = document()
@@ -349,7 +382,8 @@ class ProposalResultTests(unittest.TestCase):
             count = len(self.requests)
             with self.subTest(receipt=invalid), self.assertRaises(BaseRegistryClientError) as raised:
                 self.client.execute_proposal(attempt)
-            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertEqual(raised.exception.kind, 'protocol')
+            self.assertTrue(raised.exception.outcome_unknown)
             self.assertEqual(len(self.requests), count + 1)
         self.value = receipt
         self.assertEqual(self.client.execute_proposal(attempt).document['state'], 'submitted')
@@ -441,6 +475,7 @@ class ProposalResultTests(unittest.TestCase):
             self.assertEqual(raised.exception.kind, 'invalid-request')
         self.assertEqual(len(self.requests), count)
         self.value['revision'] += 1
+        self.value['attachments']['support']['value'].update(sha256=hashlib.sha256(b'ok').hexdigest(), contentType='text/plain', byteSize=2)
         self.client.upload_proposal_attachment(retained, 'support', 'text/plain', b'ok', 'allowed-upload')
         self.download_bytes += b'x'
         with self.assertRaises(BaseRegistryClientError) as raised:
