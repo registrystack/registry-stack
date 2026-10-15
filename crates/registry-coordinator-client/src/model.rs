@@ -88,6 +88,15 @@ impl TryFrom<RunStatusDocument> for RunStatus {
         if document.deadline_at <= document.admitted_at {
             return Err("expected a deadline after admission");
         }
+        // A leased Finish may commit while restore review projects attention.
+        // Retention can erase output without erasing the completed outcome.
+        let finished = document.state == "finished";
+        let restore_review = document.state == "attention" && document.restore_review_required;
+        if document.outcome.is_some() && !(finished || restore_review)
+            || document.outcome.is_none() && (finished || document.output.is_some())
+        {
+            return Err("expected terminal evidence consistent with the run state");
+        }
         Ok(Self {
             run_id: document.run_id,
             workflow: document.workflow,

@@ -314,6 +314,7 @@ class ProposalResultTests(unittest.TestCase):
                 'subject': {'source': 'directory', 'subjectType': 'proposal', 'id': ID, 'version': '2', 'digest': DIGEST},
                 'context': {'reference': 'breg:directory:correct:' + ID + ':2'}, 'reviewable': True}
         configured = dict(base, authority='review-provider', policy={'id': 'review', 'version': '1', 'digest': DIGEST})
+        canonical_id = '123e4567-e89b-42d3-a456-426614174000'
         terminal = {'state': 'approved', 'resultId': TARGET, 'completedAt': '2026-10-01T00:00:00.000000Z', 'availableUntil': '2026-10-02T00:00:00.000000Z'}
         self.value = copy.deepcopy(base)
         self.assertNotIn('result', self.client.read_proposal_review_status(prior)['value'])
@@ -321,6 +322,11 @@ class ProposalResultTests(unittest.TestCase):
             self.value = dict(copy.deepcopy(configured), requestId=ID, result=result)
             with self.subTest(result=result):
                 self.assertEqual(self.client.read_proposal_review_status(prior)['value']['result'], result)
+        for correlation_id in ['123e4567-e89b-12d3-a456-426614174000', canonical_id, '0192a870-1234-7abc-8def-123456789abc']:
+            self.value = dict(copy.deepcopy(configured), requestId=correlation_id, result=dict(terminal, resultId=correlation_id))
+            observed = self.client.read_proposal_review_status(prior)['value']
+            self.assertEqual(observed['requestId'], correlation_id)
+            self.assertEqual(observed['result']['resultId'], correlation_id)
         self.value = dict(copy.deepcopy(configured), result={'state': 'pending'})
         self.assertNotIn('requestId', self.client.read_proposal_review_status(prior)['value'])
         self.value['result'] = terminal
@@ -333,6 +339,7 @@ class ProposalResultTests(unittest.TestCase):
             invalid_results.append(result)
         expired = dict(terminal, state='expired')
         del expired['availableUntil']
+        invalid_results += [dict(terminal, resultId=result_id) for result_id in [canonical_id.upper(), canonical_id.replace('-', '')]]
         invalid_results += [dict(terminal, resultId='not-a-uuid'), dict(terminal, resultId='00000000-0000-0000-0000-000000000000'),
                             dict(terminal, completedAt='2026-10-01'), dict(terminal, availableUntil='private-canary'),
                             dict(terminal, availableUntil=terminal['completedAt']), dict(terminal, availableUntil='2026-09-30T00:00:00Z'),

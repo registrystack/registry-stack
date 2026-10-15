@@ -326,6 +326,62 @@ test('inspect and reconcile validate wait budgets and preserve exhausted waits',
   }
 });
 
+test('run status requires coherent terminal evidence and preserves restore review', async (context) => {
+  let run;
+  const { baseUrl, requests } = await serve(context, (request) => ({
+    status: 200,
+    document: request.url.endsWith('/inspect') || request.url.endsWith('/reconcile')
+      ? { ...INSPECTION, run }
+      : request.url.includes('?limit=') ? { runs: [run] } : run,
+  }));
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  const cases = [
+    ['finished', 'completed', null, false, true],
+    ['finished', 'completed', { accepted: true }, false, true],
+    ['finished', 'completed', false, false, true],
+    ['finished', null, null, false, false],
+    ['finished', null, { value: 'output-canary' }, false, false],
+    ['attention', 'completed', { accepted: true }, true, true],
+    ['attention', 'completed', null, true, true],
+    ['attention', null, null, true, true],
+    ['attention', null, { value: 'output-canary' }, true, false],
+    ['running', 'outcome-canary', null, true, false],
+  ];
+  for (const state of ['running', 'failed', 'cancelled', 'cancelled-after-effect', 'expired', 'attention', 'cancel-requested']) {
+    cases.push([state, null, null, false, true]);
+    cases.push([state, 'outcome-canary', null, false, false]);
+    cases.push([state, null, { value: 'output-canary' }, false, false]);
+  }
+  for (const [state, outcome, output, restoreReviewRequired, valid] of cases) {
+    run = { ...STATUS, state, outcome, output, restoreReviewRequired };
+    for (const [call, document] of [
+      [() => client.start('token-canary', 'original-admission', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} }), run],
+      [() => client.status('token-canary', RUN_ID), run],
+      [() => client.cancel('token-canary', RUN_ID, 'caller-withdrew'), run],
+      [() => client.inspect('token-canary', RUN_ID), { ...INSPECTION, run }],
+      [() => client.reconcile('token-canary', RUN_ID, 'response-lost'), { ...INSPECTION, run }],
+      [() => client.list('token-canary', 1), { runs: [run] }],
+    ]) {
+      const before = requests.length;
+      if (valid) {
+        assert.deepEqual(await call(), { kind: 'complete', value: document });
+      } else {
+        await assert.rejects(call, (error) => {
+          assert.ok(error instanceof CoordinatorClientError);
+          assert.equal(error.kind, 'protocol');
+          assert.equal(error.protocolFailure, 'body');
+          assert.equal(error.status, 200);
+          assert.equal(error.outcomeUnknown, true);
+          assert.doesNotMatch(inspectValue(error), /token-canary|outcome-canary|output-canary/);
+          return true;
+        });
+      }
+      assert.equal(requests.length, before + 1);
+    }
+  }
+});
+
 test('run and step failure paths reject malformed pointers without resending', async (context) => {
   let document;
   const { baseUrl, requests } = await serve(context, () => ({ status: 200, document }));
@@ -748,7 +804,7 @@ test('list refuses received runs outside the intersected state and attention fil
   let state = 'running';
   let empty = false;
   const { baseUrl, requests } = await serve(context, () => ({
-    status: 200, document: {runs: empty ? [] : [{...STATUS, state}]},
+    status: 200, document: {runs: empty ? [] : [{...STATUS, state, outcome: state === 'finished' ? 'completed' : null}]},
   }));
   const {CoordinatorClient, CoordinatorClientError} = require('../client');
   const client = new CoordinatorClient({baseUrl});

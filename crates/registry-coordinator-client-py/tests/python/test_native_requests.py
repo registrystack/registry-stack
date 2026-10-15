@@ -220,6 +220,48 @@ class NativeRequestTests(unittest.TestCase):
                     self.assertNotIn("token-canary", rendered(error))
                 self.assertEqual(len(self.observed()), 1)
 
+    def test_run_status_requires_coherent_terminal_evidence_and_preserves_restore_review(self) -> None:
+        cases = [
+            ("finished", "completed", None, False, True),
+            ("finished", "completed", {"accepted": True}, False, True),
+            ("finished", "completed", False, False, True),
+            ("finished", None, None, False, False),
+            ("finished", None, {"value": "output-canary"}, False, False),
+            ("attention", "completed", {"accepted": True}, True, True),
+            ("attention", "completed", None, True, True),
+            ("attention", None, None, True, True),
+            ("attention", None, {"value": "output-canary"}, True, False),
+            ("running", "outcome-canary", None, True, False),
+        ]
+        for state in ("running", "failed", "cancelled", "cancelled-after-effect", "expired", "attention", "cancel-requested"):
+            cases += [(state, None, None, False, True),
+                      (state, "outcome-canary", None, False, False),
+                      (state, None, {"value": "output-canary"}, False, False)]
+        for state, outcome, output, restore, valid in cases:
+            run = {**STATUS, "state": state, "outcome": outcome, "output": output, "restoreReviewRequired": restore}
+            for call, document in (
+                (lambda: self.client.start("token-canary", KEY, START_REQUEST), run),
+                (lambda: self.client.status("token-canary", RUN), run),
+                (lambda: self.client.cancel("token-canary", RUN, "caller-withdrew"), run),
+                (lambda: self.client.inspect("token-canary", RUN), {**INSPECTION, "run": run}),
+                (lambda: self.client.reconcile("token-canary", RUN, "response-lost"), {**INSPECTION, "run": run}),
+                (lambda: self.client.list("token-canary", 1), {"runs": [run]}),
+            ):
+                self.service.script(ok(document))
+                if valid:
+                    self.assertEqual(call(), {"kind": "complete", "value": document})
+                else:
+                    with self.assertRaises(CoordinatorClientError) as refused:
+                        call()
+                    error = refused.exception
+                    self.assertEqual(error.kind, "protocol")
+                    self.assertEqual(error.protocol_failure, "body")
+                    self.assertEqual(error.status, 200)
+                    self.assertIs(error.outcome_unknown, True)
+                    for canary in ("token-canary", "outcome-canary", "output-canary"):
+                        self.assertNotIn(canary, rendered(error))
+                self.assertEqual(len(self.observed()), 1)
+
     def test_run_and_step_failure_paths_reject_malformed_pointers_without_resending(self) -> None:
         for path in ("protected-field-canary", "#/field", "/~", "/~2", "/x~0~"):
             run = {**STATUS, "failurePath": path}
@@ -356,7 +398,7 @@ class NativeRequestTests(unittest.TestCase):
             ('failed', None, 'finished'), (None, True, 'running'), (None, False, 'attention'),
             (None, False, 'failed'), ('attention', True, 'failed'), ('attention', False, 'attention'),
         ):
-            self.service.script(ok({'runs': [{**STATUS, 'state': returned}]}))
+            self.service.script(ok({'runs': [{**STATUS, 'state': returned, 'outcome': 'completed' if returned == 'finished' else None}]}))
             with self.subTest(state_filter=state_filter, attention=attention, returned=returned):
                 with self.assertRaises(CoordinatorClientError) as raised:
                     self.client.list('filter-token-canary', 1, None, state_filter, attention)

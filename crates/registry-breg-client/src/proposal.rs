@@ -1417,11 +1417,10 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
             && document.request_id.is_none()
     } else {
         document.context.fields.is_none()
-            && document.request_id.as_deref().is_none_or(|id| {
-                document.policy.is_some()
-                    && Uuid::parse_str(id)
-                        .is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == id)
-            })
+            && document
+                .request_id
+                .as_deref()
+                .is_none_or(|id| document.policy.is_some() && canonical_proposal_id(id))
             && document.result.is_some() == document.policy.is_some()
             && document.result.as_ref().is_none_or(|result| {
                 valid_review_result(result)
@@ -1450,7 +1449,7 @@ fn valid_review_result(result: &BRegProposalReviewResult) -> bool {
     ) && result
         .result_id
         .as_deref()
-        .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|id| !id.is_nil()))
+        .is_some_and(canonical_proposal_id)
         && result
             .completed_at
             .as_deref()

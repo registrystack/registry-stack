@@ -161,3 +161,146 @@ async fn leased_wait_deadline_is_checked_atomically_before_advancing() {
     connection_task.await.unwrap().unwrap();
     assert!(violations.is_empty(), "late wait advanced: {violations:?}");
 }
+
+#[tokio::test]
+async fn leased_finish_preserves_outcome_under_restore_review_and_after_retention() {
+    let url = std::env::var("COORDINATOR_TEST_DATABASE_URL")
+        .expect("COORDINATOR_TEST_DATABASE_URL must name a disposable PostgreSQL database");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.unwrap();
+    let connection_task = tokio::spawn(connection);
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("workflow.yaml"),
+        r#"
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: leased-finish, version: v1}
+functions:
+  keep:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: keep
+    inputs: {input: {type: object}}
+    output: {type: object}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: done
+  steps:
+    done:
+      type: finish
+      outcome: done
+      output: {type: function, function: keep, inputs: {input: {type: input}}}
+  outcomes:
+    done: {type: object}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("functions.rhai"),
+        "fn keep(args) { args.input }\n",
+    )
+    .unwrap();
+    let definition = Definition::load(project.path()).expect("pure terminal output");
+    let namespace = format!("coordinator_finish_{}", Uuid::new_v4().simple());
+    let store = Arc::new(Store::connect(&url, &namespace).await.unwrap());
+    store.migrate().await.unwrap();
+    let operator = crate::store::Actor {
+        issuer: "https://issuer.example.invalid".into(),
+        subject: "synthetic-operator".into(),
+        client_id: "synthetic-client".into(),
+        operator: true,
+    };
+    let output = json!({"receipt":"synthetic-finish-canary"});
+    let run = store
+        .admit_owned(
+            &definition,
+            output.clone(),
+            &operator,
+            "finish-start",
+            "timer-binding",
+        )
+        .await
+        .unwrap();
+    let worker = Worker::new(store.clone(), Arc::new(NoCalls));
+    let dispatcher = store.dispatcher().unwrap();
+    let Claim::Leased(job) = dispatcher.claim().await.unwrap() else {
+        panic!("pure finish must be leased before restore hold")
+    };
+    assert_eq!(job.key.part(), "done");
+    store
+        .set_restore_hold(&operator, "synthetic-restored-deployment")
+        .await
+        .unwrap();
+    let pending = store.status_owned(run, &operator).await.unwrap();
+    assert_eq!(pending.state, "attention");
+    assert!(pending.restore_review_required);
+    assert!(pending.outcome.is_none() && pending.output.is_none());
+
+    // An already leased pure Finish performs no product I/O. Its real result
+    // commits while restore review still controls the public progress state.
+    let sent = worker.send(&job).await.unwrap();
+    dispatcher.finish(&job, sent).await.unwrap();
+    let held = store.status_owned(run, &operator).await.unwrap();
+    assert_eq!(held.state, "attention");
+    assert!(held.restore_review_required);
+    assert_eq!(held.outcome.as_deref(), Some("done"));
+    assert_eq!(held.output.as_ref(), Some(&output));
+    let wire = serde_json::to_value(&held).unwrap();
+    assert_eq!(wire["state"], "attention");
+    assert_eq!(wire["restoreReviewRequired"], true);
+    assert_eq!(wire["outcome"], "done");
+    assert_eq!(wire["output"], output);
+    println!("held finish status: {wire}");
+    assert_eq!(
+        store
+            .release_restore_hold(&operator, "fence-without-history-review")
+            .await
+            .unwrap_err()
+            .code,
+        "restore-unresolved"
+    );
+    let cutoff = client
+        .query_one("SELECT clock_timestamp()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        store.retain_terminal(cutoff, 100, &operator).await.unwrap(),
+        0
+    );
+    store
+        .complete_execution_recovery(&operator, "synthetic-complete-history-fenced", true, true)
+        .await
+        .unwrap();
+    store
+        .release_restore_hold(&operator, "synthetic-complete-history-fenced")
+        .await
+        .unwrap();
+    let released = store.status_owned(run, &operator).await.unwrap();
+    assert_eq!(released.state, "finished");
+    assert!(!released.restore_review_required);
+    assert_eq!(released.outcome.as_deref(), Some("done"));
+    assert_eq!(released.output.as_ref(), Some(&output));
+    assert_eq!(
+        store.retain_terminal(cutoff, 100, &operator).await.unwrap(),
+        1
+    );
+    let retained = store.status_owned(run, &operator).await.unwrap();
+    assert_eq!(retained.state, "finished");
+    assert_eq!(retained.outcome.as_deref(), Some("done"));
+    assert!(retained.output.is_none());
+    println!(
+        "retained finish status: {}",
+        serde_json::to_value(retained).unwrap()
+    );
+    client
+        .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
+        .await
+        .unwrap();
+    drop(dispatcher);
+    drop(worker);
+    drop(store);
+    drop(client);
+    connection_task.await.unwrap().unwrap();
+}
