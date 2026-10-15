@@ -510,15 +510,25 @@ impl BaseRegistryClient {
                 idempotency_key,
             )
             .await?;
-        let proposal = crate::BRegProposal::from_slice(raw.value.as_bytes())?;
+        let invalid_receipt = || {
+            BaseRegistryClientError::protocol(
+                201,
+                crate::BRegProtocolFailure::Body,
+                Some(raw.metadata.trace_id().clone()),
+            )
+        };
+        let proposal =
+            crate::BRegProposal::from_slice(raw.value.as_bytes()).map_err(|_| invalid_receipt())?;
         if proposal.action_id() != action.action_identifier()
             || proposal.action_revision() != action.definition_revision()
             || proposal.state() != crate::BRegProposalState::Draft
         {
-            return Err(action_recovery_refusal());
+            return Err(invalid_receipt());
         }
         Ok(BRegComplete {
-            value: proposal.bind_profile(self.source_binding(), action.access_profile())?,
+            value: proposal
+                .bind_profile(self.source_binding(), action.access_profile())
+                .map_err(|_| invalid_receipt())?,
             metadata: raw.metadata,
         })
     }

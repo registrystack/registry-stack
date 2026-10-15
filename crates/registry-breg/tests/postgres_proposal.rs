@@ -3249,6 +3249,130 @@ async fn narrowed_attachment_disclosure_refuses_the_old_exact_receipt_without_re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[cfg(feature = "tooling")]
+async fn review_context_refuses_active_action_mapping_for_a_retained_submission() {
+    let mut source = registry_source(false);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+        "id":"review-name","fields":{
+            "proposedName":{"type":"input","input":"value"},
+            "currentName":{"type":"record","input":"target","field":"name"},
+            "changes":{"type":"changes","recordType":"target","fields":["name"]}
+        }
+    });
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("get-review-context"), json!("get-review-status")]);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["proposedName", "currentName", "changes"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
+            .await;
+    let draft = start(&fixture, "frozen-name-canary", "mapping-start").await;
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(&draft, "submit", json!({}), &key("mapping-submit"))
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let path = format!(
+        "/v1/proposals/{}/review-context?accessProfile=clerk",
+        submitted.id()
+    );
+    let response = reqwest::get(format!("{}{path}", fixture.http.base_url))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let original: Value = response.json().await.unwrap();
+    assert_eq!(
+        original["actionRevision"],
+        fixture.registry.actions().actions[0].definition_revision
+    );
+    assert_eq!(
+        original["context"]["fields"]["proposedName"],
+        "frozen-name-canary"
+    );
+    assert_eq!(
+        original["context"]["fields"]["changes"][0]["after"]["name"],
+        "frozen-name-canary"
+    );
+
+    let mut next = source;
+    // The same public field now means a different frozen input. Even though both
+    // values exist, the current mapping must not reinterpret the old submission.
+    next["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["proposedName"] =
+        json!({"type":"input","input":"target"});
+    assert_ne!(
+        fixture.registry.actions().actions[0].definition_revision,
+        compile(next.clone()).actions().actions[0].definition_revision
+    );
+    let (registry, identity) = proposal_activation::activate_successor(&fixture, &next).await;
+    let current_schema = registry_breg::compiler::review_context::compile_schema(
+        &registry,
+        &registry.actions().actions[0],
+    )
+    .unwrap()
+    .unwrap();
+    let current = successor_client(&fixture, registry, identity).await;
+    let response = reqwest::get(format!("{}{path}", current.base_url))
+        .await
+        .unwrap();
+    let status = response.status();
+    let refused = response.text().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::NOT_FOUND, "{refused}");
+    for hidden in [
+        "frozen-name-canary",
+        "proposedName",
+        "currentName",
+        "sha256:",
+    ] {
+        assert!(!refused.contains(hidden), "refusal disclosed {hidden}");
+    }
+    let status = reqwest::get(format!(
+        "{}/v1/proposals/{}/review-status?accessProfile=clerk",
+        current.base_url,
+        submitted.id(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(status.status(), reqwest::StatusCode::OK);
+    let status: Value = status.json().await.unwrap();
+    assert_eq!(status["actionRevision"], original["actionRevision"]);
+    assert!(status["context"].get("fields").is_none());
+    assert_eq!(
+        status["context"]["contract"],
+        json!({
+            "id":current_schema.id,"revision":current_schema.revision,"schemaDigest":current_schema.digest,
+        })
+    );
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM registry_internal.registry_proposal_applications),
+            (SELECT count(*) FROM registry_internal.registry_revisions),
+            action_revision FROM registry_internal.registry_proposal_state",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 0);
+    assert_eq!(row.get::<_, i64>(1), 1);
+    assert_eq!(
+        row.get::<_, String>(2),
+        original["actionRevision"].as_str().unwrap()
+    );
+    drop(current);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg(feature = "tooling")]
 async fn retained_attachment_download_survives_tighter_current_upload_policy() {
     let mut source = registry_source(false);
     source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({"id":"retained-document","fields":{"document":{"type":"document","slot":"support"}}});
@@ -3322,6 +3446,12 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
     next["actions"][0]["execution"]["proposal"]["attachments"][0]["contentTypes"] =
         json!(["application/octet-stream"]);
     let (registry, identity) = proposal_activation::activate_successor(&fixture, &next).await;
+    let current_schema = registry_breg::compiler::review_context::compile_schema(
+        &registry,
+        &registry.actions().actions[0],
+    )
+    .unwrap()
+    .unwrap();
     let current = successor_client(&fixture, registry, identity).await;
     let metadata = current
         .client
@@ -3368,27 +3498,13 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
         .value
         .select_proposal_review_context("clerk", "correct-name")
         .unwrap();
-    let context = current
-        .client
-        .read_proposal_review_by_id(&binding, submitted.id())
-        .await
-        .unwrap()
-        .value;
-    assert_ne!(
-        old_context.context.contract.as_ref().unwrap().schema_digest,
-        context.context.contract.as_ref().unwrap().schema_digest
-    );
-    let reviewed = current
-        .client
-        .download_proposal_review_document(&binding, &context, "document")
-        .await
-        .unwrap()
-        .value;
-    assert_eq!(reviewed.media_type(), "text/plain");
-    assert_eq!(
-        reviewed.as_bytes(),
-        bytes,
-        "retained review bytes use the frozen manifest rather than today's upload ceiling"
+    assert!(
+        current
+            .client
+            .read_proposal_review_by_id(&binding, submitted.id())
+            .await
+            .is_err(),
+        "a fresh context must not reinterpret the retained submission under a changed Action"
     );
     assert!(
         current
@@ -3396,8 +3512,37 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
             .download_proposal_review_document(&binding, &old_context, "document")
             .await
             .is_err(),
-        "the former context schema digest remains stale after slot policy changes"
+        "a saved review link cannot release bytes after the Action revision changes"
     );
+
+    let saved_path = old_context.context.fields.as_ref().unwrap()["document"]["download"]["path"]
+        .as_str()
+        .unwrap();
+    let current_schema_path = saved_path.replace(
+        &old_context
+            .context
+            .contract
+            .as_ref()
+            .unwrap()
+            .schema_digest
+            .replace(':', "%3A"),
+        &current_schema.digest.replace(':', "%3A"),
+    );
+    for path in [saved_path, current_schema_path.as_str()] {
+        let response = reqwest::get(format!("{}{path}&accessProfile=clerk", current.base_url))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "review bytes require the frozen Action even with today's context schema"
+        );
+        assert!(!response
+            .text()
+            .await
+            .unwrap()
+            .contains("historical-text-attachment-canary"));
+    }
 
     let action = metadata
         .value

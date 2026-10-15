@@ -229,7 +229,8 @@ class ProposalStartTests(unittest.TestCase):
                 count = len(requests)
                 with self.assertRaises(BaseRegistryClientError) as raised:
                     client.start_proposal(start, {}, 'wrong-start-' + state)
-                self.assertEqual(raised.exception.kind, 'invalid-request')
+                self.assertEqual(raised.exception.kind, 'protocol')
+                self.assertTrue(raised.exception.outcome_unknown)
                 self.assertEqual(len(requests), count + 1)
                 self.assertEqual(requests[-1][0], '/tenant/v1/actions/correct/proposals?accessProfile=reader')
         finally:

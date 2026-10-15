@@ -2,11 +2,12 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const {test}=require('node:test');
+const {createHash}=require('node:crypto');
 const {BaseRegistryClient}=process.env.BREG_CLIENT_PACKAGE ? require(process.env.BREG_CLIENT_PACKAGE).breg : require('..');
 const fixture=require('../../registry-breg-client/tests/fixtures/attachments.json');
 const slot='supporting-file';
 const bytes=Buffer.from(fixture.content);
-async function harness() {
+async function harness(mutateReceipt) {
  const requests=[];
  const server=http.createServer(async(request,response)=>{
   const chunks=[];for await(const chunk of request)chunks.push(chunk);
@@ -16,7 +17,12 @@ async function harness() {
    response.setHeader('content-type','application/pdf');response.setHeader('content-disposition','attachment');response.setHeader('x-content-type-options','nosniff');response.setHeader('vary','authorization');return response.end(bytes);
   }
   const value=structuredClone(request.url.startsWith('/v1/registry')?fixture.metadata:fixture.proposal);
-  if(['PATCH','DELETE'].includes(request.method))value.revision++;
+  if(['PATCH','DELETE'].includes(request.method)) {
+   value.revision++;
+   if(request.method==='PATCH')Object.assign(value.attachments[slot].value,{sha256:createHash('sha256').update(Buffer.concat(chunks)).digest('hex'),contentType:request.headers['content-type'],byteSize:Buffer.concat(chunks).length});
+   else delete value.attachments[slot].value;
+   if(mutateReceipt)mutateReceipt(value,request.method);
+  }
   response.setHeader('content-type','application/json');response.setHeader('vary','authorization, accept');response.end(JSON.stringify(value));
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -56,4 +62,28 @@ test('Proposal slot authority remains source bound',async()=>{
   const other=new BaseRegistryClient({baseUrl:'http://127.0.0.1:1'});
   await assert.rejects(other.downloadProposalAttachment(h.proposal,slot),error=>error.kind==='invalid-request');assert.equal(h.requests.length,2);
  } finally {await h.close();}
+});
+
+test('attachment receipts bind disclosed selected-slot effects and preserve omitted metadata',async()=>{
+ const replacement=Buffer.from('replacement-private-canary');
+ for(const [name,mutate] of [
+  ['unchanged',value=>{value.attachments[slot].value=structuredClone(fixture.proposal.attachments[slot].value);}],
+  ['digest',value=>{value.attachments[slot].value.sha256='a'.repeat(64);}],
+  ['media',value=>{value.attachments[slot].value.contentType='text/plain';}],
+  ['size',value=>{value.attachments[slot].value.byteSize++;}],
+  ['missing',value=>{delete value.attachments[slot];}]
+ ]) {
+  const h=await harness(mutate);try {
+   await assert.rejects(h.client.uploadProposalAttachment(h.proposal,slot,'application/pdf',replacement,'exact-upload'),error=>error.kind==='protocol'&&error.outcomeUnknown&&!error.message.includes('replacement-private-canary'));
+   assert.equal(h.requests.length,3,name+': malformed 200 is not resent');
+  } finally {await h.close();}
+ }
+ const stale=await harness(value=>{value.attachments[slot].value=structuredClone(fixture.proposal.attachments[slot].value);});try {
+  await assert.rejects(stale.client.deleteProposalAttachment(stale.proposal,slot,'exact-remove'),error=>error.kind==='protocol'&&error.outcomeUnknown);
+  assert.equal(stale.requests.length,3);
+ } finally {await stale.close();}
+ const omitted=await harness(value=>{delete value.attachments[slot].value;});try {
+  await omitted.client.uploadProposalAttachment(omitted.proposal,slot,'application/pdf',replacement,'omitted-upload');
+  await omitted.client.deleteProposalAttachment(omitted.proposal,slot,'absent-remove');
+ } finally {await omitted.close();}
 });

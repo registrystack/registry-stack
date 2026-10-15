@@ -171,7 +171,7 @@ test('Proposal Start accepts exact Draft replay and refuses otherwise valid term
       if (state === 'submitted') value.effectDigest = revision;
       assert.equal(JSON.parse((await client.getProposal(get, id)).documentJson).state, state, 'ordinary reads permit this representation');
       const count = requests.length;
-      await assert.rejects(client.startProposal(start, '{}', `wrong-start-${state}`), error => error.kind === 'invalid-request');
+      await assert.rejects(client.startProposal(start, '{}', `wrong-start-${state}`), error => error.kind === 'protocol' && error.outcomeUnknown);
       assert.equal(requests.length, count + 1, 'validate one actual Start response');
       assert.equal(requests.at(-1).url, '/tenant/v1/actions/correct/proposals?accessProfile=author');
     }

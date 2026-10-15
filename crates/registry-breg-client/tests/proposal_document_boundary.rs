@@ -718,6 +718,11 @@ async fn readable_attachment_metadata_requires_a_valid_upload_instant() {
     let key = BRegIdempotencyKey::parse("attachment-instant").unwrap();
     let mut receipt = valid.clone();
     receipt["revision"] = json!(4);
+    use sha2::{Digest, Sha256};
+    receipt["attachments"]["supporting-file"]["value"]["sha256"] = json!(Sha256::digest(b"%PDF")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>());
     fixture.answer(receipt.clone());
     assert!(fixture
         .client

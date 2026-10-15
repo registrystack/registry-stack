@@ -1004,7 +1004,18 @@ impl BaseRegistryClient {
                 None,
             )
             .await?;
-        self.proposal_attachment_response(proposal, link, response)
+        use sha2::{Digest, Sha256};
+        let sha256: String = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        self.proposal_attachment_response(
+            proposal,
+            slot,
+            link,
+            Some((&sha256, content_type, bytes.len() as u64)),
+            response,
+        )
     }
     pub async fn delete_proposal_attachment(
         &self,
@@ -1016,15 +1027,25 @@ impl BaseRegistryClient {
         let response = self
             .proposal_attachment_exchange(link, None, None, Some(key), slot.maximum_bytes, None)
             .await?;
-        self.proposal_attachment_response(proposal, link, response)
+        self.proposal_attachment_response(proposal, slot, link, None, response)
     }
     fn proposal_attachment_response(
         &self,
         prior: &BRegProposal,
+        slot: &BRegProposalAttachment,
         link: &BRegProposalLink,
+        expected_upload: Option<(&str, &str, u64)>,
         response: BRegComplete<BRegRawDocument>,
     ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
-        let current = BRegProposal::from_slice(response.value.as_bytes())?;
+        let invalid_receipt = || {
+            BaseRegistryClientError::protocol(
+                200,
+                BRegProtocolFailure::Body,
+                Some(response.metadata.trace_id().clone()),
+            )
+        };
+        let current =
+            BRegProposal::from_slice(response.value.as_bytes()).map_err(|_| invalid_receipt())?;
         if current.id != prior.id
             || current.action_id != prior.action_id
             || current.action_revision != prior.action_revision
@@ -1035,11 +1056,29 @@ impl BaseRegistryClient {
                 prior.revision,
                 &current,
             )
+            || !current
+                .attachments
+                .get(&slot.id)
+                .is_some_and(|current_slot| {
+                    match expected_upload {
+                        Some((sha256, content_type, byte_size)) => {
+                            // Get and readableAttachments are independent from write authority.
+                            current_slot.value.as_ref().is_none_or(|value| {
+                                value.sha256 == sha256
+                                    && value.content_type == content_type
+                                    && value.byte_size == byte_size
+                            })
+                        }
+                        None => current_slot.value.is_none(),
+                    }
+                })
         {
-            return Err(refusal());
+            return Err(invalid_receipt());
         }
         Ok(BRegComplete {
-            value: current.bind_profile(self.source_binding(), &link.access_profile)?,
+            value: current
+                .bind_profile(self.source_binding(), &link.access_profile)
+                .map_err(|_| invalid_receipt())?,
             metadata: response.metadata,
         })
     }
@@ -1205,12 +1244,22 @@ impl BaseRegistryClient {
                 Some(&key),
             )
             .await?;
-        let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
+        let invalid_receipt = || {
+            BaseRegistryClientError::protocol(
+                200,
+                BRegProtocolFailure::Body,
+                Some(response.metadata.trace_id().clone()),
+            )
+        };
+        let proposal =
+            BRegProposal::from_slice(response.value.as_bytes()).map_err(|_| invalid_receipt())?;
         if !transition_successor(&evidence, &proposal) {
-            return Err(refusal());
+            return Err(invalid_receipt());
         }
         Ok(BRegComplete {
-            value: proposal.bind_profile(self.source_binding(), &evidence.link.access_profile)?,
+            value: proposal
+                .bind_profile(self.source_binding(), &evidence.link.access_profile)
+                .map_err(|_| invalid_receipt())?,
             metadata: response.metadata,
         })
     }
@@ -2031,6 +2080,13 @@ mod tests {
         let original = fixture["proposal"].clone();
         let mut current = original.clone();
         current["revision"] = json!(4);
+        use sha2::{Digest, Sha256};
+        current["attachments"]["supporting-file"]["value"]["sha256"] =
+            json!(Sha256::digest(b"%PDF")
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>());
+        current["attachments"]["supporting-file"]["value"]["byteSize"] = json!(4);
         let (client, response, server) = proposal_response_client(current.clone()).await;
         let prior = proposal(&client, original);
         let key = BRegIdempotencyKey::parse("attachment-binding").unwrap();
@@ -2038,6 +2094,12 @@ mod tests {
             .upload_proposal_attachment(&prior, "supporting-file", "application/pdf", b"%PDF", &key)
             .await
             .is_ok());
+        let mut removed = current.clone();
+        removed["attachments"]["supporting-file"]
+            .as_object_mut()
+            .unwrap()
+            .remove("value");
+        *response.lock().unwrap() = removed;
         assert!(client
             .delete_proposal_attachment(&prior, "supporting-file", &key)
             .await
@@ -2055,8 +2117,11 @@ mod tests {
             let mut changed = current.clone();
             changed[field] = value;
             // Keep this response independently valid so receipt correlation makes the refusal.
-            changed["attachments"] = json!({});
-            *response.lock().unwrap() = changed;
+            if field == "submissionVersion" {
+                changed["attachments"]["supporting-file"]["value"]["submissionVersion"] =
+                    changed["submissionVersion"].clone();
+            }
+            *response.lock().unwrap() = changed.clone();
             assert!(
                 client
                     .upload_proposal_attachment(
@@ -2070,6 +2135,11 @@ mod tests {
                     .is_err(),
                 "upload:{field}"
             );
+            changed["attachments"]["supporting-file"]
+                .as_object_mut()
+                .unwrap()
+                .remove("value");
+            *response.lock().unwrap() = changed;
             assert!(
                 client
                     .delete_proposal_attachment(&prior, "supporting-file", &key)

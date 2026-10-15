@@ -2390,6 +2390,14 @@ impl MutationCoordinator {
         records: &BTreeMap<String, crate::api::proposals::ProposalRecordReadAuthority>,
     ) -> Result<Value, MutationError> {
         let action = proposal_action(registry, &document.action_id)?;
+        // Current disclosure cannot reinterpret frozen work through a newer
+        // Action mapping. Review document downloads use this same projection.
+        if authority.operation
+            == ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
+            && action.definition_revision != document.action_revision
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
         let workflow =
             proposal_store::load(tx, &document.action_id, document.proposal_id, false).await?;
         let frozen = workflow
