@@ -116,6 +116,13 @@ and only `match` carries private facts. Derivation returns exactly the declared
 Outputs. Functions cannot authorize, choose a Source, read credentials,
 perform I/O, sign, audit or construct an assertion.
 
+An authored `assertion-derive/v1` Function returns an array whose entries each
+have exactly `output` and `value`. `output` names a local Output declared by the
+calling definition, for example `#{output: "region", value: facts["residence-region"]}`.
+The compiler maps those names to the declared public concept identifiers in the
+compiled runtime ABI. Do not return runtime `concept_id` entries from an authored
+Function. Unknown, duplicate, missing or malformed outputs are refused.
+
 `explain` exposes Function interfaces, typed call sites, capabilities, digests
 and the Source-to-Fact-to-Output flow without source values or secrets. `types`
 generates TypeScript or Python declarations from that same model. A scalar

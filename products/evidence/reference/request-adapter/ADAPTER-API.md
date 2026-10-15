@@ -6,6 +6,13 @@ This document defines the Version 1 API visible to reviewed source-adapter
 scripts. It is intentionally smaller than Rhai's standard library. The host is
 Rust. Adapter scripts cannot perform I/O or choose transport authority.
 
+This is the compiled bundle's runtime ABI. For normalized EvidenceProject
+Functions, start with the [authoring reference](../authoring-projects/CONFIG.md).
+In particular, an authored `assertion-derive/v1` Function returns local
+`{output, value}` entries; the authoring compiler translates them into this
+runtime ABI's `{concept_id, value}` entries. The host-helper and resource limits
+below also apply to the compiled authored Functions.
+
 This contract is the `registry.evidence.request-adapter/v1` ABI and is bound to
 the Evidence bundle contract Version 1. A
 source does not carry a redundant `adapterAbiVersion` field unless the product

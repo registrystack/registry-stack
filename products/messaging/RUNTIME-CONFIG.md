@@ -447,8 +447,8 @@ directory for an `smtp` provider or an undeclared id, a file the provider does
 not name, a hidden entry, or a symbolic link under `providers/` is refused
 with its path, and a declared `http` provider without its directory or a
 named script is refused as missing. `providers/` is digested with the rest of
-the package. `products/messaging/examples/providers/` holds two example
-provider directories, and the starter ships the mock one as `sms-gateway`.
+the package. `products/messaging/examples/providers/` holds the maintained
+provider examples, and the starter ships the mock one as `sms-gateway`.
 
 ### Templates
 
