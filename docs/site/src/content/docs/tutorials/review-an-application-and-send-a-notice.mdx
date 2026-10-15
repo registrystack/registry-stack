@@ -209,7 +209,7 @@ common = {'Authorization': token,
           'Registry-Casework-Profile': s['caseworkProfile']}
 with urllib.request.urlopen(urllib.request.Request(base, headers=common)) as response:
     current = json.load(response)
-body = json.dumps({'decision': {'type': 'approve'}}).encode()
+body = json.dumps({'decision': {'type': 'approve', 'outcome': 'approved'}}).encode()
 headers = {**common, 'Content-Type': 'application/json',
            'If-Match': f'"{current["revision"]}"', 'Idempotency-Key': str(uuid.uuid4())}
 request = urllib.request.Request(base + '/decisions', data=body, method='POST', headers=headers)
@@ -219,7 +219,7 @@ print('Approved')
 PY
 ```
 
-A successful decision prints `Approved`. If the task revision changed, read it again before deciding.
+A successful decision prints `Approved`. The decision names the policy's `approved` outcome; an approval without one is refused with HTTP `400` and the policy's approval outcomes in the `Registry-Casework-Validation-Allowed` header. If the task revision changed, read it again before deciding.
 
 The Casework completion event advances an eligible read on the restarted worker while preserving
 the durable observation floor. Coordinator reads the authoritative
