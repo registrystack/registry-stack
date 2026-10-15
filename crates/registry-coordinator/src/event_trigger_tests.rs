@@ -166,6 +166,76 @@ fn exact_event_identity_survives_retry_replay_and_old_commit_time() {
 }
 
 #[test]
+fn event_ownership_follows_the_authenticated_producer_across_source_aliases() {
+    let value = event();
+    let (body, headers) = signed(&value, TARGET, 1, "first-delivery");
+    let first = verify(&body, &headers).unwrap();
+    let mut renamed = trigger();
+    renamed.source = "renamed-registry".into();
+    let replay = verify_delivery(
+        &source(),
+        &renamed.source,
+        &renamed,
+        "record-saved",
+        &Method::POST,
+        TARGET,
+        &headers,
+        &body,
+        KEY,
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert_eq!(first.key, replay.key);
+    assert_eq!(first.actor.issuer, replay.actor.issuer);
+    assert_eq!(first.actor.subject, replay.actor.subject);
+    assert_eq!(first.actor.client_id, replay.actor.client_id);
+    assert!(!replay.actor.operator);
+
+    assert!(
+        verify_delivery(
+            &source(),
+            "registry",
+            &renamed,
+            "record-saved",
+            &Method::POST,
+            TARGET,
+            &headers,
+            &body,
+            KEY,
+            SystemTime::now(),
+        )
+        .is_err(),
+        "the trigger must still select the configured source alias"
+    );
+
+    let mut other = value;
+    other["source"] = json!("urn:example:another-authenticated-producer");
+    let mut other_source = source();
+    other_source.source = ExternalId::new(other["source"].as_str().unwrap()).unwrap();
+    let (body, headers) = signed(&other, TARGET, 1, "other-producer");
+    let other = verify_delivery(
+        &other_source,
+        "registry",
+        &trigger(),
+        "record-saved",
+        &Method::POST,
+        TARGET,
+        &headers,
+        &body,
+        KEY,
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert_ne!(first.key, other.key);
+    assert_ne!(first.actor.subject, other.actor.subject);
+    assert_ne!(first.actor.client_id, other.actor.client_id);
+    assert!(
+        verify(&body, &headers).is_err(),
+        "another producer cannot use the original source binding"
+    );
+}
+
+#[test]
 fn a_conforming_alternate_product_uses_the_same_verifier() {
     let mut value = event();
     value["source"] = json!("urn:registrystack:scheduling:synthetic:local");
@@ -626,6 +696,172 @@ mod postgres {
         tokio::spawn(async move {
             connection.await.unwrap();
         });
+        client
+            .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn source_alias_rename_recovers_one_original_run_after_restart() {
+        let database = std::env::var("COORDINATOR_TEST_DATABASE_URL")
+            .expect("a disposable real PostgreSQL database is required");
+        let namespace = format!("coordinator_{}", Uuid::new_v4().simple());
+        let store = Store::connect(&database, &namespace).await.unwrap();
+        store.migrate().await.unwrap();
+        let mut runtime = runtime(&namespace);
+        let original = definition(project_text());
+        runtime.validate_workflow(&original.workflow).unwrap();
+        let value = event();
+        let (body, headers) = signed(&value, TARGET, 1, "before-alias-rename");
+        let run = admit(
+            &store,
+            &original,
+            &runtime,
+            verify(&body, &headers).unwrap(),
+        )
+        .await
+        .unwrap();
+        drop(store);
+
+        let source = runtime.event_sources.remove("registry").unwrap();
+        runtime
+            .event_sources
+            .insert("renamed-registry".into(), source);
+        let renamed = definition(
+            &project_text()
+                .replace("source: registry", "source: renamed-registry")
+                .replace(
+                    "{type: input, path: /data/recordId}",
+                    "{type: literal, value: '00000000-0000-4000-8000-000000000099'}",
+                ),
+        );
+        runtime.validate_workflow(&renamed.workflow).unwrap();
+        assert_ne!(original.digest, renamed.digest);
+        let store = Store::connect(&database, &namespace).await.unwrap();
+        store.check_runtime_bindings(&runtime).await.unwrap();
+        let (body, headers) = signed(&value, TARGET, 2, "after-alias-rename");
+        let trigger = &renamed.workflow.event_triggers["record-saved"];
+        let verify_renamed = || {
+            verify_delivery(
+                &runtime.event_sources[&trigger.source],
+                &trigger.source,
+                trigger,
+                "record-saved",
+                &Method::POST,
+                TARGET,
+                &headers,
+                &body,
+                KEY,
+                SystemTime::now(),
+            )
+            .unwrap()
+        };
+        let (replay, retry) = tokio::join!(
+            admit(&store, &renamed, &runtime, verify_renamed()),
+            admit(&store, &renamed, &runtime, verify_renamed()),
+        );
+        assert_eq!(
+            run,
+            replay.unwrap(),
+            "renaming a local source alias recovers the original Run"
+        );
+        assert_eq!(
+            run,
+            retry.unwrap(),
+            "concurrent exact retries cannot admit more work"
+        );
+        assert_eq!(store.list_runs(100).await.unwrap().len(), 1);
+        let actor = verify_renamed().actor;
+        assert_eq!(
+            store.definition_owned(run, &actor).await.unwrap().digest,
+            original.digest
+        );
+        let mut conflict = value.clone();
+        conflict["data"]["values"]["name"] = json!("Changed ignored projection");
+        let (conflict_body, conflict_headers) = signed(&conflict, TARGET, 3, "renamed-conflict");
+        let conflict = verify_delivery(
+            &runtime.event_sources[&trigger.source],
+            &trigger.source,
+            trigger,
+            "record-saved",
+            &Method::POST,
+            TARGET,
+            &conflict_headers,
+            &conflict_body,
+            KEY,
+            SystemTime::now(),
+        )
+        .unwrap();
+        assert_eq!(
+            admit(&store, &renamed, &runtime, conflict)
+                .await
+                .unwrap_err()
+                .code,
+            "start-conflict"
+        );
+
+        let mut other = value.clone();
+        other["source"] = json!("urn:example:another-authenticated-producer");
+        let mut other_source = runtime.event_sources[&trigger.source].clone();
+        other_source.source = ExternalId::new(other["source"].as_str().unwrap()).unwrap();
+        let (other_body, other_headers) = signed(&other, TARGET, 1, "other-producer");
+        let other = verify_delivery(
+            &other_source,
+            &trigger.source,
+            trigger,
+            "record-saved",
+            &Method::POST,
+            TARGET,
+            &other_headers,
+            &other_body,
+            KEY,
+            SystemTime::now(),
+        )
+        .unwrap();
+        assert_eq!(
+            store
+                .status_owned(run, &other.actor)
+                .await
+                .unwrap_err()
+                .code,
+            "run-absent",
+            "another authenticated URI cannot inspect the original producer's Run"
+        );
+
+        let (client, connection) = tokio_postgres::connect(&database, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            connection.await.unwrap();
+        });
+        let counts = client.query_one(&format!("SELECT (SELECT count(*) FROM {namespace}.runs),(SELECT count(*) FROM {namespace}.jobs)"), &[]).await.unwrap();
+        assert_eq!(counts.get::<_, i64>(0), 1);
+        assert_eq!(
+            counts.get::<_, i64>(1),
+            1,
+            "alias replay creates no second dispatch job"
+        );
+        let replay = verify_renamed();
+        let store = std::sync::Arc::new(store);
+        let adapters = std::sync::Arc::new(NoEffects {
+            digest: runtime.binding_digest().unwrap(),
+            runtime: runtime.clone(),
+        });
+        let worker = crate::worker::Worker::new(store.clone(), adapters);
+        assert!(worker.tick().await.unwrap());
+        let status = store.status_owned(run, &actor).await.unwrap();
+        assert_eq!(status.state, "finished");
+        assert_eq!(
+            status.output,
+            Some(json!({"recordId":"00000000-0000-4000-8000-000000000001"})),
+            "renamed ingress preserves the original mapped input despite active mapping changes"
+        );
+        assert_eq!(
+            admit(&store, &renamed, &runtime, replay).await.unwrap(),
+            run
+        );
+        assert_eq!(store.list_runs(100).await.unwrap().len(), 1);
         client
             .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
             .await
