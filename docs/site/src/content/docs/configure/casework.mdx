@@ -106,7 +106,7 @@ This submitted-context fragment adds a structured answer to the starter. Both sc
 
 ```yaml
 reviewPolicies:
-  - id: decision
+  decision:
     version: "1"
     purpose: answer
     context:
@@ -220,7 +220,7 @@ Declare the provider's read purposes separately:
 
 ```yaml
 contextProviders:
-  - id: facility-proposal-context
+  facility-proposal-context:
     capabilities: [human-display, service-status]
     sourceNamespace: facility-registry
     deploymentRef: facility-registry

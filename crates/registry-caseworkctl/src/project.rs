@@ -42,7 +42,7 @@ queues:
   decisions:
     label: Decisions awaiting review
 reviewPolicies:
-  - id: decision
+  decision:
     version: "1"
     purpose: answer
     context: {mode: submitted}

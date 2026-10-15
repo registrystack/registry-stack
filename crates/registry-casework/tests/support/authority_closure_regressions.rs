@@ -118,16 +118,18 @@ impl ReviewContextProvider for PlainProvider {
 #[tokio::test]
 async fn accepted_plain_policy_does_not_pin_another_policys_optional_provider_capabilities() {
     let mut value = project_value(true, false);
-    let mut routed = value["reviewPolicies"][0].clone();
-    routed["id"] = json!("routed-review");
+    let mut routed = value["reviewPolicies"]["notice-review"].clone();
     routed["routing"] = json!([{"id":"north","because":"Route north notices","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
-    value["reviewPolicies"].as_array_mut().unwrap().push(routed);
+    value["reviewPolicies"]["routed-review"] = routed;
     value["trustedProducers"]["notice-service"]["reviewPolicies"] =
         json!(["notice-review", "routed-review"]);
     let f = Fixture::new(value.clone()).await;
     f.create("plain").await;
     // Remove the drained routing policy while a plain review remains open.
-    value["reviewPolicies"].as_array_mut().unwrap().pop();
+    value["reviewPolicies"]
+        .as_object_mut()
+        .unwrap()
+        .remove("routed-review");
     value["trustedProducers"]["notice-service"]["reviewPolicies"] = json!(["notice-review"]);
     let provider = PlainProvider(f.state.clone());
     let declared_project = decode(&value);
@@ -137,8 +139,10 @@ async fn accepted_plain_policy_does_not_pin_another_policys_optional_provider_ca
         [Arc::new(PlainProvider(f.state.clone())) as Arc<dyn ReviewContextProvider>]
     )
     .is_ok());
-    value["contextProviders"][0]["capabilities"] = json!(["human-display", "service-status"]);
-    value["contextProviders"][0]["serviceProfiles"] = json!({"service-status":"status"});
+    value["contextProviders"]["notice-context"]["capabilities"] =
+        json!(["human-display", "service-status"]);
+    value["contextProviders"]["notice-context"]["serviceProfiles"] =
+        json!({"service-status":"status"});
     let project = decode(&value);
     project.check().unwrap();
     let candidate = ActivationCandidate {
@@ -159,7 +163,8 @@ async fn accepted_plain_policy_does_not_pin_another_policys_optional_provider_ca
             .len(),
         2
     );
-    value["contextProviders"][0]["serviceProfiles"]["service-status"] = json!("replacement-status");
+    value["contextProviders"]["notice-context"]["serviceProfiles"]["service-status"] =
+        json!("replacement-status");
     let changed = decode(&value);
     let candidate = ActivationCandidate {
         project: &changed,

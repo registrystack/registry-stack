@@ -25,7 +25,7 @@ fn submitted_context_refuses_unknown_members_in_json_and_located_yaml() {
     let finding = report
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.path == "/reviewPolicies/0/context/conformanceUnknown")
+        .find(|diagnostic| diagnostic.path == "/reviewPolicies/decision/context/conformanceUnknown")
         .expect("the unknown context member has its own location");
     assert_eq!(finding.code, "config.unknown-key");
     assert!(finding.source.as_ref().and_then(|site| site.line).is_some());

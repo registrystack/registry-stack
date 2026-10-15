@@ -18,7 +18,7 @@ teams:
     memberProfiles: [staff]
     supervisorProfiles: [supervisor]
 reviewPolicies:
-  - id: regional-review
+  regional-review:
     version: "1"
     purpose: approval
     context: {mode: submitted}

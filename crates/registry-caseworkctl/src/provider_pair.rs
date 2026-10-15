@@ -201,12 +201,9 @@ pub(super) fn pair(
             .document
             .to_json_value();
         let providers = document["contextProviders"]
-            .as_array_mut()
+            .as_object_mut()
             .context("contextProviders is required")?;
-        providers
-            .iter_mut()
-            .find(|p| p["id"] == id)
-            .context("provider disappeared")?["description"] = json!(relative);
+        providers.get_mut(id).context("provider disappeared")?["description"] = json!(relative);
         let bytes = serde_json::to_vec_pretty(&export)?;
         // Both replacements are prepared before mutation and never change BReg inputs.
         // An existing description already names this exact destination. Leave
@@ -329,7 +326,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&description).unwrap()).unwrap();
         assert_eq!(export.schema_bytes.as_bytes(), schema_bytes);
         let mut expected = original_value;
-        expected["contextProviders"][0]["description"] =
+        expected["contextProviders"]["facility-proposal-context"]["description"] =
             json!("context-providers/facility-proposal-context.json");
         assert_eq!(
             crate::project::read_project(&project)

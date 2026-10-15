@@ -31,7 +31,8 @@ async fn caseload_target_membership_must_match_the_pinned_deciding_profiles() {
 
     // A later package cannot reinterpret the accepted stage's membership roles.
     let mut changed = project_value(false, false);
-    changed["reviewPolicies"][0]["stages"][0]["decidingProfiles"] = json!(["staff", "supervisor"]);
+    changed["reviewPolicies"]["notice-review"]["stages"][0]["decidingProfiles"] =
+        json!(["staff", "supervisor"]);
     let service = CaseworkService::new(f.store.clone(), decode(&changed), []).unwrap();
     assert!(matches!(
         service
@@ -214,15 +215,17 @@ async fn assert_activation_refused(
 #[tokio::test]
 async fn activation_preserves_pinned_provider_namespace_profiles_binding_and_capabilities() {
     let mut value = project_value(true, true);
-    value["reviewPolicies"][0]["stages"].as_array_mut().unwrap().push(json!({"id":"second-review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":true}));
+    value["reviewPolicies"]["notice-review"]["stages"].as_array_mut().unwrap().push(json!({"id":"second-review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":true}));
     let f = Fixture::new(value.clone()).await;
     f.create("provider-pinned").await;
     let provider = SubstituteProvider(Arc::clone(&f.state));
 
     let mut presentation = value.clone();
-    presentation["contextProviders"][0]["description"] = json!("A clearer provider description");
+    presentation["contextProviders"]["notice-context"]["description"] =
+        json!("A clearer provider description");
     presentation["queues"]["reviews"]["label"] = json!("Review notices");
-    presentation["reviewPolicies"][0]["outcomes"]["approved"]["label"] = json!("Accept notice");
+    presentation["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["label"] =
+        json!("Accept notice");
     assert!(activation_plan(&f, &presentation, &provider)
         .await
         .refusals
@@ -230,25 +233,26 @@ async fn activation_preserves_pinned_provider_namespace_profiles_binding_and_cap
 
     let mut candidates = Vec::new();
     let mut namespace = value.clone();
-    namespace["contextProviders"][0]["sourceNamespace"] = json!("replacement-source");
+    namespace["contextProviders"]["notice-context"]["sourceNamespace"] =
+        json!("replacement-source");
     namespace["trustedProducers"]["notice-service"]["sourceNamespaces"] =
         json!(["notice-source", "replacement-source"]);
     candidates.push(namespace);
     let mut binding = value.clone();
-    binding["contextProviders"][0]["deploymentRef"] = json!("replacement-notices");
+    binding["contextProviders"]["notice-context"]["deploymentRef"] = json!("replacement-notices");
     candidates.push(binding);
     let mut profiles = value.clone();
-    profiles["contextProviders"][0]["serviceProfiles"]["routing-context"] =
+    profiles["contextProviders"]["notice-context"]["serviceProfiles"]["routing-context"] =
         json!("replacement-routing");
     candidates.push(profiles);
     let mut capabilities = value.clone();
-    capabilities["reviewPolicies"][0]
+    capabilities["reviewPolicies"]["notice-review"]
         .as_object_mut()
         .unwrap()
         .remove("routing");
-    capabilities["contextProviders"][0]["capabilities"] =
+    capabilities["contextProviders"]["notice-context"]["capabilities"] =
         json!(["human-display", "service-status", "task-grant-context"]);
-    capabilities["contextProviders"][0]["serviceProfiles"]
+    capabilities["contextProviders"]["notice-context"]["serviceProfiles"]
         .as_object_mut()
         .unwrap()
         .remove("routing-context");
@@ -274,7 +278,7 @@ async fn activation_preserves_pinned_clock_step_destination_queues() {
     let mut changed = value;
     changed["queues"].as_object_mut().unwrap().remove("north");
     changed["teams"]["review-team"]["serves"] = json!(["reviews"]);
-    changed["reviewPolicies"][0]["clocks"] = json!([]);
+    changed["reviewPolicies"]["notice-review"]["clocks"] = json!([]);
     changed["clocks"] = json!({});
     let provider = CapabilitiesProvider(Vec::new());
     assert_activation_refused(&f, &changed, &provider).await;

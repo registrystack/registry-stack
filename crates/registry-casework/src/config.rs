@@ -1220,7 +1220,7 @@ impl RuntimeConfig {
             findings.push(task_authority_finding(
                 &["authentication", "oidc", "allowedClients"],
                 "must name every client taskAuthority admits",
-                "List in authentication.oidc.allowedClients every client taskAuthority.statusClients and casework.yaml taskTemplates[].client name.",
+                "List in authentication.oidc.allowedClients every client taskAuthority.statusClients and casework.yaml taskTemplates.TEMPLATE_ID.client name.",
             ));
         }
         if authority.status_clients.len() > MAXIMUM_STATUS_CLIENTS {
@@ -1252,8 +1252,8 @@ impl RuntimeConfig {
         }) {
             findings.push(task_authority_finding(
                 &["authentication", "oidc", "issuer"],
-                "must be the issuer every casework.yaml taskTemplates[].agent.issuer names",
-                "Name the same issuer in authentication.oidc.issuer and in each taskTemplates[].agent.issuer.",
+                "must be the issuer every casework.yaml taskTemplates.TEMPLATE_ID.agent.issuer names",
+                "Name the same issuer in authentication.oidc.issuer and in each taskTemplates.TEMPLATE_ID.agent.issuer.",
             ));
         }
         if !allowed_clients.is_empty()
@@ -1263,8 +1263,8 @@ impl RuntimeConfig {
         {
             findings.push(task_authority_finding(
                 &["authentication", "oidc", "allowedClients"],
-                "must admit every client casework.yaml taskTemplates[].client names",
-                "Add each taskTemplates[].client to authentication.oidc.allowedClients.",
+                "must admit every client casework.yaml taskTemplates.TEMPLATE_ID.client names",
+                "Add each taskTemplates.TEMPLATE_ID.client to authentication.oidc.allowedClients.",
             ));
         }
         if templates
@@ -1273,8 +1273,8 @@ impl RuntimeConfig {
         {
             findings.push(task_authority_finding(
                 &["taskAuthority"],
-                "cannot grant a casework.yaml taskTemplates[].resource that is not an absolute URI without userinfo or a fragment",
-                "Write each taskTemplates[].resource in casework.yaml as the absolute URI of the resource the grant is for.",
+                "cannot grant a casework.yaml taskTemplates.TEMPLATE_ID.resource that is not an absolute URI without userinfo or a fragment",
+                "Write each taskTemplates.TEMPLATE_ID.resource in casework.yaml as the absolute URI of the resource the grant is for.",
             ));
         }
     }

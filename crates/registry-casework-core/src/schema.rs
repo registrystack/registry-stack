@@ -317,8 +317,8 @@ mod tests {
             .unwrap()
             .contains("256 UTF-8 bytes"));
 
-        let profiles =
-            &document["$defs"]["ReviewContextProviderPolicy"]["properties"]["serviceProfiles"];
+        let profiles = &document["properties"]["contextProviders"]["additionalProperties"]
+            ["properties"]["serviceProfiles"];
         assert_eq!(profiles["propertyNames"]["$ref"], "#/$defs/LocalId");
         assert_eq!(profiles["additionalProperties"], false);
         assert_eq!(profiles["properties"].as_object().unwrap().len(), 4);
@@ -343,7 +343,7 @@ mod tests {
             .expect_err("the project reader enforces the context-contract id byte bound");
         assert!(report.diagnostics().iter().any(|diagnostic| {
             diagnostic.code == "casework.review-policy.context-contract"
-                && diagnostic.path == "/reviewPolicies/1/context/contract/id"
+                && diagnostic.path == "/reviewPolicies/facility-address-review/context/contract/id"
         }));
 
         let blank = authored.replace(original_id, "\"   \"");
@@ -351,15 +351,17 @@ mod tests {
             .expect_err("the project reader rejects a blank context-contract id");
         assert!(report.diagnostics().iter().any(|diagnostic| {
             diagnostic.code == "casework.review-policy.context-contract"
-                && diagnostic.path == "/reviewPolicies/1/context/contract/id"
+                && diagnostic.path == "/reviewPolicies/facility-address-review/context/contract/id"
         }));
 
         let mut blank = decoded.document.to_json_value();
-        blank["reviewPolicies"][1]["context"]["contract"]["id"] = Value::from("   ");
+        blank["reviewPolicies"]["facility-address-review"]["context"]["contract"]["id"] =
+            Value::from("   ");
         assert!(!compiled(&document).is_valid(&blank));
 
         let mut control = decoded.document.to_json_value();
-        control["reviewPolicies"][1]["context"]["contract"]["id"] = Value::from("external\u{1}id");
+        control["reviewPolicies"]["facility-address-review"]["context"]["contract"]["id"] =
+            Value::from("external\u{1}id");
         assert!(!compiled(&document).is_valid(&control));
     }
 }

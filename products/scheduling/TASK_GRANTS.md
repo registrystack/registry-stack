@@ -152,7 +152,7 @@ The Casework project declares the exact destination in a governed template:
 
 ```yaml
 taskTemplates:
-  - id: schedule-registry-update
+  schedule-registry-update:
     version: "1"
     label: Book a registry update
     eligibleTeams: [registry-review]

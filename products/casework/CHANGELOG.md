@@ -14,17 +14,17 @@
   served clocks and routing, and the trusted producer in its dependencies.
   The identifier-keyed maps of row F4 are a configuration shape only: served
   policies keep arrays, listed in identifier order, and reordering a map
-  changes neither the served policy nor its digest. Outcomes and clock
-  reminders are therefore listed in identifier order rather than authored
-  order. Stages, routing rules, clock steps, review policies, context
-  providers and task templates stay lists.
+  changes neither the served policy nor its digest. Outcomes, clock
+  reminders, review policies, context providers and task templates are
+  therefore listed in identifier order rather than authored order. Stages,
+  routing rules and clock steps stay lists.
 
   | Row | Before | After |
   | --- | --- | --- |
   | F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
   | F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
   | F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
-  | F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
+  | F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, `reviewPolicies`, `contextProviders`, `taskTemplates`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
   | F5 | `type: activity` | `type: stage` |
   | F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
   | F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |

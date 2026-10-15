@@ -134,6 +134,45 @@ fn reordering_a_named_map_changes_neither_the_served_policy_nor_its_digest() {
 }
 
 #[test]
+fn reordering_review_policies_and_context_providers_changes_no_served_policy() {
+    const PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../products/casework/examples/canonical-review/casework.yaml"
+    );
+    const CANONICAL: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../products/casework/examples/canonical-review/casework.yaml"
+    ));
+    let decision = CANONICAL.find("  decision:\n").unwrap();
+    let address = CANONICAL.find("  facility-address-review:\n").unwrap();
+    let producers = CANONICAL.find("trustedProducers:\n").unwrap();
+    assert!(decision < address && address < producers);
+    let reordered = format!(
+        "{}{}{}{}",
+        &CANONICAL[..decision],
+        &CANONICAL[address..producers],
+        &CANONICAL[decision..address],
+        &CANONICAL[producers..]
+    );
+    assert_ne!(reordered, CANONICAL);
+    let original = CaseworkProject::read(PATH, CANONICAL.as_bytes())
+        .unwrap()
+        .value;
+    let moved = CaseworkProject::read(PATH, reordered.as_bytes())
+        .unwrap()
+        .value;
+    for policy in ["decision", "facility-address-review"] {
+        let before = original.compile_policy(policy).unwrap();
+        let after = moved.compile_policy(policy).unwrap();
+        assert_eq!(after.identity.digest, before.identity.digest);
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+    }
+}
+
+#[test]
 fn an_elapsed_budget_names_exactly_one_unit() {
     for (after, seconds) in [
         ("{minutes: 90}", 90 * 60),
@@ -164,7 +203,7 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
     );
     assert_refused(
         &replaced("terminalRetentionDays: 30", "terminalDays: 30"),
-        "/reviewPolicies/0/retention/terminalDays",
+        "/reviewPolicies/regional-review/retention/terminalDays",
         "terminalRetentionDays",
         "F2",
     );
@@ -173,7 +212,7 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
             "accountabilityRetentionDays: 365",
             "accountabilityDays: 365",
         ),
-        "/reviewPolicies/0/retention/accountabilityDays",
+        "/reviewPolicies/regional-review/retention/accountabilityDays",
         "accountabilityRetentionDays",
         "F2",
     );
@@ -197,8 +236,31 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
             "      approved: {label: Approve,",
             "      approved: {id: approved, label: Approve,",
         ),
-        "/reviewPolicies/0/outcomes/approved/id",
+        "/reviewPolicies/regional-review/outcomes/approved/id",
         "outcomes: {OUTCOME_ID: {",
+        "F4",
+    );
+    assert_refused(
+        &replaced(
+            "reviewPolicies:\n  regional-review:\n",
+            "reviewPolicies:\n  - id: regional-review\n",
+        ),
+        "/reviewPolicies/0/id",
+        "reviewPolicies: {POLICY_ID: {",
+        "F4",
+    );
+    assert_refused(
+        &format!(
+            "{EXAMPLE}contextProviders:\n  - {{id: regional-context, deploymentRef: regional}}\n"
+        ),
+        "/contextProviders/0/id",
+        "contextProviders: {PROVIDER_ID: {",
+        "F4",
+    );
+    assert_refused(
+        &format!("{EXAMPLE}taskTemplates:\n  - {{id: regional-summary, version: \"1\"}}\n"),
+        "/taskTemplates/0/id",
+        "taskTemplates: {TEMPLATE_ID: {",
         "F4",
     );
     assert_refused(
@@ -254,7 +316,7 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
             "        when:\n          stage: technical\n",
             "        when:\n          activity: review\n          stage: technical\n",
         ),
-        "/reviewPolicies/0/routing/0/when/activity",
+        "/reviewPolicies/regional-review/routing/0/when/activity",
         "Remove activity",
         "F9",
     );
