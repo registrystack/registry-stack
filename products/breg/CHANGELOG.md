@@ -4,7 +4,8 @@
 
 - BREAKING: an event with no compiled delivery is bounded at 1 MiB, the
   Version 1 signable bound, instead of 2 MiB, and a larger one is refused
-  when it is recorded. Publish a smaller event.
+  when it is recorded. The runtime logs the envelope size and bound with the
+  fix: project fewer or smaller fields into the event.
 - The Rust client's `verify_webhook` delegates to the shared hooks receiver
   and keeps its API and refusal codes. A signed header that is not visible
   ASCII is refused as `malformed-signature`.

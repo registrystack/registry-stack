@@ -3949,6 +3949,10 @@ impl From<OutboxError> for MutationError {
     fn from(error: OutboxError) -> Self {
         match error {
             OutboxError::InvalidProjection => Self::InvalidRequest,
+            OutboxError::EventTooLarge { .. } => {
+                tracing::warn!(reason = %error, "a configured event refused the mutation");
+                Self::InvalidRequest
+            }
             OutboxError::Unavailable => Self::Unavailable,
         }
     }

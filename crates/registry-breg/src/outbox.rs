@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use registry_platform_hooks::delivery::DeliveryCapture;
-use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
+use registry_platform_hooks::{
+    Causation, EnvelopeLimits, EventSubject, HookEnvelope, HookEnvelopeError,
+};
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
 use tokio_postgres::Transaction;
@@ -27,6 +29,11 @@ use crate::webhook::DELIVERY_SCHEMA;
 pub enum OutboxError {
     #[error("configured event projection is invalid")]
     InvalidProjection,
+    #[error(
+        "the event envelope is {size} bytes, over its {max}-byte delivery bound; \
+         project fewer or smaller fields into the event"
+    )]
+    EventTooLarge { size: usize, max: usize },
     #[error("mutation outbox is unavailable")]
     Unavailable,
 }
@@ -124,7 +131,12 @@ pub(crate) fn envelope_payload(
     };
     envelope
         .to_canonical_bytes(&limits)
-        .map_err(|_| OutboxError::InvalidProjection)
+        .map_err(|error| match error {
+            HookEnvelopeError::PayloadTooLarge { size, max } => {
+                OutboxError::EventTooLarge { size, max }
+            }
+            _ => OutboxError::InvalidProjection,
+        })
 }
 
 /// Resolve the data contract id of every hook of `entity` that `trigger` fires.
@@ -703,9 +715,22 @@ mod tests {
         assert!(data_bytes < payload.len());
         let between = u32::try_from(data_bytes + 1).expect("bound");
         assert!(usize::try_from(between).expect("bound") < payload.len());
+        let refusal = envelope_payload(&envelope, Some(between)).unwrap_err();
         assert_eq!(
-            envelope_payload(&envelope, Some(between)).unwrap_err(),
-            OutboxError::InvalidProjection
+            refusal,
+            OutboxError::EventTooLarge {
+                size: payload.len(),
+                max: data_bytes + 1,
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "the event envelope is {} bytes, over its {}-byte delivery bound; \
+                 project fewer or smaller fields into the event",
+                payload.len(),
+                data_bytes + 1
+            )
         );
         let exact = u32::try_from(payload.len()).expect("bound");
         assert_eq!(
