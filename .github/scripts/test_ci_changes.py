@@ -2256,7 +2256,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-breg-mcp/src/gateway.rs",
             "crates/registry-breg-review/tests/support/mod.rs",
             "crates/registry-breg-review/src/lib.rs",
-            "crates/registry-coordinator/tests/support/breg_service.rs",
+            "crates/registry-breg-mcp/tests/support/breg_service.rs",
         ):
             with self.subTest(path=path):
                 outputs = classify(
@@ -2275,12 +2275,12 @@ class CiChangesTest(unittest.TestCase):
         )[1].split("\n      # The native worker", 1)[0]
         self.assertIn("if: matrix.lane == 'postgres'", step)
         self.assertIn("shell: bash", step)
-        self.assertIn(
-            "COORDINATOR_TEST_DATABASE_URL: ${{ env.BREG_TEST_DATABASE_URL }}", step
-        )
+        # The fixture reads the job-wide BREG_TEST_DATABASE_URL directly.
+        self.assertIn('echo "BREG_TEST_DATABASE_URL=', job)
+        self.assertNotIn("COORDINATOR_", step)
         for variable, binary in (
-            ("COORDINATOR_BREG_BIN", "breg"),
-            ("COORDINATOR_BREGCTL_BIN", "bregctl"),
+            ("BREG_BIN", "breg"),
+            ("BREGCTL_BIN", "bregctl"),
             ("BREG_REVIEW_NATIVE_BIN", "breg-review"),
         ):
             with self.subTest(binary=binary):

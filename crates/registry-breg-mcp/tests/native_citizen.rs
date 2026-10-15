@@ -3,7 +3,7 @@
 //! The test issuer supplies bounded task grants; BReg owns Proposal ownership,
 //! target authorization, current disclosure and every lifecycle transition.
 
-#[path = "../../registry-coordinator/tests/support/breg_service.rs"]
+#[path = "support/breg_service.rs"]
 mod breg_service;
 #[path = "support/citizen_project.rs"]
 mod citizen_project;
@@ -343,7 +343,7 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
     let http = reqwest::Client::new();
     let service_token = issuer.issue_access_token(
         "application-reader",
-        "coordinator-reader",
+        "fixture-reader",
         AUDIENCE,
         "applications:read",
         gateway::now() + 300,
