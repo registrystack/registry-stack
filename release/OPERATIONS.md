@@ -320,8 +320,8 @@ published release artifacts.
 
 Root CI's PostgreSQL services, nightly platform coverage, the release upgrade
 rehearsal, and the BReg, Casework and Messaging dev tools pull canonical
-`docker.io/library/postgres`. Debian recipe roots use
-`public.ecr.aws/docker/library/debian`, and Mailpit uses its
+`docker.io/library/postgres`. Debian recipe roots use canonical
+`docker.io/library/debian`, and Mailpit uses its
 upstream `ghcr.io/axllent/mailpit` mirror. Each reference retains the exact
 upstream manifest digest; the registry endpoint changes, not the selected image
 bytes.
@@ -330,9 +330,10 @@ The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
 session whose schema requires PostGIS still pulls `postgis/postgis` from
 Docker Hub.
 
-[Docker Official Images on ECR Public](https://aws.amazon.com/blogs/containers/docker-official-images-now-available-on-amazon-elastic-container-registry-public/)
-and [Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
-document these upstream alternatives. When updating a pin, verify the returned
+[Debian's Docker Official Image](https://hub.docker.com/_/debian),
+[PostgreSQL's Docker Official Image](https://hub.docker.com/_/postgres), and
+[Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
+document these upstream image sources. When updating a pin, verify the returned
 manifest's SHA256 at the selected endpoint before changing its immutable digest.
 The strict recipe and gate checks continue to require the recorded repository
 and digest. No registry account is required for these public image pulls.
