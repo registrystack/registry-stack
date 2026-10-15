@@ -185,6 +185,71 @@ test('every run response rejects an unknown effective state without disclosing i
   }
 });
 
+test('every run response rejects a nil identity with an unknown outcome and one send', async (context) => {
+  const nil = '00000000-0000-0000-0000-000000000000';
+  const run = { ...STATUS, runId: nil };
+  const { baseUrl, requests } = await serve(context, (request) => ({
+    status: 200,
+    document: request.url.endsWith('/inspect') || request.url.endsWith('/reconcile')
+      ? { ...INSPECTION, run }
+      : request.url.endsWith('/retry-same') ? { ...RETRY_SCHEDULED, runId: nil }
+        : request.url.includes('?limit=') ? { runs: [run] } : run,
+  }));
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  for (const call of [
+    () => client.start('token-canary', 'original-admission', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} }),
+    () => client.status('token-canary', nil),
+    () => client.cancel('token-canary', nil, 'caller-withdrew'),
+    () => client.inspect('token-canary', nil),
+    () => client.reconcile('token-canary', nil, 'response-lost'),
+    () => client.retrySame('token-canary', nil, 'response-lost'),
+    () => client.list('token-canary', 1),
+  ]) {
+    const before = requests.length;
+    await assert.rejects(call, (error) => {
+      assert.ok(error instanceof CoordinatorClientError);
+      assert.equal(error.kind, 'protocol');
+      assert.equal(error.protocolFailure, 'body');
+      assert.equal(error.status, 200);
+      assert.equal(error.outcomeUnknown, true);
+      assert.doesNotMatch(inspectValue(error), /token-canary|original-admission/);
+      return true;
+    });
+    assert.equal(requests.length, before + 1);
+  }
+});
+
+test('inspect and reconcile preserve consistent recovery decisions and reject contradictions', async (context) => {
+  let document;
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  for (const operation of [undefined, INSPECTION.recovery.operation]) {
+    for (const [retryAllowed, reason, valid] of [
+      [true, null, true], [false, 'evaluation-uncertain', true],
+      [true, 'evaluation-uncertain', false], [false, null, false],
+    ]) {
+      document = { ...INSPECTION, recovery: { retryAllowed, reason, ...(operation && { operation }) } };
+      for (const call of [() => client.inspect('token', RUN_ID), () => client.reconcile('token', RUN_ID, 'response-lost')]) {
+        const before = requests.length;
+        if (valid) {
+          assert.deepEqual(await call(), { kind: 'complete', value: document });
+        } else {
+          await assert.rejects(call, (error) => {
+            assert.equal(error.kind, 'protocol');
+            assert.equal(error.protocolFailure, 'body');
+            assert.equal(error.status, 200);
+            assert.equal(error.outcomeUnknown, true);
+            return true;
+          });
+        }
+        assert.equal(requests.length, before + 1);
+      }
+    }
+  }
+});
+
 test('a run and step status carry the failure path a refused call input names', async (context) => {
   for (const [member, expected] of [['/recordId', '/recordId'], [null, null], [undefined, null]]) {
     const run = { ...STATUS };

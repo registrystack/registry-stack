@@ -110,6 +110,57 @@ class NativeRequestTests(unittest.TestCase):
             self.assertNotIn("protected-state-canary", rendered(error))
             self.assertEqual(len(self.observed()), 1)
 
+    def test_every_run_response_rejects_a_nil_identity_with_an_unknown_outcome_and_one_send(self) -> None:
+        nil = "00000000-0000-0000-0000-000000000000"
+        run = {**STATUS, "runId": nil}
+        for call, document in (
+            (lambda: self.client.start("token-canary", KEY, START_REQUEST), run),
+            (lambda: self.client.status("token-canary", nil), run),
+            (lambda: self.client.cancel("token-canary", nil, "caller-withdrew"), run),
+            (lambda: self.client.inspect("token-canary", nil), {**INSPECTION, "run": run}),
+            (lambda: self.client.reconcile("token-canary", nil, "response-lost"), {**INSPECTION, "run": run}),
+            (lambda: self.client.retry_same("token-canary", nil, "response-lost"), {**RETRY_SCHEDULED, "runId": nil}),
+            (lambda: self.client.list("token-canary", 1), {"runs": [run]}),
+        ):
+            self.service.script(ok(document))
+            with self.assertRaises(CoordinatorClientError) as refused:
+                call()
+            error = refused.exception
+            self.assertEqual(error.kind, "protocol")
+            self.assertEqual(error.protocol_failure, "body")
+            self.assertEqual(error.status, 200)
+            self.assertIs(error.outcome_unknown, True)
+            self.assertNotIn("token-canary", rendered(error))
+            self.assertNotIn(KEY, rendered(error))
+            self.assertEqual(len(self.observed()), 1)
+
+    def test_inspect_and_reconcile_preserve_consistent_recovery_decisions_and_reject_contradictions(self) -> None:
+        for operation in (None, INSPECTION["recovery"]["operation"]):
+            for allowed, reason, valid in (
+                (True, None, True), (False, "evaluation-uncertain", True),
+                (True, "evaluation-uncertain", False), (False, None, False),
+            ):
+                recovery = {"retryAllowed": allowed, "reason": reason}
+                if operation is not None:
+                    recovery["operation"] = operation
+                document = {**INSPECTION, "recovery": recovery}
+                for call in (
+                    lambda: self.client.inspect("token", RUN),
+                    lambda: self.client.reconcile("token", RUN, "response-lost"),
+                ):
+                    self.service.script(ok(document))
+                    if valid:
+                        self.assertEqual(call(), {"kind": "complete", "value": document})
+                    else:
+                        with self.assertRaises(CoordinatorClientError) as refused:
+                            call()
+                        error = refused.exception
+                        self.assertEqual(error.kind, "protocol")
+                        self.assertEqual(error.protocol_failure, "body")
+                        self.assertEqual(error.status, 200)
+                        self.assertIs(error.outcome_unknown, True)
+                    self.assertEqual(len(self.observed()), 1)
+
     def test_a_run_and_step_status_carry_the_failure_path_a_refused_call_input_names(self) -> None:
         absent = object()
         for member, expected in (("/recordId", "/recordId"), (None, None), (absent, None)):

@@ -31,6 +31,7 @@ pub struct WorkflowContract {
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunStatus {
+    #[serde(deserialize_with = "run_id")]
     pub run_id: Uuid,
     pub workflow: String,
     #[serde(deserialize_with = "revision")]
@@ -123,13 +124,37 @@ pub struct OperationIdentity {
     pub read_receipt: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RecoveryStatusDocument")]
 pub struct RecoveryStatus {
     pub retry_allowed: bool,
     pub reason: Option<RetryBlockReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIdentity>,
 }
+// Keep the wire shape strict while validating the runtime's one recovery decision.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecoveryStatusDocument {
+    retry_allowed: bool,
+    reason: Option<RetryBlockReason>,
+    operation: Option<OperationIdentity>,
+}
+
+impl TryFrom<RecoveryStatusDocument> for RecoveryStatus {
+    type Error = &'static str;
+
+    fn try_from(document: RecoveryStatusDocument) -> Result<Self, Self::Error> {
+        if document.retry_allowed != document.reason.is_none() {
+            return Err("expected a consistent recovery decision");
+        }
+        Ok(Self {
+            retry_allowed: document.retry_allowed,
+            reason: document.reason,
+            operation: document.operation,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum EffectState {
@@ -237,6 +262,7 @@ pub struct RunList {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetryScheduled {
+    #[serde(deserialize_with = "run_id")]
     pub run_id: Uuid,
     /// Always `retry-scheduled`; any other answer is refused as a protocol failure.
     pub status: String,
@@ -244,6 +270,15 @@ pub struct RetryScheduled {
 
 // Inputs and authored outputs can carry protected source values. Debug is
 // intentionally not derived for those documents.
+
+fn run_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {
+    let value = Uuid::deserialize(deserializer)?;
+    if value.is_nil() {
+        Err(serde::de::Error::custom("expected a nonnil run identity"))
+    } else {
+        Ok(value)
+    }
+}
 
 fn run_state<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let value = String::deserialize(deserializer)?;
