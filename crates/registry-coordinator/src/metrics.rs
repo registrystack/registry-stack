@@ -344,7 +344,7 @@ pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
 }
 
 /// The operator-private router the metrics listener serves, with the public
-/// listener's body limit and security headers. It has no other route.
+/// listener's JSON body limit and security headers. It has no other route.
 pub fn metrics_router(store: Arc<Store>) -> Router {
     Router::new()
         .route(METRICS_PATH, get(serve_metrics))

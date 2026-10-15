@@ -84,7 +84,7 @@ class DeliveryProxy:
                     self.send_error(404)
                     return
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 65_536:
+                if not 0 < length <= 1_048_576:
                     self.send_error(413)
                     return
                 body = self.rfile.read(length)
