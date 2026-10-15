@@ -1447,11 +1447,9 @@ impl MutationTransaction {
         let document =
             proposal_store::load_document(tx, id, proposal_store::DocumentLock::None).await?;
         let workflow = proposal_store::load(tx, &action.id, id, false).await?;
-        let reference = record_reference(
-            self.audit.profile(),
-            &action.definition_revision,
-            &id.to_string(),
-        )?;
+        // A Proposal event names its public resource, as Scheduling names an
+        // appointment; record hooks keep their hashed record reference.
+        let reference = format!("/v1/proposals/{id}");
         let event_source = self.event_source();
         crate::proposal_events::insert_proposal_lifecycle_event(
             tx,

@@ -136,8 +136,10 @@ The body is one shared hook envelope, the envelope every Registry Stack product
 delivers: `id`, `type`, `source`, `time`, `subject`, `dataschema`, `data`, and
 `causation`, and nothing else. `id`, `type`, `source`, `time`, and `dataschema`
 repeat the CloudEvents attributes above, so a receiver reading only the body
-still knows which event it holds. `subject` carries the hashed record reference
-and the revision the change produced, never the raw record id. `causation`
+still knows which event it holds. For a record event, `subject` carries the
+hashed record reference and the revision the change produced, never the raw
+record id. For a Proposal event, `subject` carries the Proposal's resource path,
+`/v1/proposals/{id}`, and its lifecycle revision. `causation`
 carries `root` and `hop`, plus `parent` once an event is caused by another; a
 captured registry mutation is a root event, so `root` equals `id` and `hop` is
 0. Delivery attributes stay on the transport and never enter the envelope.

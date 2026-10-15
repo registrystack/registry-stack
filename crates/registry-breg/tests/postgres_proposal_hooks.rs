@@ -260,6 +260,12 @@ async fn native_observers_capture_filter_fanout_replay_and_private_values_atomic
         )
         .unwrap();
         assert_eq!(envelope.subject.record_revision, row.get::<_, i64>(2));
+        // A Proposal is addressed by its public resource path; only record
+        // hooks carry a hashed record reference.
+        assert_eq!(
+            envelope.subject.record_reference,
+            format!("/v1/proposals/{}", draft.id())
+        );
         assert_eq!(envelope.data.as_object().unwrap().len(), 11);
     }
     let service = service(&fixture, destinations);
