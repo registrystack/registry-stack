@@ -230,16 +230,17 @@ test('a list limit outside one to one hundred fails before I/O', async (context)
 });
 
 test('list preserves the opaque cursor and state and attention filters', async (context) => {
+  const attentionStatus = { ...STATUS, state: 'attention' };
   const { baseUrl, requests } = await serve(context, () => ({
     status: 200,
-    document: { runs: [STATUS], nextCursor: 'cursor-next' },
+    document: { runs: [attentionStatus], nextCursor: 'cursor-next' },
   }));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
 
   assert.deepEqual(
     await client.list('secret', 1, 'cursor-before', 'attention', true),
-    { kind: 'complete', value: { runs: [STATUS], nextCursor: 'cursor-next' } },
+    { kind: 'complete', value: { runs: [attentionStatus], nextCursor: 'cursor-next' } },
   );
   assert.equal(
     requests[0].path,
@@ -533,4 +534,40 @@ test('workflow discovery retains the exact Review policy and refuses a different
     return true;
   });
   assert.equal(requests.length, 2);
+});
+
+
+test('list refuses received runs outside the intersected state and attention filters', async (context) => {
+  let state = 'running';
+  let empty = false;
+  const { baseUrl, requests } = await serve(context, () => ({
+    status: 200, document: {runs: empty ? [] : [{...STATUS, state}]},
+  }));
+  const {CoordinatorClient, CoordinatorClientError} = require('../client');
+  const client = new CoordinatorClient({baseUrl});
+  for (const [filter, attention, returned] of [
+    [null, true, 'attention'], [null, true, 'failed'], [null, false, 'running'],
+    ['failed', true, 'failed'], ['attention', true, 'attention'], ['running', false, 'running'],
+  ]) {
+    state = returned;
+    const result = await client.list('filter-token-canary', 1, null, filter, attention);
+    assert.deepEqual(result, {kind: 'complete', value: {runs: [{...STATUS, state}]}});
+  }
+  for (const [filter, attention, returned] of [
+    ['failed', null, 'finished'], [null, true, 'running'], [null, false, 'attention'],
+    [null, false, 'failed'], ['attention', true, 'failed'], ['attention', false, 'attention'],
+  ]) {
+    state = returned;
+    const count = requests.length;
+    await assert.rejects(client.list('filter-token-canary', 1, null, filter, attention), error => {
+      assert.ok(error instanceof CoordinatorClientError);
+      assert.equal(error.kind, 'protocol');
+      assert.equal(error.protocolFailure, 'body');
+      assert.doesNotMatch(inspectValue(error), /filter-token-canary/);
+      return true;
+    });
+    assert.equal(requests.length, count + 1, 'validate one received page without following or retrying');
+  }
+  empty = true;
+  assert.deepEqual(await client.list('token', 1, null, 'attention', false), {kind: 'complete', value: {runs: []}});
 });

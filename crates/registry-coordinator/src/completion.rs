@@ -5,7 +5,10 @@
 //! the connection's producer credential, and only that read can settle it.
 
 use crate::{
-    http::problem, metrics::AuthenticationRefusal, protocol::AdapterSet, store::Store,
+    http::{problem, single_header},
+    metrics::AuthenticationRefusal,
+    protocol::AdapterSet,
+    store::Store,
     CoordinatorError,
 };
 use axum::{
@@ -164,15 +167,6 @@ pub(crate) fn authenticate(
 fn completed_at_is_acceptable(completed_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
     completed_at >= now - chrono::Duration::days(OLDEST_COMPLETION_DAYS)
         && completed_at <= now + chrono::Duration::minutes(FUTURE_COMPLETION_MINUTES)
-}
-
-fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    let mut values = headers.get_all(name).iter();
-    let value = values.next()?;
-    if values.next().is_some() {
-        return None;
-    }
-    value.to_str().ok()
 }
 
 #[cfg(test)]

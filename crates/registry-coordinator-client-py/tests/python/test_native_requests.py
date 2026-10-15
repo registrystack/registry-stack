@@ -159,13 +159,14 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observed["body"], "")
 
     def test_list_preserves_the_opaque_cursor_and_filters(self) -> None:
-        self.service.script(ok({"runs": [STATUS], "nextCursor": "cursor-next"}))
+        attention_status = {**STATUS, "state": "attention"}
+        self.service.script(ok({"runs": [attention_status], "nextCursor": "cursor-next"}))
 
         outcome = self.client.list("list-token", 1, "cursor-before", "attention", True)
 
         self.assertEqual(
             outcome,
-            {"kind": "complete", "value": {"runs": [STATUS], "nextCursor": "cursor-next"}},
+            {"kind": "complete", "value": {"runs": [attention_status], "nextCursor": "cursor-next"}},
         )
         (observed,) = self.observed()
         self.assertEqual(
@@ -182,6 +183,31 @@ class NativeRequestTests(unittest.TestCase):
                     self.client.list(*arguments)
                 self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(len(self.observed()), 1)
+
+
+    def test_list_refuses_received_runs_outside_intersected_state_and_attention_filters(self) -> None:
+        for state_filter, attention, returned in (
+            (None, True, 'attention'), (None, True, 'failed'), (None, False, 'running'),
+            ('failed', True, 'failed'), ('attention', True, 'attention'), ('running', False, 'running'),
+        ):
+            run = {**STATUS, 'state': returned}
+            self.service.script(ok({'runs': [run]}))
+            self.assertEqual(self.client.list('filter-token-canary', 1, None, state_filter, attention),
+                             {'kind': 'complete', 'value': {'runs': [run]}})
+        for state_filter, attention, returned in (
+            ('failed', None, 'finished'), (None, True, 'running'), (None, False, 'attention'),
+            (None, False, 'failed'), ('attention', True, 'failed'), ('attention', False, 'attention'),
+        ):
+            self.service.script(ok({'runs': [{**STATUS, 'state': returned}]}))
+            with self.subTest(state_filter=state_filter, attention=attention, returned=returned):
+                with self.assertRaises(CoordinatorClientError) as raised:
+                    self.client.list('filter-token-canary', 1, None, state_filter, attention)
+                self.assertEqual(raised.exception.kind, 'protocol')
+                self.assertEqual(raised.exception.protocol_failure, 'body')
+                self.assertNotIn('filter-token-canary', rendered(raised.exception))
+                self.assertEqual(len(self.observed()), 1)
+        self.service.script(ok({'runs': []}))
+        self.assertEqual(self.client.list('token', 1, None, 'attention', False), {'kind': 'complete', 'value': {'runs': []}})
 
     def test_retry_same_posts_the_reason_only_and_no_key(self) -> None:
         self.service.script(ok(RETRY_SCHEDULED))

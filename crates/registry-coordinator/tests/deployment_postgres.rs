@@ -1156,6 +1156,51 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         );
     }
 
+    let authorization_a = format!("Bearer {a}");
+    let authorization_b = format!("Bearer {b}");
+    let authorization_op = format!("Bearer {op}");
+    for values in [
+        [&authorization_a, &authorization_a],
+        [&authorization_a, &authorization_b],
+        [&authorization_b, &authorization_a],
+        [&authorization_a, &authorization_op],
+    ] {
+        for (method, path) in [
+            ("GET", "/v1/workflows/delayed-follow-up"),
+            ("GET", "/v1/runs"),
+            ("POST", "/v1/runs"),
+            ("GET", "/v1/runs/00000000-0000-4000-8000-000000000001"),
+            (
+                "POST",
+                "/v1/runs/00000000-0000-4000-8000-000000000001/retry-same",
+            ),
+            ("POST", "/v1/review-requests"),
+            (
+                "GET",
+                "/v1/review-requests/00000000-0000-4000-8000-000000000001",
+            ),
+            (
+                "POST",
+                "/v1/review-requests/00000000-0000-4000-8000-000000000001/cancel",
+            ),
+        ] {
+            let response = http
+                .request(method.parse().unwrap(), format!("{origin}{path}"))
+                .header("Authorization", values[0])
+                .header("Authorization", values[1])
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 401, "{method} {path}");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(response.headers()["www-authenticate"], "Bearer");
+            assert_eq!(
+                response.json::<Value>().await.unwrap()["code"],
+                "authentication.refused"
+            );
+        }
+    }
     assert_authenticated_run_validation(&http, &origin, &database, &namespace, &op, &a).await;
     let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
     assert_bounded_readiness(&http, &origin, &database, &namespace).await;

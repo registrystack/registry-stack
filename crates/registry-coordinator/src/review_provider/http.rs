@@ -36,15 +36,7 @@ pub(crate) fn router() -> Router<HttpState> {
 async fn producer(s: &HttpState, headers: &HeaderMap, action: Action) -> Result<Caller> {
     let caller = crate::http::caller(s, headers).await?;
     caller.authorize(action, None)?;
-    let values = headers
-        .get_all(REVIEW_PROFILE_HEADER)
-        .iter()
-        .collect::<Vec<_>>();
-    let profile = match values.as_slice() {
-        [profile] => profile.to_str().ok(),
-        _ => None,
-    }
-    .ok_or_else(|| {
+    let profile = crate::http::single_header(headers, REVIEW_PROFILE_HEADER).ok_or_else(|| {
         CoordinatorError::new(
             "access.denied",
             "select the admitted Review producer profile",
@@ -56,10 +48,7 @@ async fn producer(s: &HttpState, headers: &HeaderMap, action: Action) -> Result<
 
 fn binding<'a>(caller: &'a Caller, headers: &HeaderMap) -> Result<&'a super::ReviewProducer> {
     caller.review_producer(
-        headers
-            .get(REVIEW_PROFILE_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default(),
+        crate::http::single_header(headers, REVIEW_PROFILE_HEADER).unwrap_or_default(),
     )
 }
 

@@ -225,6 +225,12 @@ impl CoordinatorClient {
             .query(&parameters);
         let value: RunList = self.answer(self.send(request).await?).await?;
         if value.runs.len() > query.limit as usize
+            || value.runs.iter().any(|run| {
+                query.state.is_some_and(|state| run.state != state.as_str())
+                    || query.attention.is_some_and(|attention| {
+                        attention != matches!(run.state.as_str(), "attention" | "failed")
+                    })
+            })
             || value.next_cursor.as_deref().is_some_and(|cursor| {
                 !valid_cursor(cursor)
                     || value.runs.len() != query.limit as usize

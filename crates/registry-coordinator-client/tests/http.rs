@@ -248,7 +248,9 @@ async fn listing_retry_and_cancellation_use_only_their_exact_routes() {
 
 #[tokio::test]
 async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cursor() {
-    let server = Server::new(json!({"runs":[status()],"nextCursor":"cursor-next"})).await;
+    let mut matching = status();
+    matching["state"] = json!("attention");
+    let server = Server::new(json!({"runs":[matching],"nextCursor":"cursor-next"})).await;
     let client = server.client();
     let mut query = RunListQuery::new(1);
     query.cursor = Some("cursor-before".into());
@@ -262,6 +264,62 @@ async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cur
     assert_eq!(
         seen[0].1,
         "/deployment/v1/runs?limit=1&cursor=cursor-before&state=attention&attention=true"
+    );
+}
+
+#[tokio::test]
+async fn list_responses_must_satisfy_the_requested_effective_state_and_attention() {
+    let server = Server::new(json!({"runs":[]})).await;
+    let client = server.client();
+    let states = [
+        RunListState::Running,
+        RunListState::Finished,
+        RunListState::Failed,
+        RunListState::Cancelled,
+        RunListState::CancelledAfterEffect,
+        RunListState::Expired,
+        RunListState::Attention,
+        RunListState::CancelRequested,
+    ];
+    for state in states {
+        let name = serde_json::to_value(state).unwrap();
+        for selected in std::iter::once(None).chain(states.into_iter().map(Some)) {
+            for attention in [None, Some(false), Some(true)] {
+                let query = RunListQuery {
+                    state: selected,
+                    attention,
+                    ..RunListQuery::new(1)
+                };
+                let mut run = status();
+                run["state"] = name.clone();
+                server.answer(200, "application/json", &json!({"runs":[run]}).to_string());
+                let before = server.count();
+                let result = client.list_page(&token(), &query).await;
+                let matches = selected.is_none_or(|selected| selected == state)
+                    && attention.is_none_or(|selected| {
+                        selected == matches!(state, RunListState::Attention | RunListState::Failed)
+                    });
+                if matches {
+                    assert!(result.is_ok(), "{state:?}, {selected:?}, {attention:?}");
+                } else {
+                    assert!(
+                        matches!(result, Err(CoordinatorClientError::Protocol { .. })),
+                        "{state:?}, {selected:?}, {attention:?}"
+                    );
+                }
+                assert_eq!(server.count(), before + 1, "one caller-controlled read");
+            }
+        }
+    }
+    let query = RunListQuery {
+        state: Some(RunListState::Running),
+        attention: Some(true),
+        ..RunListQuery::new(20)
+    };
+    server.answer(200, "application/json", "{\"runs\":[]}");
+    assert!(
+        client.list_page(&token(), &query).await.is_ok(),
+        "an empty intersection has a valid empty page"
     );
 }
 

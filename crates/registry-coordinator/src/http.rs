@@ -295,21 +295,14 @@ pub(crate) async fn caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller>
     result
 }
 async fn authenticated_caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller> {
-    let value = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
+    let token = single_header(headers, axum::http::header::AUTHORIZATION.as_str())
+        .and_then(|value| registry_platform_authcommon::parse_bearer_token(value).ok())
         .ok_or_else(|| {
             CoordinatorError::new(
                 "access.unauthenticated",
                 "a verified access token is required",
             )
         })?;
-    let token = registry_platform_authcommon::parse_bearer_token(value).map_err(|_| {
-        CoordinatorError::new(
-            "access.unauthenticated",
-            "a verified access token is required",
-        )
-    })?;
     s.authenticator.authenticate(token).await
 }
 async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
@@ -860,15 +853,21 @@ async fn workflow_contract(
     }.await)
 }
 
-pub(crate) fn idempotency_key(headers: &HeaderMap) -> Result<&str> {
-    let mut values = headers.get_all("idempotency-key").iter();
-    match (values.next(), values.next()) {
-        (Some(key), None) => key.to_str().ok().filter(|key| {
-            !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control)
-        }),
-        _ => None,
+pub(crate) fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
     }
-    .ok_or_else(|| CoordinatorError::new("start-key-invalid", "supply one bounded Idempotency-Key"))
+    value.to_str().ok()
+}
+
+pub(crate) fn idempotency_key(headers: &HeaderMap) -> Result<&str> {
+    single_header(headers, "idempotency-key")
+        .filter(|key| !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control))
+        .ok_or_else(|| {
+            CoordinatorError::new("start-key-invalid", "supply one bounded Idempotency-Key")
+        })
 }
 
 async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody) -> Response {
