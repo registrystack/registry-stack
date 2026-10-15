@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 use chrono::{DateTime, Utc};
-use registry_review_protocol::PolicyBinding;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -24,7 +23,6 @@ pub struct WorkflowContract {
     pub workflow_revision: String,
     pub input: Value,
     pub outcomes: BTreeMap<String, Value>,
-    pub review_policy: Option<PolicyBinding>,
 }
 
 /// The authenticated runtime's progress, not authorization to source records.

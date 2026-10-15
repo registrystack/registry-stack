@@ -6,7 +6,6 @@ import type {
   RunList,
   RunStatus,
   WorkflowContract,
-  PolicyBinding,
 } from '../client'
 
 const client = new CoordinatorClient({
@@ -15,8 +14,8 @@ const client = new CoordinatorClient({
 })
 
 declare const contract: WorkflowContract
-const reviewPolicy: PolicyBinding | null = contract.reviewPolicy
-void reviewPolicy
+// @ts-expect-error a workflow contract carries no review policy
+void contract.reviewPolicy
 
 const started: Promise<CoordinatorOutcome<RunStatus>> = client.start(
   'header.payload.signature',

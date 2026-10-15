@@ -66,17 +66,20 @@ class CapabilityTests(unittest.TestCase):
             self.assertIn(f'"{member}"', stub)
         self.assertNotIn("trace", stub.lower())
 
-    def test_workflow_metadata_declares_the_shared_nullable_policy_pin(self) -> None:
+    def test_workflow_metadata_declares_no_review_policy(self) -> None:
         stub = ast.parse(_STUB.read_text(encoding="utf-8"))
         declarations = {
             node.name: {field.target.id: ast.unparse(field.annotation)
                         for field in node.body
                         if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)}
             for node in stub.body
-            if isinstance(node, ast.ClassDef) and node.name in {"WorkflowContract", "PolicyBinding"}
+            if isinstance(node, ast.ClassDef)
         }
-        self.assertEqual(declarations["WorkflowContract"]["reviewPolicy"], "PolicyBinding | None")
-        self.assertEqual(declarations["PolicyBinding"], {"id": "str", "version": "str", "digest": "str"})
+        self.assertEqual(
+            declarations["WorkflowContract"],
+            {"workflow": "str", "workflowRevision": "str", "input": "JsonValue", "outcomes": "dict[str, JsonValue]"},
+        )
+        self.assertNotIn("PolicyBinding", declarations)
 
 
 if __name__ == "__main__":

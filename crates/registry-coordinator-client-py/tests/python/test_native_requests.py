@@ -59,7 +59,7 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(json.loads(observed["body"]), START_REQUEST)
 
     def test_workflow_discovers_one_bound_revision_without_starting(self) -> None:
-        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}, "reviewPolicy": None}
+        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}}
         self.service.script(ok(contract))
         self.assertEqual(self.client.workflow("contract-token", "nursing-notice"), {"kind": "complete", "value": contract})
         (observed,) = self.observed()
@@ -67,11 +67,8 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observed["path"], "/deployment/v1/workflows/nursing-notice")
         self.assertEqual(observed["idempotency_key"], "")
 
-    def test_workflow_carries_the_exact_review_policy_and_refuses_a_different_revision(self) -> None:
-        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}, "reviewPolicy": {"id": "nursing-notice", "version": "pilot-1", "digest": START_REQUEST["workflowRevision"]}}
-        self.service.script(ok(contract))
-        self.assertEqual(self.client.workflow("contract-token", "nursing-notice"), {"kind": "complete", "value": contract})
-        contract["reviewPolicy"]["digest"] = "sha256:" + "1" * 64
+    def test_workflow_refuses_a_contract_carrying_a_review_policy_member(self) -> None:
+        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}, "reviewPolicy": None}
         self.service.script(ok(contract))
         with self.assertRaises(CoordinatorClientError) as refused:
             self.client.workflow("contract-token", "nursing-notice")

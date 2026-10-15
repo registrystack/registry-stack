@@ -1523,12 +1523,11 @@ fn run_and_step_status_carry_the_failure_path_a_refused_call_input_names() {
 
 #[tokio::test]
 async fn workflow_contract_discovery_is_one_confined_read_with_a_revision_pin() {
-    let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision, "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}}, "reviewPolicy":null});
+    let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision, "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}}});
     let server = Server::new(contract.clone()).await;
     let client = server.client();
     let found = client.workflow(&token(), "nursing-notice").await.unwrap();
     assert_eq!(found.value.workflow_revision, request().workflow_revision);
-    assert!(found.value.review_policy.is_none());
     {
         let seen = server.fixture.seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
@@ -1555,37 +1554,16 @@ async fn workflow_contract_discovery_is_one_confined_read_with_a_revision_pin() 
 }
 
 #[tokio::test]
-async fn workflow_review_policy_reuses_shared_validation_and_pins_identity_and_revision() {
-    let policy =
-        json!({"id":"nursing-notice","version":"pilot-1","digest":request().workflow_revision});
+async fn workflow_contract_with_a_review_policy_member_is_refused() {
     let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision,
-        "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}}, "reviewPolicy":policy});
-    let server = Server::new(contract.clone()).await;
+        "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}},
+        "reviewPolicy":{"id":"nursing-notice","version":"pilot-1","digest":request().workflow_revision}});
+    let server = Server::new(contract).await;
     let client = server.client();
-    let found = client.workflow(&token(), "nursing-notice").await.unwrap();
-    let retained = found.value.review_policy.unwrap();
-    assert_eq!(serde_json::to_value(retained).unwrap(), policy);
-    for (member, value) in [
-        ("id", json!("other-workflow")),
-        ("id", json!("")),
-        ("version", json!("")),
-        ("version", json!("untrusted\nversion")),
-        ("digest", json!(format!("sha256:{}", "1".repeat(64)))),
-        ("digest", json!("author-version-1")),
-    ] {
-        let mut malformed = contract.clone();
-        malformed["reviewPolicy"][member] = value;
-        server.answer(200, "application/json", &malformed.to_string());
-        assert!(matches!(
-            client.workflow(&token(), "nursing-notice").await,
-            Err(CoordinatorClientError::Protocol { .. })
-        ));
-    }
-    assert_eq!(
-        server.count(),
-        7,
-        "metadata reads never retry a refused binding"
-    );
+    assert!(matches!(
+        client.workflow(&token(), "nursing-notice").await,
+        Err(CoordinatorClientError::Protocol { .. })
+    ));
 }
 
 #[tokio::test]
