@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha5.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha6.schema.json",
   "title": "LifecycleExplanation",
   "description": "The native engine-owned Proposal lifecycle, pinned independently of project source.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5"
+      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha6"
     },
     "kind": {
       "const": "BRegLifecycleExplanation"
@@ -87,6 +87,13 @@
                 "apply"
               ],
               "id": "atomic-commit"
+            },
+            {
+              "description": "No caller operation rejects a Proposal. Only a verified result from the configured review authority for the exact current, not withdrawn submission does, in the same transaction that records the result and its lifecycle event.",
+              "events": [
+                "reject"
+              ],
+              "id": "review-authority-result"
             }
           ],
           "id": "proposal",
@@ -104,7 +111,7 @@
               "id": "submitted",
               "incomingTransitions": 2,
               "initial": false,
-              "outgoingTransitions": 5,
+              "outgoingTransitions": 6,
               "terminal": false,
               "unreachable": false
             },
@@ -118,6 +125,14 @@
             },
             {
               "id": "applied",
+              "incomingTransitions": 1,
+              "initial": false,
+              "outgoingTransitions": 0,
+              "terminal": true,
+              "unreachable": false
+            },
+            {
+              "id": "rejected",
               "incomingTransitions": 1,
               "initial": false,
               "outgoingTransitions": 0,
@@ -179,6 +194,12 @@
               "from": "submitted",
               "guard": "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
               "to": "applied"
+            },
+            {
+              "event": "reject",
+              "from": "submitted",
+              "guard": "The configured review authority returned a rejected result for the exact current submission. A rejection is terminal; a changes-requested result leaves the Proposal submitted and revisable.",
+              "to": "rejected"
             }
           ]
         }

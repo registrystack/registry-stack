@@ -136,7 +136,14 @@ An authorized Get identifies the Proposal, Action revision, submission version,
 effect digest, state, and local application status. Preserve that exact binding.
 Revise or Rebase invalidates the earlier observation; do not follow a successor
 implicitly. Applied work includes retained application evidence. Blocked work
-includes a safe reason, recovery hint, and authorized transitions.
+includes a safe reason, recovery hint, and authorized transitions. `turn` says
+whether the party, an official or nobody acts next.
+
+A Review rejection of the current submission is final: the Proposal moves to
+the terminal `rejected` state with a `rejected` lifecycle event, and Revise is
+no longer offered. Changes requested keep the Proposal `submitted`, record a
+`review-returned` event, and promote Revise. The Proposal's `decision` carries
+the outcome, its time and the reviewer's public reason, if any.
 
 For an uncertain command, retain and replay its original prepared request and
 idempotency key. A later Get does not establish whether that command executed.

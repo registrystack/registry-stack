@@ -15,8 +15,8 @@ own `breg/ctl-report/v1alpha1` version.
 | `proposals` | `BRegProposalsExplanation` | `v1alpha1` | `ProposalsExplanation.schema.json` |
 | `routes` | `BRegRoutesExplanation` | `v1alpha5` | `RoutesExplanation.schema.json` |
 | `queries` | `BRegQueriesExplanation` | `v1alpha5` | `QueriesExplanation.schema.json` |
-| `events` | `BRegEventsExplanation` | `v1alpha5` | `EventsExplanation.schema.json` |
-| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha5` | `LifecycleExplanation.schema.json` |
+| `events` | `BRegEventsExplanation` | `v1alpha6` | `EventsExplanation.schema.json` |
+| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha6` | `LifecycleExplanation.schema.json` |
 
 Each format's identifier is
 `id.registrystack.org/formats/breg/<format>/<version>`, with the format name
@@ -49,10 +49,19 @@ a form can distinguish multiline `text` from a bounded `string` and discover a
 reference's target. Its internal shape follows the engine field type contract;
 the JSON value `schema` remains the validation contract for field values.
 
-Consumers of these seven formats must select the corresponding `v1alpha5`
+Consumers of the five formats above at `v1alpha5` must select that
 schema and use the native fields above. `ProposalsExplanation` starts at
 `v1alpha1`. Event inspection adds the owning hook phase and Proposal transition
 selection. `AccessPreview` retains `v1alpha4` because its pinned shape is unchanged.
+
+`LifecycleExplanation` `v1alpha6` adds the terminal `rejected` state, the
+`reject` transition from `submitted`, and the `review-authority-result`
+enforcement that only a verified review result performs it. Consumers select
+the `v1alpha6` schema.
+
+`EventsExplanation` `v1alpha6` adds the `rejected` and `review-returned`
+Proposal transitions to the transition selection a Proposal hook may name.
+Consumers select the `v1alpha6` schema.
 
 ## Schemas and compatibility
 

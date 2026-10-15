@@ -536,9 +536,9 @@ permitted transitions. The execution mode is fixed by the package.
 | Resource | Contract |
 | --- | --- |
 | `/v1/actions/{action}/proposals` | Start a draft for the selected Action under Start authority. |
-| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. |
+| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. `turn=party`, `official` or `nobody` keeps only Proposals waiting on that turn. |
 | `/v1/proposals/{proposal_id}` | Read the Proposal under current ownership, target, and disclosure grants. |
-| `/v1/proposals/{proposal_id}/submissions/{submission_version}` | Read one exact submission under the same Get authority: its frozen `effectDigest`, its `review` result and its `application` outcome as separate members. Only the current submission reports application progress. Answers 410 `proposal.submission_expired` once the result window has lapsed and no application receipt remains. |
+| `/v1/proposals/{proposal_id}/submissions/{submission_version}` | Read one exact submission under the same Get authority: its frozen `effectDigest`, its `review` result, its `decision` when one was made, and its `application` outcome as separate members. Only the current submission reports application progress. Answers 410 `proposal.submission_expired` once the result window has lapsed and no application receipt remains. |
 | Promoted transition links | Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply only when currently authorized. |
 | Promoted review and attachment links | Separate review-status, review-context, slot read/upload, and verification authority. |
 
@@ -562,10 +562,27 @@ dependent operations.
 ### Observe an exact submission
 
 An authorized Proposal Get carries `id`, `actionId`, `actionRevision`,
-`submissionVersion`, `revision`, `state`, and `effectDigest` when frozen.
+`submissionVersion`, `revision`, `state`, `turn`, and `effectDigest` when frozen.
 `applicationStatus` describes local progress, safe blocked reason and recovery
 hint, and automatic retry information where applicable. Applied work includes
 retained `application` evidence. Inputs and attachments follow separate disclosure.
+
+`state` is `draft`, `submitted`, `applied`, `cancelled` or `rejected`. A Review
+that rejects the current submission ends the Proposal in `rejected`; no
+transition leaves it, and every command link reads `review-rejected` with
+recovery `receipt-only`. A changes-requested result keeps it `submitted` and
+promotes Revise. `turn` is `party`, `official` or `nobody`: whose move the
+Proposal waits on, derived when it is read. Once the reviewer decided the
+current submission, `decision` carries `status`, `decidedAt` and, when the
+reviewer wrote one for the subject, `publicReason`, the only reviewer text BReg
+serves. The same Get authority that reads the Proposal reads its review state
+and decision; there is no separate grant to withhold them.
+
+The `apply` link's availability names the Review state: `pending-review` with
+`refresh` while a decision is awaited, `dependency-outage` with `retry` while
+delivery is failing, `review-changes-requested` with `revise`, and
+`review-ended` with `revise` for an expired approval, a review submission that
+failed for good, an `answered` result, or a provider end.
 
 Preserve the exact Action revision, submission version, and digest while waiting.
 Revise or Rebase makes the earlier binding stale. Do not silently follow its

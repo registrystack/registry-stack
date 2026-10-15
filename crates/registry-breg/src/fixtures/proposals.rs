@@ -379,7 +379,7 @@ pub(super) fn assert_response(step: &ValidatedStep, document: &Value) -> Result<
             .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
         || !matches!(
             document["state"].as_str(),
-            Some("draft" | "submitted" | "applied" | "cancelled")
+            Some("draft" | "submitted" | "applied" | "cancelled" | "rejected")
         ))
     {
         return Err(FixtureError::ResponseShapeRefused);

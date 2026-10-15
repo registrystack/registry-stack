@@ -132,12 +132,69 @@
 - BREAKING: under required Review, `applicationStatus.state` reads
   `awaiting-review` until an approved result exists, in both application
   modes. `application-refused` now means only that an executor refused the
-  frozen effects. A rejected, changes-requested, or provider-ended Review is
-  reported by the `apply` link's availability as `review-rejected`,
-  `review-changes-requested` or `review-ended`, each with the new recovery
-  `revise`. `applicationStatus.recovery` no longer lists the never-emitted
+  frozen effects. A changes-requested or provider-ended Review is reported by
+  the `apply` link's availability as `review-changes-requested` or
+  `review-ended`, each with the new recovery `revise`. `applicationStatus.recovery` no longer lists the never-emitted
   `terminal`. The Rust, Node.js and Python clients and the generated project
   SDKs accept the new values; update clients with the server.
+- BREAKING: a Review that rejects a Proposal's current submission ends the
+  Proposal. It moves to the terminal state `rejected` in the transaction that
+  records the result, with a `rejected` lifecycle event whose `authorityKind`
+  is `review`. Edit, Revise, Rebase, Retry, Apply and Cancel answer 409
+  `proposal.rejected`, and each command link reads `review-rejected` with
+  recovery `receipt-only`.
+  `applicationStatus.state` reads `rejected`. A changes-requested result keeps
+  the Proposal `submitted` and revisable and records a `review-returned`
+  event. Proposal `state`, event `transition` and `authorityKind`, and the
+  Rust, Node.js and Python client types accept the new values. Migration: a
+  client that waited for Revise after a rejection starts a new Proposal
+  instead; a receiver that switches on `transition` or `authorityKind` adds
+  the new values.
+- BREAKING: every Proposal document and lifecycle event carries `turn`:
+  `party`, `official` or `nobody`, whose move the Proposal waits on, derived
+  when it is read and never stored. `turn` is required in the Proposal event
+  schema. `GET /v1/proposals?turn=party` (or `official`, `nobody`) lists only
+  Proposals with that turn, and `state=rejected` lists rejected ones; any
+  other value is concealed like every malformed list query.
+  The Rust `BRegProposalQuery` gains `turn`. Migration: a receiver that
+  validates Proposal events against a pinned copy of the schema refreshes it.
+- Proposal Get, each Proposal in a list, and the per-version submission read
+  carry `decision` once the reviewer decided the submission: `status`,
+  `decidedAt` and, when the reviewer wrote one for the subject,
+  `publicReason`. It is read through the review protocol's result type, and
+  the public reason is the only reviewer text BReg serves. A read that serves
+  a public reason records a fixed `proposal-review-public-reason` marker in
+  its audit entry, never the text. Lifecycle command responses omit
+  `decision`.
+- The `apply` link's availability tells the truth about Reviews that cannot
+  approve the current submission: an approval past its `availableUntil`, an
+  `answered` result, and a review submission that failed for good read
+  `review-ended` with recovery `revise` instead of `pending-review` with
+  `refresh`. While delivery or result lookup is failing it reads
+  `dependency-outage` with recovery `retry`. When Revise is the recovery, the
+  Retry link reports the same reason instead of `invalid-input`.
+- BREAKING: Apply, Retry and Revise link availability no longer lists the
+  never-emitted recovery `terminal`. It is removed from the schema, the Rust
+  `BRegRecoveryHint`, and the Node.js and Python types; a document carrying it
+  is refused as malformed. Migration: drop any `terminal` branch; a rejected
+  Proposal reads `receipt-only`.
+- The Rust, Node.js and Python clients read one submitted version with
+  `read_proposal_submission` (`readProposalSubmission` in Node.js), which
+  follows the Proposal's self link and decodes `decision`, and a lapsed
+  version's 410 `proposal.submission_expired` as a Problem. The client
+  capability inventory names it and the `limit` and `turn` list options.
+- The per-version submission read's 410 audits a result count of zero, not a
+  one-record read.
+- BREAKING: `bregctl explain lifecycle` answers
+  `breg/lifecycle-explanation/v1alpha6`, which adds the `rejected` state, the
+  `reject` transition from `submitted`, and its `review-authority-result`
+  enforcement. `bregctl explain events` answers
+  `breg/events-explanation/v1alpha6`, whose Proposal transition selection adds
+  `rejected` and `review-returned`; a Proposal hook may select either.
+  Migration: select the `v1alpha6` schema for both formats.
+- `bregctl dev` verifies the webhook deliveries it receives with the shared
+  hooks receiver, the verifier the clients use, and keeps only its local
+  checks of content type, event id, time, generation and attempt.
 - Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
   queued, applying or blocked automatic application job in the same
   transaction, so the job reads `cancelled` instead of remaining inert queued

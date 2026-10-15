@@ -3594,3 +3594,69 @@ naming `statusResource` rather than read as an alias, so a file cannot carry
 both spellings with different values. Tests:
 `a_task_status_casework_resource_is_refused_naming_status_resource`, plus the
 existing structural refusal tests that now use `statusResource`.
+
+## Review state, decision and rejection on ordinary Proposal reads
+
+A Proposal Get holder sees the review state, `resultId`, `completedAt` and
+`availableUntil` of every retained submission version, the current one
+included, through `GET /v1/proposals/{id}/submissions/{version}`, and the
+current version's `decision` on the Proposal Get and in the list. Before the
+per-version read, review state sat only behind the separately grantable
+`get-review-status` operation. A deployment can no longer withhold it from a
+Get holder: the grant to read the Proposal is the grant to read how its
+Review went. This is a deliberate widening, recorded once for both reads by
+BREG-SEC-177, and BREG-SEC-173 now names the summary as the part of review
+data ordinary envelopes carry. `get-review-status` keeps the rest: the review
+authority, the accepted policy binding, the subject binding and the context
+reference.
+
+`decision` is `{status, decidedAt, publicReason}`. It is read from the stored
+result through the review protocol's own `ReviewResult` type, so a protocol
+rename is a compile error rather than a silent omission. `publicReason` is the
+text the protocol releases to the subject's owner and the only reviewer text
+BReg serves. The reviewer's private `result`, notes, internal reason and
+identity are never projected, and a stored result that does not decode as a
+`ReviewResult` fails the read as unavailable rather than serving a partial
+decision. A provider end (`cancelled`, `superseded`) and a result whose
+content retention erased carry no decision. Lifecycle command responses omit
+it. A read that serves a public reason records the fixed
+`proposal-review-public-reason` marker in its audit entry's field-set
+reference, never the text. The 410 `proposal.submission_expired` answer
+audits a result count of zero.
+
+A rejection of the current submission is terminal (BREG-SEC-178). The
+`reject` transition has no caller operation: it runs only when BReg records a
+verified review result for the exact current, not withdrawn submission, in
+the transaction that records the result and under the Proposal state lock,
+with a `rejected` lifecycle event whose `authorityKind` is `review`. A result
+for a superseded version changes no lifecycle state. Every transition out of
+`rejected` is refused with `proposal.rejected`, so rejected work can be
+neither revised into approval nor applied. A changes-requested result keeps
+the Proposal `submitted`, records `review-returned`, and grants nothing: the
+revised version needs its own Review.
+
+`turn` is derived from state that the same read already discloses and
+carries no new data. The `turn` list filter runs after each Proposal is
+authorized and projected, so it conceals exactly what the list already
+conceals.
+
+### Tests
+
+`submission_read_reports_each_version_separately_and_is_gone_after_its_windows`
+in `crates/registry-breg/tests/postgres_proposal.rs` asserts the exact
+`decision`, that a reviewer-only canary in the private result never reaches
+the response, the public-reason marker, that the public reason's text never
+reaches the audit journal, and the zero result count of the 410 read.
+`review_rejection_is_terminal_and_changes_requested_returns_to_the_party`
+asserts the `rejected` state and event, the `review-returned` event, the
+`turn` on the document, the event and the list filter, that the client offers
+no Revise of a rejected Proposal, and that the server answers the exact inert
+Revise link with 409 `proposal.rejected`. The workflow unit test in
+`crates/registry-breg/src/proposal_workflow.rs` refuses Edit, Revise, Rebase,
+Retry, Cancel and a second rejection from `rejected`.
+
+### Accepted residuals
+
+The public reason is whatever the reviewer wrote for the subject. BReg bounds
+its length through the protocol type but cannot judge its content; a
+reviewer who writes personal data there discloses it to every Get holder.

@@ -266,7 +266,7 @@ async fn native_observers_capture_filter_fanout_replay_and_private_values_atomic
             envelope.subject.record_reference,
             format!("/v1/proposals/{}", draft.id())
         );
-        assert_eq!(envelope.data.as_object().unwrap().len(), 11);
+        assert_eq!(envelope.data.as_object().unwrap().len(), 12);
     }
     let service = service(&fixture, destinations);
     for _ in 0..5 {

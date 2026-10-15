@@ -55,11 +55,11 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegProposalsExplanation",
         ),
         "EventsExplanation" => (
-            "id.registrystack.org/formats/breg/events-explanation/v1alpha5",
+            "id.registrystack.org/formats/breg/events-explanation/v1alpha6",
             "BRegEventsExplanation",
         ),
         "LifecycleExplanation" => (
-            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5",
+            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha6",
             "BRegLifecycleExplanation",
         ),
         _ => panic!("unknown contract {contract}"),
@@ -590,7 +590,7 @@ fn proposal_lifecycle_pin_rejects_state_event_order_and_enforcement_drift() {
             .iter()
             .map(|s| s["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["draft", "submitted", "cancelled", "applied"]
+        ["draft", "submitted", "cancelled", "applied", "rejected"]
     );
     let schema = load_schema("LifecycleExplanation");
     for pointer in [

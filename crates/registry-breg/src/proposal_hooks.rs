@@ -28,19 +28,21 @@ pub const MAX_PROPOSAL_EVENT_PAYLOAD_BYTES: u32 = 8192;
 pub fn proposal_event_schema() -> Value {
     let digest = json!({"type":"string","pattern":"^sha256:[0-9a-f]{64}$"});
     let nullable_digest = json!({"anyOf":[digest.clone(),{"type":"null"}]});
-    let states = json!({"type":"string","enum":["draft","submitted","applied","cancelled"]});
+    let states =
+        json!({"type":"string","enum":["draft","submitted","applied","cancelled","rejected"]});
     json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":PROPOSAL_EVENT_SCHEMA,
         "type":"object","additionalProperties":false,
-        "required":["actionId","actionRevision","proposalId","submissionVersion","revision","fromState","state","transition","effectDigest","authorityKind","systemApplyGrantRevision"],
+        "required":["actionId","actionRevision","proposalId","submissionVersion","revision","fromState","state","transition","effectDigest","authorityKind","systemApplyGrantRevision","turn"],
         "properties":{
             "actionId":{"type":"string","minLength":1,"maxLength":64},
             "actionRevision":digest,"proposalId":{"type":"string","format":"uuid"},
             "submissionVersion":{"type":"integer","minimum":1,"maximum":4294967295u64},
             "revision":{"type":"integer","minimum":1,"maximum":9007199254740991u64},
             "fromState":{"anyOf":[states.clone(),{"const":"none"}]},"state":states,
-            "transition":{"type":"string","enum":["started","edited","submitted","revised","rebased","retried","cancelled","applied"]},
-            "effectDigest":nullable_digest.clone(),"authorityKind":{"enum":["caller","system"]},
-            "systemApplyGrantRevision":nullable_digest}})
+            "transition":{"type":"string","enum":["started","edited","submitted","revised","rebased","retried","cancelled","applied","rejected","review-returned"]},
+            "effectDigest":nullable_digest.clone(),"authorityKind":{"enum":["caller","system","review"]},
+            "systemApplyGrantRevision":nullable_digest,
+            "turn":{"type":"string","enum":["party","official","nobody"]}}})
 }
 
 pub fn source_hooks(
@@ -327,6 +329,8 @@ pub fn matching_transitions(
         ProposalEventTransition::Retried,
         ProposalEventTransition::Cancelled,
         ProposalEventTransition::Applied,
+        ProposalEventTransition::Rejected,
+        ProposalEventTransition::ReviewReturned,
     ]
     .into_iter()
     .filter(|transition| transitions.is_empty() || transitions.contains(transition))

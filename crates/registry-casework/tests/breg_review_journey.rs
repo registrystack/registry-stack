@@ -593,6 +593,7 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
             &authorities,
+            &fixture.mutations,
         )
         .await
         .unwrap()
@@ -734,6 +735,7 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
             &authorities,
+            &fixture.mutations,
         )
         .await
         .unwrap();
@@ -785,6 +787,7 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
             &authorities,
+            &fixture.mutations,
         )
         .await
         .unwrap();

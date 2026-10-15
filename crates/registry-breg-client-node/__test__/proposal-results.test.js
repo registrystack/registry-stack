@@ -395,3 +395,55 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
     });
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+test('Proposal turn, decision and the submission read decode exactly', async () => {
+  const proposal = {...document(), state: 'rejected', turn: 'nobody',
+    decision: {status: 'rejected', decidedAt: '2026-10-01T10:00:00.000000Z', publicReason: 'Public reason'},
+    applicationStatus: {state: 'rejected', mode: 'manual'}};
+  delete proposal.application;
+  const submission = {id, actionId: 'correct', submissionVersion: 2, current: true, effectDigest: digest,
+    review: {state: 'rejected', resultId: targetId, completedAt: '2026-10-01T10:00:00.000000Z', availableUntil: '2026-10-02T10:00:00.000000Z'},
+    application: {state: 'rejected', mode: 'manual'}, decision: proposal.decision};
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push(request.url);
+    const headers = {'content-type': 'application/json', 'cache-control': 'no-store', vary: 'authorization, accept',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'};
+    if (request.url.startsWith(`/v1/proposals/${id}/submissions/1?`)) {
+      response.writeHead(410, {...headers, 'content-type': 'application/problem+json'});
+      response.end(JSON.stringify({type: 'https://id.registrystack.org/problems/registry-breg/proposal/submission_expired',
+        title: 'Gone', status: 410, code: 'proposal.submission_expired', traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+        detail: 'The review result and application receipt of the submission are no longer retained.'}));
+      return;
+    }
+    const metadata = {id: 'registry', version: '1', revision: digest, metadataVersion: '2', recordTypes: [], operations: [],
+      proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [], actions: [],
+        get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['reader']}}};
+    response.writeHead(200, headers);
+    response.end(JSON.stringify(request.url.startsWith('/v1/registry') ? metadata
+      : request.url.includes('/submissions/') ? submission : proposal));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}`});
+    const binding = (await client.registryContract('reader')).selectProposalGet('reader');
+    const current = await client.getProposal(binding, id);
+    const observed = JSON.parse(current.documentJson);
+    assert.equal(observed.state, 'rejected');
+    assert.equal(observed.turn, 'nobody');
+    assert.deepEqual(observed.decision, proposal.decision);
+    const read = await client.readProposalSubmission(current, 2);
+    assert.deepEqual(read.value, submission);
+    assert.ok(requests.at(-1).startsWith(`/v1/proposals/${id}/submissions/2?accessProfile=reader`));
+    await assert.rejects(client.readProposalSubmission(current, 1),
+      error => error.kind === 'problem' && error.code === 'proposal.submission_expired');
+    await assert.rejects(client.readProposalSubmission(current, 0), error => error.kind === 'invalid-request');
+    proposal.decision = {...proposal.decision, publicReason: 'x'.repeat(2001)};
+    await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+    proposal.decision = {status: 'rejected', decidedAt: '2026-10-01T10:00:00.000000Z'};
+    proposal.turn = 'someone';
+    await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+  } finally {
+    server.close();
+  }
+});

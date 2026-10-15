@@ -79,8 +79,13 @@ fn validates(subject: &str, mut value: Value) {
         ),
         _ => unreachable!(),
     };
+    let version = if subject == "events" {
+        "v1alpha6"
+    } else {
+        "v1alpha5"
+    };
     value["apiVersion"] = json!(format!(
-        "id.registrystack.org/formats/breg/{subject}-explanation/v1alpha5"
+        "id.registrystack.org/formats/breg/{subject}-explanation/{version}"
     ));
     value["kind"] = json!(kind);
     let schema: Value = serde_json::from_str(schema).unwrap();
@@ -409,7 +414,9 @@ fn event_inspection_uses_owner_hooks_for_phase_and_transitions() {
             "rebased",
             "retried",
             "cancelled",
-            "applied"
+            "applied",
+            "rejected",
+            "review-returned"
         ])
     );
     let model = inspect_registry(&registry);

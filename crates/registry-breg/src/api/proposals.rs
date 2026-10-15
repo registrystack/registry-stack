@@ -49,6 +49,7 @@ pub(crate) struct ProposalListQuery {
     pub owner: Option<String>,
     pub state: Option<String>,
     pub target: Option<Uuid>,
+    pub turn: Option<String>,
     pub after: Option<Uuid>,
     pub limit: usize,
 }
@@ -1187,9 +1188,13 @@ pub(super) async fn list(
                 "action" => query.action = Some(value),
                 "owner" if value == "caller" => query.owner = Some(value),
                 "state"
-                    if ["draft", "submitted", "applied", "cancelled"].contains(&value.as_str()) =>
+                    if ["draft", "submitted", "applied", "cancelled", "rejected"]
+                        .contains(&value.as_str()) =>
                 {
                     query.state = Some(value)
+                }
+                "turn" if ["party", "official", "nobody"].contains(&value.as_str()) => {
+                    query.turn = Some(value)
                 }
                 "target" => match Uuid::parse_str(&value) {
                     Ok(id) => query.target = Some(id),

@@ -354,6 +354,7 @@ async fn approve(
         "casework",
         &accepted,
         &review.result(&accepted),
+        &fixture.mutations,
     )
     .await
     .unwrap();

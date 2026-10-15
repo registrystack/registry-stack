@@ -2703,6 +2703,22 @@ impl BaseRegistryClient {
         raw_value(py, &response.value, &response.metadata)
     }
 
+    fn read_proposal_submission<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+        version: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_proposal_submission(&proposal, version))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
+
     fn read_proposal_review_status<'py>(
         &self,
         py: Python<'py>,

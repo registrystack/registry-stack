@@ -26,6 +26,7 @@ pub(crate) struct ProposalLifecycleEvent<'a> {
     pub effect_digest: Option<&'a str>,
     pub authority_kind: &'a str,
     pub system_grant_revision: Option<&'a str>,
+    pub turn: &'a str,
     pub reference: &'a str,
     pub package_revision: &'a str,
     pub schema_fingerprint: &'a str,
@@ -56,6 +57,8 @@ pub(crate) async fn insert_proposal_lifecycle_event(
                 | "retried"
                 | "cancelled"
                 | "applied"
+                | "rejected"
+                | "review-returned"
         )
     {
         return Err(OutboxError::InvalidProjection);
@@ -93,7 +96,7 @@ pub(crate) async fn insert_proposal_lifecycle_event(
                 "proposalId":event.proposal_id,"submissionVersion":event.version,"revision":event.revision,
                 "fromState":event.from_state,"state":event.state,"transition":event.transition,
                 "effectDigest":event.effect_digest,"authorityKind":event.authority_kind,
-                "systemApplyGrantRevision":event.system_grant_revision}),
+                "systemApplyGrantRevision":event.system_grant_revision,"turn":event.turn}),
         },
     )?;
     let payload = envelope_payload(

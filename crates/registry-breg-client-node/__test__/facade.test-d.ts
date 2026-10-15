@@ -238,3 +238,9 @@ client.readProposalReviewStatus(proposal).then(outcome => {
   const acceptedRequestId: string | undefined = outcome.value.requestId
   acceptedRequestId?.toUpperCase()
 })
+client.readProposalSubmission(proposal, 1).then(outcome => {
+  const status: 'approved' | 'rejected' | 'changes-requested' | 'answered' | undefined = outcome.value.decision?.status
+  const publicReason: string | undefined = outcome.value.decision?.publicReason
+  void status
+  publicReason?.toUpperCase()
+})

@@ -220,7 +220,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['actionTargetConditions', [1], [1]], ['invokeAction', [1], [1]],
   ['executeRecoveredAction'], ['executeRecoveredProposalStart'], ['executeRecoveredCreate'],
   ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
-  ['startProposal'], ['readProposal'], ['getProposal'], ['listProposals'], ['executeProposal'],
+  ['startProposal'], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals'], ['executeProposal'],
   ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
   ['readProposalReviewStatus'], ['readProposalReviewContext'],
   ['readProposalReviewById'], ['downloadProposalReviewDocument', [1], [1]],

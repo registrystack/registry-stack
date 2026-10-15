@@ -5138,6 +5138,7 @@ fn mutation_problem(error: MutationError) -> Response {
             precondition_failed()
         }
         MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
+        MutationError::ProposalRejected => fixed_problem(ProblemCode::ProposalRejected),
         MutationError::IdempotencyConflict => fixed_problem(ProblemCode::IdempotencyConflict),
         MutationError::IdempotencyExpired => fixed_problem(ProblemCode::IdempotencyExpired),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),

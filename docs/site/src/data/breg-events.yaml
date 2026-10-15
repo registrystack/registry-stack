@@ -50,10 +50,11 @@
   rows:
     - ['`actionId`, `actionRevision`', 'String and digest', 'Exact governed Action binding.']
     - ['`proposalId`, `submissionVersion`, `revision`', 'UUID and positive integers', 'Exact durable work and transition revision.']
-    - ['`fromState`, `state`, `transition`', 'Closed strings', 'Native lifecycle transition and its states.']
+    - ['`fromState`, `state`, `transition`', 'Closed strings', 'Native lifecycle transition and its states. `transition` is `started`, `edited`, `submitted`, `revised`, `rebased`, `retried`, `cancelled`, `applied`, `rejected` or `review-returned`; `rejected` ends the Proposal in the terminal `rejected` state.']
     - ['`effectDigest`', 'Digest or null', 'Frozen plan identity when available.']
-    - ['`authorityKind`', 'Closed string', 'Authority used for the transition.']
+    - ['`authorityKind`', '`caller`, `system` or `review`', 'Authority used for the transition; `review` for a transition a recorded review result caused.']
     - ['`systemApplyGrantRevision`', 'Digest or null', 'Restricted system grant binding for automatic application.']
+    - ['`turn`', '`party`, `official` or `nobody`', 'Whose move the Proposal waits on after the transition.']
 - id: delivery
   title: Delivery limits and outcomes
   columns: [Property, Contract]

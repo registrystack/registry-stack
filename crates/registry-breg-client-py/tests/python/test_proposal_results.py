@@ -43,6 +43,7 @@ class ProposalResultTests(unittest.TestCase):
     def setUp(self):
         self.value = document()
         self.reply_status = 200
+        self.content_type = 'application/json'
         self.metadata = copy.deepcopy(METADATA)
         self.requests = []
         self.download_bytes = None
@@ -75,7 +76,7 @@ class ProposalResultTests(unittest.TestCase):
                     return
                 payload = json.dumps(owner.metadata if self.path.startswith('/tenant/v1/registry') else owner.value).encode()
                 self.send_response(owner.reply_status)
-                for key, value in [('content-type', 'application/json'), ('cache-control', 'no-store'), ('vary', 'authorization, accept'),
+                for key, value in [('content-type', owner.content_type), ('cache-control', 'no-store'), ('vary', 'authorization, accept'),
                                    ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'), ('content-length', str(len(payload)))]:
                     self.send_header(key, value)
                 self.end_headers()
@@ -277,6 +278,46 @@ class ProposalResultTests(unittest.TestCase):
             self.assertTrue(self.requests[-1][0].endswith('/review-status?accessProfile=reader'))
         self.value['context']['contract'] = {'id': 'urn:registry:breg:review-context:directory:correct:review', 'revision': DIGEST, 'schemaDigest': DIGEST}
         self.assertEqual(self.client.read_proposal_review_context(prior)['value']['context']['fields'], {'private': 'private-canary'})
+
+    def test_turn_decision_and_submission_read_decode_exactly(self):
+        decision = {'status': 'rejected', 'decidedAt': '2026-10-01T10:00:00.000000Z', 'publicReason': 'Public reason'}
+        self.value = document()
+        del self.value['application']
+        self.value.update(state='rejected', turn='nobody', decision=decision, applicationStatus={'state': 'rejected', 'mode': 'manual'})
+        proposal = self.client.get_proposal(self.binding, ID)
+        self.assertEqual(proposal.document['turn'], 'nobody')
+        self.assertEqual(proposal.document['decision'], decision)
+        submission = {'id': ID, 'actionId': 'correct', 'submissionVersion': 2, 'current': True, 'effectDigest': DIGEST,
+                      'review': {'state': 'rejected', 'resultId': TARGET, 'completedAt': '2026-10-01T10:00:00.000000Z',
+                                 'availableUntil': '2026-10-02T10:00:00.000000Z'},
+                      'application': {'state': 'rejected', 'mode': 'manual'}, 'decision': decision}
+        self.value = copy.deepcopy(submission)
+        self.assertEqual(self.client.read_proposal_submission(proposal, 2)['value'], submission)
+        self.assertTrue(self.requests[-1][0].startswith('/tenant/v1/proposals/' + ID + '/submissions/2?accessProfile=reader'))
+        count = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.read_proposal_submission(proposal, 0)
+        self.assertEqual(raised.exception.kind, 'invalid-request')
+        self.assertEqual(len(self.requests), count)
+        self.reply_status = 410
+        self.content_type = 'application/problem+json'
+        self.value = {'type': 'https://id.registrystack.org/problems/registry-breg/proposal/submission_expired', 'title': 'Gone',
+                      'status': 410, 'code': 'proposal.submission_expired', 'traceId': '4bf92f3577b34da6a3ce929d0e0e4736',
+                      'detail': 'The review result and application receipt of the submission are no longer retained.'}
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.read_proposal_submission(proposal, 1)
+        self.assertEqual((raised.exception.kind, raised.exception.code), ('problem', 'proposal.submission_expired'))
+        self.reply_status = 200
+        self.content_type = 'application/json'
+        for invalid in [dict(decision, publicReason='x' * 2001), dict(decision, publicReason=''), dict(decision, decidedAt='yesterday')]:
+            self.value = dict(copy.deepcopy(submission), decision=invalid)
+            with self.subTest(decision=invalid), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.read_proposal_submission(proposal, 2)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+        self.value = document()
+        self.value['turn'] = 'someone'
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.get_proposal(self.binding, ID)
 
     def test_documents_require_version_and_state_appropriate_frozen_evidence(self):
         for state in ('draft', 'submitted', 'applied', 'cancelled'):

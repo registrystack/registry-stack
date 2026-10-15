@@ -33,7 +33,8 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   assert.deepEqual(module.get('recordTypes[].hooks[].phase').values, ['after', 'before']);
   assert.ok(project.has('accessProfiles[].permissions.proposals[].targets[].recordType'));
   assert.deepEqual(project.get('actions[].execution.proposal.hooks[].transitions[]').values,
-    ['applied', 'cancelled', 'edited', 'rebased', 'retried', 'revised', 'started', 'submitted']);
+    ['applied', 'cancelled', 'edited', 'rebased', 'rejected', 'retried', 'review-returned', 'revised', 'started',
+      'submitted']);
   for (const path of ['changed[]', 'beforeEquals.*', 'afterEquals.*']) {
     assert.ok(module.has(`recordTypes[].hooks[].when.${path}`), path);
   }

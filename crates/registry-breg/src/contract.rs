@@ -347,6 +347,8 @@ pub enum ProposalEventTransition {
     Retried,
     Cancelled,
     Applied,
+    Rejected,
+    ReviewReturned,
 }
 
 impl ProposalEventTransition {
@@ -360,6 +362,8 @@ impl ProposalEventTransition {
             Self::Retried => "retried",
             Self::Cancelled => "cancelled",
             Self::Applied => "applied",
+            Self::Rejected => "rejected",
+            Self::ReviewReturned => "review-returned",
         }
     }
 }
