@@ -1084,8 +1084,10 @@ impl CaseworkProject {
                     );
                 }
                 if !exclusion_reported {
-                    if let Some(stage_index) =
-                        policy.stages.iter().position(|stage| stage.exclude_initiator)
+                    if let Some(stage_index) = policy
+                        .stages
+                        .iter()
+                        .position(|stage| stage.exclude_initiator)
                     {
                         exclusion_reported = true;
                         findings.add(

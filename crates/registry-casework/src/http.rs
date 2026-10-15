@@ -479,7 +479,9 @@ async fn review_policy_description(
     reject_source_profile(&headers)?;
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(
-        state.service.review_policy_description(&actor, &policy_id)?,
+        state
+            .service
+            .review_policy_description(&actor, &policy_id)?,
     ))
 }
 

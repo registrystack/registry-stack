@@ -302,7 +302,8 @@ impl CaseworkService {
                 .review_policies
                 .iter()
                 .filter(|policy| {
-                    policy.stages
+                    policy
+                        .stages
                         .iter()
                         .any(|stage| stage.deciding_profiles.contains(&actor.profile_id))
                 })

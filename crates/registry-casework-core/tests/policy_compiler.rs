@@ -547,9 +547,11 @@ fn a_producer_names_its_review_policies_in_its_findings() {
     };
     let mut value = project_value();
     value["trustedProducers"][0]["reviewPolicies"] = json!([]);
-    assert!(refused(value).diagnostics().iter().any(|item| item.code
-        == "casework.review-producer.no-policies"
-        && item.path == "/trustedProducers/0/reviewPolicies"));
+    assert!(refused(value)
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "casework.review-producer.no-policies"
+            && item.path == "/trustedProducers/0/reviewPolicies"));
     let mut value = project_value();
     value["trustedProducers"][0]["reviewPolicies"] = json!(["notice-review", "notice-review"]);
     assert!(refused(value)
