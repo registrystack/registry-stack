@@ -34,7 +34,7 @@ use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
-use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
+use registry_breg::mutation::{MutationBody, MutationPlan, MutationRequest, MutationTransaction};
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
     test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
@@ -496,7 +496,7 @@ struct Setup {
     compiled: CompiledRegistry,
     pool: RuntimePool,
     identity: ExpectedRegistryIdentity,
-    coordinator: MutationCoordinator,
+    coordinator: MutationTransaction,
     service: WebhookDeliveryService,
     // Kept alive for the deployment's lifetime, not read: the activated
     // bindings were resolved out of this directory.
@@ -587,7 +587,7 @@ async fn setup_in(
         .expect("test owns a keyed audit profile");
     let lock_key =
         RegistryLockKey::derive("hook-proposal-registry").expect("test lock identity is bounded");
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -1084,7 +1084,7 @@ fn single_delivery(event: &CapturedEvent) -> &str {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn real_postgres_hook_proposal_seals_an_encrypted_action_field() {
+async fn real_postgres_hook_change_seals_an_encrypted_action_field() {
     let receiver = HttpsReceiver::start().await;
     let setup = setup_with_field_encryption(encrypted_proposal_registry(), &receiver, false).await;
     let mut mutation_client = setup
@@ -1723,17 +1723,17 @@ async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
         .database
         .admin
         .batch_execute(&format!(
-            "CREATE FUNCTION registry_internal.pause_hook_proposal_application()
+            "CREATE FUNCTION registry_internal.pause_hook_change_application()
                  RETURNS trigger LANGUAGE plpgsql AS $$
                  BEGIN
                      PERFORM pg_advisory_xact_lock({PROPOSAL_WRITE_LOCK});
                      RETURN NEW;
                  END;
              $$;
-             CREATE TRIGGER pause_hook_proposal_application
+             CREATE TRIGGER pause_hook_change_application
                  BEFORE INSERT ON registry_data.{followup_table}
                  FOR EACH ROW
-                 EXECUTE FUNCTION registry_internal.pause_hook_proposal_application();"
+                 EXECUTE FUNCTION registry_internal.pause_hook_change_application();"
         ))
         .await
         .expect("administrator installs the proposal-application pause");

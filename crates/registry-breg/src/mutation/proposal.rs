@@ -133,7 +133,7 @@ fn validate_recovery_actor(
     Ok(())
 }
 
-impl MutationCoordinator {
+impl MutationTransaction {
     pub(crate) async fn read_proposal_attachment(
         &self,
         attachment: &crate::attachment_store::StoredAttachment,
@@ -3172,14 +3172,14 @@ async fn load_proposal_row(
 #[cfg(test)]
 mod disclosure_tests {
     use super::*;
-    fn coordinator(database: &str, activation: &str, key: u8, issuer: &str) -> MutationCoordinator {
+    fn coordinator(database: &str, activation: &str, key: u8, issuer: &str) -> MutationTransaction {
         let (audit, _capture) = crate::audit::test_support::capturing(
             registry_platform_audit::AuditProfile::production_from_secret_bytes(
                 vec![key; 32].into(),
             )
             .unwrap(),
         );
-        MutationCoordinator::new(
+        MutationTransaction::new(
             crate::postgres::RegistryLockKey::derive("proposal-test").unwrap(),
             std::time::Duration::from_secs(1),
             crate::postgres::ExpectedRegistryIdentity {

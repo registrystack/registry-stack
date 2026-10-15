@@ -14,8 +14,8 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationOutcome,
-    MutationPlan, MutationRequest, PatchOperation,
+    MutationBody, MutationError, MutationFaultPoint, MutationOutcome, MutationPlan,
+    MutationRequest, MutationTransaction, PatchOperation,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
@@ -78,7 +78,7 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
         )
         .await
         .expect("test simulates a same-schema package upgrade");
-    let upgraded = MutationCoordinator::new(
+    let upgraded = MutationTransaction::new(
         fixture.lock_key,
         Duration::from_secs(2),
         upgraded_identity,
@@ -508,7 +508,7 @@ struct Fixture {
     database: TestDatabase,
     compiled: registry_breg::CompiledRegistry,
     identity: ExpectedRegistryIdentity,
-    coordinator: MutationCoordinator,
+    coordinator: MutationTransaction,
     lock_key: RegistryLockKey,
     profile: AuditProfile,
     table: String,
@@ -538,7 +538,7 @@ impl Fixture {
         let profile = AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
             .expect("test owns keyed audit profile");
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock id is bounded");
-        let coordinator = MutationCoordinator::new(
+        let coordinator = MutationTransaction::new(
             lock_key,
             Duration::from_secs(2),
             identity.clone(),

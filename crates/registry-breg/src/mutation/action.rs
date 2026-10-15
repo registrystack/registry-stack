@@ -25,7 +25,7 @@ const HOOK_PROPOSAL_APPLY_BUDGET: Duration = Duration::from_secs(5);
 /// One accepted hook proposal the delivery worker settled, ready for the
 /// same mutation path an action handler's outcome takes. Every field is
 /// identity and the exact bytes the delivery row records.
-pub(crate) struct HookProposalApplication<'a> {
+pub(crate) struct HookChangeApplication<'a> {
     pub(crate) event_id: Uuid,
     pub(crate) compiled_delivery_id: &'a str,
     pub(crate) generation: i64,
@@ -39,7 +39,7 @@ pub(crate) struct HookProposalApplication<'a> {
 
 /// What became of one hook proposal the mutation path was asked to apply.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HookProposalOutcome {
+pub(crate) enum HookChangeOutcome {
     /// The proposal applied; the revision the applied mutation produced.
     Applied(i64),
     /// Deterministically refused: retrying the same answer cannot apply it,
@@ -66,12 +66,12 @@ struct ActionEffectResult {
     operation: Operation,
 }
 
-struct HookProposalReceipt {
+struct HookChangeReceipt {
     answer_digest: Option<[u8; 32]>,
     resulting_revision: i64,
 }
 
-impl MutationCoordinator {
+impl MutationTransaction {
     /// Acquire the session lock that serializes every classification for one
     /// hook delivery. The immediate-action transaction takes the same lock at
     /// transaction scope, so a recovery cannot observe the receipt until an
@@ -81,17 +81,17 @@ impl MutationCoordinator {
     /// connection. If its future is cancelled while holding the lock, it must
     /// discard the connection so PostgreSQL closes the session and releases
     /// the lock.
-    pub(crate) fn hook_proposal_key_reference(
+    pub(crate) fn hook_change_key_reference(
         &self,
         event_id: Uuid,
         compiled_delivery_id: &str,
     ) -> Result<String, UncertainApply> {
-        let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
+        let idempotency_key = hook_change_idempotency_key(event_id, compiled_delivery_id);
         resolve_hook_key_reference(compiled_delivery_id, &idempotency_key)
             .map_err(|_| UncertainApply)
     }
 
-    pub(crate) async fn acquire_hook_proposal_lock(
+    pub(crate) async fn acquire_hook_change_lock(
         &self,
         client: &Client,
         key_reference: &str,
@@ -113,7 +113,7 @@ impl MutationCoordinator {
     /// already owns. The transaction-scoped form lets lease reaping serialize
     /// with an in-flight application without checking out a second pooled
     /// connection while its delivery row is locked.
-    pub(crate) async fn acquire_hook_proposal_transaction_lock(
+    pub(crate) async fn acquire_hook_change_transaction_lock(
         &self,
         transaction: &Transaction<'_>,
         key_reference: &str,
@@ -131,8 +131,8 @@ impl MutationCoordinator {
         Ok(())
     }
 
-    /// Release a lock acquired by [`Self::acquire_hook_proposal_lock`].
-    pub(crate) async fn release_hook_proposal_lock(
+    /// Release a lock acquired by [`Self::acquire_hook_change_lock`].
+    pub(crate) async fn release_hook_change_lock(
         &self,
         client: &Client,
         key_reference: &str,
@@ -273,16 +273,16 @@ impl MutationCoordinator {
     /// instead, so a redelivered answer resolves through receipt recovery as
     /// a replay of the same application, while a changed answer after the
     /// commit surfaces as a stable dead-letter conflict.
-    pub(crate) async fn apply_hook_proposal(
+    pub(crate) async fn apply_hook_change(
         &self,
         client: &mut Client,
         registry: &CompiledRegistry,
-        application: &HookProposalApplication<'_>,
-    ) -> Result<HookProposalOutcome, UncertainApply> {
+        application: &HookChangeApplication<'_>,
+    ) -> Result<HookChangeOutcome, UncertainApply> {
         let idempotency_key =
-            hook_proposal_idempotency_key(application.event_id, application.compiled_delivery_id);
+            hook_change_idempotency_key(application.event_id, application.compiled_delivery_id);
         let receipt = self
-            .hook_proposal_receipt(
+            .hook_change_receipt(
                 &***client,
                 application.compiled_delivery_id,
                 &idempotency_key,
@@ -291,7 +291,7 @@ impl MutationCoordinator {
         if let Some(receipt) = &receipt {
             if let Some(answer_digest) = receipt.answer_digest {
                 return if answer_digest == *application.answer_digest {
-                    Ok(HookProposalOutcome::Applied(receipt.resulting_revision))
+                    Ok(HookChangeOutcome::Applied(receipt.resulting_revision))
                 } else {
                     conflicting_hook_answer()
                 };
@@ -299,18 +299,18 @@ impl MutationCoordinator {
         }
         if receipt.is_none()
             && !self
-                .hook_proposal_still_owns_delivery(&***client, application)
+                .hook_change_still_owns_delivery(&***client, application)
                 .await?
         {
             return Err(UncertainApply);
         }
         let outcome = self
-            .apply_hook_proposal_inner(client, registry, application, &idempotency_key)
+            .apply_hook_change_inner(client, registry, application, &idempotency_key)
             .await;
         if receipt.is_some()
             && matches!(
                 &outcome,
-                Ok(HookProposalOutcome::Refused { .. } | HookProposalOutcome::DeadLettered { .. })
+                Ok(HookChangeOutcome::Refused { .. } | HookChangeOutcome::DeadLettered { .. })
             )
         {
             return conflicting_hook_answer();
@@ -321,10 +321,10 @@ impl MutationCoordinator {
     /// Confirm that the worker still owns the delivery lease before a new
     /// proposal mutation starts. Receipt replays do not need a live lease:
     /// they return an already committed result and cannot create new state.
-    async fn hook_proposal_still_owns_delivery(
+    async fn hook_change_still_owns_delivery(
         &self,
         client: &(impl tokio_postgres::GenericClient + Sync),
-        application: &HookProposalApplication<'_>,
+        application: &HookChangeApplication<'_>,
     ) -> Result<bool, UncertainApply> {
         client
             .query_one(
@@ -356,15 +356,15 @@ impl MutationCoordinator {
     /// proposal committed, so the changed answer becomes the same stable
     /// conflict as a changed proposal instead of overwriting the row's
     /// disposition with `none`.
-    pub(crate) async fn recover_hook_proposal_receipt(
+    pub(crate) async fn recover_hook_change_receipt(
         &self,
         client: &(impl tokio_postgres::GenericClient + Sync),
         event_id: Uuid,
         compiled_delivery_id: &str,
-    ) -> Result<Option<HookProposalOutcome>, UncertainApply> {
-        let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
+    ) -> Result<Option<HookChangeOutcome>, UncertainApply> {
+        let idempotency_key = hook_change_idempotency_key(event_id, compiled_delivery_id);
         if self
-            .hook_proposal_receipt(client, compiled_delivery_id, &idempotency_key)
+            .hook_change_receipt(client, compiled_delivery_id, &idempotency_key)
             .await?
             .is_some()
         {
@@ -374,12 +374,12 @@ impl MutationCoordinator {
         }
     }
 
-    async fn hook_proposal_receipt(
+    async fn hook_change_receipt(
         &self,
         client: &(impl tokio_postgres::GenericClient + Sync),
         compiled_delivery_id: &str,
         idempotency_key: &str,
-    ) -> Result<Option<HookProposalReceipt>, UncertainApply> {
+    ) -> Result<Option<HookChangeReceipt>, UncertainApply> {
         let key_reference = resolve_hook_key_reference(compiled_delivery_id, idempotency_key)
             .map_err(|_| UncertainApply)?;
         client
@@ -396,7 +396,7 @@ impl MutationCoordinator {
             )
             .await
             .map_err(|_| UncertainApply)?
-            .map(|row| -> Result<HookProposalReceipt, UncertainApply> {
+            .map(|row| -> Result<HookChangeReceipt, UncertainApply> {
                 let answer_digest = row
                     .get::<_, Option<Vec<u8>>>(0)
                     .map(|digest| digest.try_into().map_err(|_| UncertainApply))
@@ -405,7 +405,7 @@ impl MutationCoordinator {
                     .get::<_, Option<i64>>(1)
                     .filter(|revision| *revision > 0)
                     .ok_or(UncertainApply)?;
-                Ok(HookProposalReceipt {
+                Ok(HookChangeReceipt {
                     answer_digest,
                     resulting_revision,
                 })
@@ -413,13 +413,13 @@ impl MutationCoordinator {
             .transpose()
     }
 
-    async fn apply_hook_proposal_inner(
+    async fn apply_hook_change_inner(
         &self,
         client: &mut Client,
         registry: &CompiledRegistry,
-        application: &HookProposalApplication<'_>,
+        application: &HookChangeApplication<'_>,
         idempotency_key: &str,
-    ) -> Result<HookProposalOutcome, UncertainApply> {
+    ) -> Result<HookChangeOutcome, UncertainApply> {
         // The envelope the worker delivered, re-read from the exact stored
         // bytes so the chain position comes from what was delivered, not
         // from anything reconstructed.
@@ -847,7 +847,7 @@ impl MutationCoordinator {
             .map(|row| row.get::<_, i64>(0))
             .filter(|revision| *revision > 0)
             .ok_or(UncertainApply)?;
-        Ok(HookProposalOutcome::Applied(resulting_revision))
+        Ok(HookChangeOutcome::Applied(resulting_revision))
     }
 
     pub(crate) async fn action_target_conditions(
@@ -2088,8 +2088,8 @@ fn action_for_route<'a>(
 fn refused_proposal(
     code: &'static str,
     summary: impl Into<String>,
-) -> Result<HookProposalOutcome, UncertainApply> {
-    Ok(HookProposalOutcome::Refused {
+) -> Result<HookChangeOutcome, UncertainApply> {
+    Ok(HookChangeOutcome::Refused {
         code,
         summary: summary.into(),
     })
@@ -2098,21 +2098,21 @@ fn refused_proposal(
 fn dead_lettered_proposal(
     code: &'static str,
     summary: impl Into<String>,
-) -> Result<HookProposalOutcome, UncertainApply> {
-    Ok(HookProposalOutcome::DeadLettered {
+) -> Result<HookChangeOutcome, UncertainApply> {
+    Ok(HookChangeOutcome::DeadLettered {
         code,
         summary: summary.into(),
     })
 }
 
-fn conflicting_hook_answer() -> Result<HookProposalOutcome, UncertainApply> {
+fn conflicting_hook_answer() -> Result<HookChangeOutcome, UncertainApply> {
     dead_lettered_proposal(
         "hook.proposal.answer_conflict",
         "This delivery already applied a different answer; the first application stands.",
     )
 }
 
-fn hook_proposal_idempotency_key(event_id: Uuid, compiled_delivery_id: &str) -> String {
+fn hook_change_idempotency_key(event_id: Uuid, compiled_delivery_id: &str) -> String {
     // The application identity is the hook delivery identity,
     // domain-separated. No attempt, generation, or answer component enters
     // the key; the answer digest belongs to the binding reference instead.
@@ -2833,7 +2833,7 @@ pub(crate) struct PreparedEvidenceAction {
     attempt: Option<AuditRequest>,
 }
 
-impl MutationCoordinator {
+impl MutationTransaction {
     /// Admit an Evidence action, recording its refusal when admission fails
     /// before the deadline. A successful admission carries the held attempt
     /// to [`Self::finalize_evidence_action`]; a recovered receipt answers it.

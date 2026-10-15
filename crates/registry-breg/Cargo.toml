@@ -88,8 +88,8 @@ path = "tests/postgres_webhook_delivery.rs"
 required-features = ["postgres-test"]
 
 [[test]]
-name = "postgres_hook_proposals"
-path = "tests/postgres_hook_proposals.rs"
+name = "postgres_hook_changes"
+path = "tests/postgres_hook_changes.rs"
 required-features = ["postgres-test"]
 
 [[test]]

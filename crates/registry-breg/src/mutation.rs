@@ -5,7 +5,7 @@
 mod action;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use action::erase_expired_action_evidence;
-pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
+pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
 pub(crate) use proposal::{proposal_operation_name, ProposalApplyPreflight};
 
@@ -687,7 +687,7 @@ impl MutationOutcome {
 }
 
 #[derive(Clone)]
-pub struct MutationCoordinator {
+pub struct MutationTransaction {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     expected: ExpectedRegistryIdentity,
@@ -702,7 +702,7 @@ pub struct MutationCoordinator {
     idempotency: IdempotencyPolicy,
 }
 
-impl MutationCoordinator {
+impl MutationTransaction {
     /// The event source this deployment stamps on every captured envelope.
     fn event_source(&self) -> String {
         self.event_source.clone()

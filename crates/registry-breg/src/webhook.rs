@@ -50,7 +50,7 @@ use crate::field_encryption::FieldEncryptionService;
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::idempotency::IdempotencyPolicy;
 use crate::model::CompiledRegistry;
-use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
+use crate::mutation::{HookChangeApplication, HookChangeOutcome, MutationTransaction};
 use crate::package::PackageError;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
@@ -211,8 +211,8 @@ struct BregDeliverySeams {
 }
 
 impl BregDeliverySeams {
-    fn mutation_coordinator(&self) -> MutationCoordinator {
-        let coordinator = MutationCoordinator::new_with_event_destinations(
+    fn mutation_transaction(&self) -> MutationTransaction {
+        let coordinator = MutationTransaction::new_with_event_destinations(
             self.lock_key,
             self.lock_timeout,
             self.expected.clone(),
@@ -242,8 +242,8 @@ impl DeliverySeams for BregDeliverySeams {
         // A per-call coordinator over the seams' own identity, so the apply
         // runs in fresh transactions and its committed events enqueue their
         // own delivery rows through the same destinations.
-        let coordinator = self.mutation_coordinator();
-        let mut application_lock = HookProposalLock::acquire(
+        let coordinator = self.mutation_transaction();
+        let mut application_lock = HookChangeLock::acquire(
             self.pool.clone(),
             &coordinator,
             application.event_id,
@@ -251,10 +251,10 @@ impl DeliverySeams for BregDeliverySeams {
         )
         .await?;
         let outcome = coordinator
-            .apply_hook_proposal(
+            .apply_hook_change(
                 application_lock.client(),
                 &self.registry,
-                &HookProposalApplication {
+                &HookChangeApplication {
                     event_id: application.event_id,
                     compiled_delivery_id: application.compiled_delivery_id,
                     generation: application.generation,
@@ -270,14 +270,14 @@ impl DeliverySeams for BregDeliverySeams {
         application_lock.release(&coordinator).await?;
         let outcome = outcome.map_err(|_| DeliveryError::Unavailable)?;
         Ok(match outcome {
-            HookProposalOutcome::Applied(resulting_revision) => {
+            HookChangeOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
             }
-            HookProposalOutcome::Refused { code, summary } => ProposalOutcome::Refused {
+            HookChangeOutcome::Refused { code, summary } => ProposalOutcome::Refused {
                 code: proposal_code(code),
                 summary: proposal_summary(summary),
             },
-            HookProposalOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
+            HookChangeOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
                 code: proposal_code(code),
                 summary: proposal_summary(summary),
             },
@@ -288,8 +288,8 @@ impl DeliverySeams for BregDeliverySeams {
         &self,
         recovery: ProposalReceiptRecovery<'_>,
     ) -> Result<Option<ProposalOutcome>, DeliveryError> {
-        let coordinator = self.mutation_coordinator();
-        let mut application_lock = HookProposalLock::acquire(
+        let coordinator = self.mutation_transaction();
+        let mut application_lock = HookChangeLock::acquire(
             self.pool.clone(),
             &coordinator,
             recovery.event_id,
@@ -297,7 +297,7 @@ impl DeliverySeams for BregDeliverySeams {
         )
         .await?;
         let outcome = coordinator
-            .recover_hook_proposal_receipt(
+            .recover_hook_change_receipt(
                 &***application_lock.client(),
                 recovery.event_id,
                 recovery.compiled_delivery_id,
@@ -306,14 +306,14 @@ impl DeliverySeams for BregDeliverySeams {
         application_lock.release(&coordinator).await?;
         let outcome = outcome.map_err(|_| DeliveryError::Unavailable)?;
         Ok(outcome.map(|outcome| match outcome {
-            HookProposalOutcome::Applied(resulting_revision) => {
+            HookChangeOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
             }
-            HookProposalOutcome::Refused { code, summary } => ProposalOutcome::Refused {
+            HookChangeOutcome::Refused { code, summary } => ProposalOutcome::Refused {
                 code: proposal_code(code),
                 summary: proposal_summary(summary),
             },
-            HookProposalOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
+            HookChangeOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
                 code: proposal_code(code),
                 summary: proposal_summary(summary),
             },
@@ -325,16 +325,16 @@ impl DeliverySeams for BregDeliverySeams {
         transaction: &Transaction<'_>,
         recovery: ProposalReceiptRecovery<'_>,
     ) -> Result<Option<ProposalOutcome>, DeliveryError> {
-        let coordinator = self.mutation_coordinator();
+        let coordinator = self.mutation_transaction();
         let key_reference = coordinator
-            .hook_proposal_key_reference(recovery.event_id, recovery.compiled_delivery_id)
+            .hook_change_key_reference(recovery.event_id, recovery.compiled_delivery_id)
             .map_err(|_| DeliveryError::Unavailable)?;
         coordinator
-            .acquire_hook_proposal_transaction_lock(transaction, &key_reference)
+            .acquire_hook_change_transaction_lock(transaction, &key_reference)
             .await
             .map_err(|_| DeliveryError::Unavailable)?;
         let outcome = coordinator
-            .recover_hook_proposal_receipt(
+            .recover_hook_change_receipt(
                 transaction,
                 recovery.event_id,
                 recovery.compiled_delivery_id,
@@ -342,14 +342,14 @@ impl DeliverySeams for BregDeliverySeams {
             .await
             .map_err(|_| DeliveryError::Unavailable)?;
         Ok(outcome.map(|outcome| match outcome {
-            HookProposalOutcome::Applied(resulting_revision) => {
+            HookChangeOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
             }
-            HookProposalOutcome::Refused { code, summary } => ProposalOutcome::Refused {
+            HookChangeOutcome::Refused { code, summary } => ProposalOutcome::Refused {
                 code: proposal_code(code),
                 summary: proposal_summary(summary),
             },
-            HookProposalOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
+            HookChangeOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
                 code: proposal_code(code),
                 summary: proposal_summary(summary),
             },
@@ -470,22 +470,22 @@ impl DeliverySeams for BregDeliverySeams {
 /// Normal completion explicitly unlocks and returns the connection to the
 /// pool. Cancellation or any early return discards it instead, which closes
 /// the PostgreSQL session and cannot leak an advisory lock into later work.
-struct HookProposalLock {
+struct HookChangeLock {
     pool: RuntimePool,
     client: Option<deadpool_postgres::Client>,
     key_reference: String,
 }
 
-impl HookProposalLock {
+impl HookChangeLock {
     async fn acquire(
         pool: RuntimePool,
-        coordinator: &MutationCoordinator,
+        coordinator: &MutationTransaction,
         event_id: Uuid,
         compiled_delivery_id: &str,
     ) -> Result<Self, DeliveryError> {
         let client = pool.get().await.map_err(|_| DeliveryError::Unavailable)?;
         let key_reference = coordinator
-            .hook_proposal_key_reference(event_id, compiled_delivery_id)
+            .hook_change_key_reference(event_id, compiled_delivery_id)
             .map_err(|_| DeliveryError::Unavailable)?;
         let lock = Self {
             pool,
@@ -493,7 +493,7 @@ impl HookProposalLock {
             key_reference,
         };
         coordinator
-            .acquire_hook_proposal_lock(
+            .acquire_hook_change_lock(
                 lock.client
                     .as_ref()
                     .expect("hook proposal lock owns its client while acquiring"),
@@ -510,13 +510,13 @@ impl HookProposalLock {
             .expect("hook proposal lock owns its client until release")
     }
 
-    async fn release(mut self, coordinator: &MutationCoordinator) -> Result<(), DeliveryError> {
+    async fn release(mut self, coordinator: &MutationTransaction) -> Result<(), DeliveryError> {
         let client = self
             .client
             .as_ref()
             .expect("hook proposal lock owns its client until release");
         if coordinator
-            .release_hook_proposal_lock(client, &self.key_reference)
+            .release_hook_change_lock(client, &self.key_reference)
             .await
             .is_err()
         {
@@ -531,7 +531,7 @@ impl HookProposalLock {
     }
 }
 
-impl Drop for HookProposalLock {
+impl Drop for HookChangeLock {
     fn drop(&mut self) {
         if let Some(client) = self.client.take() {
             self.pool.discard(client);
