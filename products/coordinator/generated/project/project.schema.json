@@ -808,7 +808,7 @@
       "properties": {
         "outcome": {
           "$ref": "#/$defs/ExternalId",
-          "description": "Authored outcome code required for rejected, changes-requested and\nanswered statuses; omit it for approved, cancelled and superseded."
+          "description": "Authored outcome code required for approved, rejected,\nchanges-requested and answered statuses; omit it for cancelled and\nsuperseded."
         },
         "status": {
           "$ref": "#/$defs/ReviewResultStatus",

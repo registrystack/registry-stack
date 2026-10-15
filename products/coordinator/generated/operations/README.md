@@ -1156,6 +1156,7 @@ The result of a review request a `casework.submit-review-request/v1` step submit
 | `completedAt` | string (date-time) | yes |
 | `outcome` | string or null | no |
 | `policy` | `PolicyBinding` | yes |
+| `publicReason` | string or null | no |
 | `requestId` | string (uuid) | yes |
 | `result` | object | no |
 | `resultId` | string (uuid) | yes |
