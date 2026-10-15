@@ -338,7 +338,11 @@ pub enum ClockPolicyError {
     Bounds,
     #[error("a clock references an unknown calendar or queue")]
     Reference,
-    #[error("a clock duration or calendar is invalid")]
+    #[error(
+        "a clock's elapsed duration is invalid, or the clock is not the kind this \
+         evaluation reads; write a positive whole number of hours, minutes or \
+         seconds, such as PT48H"
+    )]
     Value,
     #[error("the supplied holiday-set revision does not match the clock calendar")]
     HolidaySet,
@@ -966,6 +970,16 @@ mod tests {
         assert_eq!(
             autumn.at_risk_at,
             Some(instant("2026-11-01T01:30:00-04:00"))
+        );
+    }
+
+    #[test]
+    fn a_value_refusal_names_the_duration_fix_and_not_the_calendar() {
+        assert_eq!(
+            ClockPolicyError::Value.to_string(),
+            "a clock's elapsed duration is invalid, or the clock is not the kind this \
+             evaluation reads; write a positive whole number of hours, minutes or \
+             seconds, such as PT48H"
         );
     }
 
