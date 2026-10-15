@@ -2387,6 +2387,99 @@ impl MutationTransaction {
         Ok(())
     }
 
+    /// One exact submission of a Proposal: its frozen effect digest, its review
+    /// result and its application outcome, each reported separately. Only the
+    /// current submission has application progress; an earlier one reports
+    /// only a committed receipt. `None` means the submission existed but its
+    /// review result window has lapsed or its detail was erased, and no
+    /// application receipt remains to report.
+    pub(crate) async fn proposal_submission_value(
+        &self,
+        tx: &Transaction<'_>,
+        document: &ProposalDocument,
+        version: u32,
+    ) -> Result<Option<Value>, MutationError> {
+        let version = i64::from(version);
+        let Some(submission) = tx
+            .query_opt(
+                "SELECT effect_digest, erased_at IS NOT NULL
+                 FROM registry_internal.registry_proposal_submissions
+                 WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+                &[&document.action_id, &document.proposal_id, &version],
+            )
+            .await
+            .map_err(map_database_error)?
+        else {
+            return Err(MutationError::PreconditionFailed);
+        };
+        let erased: bool = submission.get(1);
+        let workflow = if document.header.current_proposal_erased {
+            None
+        } else {
+            Some(proposal_store::load(tx, &document.action_id, document.proposal_id, false).await?)
+        };
+        let frozen = workflow
+            .as_ref()
+            .and_then(|workflow| workflow.current_proposal())
+            .filter(|_| {
+                document.header.state != "draft" && document.header.submission_version == version
+            });
+        let review = tx
+            .query_opt(
+                "SELECT status,result_id,
+        to_char(completed_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+        to_char(available_until AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+        available_until<=transaction_timestamp()
+        FROM registry_internal.registry_proposal_review_results
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+                &[&document.action_id, &document.proposal_id, &version],
+            )
+            .await
+            .map_err(map_database_error)?;
+        let review_lapsed = review.as_ref().is_some_and(|row| row.get::<_, bool>(4));
+        let review = match review {
+            Some(row) => json!({
+                "state":if row.get::<_,bool>(4) {"expired".to_owned()} else {row.get::<_,String>(0)},
+                "resultId":row.get::<_,Uuid>(1),"completedAt":row.get::<_,String>(2),
+                "availableUntil":row.get::<_,String>(3)}),
+            None if document.header.state == "submitted"
+                && frozen.is_some_and(|frozen| {
+                    matches!(
+                        frozen.review_requirement(),
+                        CompiledProposalReview::Required { .. }
+                    )
+                }) =>
+            {
+                json!({"state":"pending"})
+            }
+            None => Value::Null,
+        };
+        let receipt = tx
+            .query_opt(
+                "SELECT application_id
+        FROM registry_internal.registry_proposal_applications
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+                &[&document.action_id, &document.proposal_id, &version],
+            )
+            .await
+            .map_err(map_database_error)?;
+        let application = match (receipt, frozen) {
+            // Who applied and when stay with the receipt: no profile reads them.
+            (Some(row), _) => json!({"state":"applied","applicationId":row.get::<_,Uuid>(0)}),
+            (None, Some(frozen)) => proposal_application_status(tx, document, frozen).await?,
+            (None, None) => Value::Null,
+        };
+        if (review_lapsed || erased) && application.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(json!({
+            "id":document.proposal_id,"actionId":document.action_id,
+            "submissionVersion":version,"current":frozen.is_some(),
+            "effectDigest":submission.get::<_,String>(0),
+            "review":review,"application":application
+        })))
+    }
+
     pub(crate) async fn proposal_review_value(
         &self,
         tx: &Transaction<'_>,

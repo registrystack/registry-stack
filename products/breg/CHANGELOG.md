@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `GET /v1/proposals/{id}/submissions/{version}` reads one submitted
+  version of a Proposal under Proposal Get authority: its frozen effect
+  digest, its review result, and its application status as separate members,
+  with `current` marking the latest version. The application member never
+  names the applier. Once neither the review result nor the application
+  receipt is retained, the read answers 410 `proposal.submission_expired`.
+  A non-canonical or unknown version is concealed like an unknown Proposal.
 - BREAKING: the Proposal list takes `limit` (1 to 100, default 50) for its
   page size and refuses `top` with `query.invalid` naming `limit`. An
   ingestion run listing takes `cursor` and answers `nextCursor`, and refuses

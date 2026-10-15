@@ -668,6 +668,94 @@ impl PostgresRecordMutationService {
         result
     }
 
+    /// Read one exact submission under the same Get authority and current
+    /// Proposal visibility as [`Self::proposal_document`]. `Ok(None)` is a
+    /// submission whose retained outcomes have lapsed.
+    pub(crate) async fn proposal_submission_read(
+        &self,
+        id: Uuid,
+        version: u32,
+        authority: &ProposalAuthority,
+        correlation: &crate::correlation::RequestCorrelation,
+    ) -> Result<Option<Value>, MutationError> {
+        let _attempt = self
+            .coordinator
+            .begin_proposal_read_audit(authority, correlation)
+            .await?;
+        let deadline = tokio::time::Instant::now() + self.action_timeout;
+        let client = self
+            .admitted_proposal_read_client(authority, correlation, deadline)
+            .await?;
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
+        let result = tokio::time::timeout_at(deadline, async {
+            let guarded = begin_proposal_transaction(
+                guard.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                authority,
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+            guarded
+                .set_statement_budget(
+                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await?;
+            self.coordinator
+                .authorize_proposal_document(
+                    guarded.transaction(),
+                    &self.registry,
+                    &document,
+                    authority,
+                )
+                .await?;
+            let value = self
+                .coordinator
+                .proposal_submission_value(guarded.transaction(), &document, version)
+                .await?;
+            if authority
+                .task_grant
+                .as_ref()
+                .is_some_and(|binding| !binding.is_current())
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            guarded
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            self.coordinator
+                .finish_proposal_read_audit(authority, Some(&document), 1, correlation)
+                .await?;
+            Ok(value)
+        })
+        .await;
+        let result = match result {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                Err(MutationError::Unavailable)
+            }
+        };
+        if result.is_err() {
+            self.coordinator
+                .record_proposal_refusal(authority, crate::model::HttpMethod::Get, correlation)
+                .await?;
+        }
+        result
+    }
+
     pub(crate) async fn proposal_review_read(
         &self,
         id: Uuid,

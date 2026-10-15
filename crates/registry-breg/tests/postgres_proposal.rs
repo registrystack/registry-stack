@@ -2211,6 +2211,166 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submission_read_reports_each_version_separately_and_is_gone_after_its_windows() {
+    let mut source = registry_source(false);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Historical", "history-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("history-submit-1"))
+        .unwrap();
+    let first = client.execute_proposal(&submit).await.unwrap().value;
+    let first_digest = serde_json::to_value(&first).unwrap()["effectDigest"].clone();
+    let id = first.id().to_owned();
+    let read = |version: &str, profile: &str| {
+        let url = format!(
+            "{}/v1/proposals/{id}/submissions/{version}?accessProfile={profile}",
+            fixture.http.base_url
+        );
+        async move {
+            let response = reqwest::get(url).await.unwrap();
+            let status = response.status();
+            (status, response.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (status, body) = read("1", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(body["id"], json!(id));
+    assert_eq!(body["submissionVersion"], 1);
+    assert_eq!(body["current"], true);
+    assert_eq!(body["effectDigest"], first_digest);
+    assert_eq!(body["review"], json!({"state":"pending"}));
+    assert_eq!(body["application"]["state"], "awaiting-review");
+
+    let row=fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions",&[]).await.unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(policy).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+        &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+    let result = review.result(&accepted);
+    fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results
+        (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until)
+        VALUES ('correct-name',$1,1,'local-review',$2,$3,'rejected',$4,$5)",
+        &[&uuid::Uuid::parse_str(&id).unwrap(),&result.result_id,&serde_json::to_value(&result).unwrap(),&result.completed_at,&result.available_until]).await.unwrap();
+
+    let current = client.read_proposal(&first).await.unwrap().value;
+    let revise = client
+        .prepare_proposal(&current, "revise", json!({}), &key("history-revise"))
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(&revised, "submit", json!({}), &key("history-submit-2"))
+        .unwrap();
+    let second = client.execute_proposal(&submit).await.unwrap().value;
+    assert_eq!(second.submission_version(), 2);
+
+    // The superseded version keeps its own review outcome and reports no
+    // application progress, which belongs to the current version alone.
+    let (status, body) = read("1", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(body["current"], false);
+    assert_eq!(body["effectDigest"], first_digest);
+    assert_eq!(body["review"]["state"], "rejected");
+    assert_eq!(body["review"]["resultId"], json!(result.result_id));
+    assert!(body["application"].is_null(), "{body}");
+    let (status, body) = read("2", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(body["current"], true);
+    assert_eq!(body["review"], json!({"state":"pending"}));
+    assert_eq!(body["application"]["state"], "awaiting-review");
+
+    // A version never submitted, a malformed version and a profile without
+    // Get authority are all concealed alike.
+    for (version, profile) in [("3", "clerk"), ("0", "clerk"), ("01", "clerk"), ("1", "missing")] {
+        let (status, _) = read(version, profile).await;
+        assert_eq!(status, reqwest::StatusCode::NOT_FOUND, "{version} {profile}");
+    }
+
+    // Once the superseded version's result window lapses it retains nothing
+    // to report, and the read says so instead of concealing the version.
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_results
+             SET completed_at=transaction_timestamp()-interval '2 minutes',
+                 available_until=transaction_timestamp()-interval '1 minute'
+             WHERE submission_version=1",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (status, body) = read("1", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::GONE);
+    assert_eq!(body["code"], "proposal.submission_expired");
+    let (status, _) = read("2", "clerk").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submission_read_reports_the_application_receipt_without_the_applier() {
+    let fixture =
+        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Receipt", "receipt-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("receipt-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let body = json!({"submissionVersion":submitted.submission_version(),"effectDigest":submitted.effect_digest().unwrap()});
+    let apply = client
+        .prepare_proposal(&submitted, "apply", body, &key("receipt-apply"))
+        .unwrap();
+    let applied = serde_json::to_value(client.execute_proposal(&apply).await.unwrap().value).unwrap();
+    let response = reqwest::get(format!(
+        "{}/v1/proposals/{}/submissions/1?accessProfile=clerk",
+        fixture.http.base_url,
+        submitted.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let read = response.json::<Value>().await.unwrap();
+    assert_eq!(read["current"], true);
+    assert!(read["review"].is_null(), "{read}");
+    assert_eq!(read["application"]["state"], "applied");
+    assert_eq!(
+        read["application"]["applicationId"],
+        applied["application"]["applicationId"]
+    );
+    // Who applied and when stay private to the receipt (D24): no profile is
+    // granted them by default.
+    for hidden in ["appliedAt", "appliedBy", "author"] {
+        assert!(!read.to_string().contains(hidden), "{read}");
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn required_review_automatic_requires_fresh_exact_approval_even_with_a_cached_result() {
     for mode in [1, 2, 3, 0] {
         let mut source = registry_source(true);

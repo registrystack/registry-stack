@@ -198,6 +198,10 @@ fn route_set(service: Arc<HttpService>) -> Router {
             .route("/v1/proposals", get(proposals::list))
             .route("/v1/proposals/{proposal_id}", get(proposals::get))
             .route(
+                "/v1/proposals/{proposal_id}/submissions/{submission_version}",
+                get(proposals::submission),
+            )
+            .route(
                 "/v1/proposals/{proposal_id}/review-context",
                 get(proposals::review_context),
             )
