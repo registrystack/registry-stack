@@ -1144,9 +1144,14 @@ form, and the rule that the explain scope differs from the read scope is
 unchanged. A deployment that relied on the earlier defaults
 (`registry_scopes`, `scheduling-read`, `scheduling-explain`) now fails closed:
 its readers receive `403 profile.not-authorized` until the file names the
-claim and scope its issuer emits. No token gains a route it did not
-have, because the change selects which single claim and scope are read and
-never widens the match.
+claim and scope its issuer emits. The change still selects one claim and
+one scope and never widens the match, but it can allow a token the earlier
+defaults refused: one whose `scope` claim carries `scheduling:read` or
+`scheduling:explain` while its `registry_scopes` claim did not carry the
+earlier spelling. Such a token must still pass the issuer, audience, and
+lifetime checks for this runtime, so only tokens minted for it qualify; an
+issuer that puts different scopes in the two claims should name
+`scopeClaim` explicitly.
 
 A read or explain refusal for a missing scope logs one `info` line naming the
 claim read, the scope expected, and the keys that select them. The line

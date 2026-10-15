@@ -1119,6 +1119,10 @@ that relied on the old default now reads the `scope` claim, so a token that
 carries its scopes only in `registry_scopes` matches no access profile's
 required scopes and is refused until the file names `scopeClaim:
 registry_scopes`. The change selects which single claim is read and never
-widens the match, so no token gains a route it did not have.
+widens the match, but it can allow a token the earlier default refused: one
+whose `scope` claim carries a required scope its `registry_scopes` claim did
+not. Such a token must still pass the issuer and audience checks for this
+runtime, so only tokens minted for it qualify; an issuer that puts different
+scopes in the two claims should name `scopeClaim` explicitly.
 `shared_runtime_configuration_blocks_use_the_platform_contract` in
 `config.rs` pins the default.
