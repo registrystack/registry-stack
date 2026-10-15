@@ -267,7 +267,8 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store', 'vary': 'authorization, accept',
       traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
     const value = request.url.startsWith('/tenant/v1/registry') ? contractDocument
-      : request.method === 'POST' && request.url.includes('/edit?') ? {...proposal, revision: proposal.revision + 1} : proposal;
+      : request.method === 'POST' && request.url.includes('/edit?')
+        ? {...proposal, input: JSON.parse(body).input, revision: proposal.revision + 1} : proposal;
     response.end(JSON.stringify(value)
       .replace('9007199254740992', '9007199254740993'));
   });
@@ -284,15 +285,16 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     assert.ok(!Object.hasOwn(JSON.parse(current.inputJson), 'undisclosed'));
     assert.doesNotMatch(util.inspect(current), /9007199254740993|12\.3400/);
     const before = requests.length;
-    for (const invalid of ['{"input":{"wide":0.10000000000000001}}', '{"input":{"wide":1,"wide":2}}']) {
-      assert.throws(() => client.prepareProposal(current, 'edit', invalid, 'refused'), error => error.kind === 'invalid-request', invalid);
+    // Exact reads retain wide integers; persisted edits must also satisfy JCS.
+    for (const invalid of ['{"input":{"wide":0.10000000000000001}}', '{"input":{"wide":1,"wide":2}}', '{"input":{"wide":9007199254740993}}']) {
+      assert.throws(() => client.prepareProposal(current, 'edit', invalid, 'refused'), error => error.kind === 'invalid-request' && error.outcomeUnknown === false, invalid);
     }
     assert.equal(requests.length, before);
-    const body = '{"input":{"wide":9007199254740993,"decimal":"12.3400","nullable":null}}';
+    const body = '{"input":{"wide":9007199254740994,"decimal":"12.3400","nullable":null}}';
     const prepared = client.prepareProposal(current, 'edit', body, 'exact-edit');
     const bytes = prepared.toBytes();
     assert.match(util.inspect(prepared), /^BRegPreparedProposal\(<redacted>\)$/);
-    assert.doesNotMatch(util.inspect(prepared), /exact-edit|9007199254740993|12\.3400/);
+    assert.doesNotMatch(util.inspect(prepared), /exact-edit|9007199254740994|12\.3400/);
     const restored = BRegPreparedProposal.fromBytes(bytes);
     await assert.rejects(client.executeProposal(restored), error => error.kind === 'invalid-request');
     const recovered = client.recoverProposal(await client.readProposal(current), restored);
@@ -301,9 +303,10 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     assert.equal(edited.revision, proposal.revision + 1);
     assert.equal(edited.submissionVersion, proposal.submissionVersion);
     assert.equal(edited.state, 'draft');
+    assert.equal(edited.input.wide, 9007199254740994);
     assert.equal(requests.at(-1).url, `/tenant/v1/proposals/${id}/edit?accessProfile=${profile}`);
-    assert.equal(requests.at(-1).body, '{"input":{"decimal":"12.3400","nullable":null,"wide":9007199254740993}}');
-    assert.match(requests.at(-1).body, /"wide":9007199254740993/);
+    assert.equal(requests.at(-1).body, '{"input":{"decimal":"12.3400","nullable":null,"wide":9007199254740994}}');
+    assert.match(requests.at(-1).body, /"wide":9007199254740994/);
     assert.equal(requests.at(-1).headers['if-match'], '"edit-condition"');
     assert.equal(requests.at(-1).headers['idempotency-key'], 'exact-edit');
   } finally { await new Promise(resolve => server.close(resolve)); }
