@@ -56,6 +56,14 @@
   `casework.review-producer.receipt-retention-out-of-range` and
   `receipt-retention-exceeds-result-retention` instead of
   `recovery-days-out-of-range` and `recovery-exceeds-retention`.
+- A repeated stage id or routing rule id within one review policy is
+  refused by the reader as `config.duplicate-id` at the `id` of the second
+  item (CFG-ID-5), before the semantic checks run. The product codes
+  `casework.review-policy.duplicate-stage-id` and
+  `casework.routing.duplicate-rule-id` no longer appear for a project read
+  from a file. Stages and routing rules stay ordered lists. Migration: no
+  file changes; a script that matches either product code must match
+  `config.duplicate-id`.
 - The runtime's readiness check refuses a database holding a retired
   Casework schema with the same fresh-database instruction that `migrate`
   gives, instead of reporting its migration ledger as newer than the binary.

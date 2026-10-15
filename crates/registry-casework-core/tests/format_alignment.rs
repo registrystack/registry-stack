@@ -217,6 +217,30 @@ fn reordering_review_policies_context_providers_and_task_templates_changes_no_se
 }
 
 #[test]
+fn a_repeated_stage_or_routing_rule_id_is_the_shared_duplicate_id() {
+    for (text, path) in [
+        (
+            replaced("      - id: signoff\n", "      - id: technical\n"),
+            "/reviewPolicies/regional-review/stages/1/id",
+        ),
+        (
+            replaced(
+                "    stages:\n",
+                "      - id: northern-requests\n        because: The submitted region is north.\n        when: {fields: {region: {equals: north}}}\n        queue: northern-review\n    stages:\n",
+            ),
+            "/reviewPolicies/regional-review/routing/1/id",
+        ),
+    ] {
+        let diagnostics = read(&text).expect_err("a repeated id is refused");
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic.code == "config.duplicate-id"
+                && diagnostic.path == path),
+            "no config.duplicate-id at {path}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
 fn an_elapsed_budget_names_exactly_one_unit() {
     for (after, seconds) in [
         ("{minutes: 90}", 90 * 60),

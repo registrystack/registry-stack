@@ -317,8 +317,13 @@ pub struct ReviewPolicy {
     pub version: String,
     pub purpose: ReviewPurpose,
     pub context: crate::ReviewContextPolicy,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
     pub routing: Vec<crate::RoutingRule>,
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
     pub stages: Vec<ReviewStagePolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clocks: Vec<String>,
@@ -346,6 +351,18 @@ pub struct ReviewPolicy {
         schemars(schema_with = "crate::typed::id_keyed_or_list_schema::<ReviewOutcomePolicy>")
     )]
     pub outcomes: Vec<ReviewOutcomePolicy>,
+}
+
+impl registry_platform_yaml::Identified for ReviewStagePolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl registry_platform_yaml::Identified for crate::RoutingRule {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 impl registry_platform_yaml::Identified for ReviewOutcomePolicy {

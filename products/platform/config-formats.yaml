@@ -1218,7 +1218,7 @@ formats:
       optionalText: none
       integer: /reviewPolicies/decision/retention/terminalRetentionDays
       boolean: none
-      idList: none
+      idList: /reviewPolicies/decision/stages
       set: /accessProfiles/staff/requiredScopes
       reference: /reviewPolicies/decision/stages/0/queue
     securityMembers:
