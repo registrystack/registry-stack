@@ -1007,7 +1007,7 @@ pub struct TaskGrantStatusConfig {
     pub private_key_ref: SecretReference,
     /// The audience the runtime requests its status credential for, an
     /// absolute resource URI.
-    pub casework_resource: ExternalId,
+    pub status_resource: ExternalId,
     /// The one scope the runtime requests its status credential with.
     /// Omitted, `casework:grants:status`.
     #[serde(default = "default_task_grant_status_scope")]

@@ -45,7 +45,7 @@ impl From<&TaskGrantStatusConfig> for TaskGrantStatusEndpoint {
             client_assertion_audience: config.client_assertion_audience.clone(),
             client_id: config.client_id.clone(),
             private_key_ref: config.private_key_ref.clone(),
-            status_resource: config.casework_resource.clone(),
+            status_resource: config.status_resource.clone(),
             status_scope: config.status_scope.clone(),
             ca_bundle_ref: config.ca_bundle_ref.clone(),
         }

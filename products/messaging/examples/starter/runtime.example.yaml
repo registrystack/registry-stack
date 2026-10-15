@@ -86,12 +86,12 @@ audit:
 retention:
   # Payload and recipient contact: 1 to 30 days after a terminal state.
   # Content-free record: from the payload period up to ten years. Replayable
-  # submission receipt: one day up to the record period. These are defaults,
+  # submission receipt: one day up to 365 days and the record period. These are defaults,
   # not a jurisdictional recommendation; the start record in the audit journal
   # carries the deployed values.
   payloadRetentionDays: 7
   recordRetentionDays: 90
-  submissionReceiptRetentionDays: 7
+  receiptRetentionDays: 7
 # The runtime half of each provider messaging.yaml declares, by provider id,
 # with the same type. Credentials, trust bundles, and callback verifier
 # secrets are secret references resolved once at startup; a provider that

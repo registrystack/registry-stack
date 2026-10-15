@@ -145,10 +145,10 @@ makes `/ready` fail.
 |---|---|---|
 | `payloadRetentionDays` | 7 | 1 to 30 |
 | `recordRetentionDays` | 90 | `payloadRetentionDays` to 3650 |
-| `submissionReceiptRetentionDays` | 7 | 1 to `recordRetentionDays` |
+| `receiptRetentionDays` | 7 | 1 to 365, and at most `recordRetentionDays` |
 
 The start record carries the deployed values.
-`submissionReceiptRetentionDays` is also the idempotency window: a
+`receiptRetentionDays` is also the idempotency window: a
 submission repeating the request of a key whose receipt is older is refused
 with `idempotency.expired`, and one that changes the request under the key
 is refused with `idempotency.key-reused` whatever the key's age. A
@@ -165,7 +165,7 @@ and the message record stays; `recordRetentionDays` after it the record is
 deleted with its attempts and receipts. The idempotency key stays spent,
 held only as a digest of the caller and the key with its times, and a repeat
 of it, with the same request or another, is refused with
-`idempotency.expired`. `submissionReceiptRetentionDays` after acceptance the
+`idempotency.expired`. `receiptRetentionDays` after acceptance the
 stored submission receipt is dropped together with the raw issuer, subject,
 and key beside it, the request hash stays with the message record, and the
 same caller's repeat of its request under the key is refused with

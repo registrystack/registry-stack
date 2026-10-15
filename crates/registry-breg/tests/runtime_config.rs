@@ -1332,7 +1332,7 @@ fn unknown_keys_inside_a_task_grant_status_entry_are_reported_with_positions() {
          clientAssertionAudience: urn:identity:test\n    \
          clientId: breg-task-status\n    \
          privateKeyRef: secret:file/task-status-key\n    \
-         caseworkResource: urn:casework:test\n    \
+         statusResource: urn:casework:test\n    \
          statusScopes: canary-a\n    \
          scopes: canary-b\n",
         valid_runtime(&fixture.secret_root, &fixture.package_root)
@@ -4532,6 +4532,34 @@ fn an_audit_key_that_is_not_a_secret_reference_is_refused_at_the_reference() {
     }
 }
 
+/// CFG-CHANGE-2: the status resource member is named for what it binds, and
+/// the Casework-named spelling it replaced is refused with the key to write.
+#[test]
+fn a_task_status_casework_resource_is_refused_naming_status_resource() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let status = json!({
+        "sourceIssuer":"urn:casework:source",
+        "baseUrl":"https://unreachable-status.invalid",
+        "tokenEndpoint":"https://identity.example/token",
+        "clientAssertionAudience":"urn:identity:test",
+        "clientId":"breg-task-status",
+        "privateKeyRef":"secret:file/missing-task-status-key",
+        "caseworkResource":"urn:casework:test"
+    });
+    let error = parse_runtime_config_with_env(
+        &format!("{base}\ntaskGrantStatus: {}\n", json!([status])),
+        env_lookup,
+    )
+    .expect_err("the Casework-named spelling is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.removed-key", "/taskGrantStatus/0/caseworkResource")
+    );
+    let rendered = format!("{error} {}", error.render_human(None));
+    assert!(rendered.contains("statusResource"), "{rendered}");
+}
+
 #[test]
 fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     let fixture = RuntimeFixture::new();
@@ -4543,7 +4571,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         "clientAssertionAudience":"urn:identity:test",
         "clientId":"breg-task-status",
         "privateKeyRef":"secret:file/missing-task-status-key",
-        "caseworkResource":"urn:casework:test",
+        "statusResource":"urn:casework:test",
         "caBundleRef":"secret:file/missing-task-status-ca"
     });
     parse_runtime_config(&format!(
@@ -4557,7 +4585,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         ("tokenEndpoint", "https://user@identity.test/token"),
         ("clientId", ""),
         ("clientAssertionAudience", ""),
-        ("caseworkResource", "not-an-absolute-resource"),
+        ("statusResource", "not-an-absolute-resource"),
         ("statusScope", "two scopes"),
         ("statusPath", "/v1/task-grants/status"),
     ] {
@@ -4591,7 +4619,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         );
     }
     let mut invalid = status.clone();
-    invalid["caseworkResource"] = json!("not-an-absolute-resource");
+    invalid["statusResource"] = json!("not-an-absolute-resource");
     let error = parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
         .unwrap_err();
     let diagnostic = &error.diagnostics(None)[0];

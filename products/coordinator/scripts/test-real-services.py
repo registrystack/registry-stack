@@ -814,9 +814,9 @@ class Journey:
             "taskGrantStatus": [{"sourceIssuer": AUTHORITY, "baseUrl": self.urls["casework"],
                 "tokenEndpoint": status["tokenEndpoint"], "clientAssertionAudience": status["clientAssertionAudience"],
                 "clientId": Path(status["clientIdFile"]).read_text().strip(),
-                "privateKeyRef": "secret:file/" + Path(status["assertionKeyFile"]).name, "caseworkResource": resource}],
+                "privateKeyRef": "secret:file/" + Path(status["assertionKeyFile"]).name, "statusResource": resource}],
             "audit": {"destination": "file", "path": str(self.root / "audit/scheduling.ndjson"), "hashKeyRef": "secret:file/audit-key"},
-            "retention": {"attemptReceiptRetentionDays": 7},
+            "retention": {"receiptRetentionDays": 7},
         })
         self.ctl("schedulingctl", "apply", "--runtime-config", runtime)
         self.ctl("schedulingctl", "records", "apply", "--runtime-config", runtime,

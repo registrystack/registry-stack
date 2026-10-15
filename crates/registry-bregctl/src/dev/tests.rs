@@ -4732,7 +4732,7 @@ fn local_task_grant_status_uses_only_the_registered_status_client_and_resource()
             );
             assert_eq!(status["clientAssertionAudience"], "http://127.0.0.1:8095");
             assert_eq!(
-                status["caseworkResource"],
+                status["statusResource"],
                 external_resource
                     .map(str::to_owned)
                     .unwrap_or_else(|| state.audience())

@@ -107,7 +107,7 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
         "clientAssertionAudience":issuer,
         "clientId":"breg-status",
         "privateKeyRef":"secret:file/status-key",
-        "caseworkResource":"urn:casework:test"
+        "statusResource":"urn:casework:test"
     }))
     .unwrap();
     let mut wrong = config.clone();

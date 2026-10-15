@@ -341,7 +341,7 @@ sends again.
 The request hash covers the canonical request body: the same key with
 another body is `409 idempotency.key-reused` whatever the key's age, as in
 Base Registry Engine, Scheduling, and Casework, and the same body under a
-key older than `retention.submissionReceiptRetentionDays` is
+key older than `retention.receiptRetentionDays` is
 `410 idempotency.expired`. A replay is
 authorized and rendered again against the active package before the stored
 receipt is answered, so a key cannot outlive the caller's authority
@@ -360,7 +360,7 @@ revised 2026-10-07). A spent key is recorded and found under
 `registry-messaging-idempotency-key-v1` and the length-prefixed issuer,
 subject, operation, and key. The row also holds the caller's raw issuer and
 subject and the raw key, and only while its submission receipt does: when
-retention erases the receipt after `submissionReceiptRetentionDays`, whether
+retention erases the receipt after `receiptRetentionDays`, whether
 the runtime sweep or `messagingctl retention erase-expired` runs it, the
 same statement clears all three, and the record deletion after
 `recordRetentionDays` clears them too if they remain (MESSAGING-SEC-11). A
@@ -378,7 +378,7 @@ is not always a service: an access profile may admit a human or agent actor,
 or read the principal from a claim other than `sub`, so under such a profile
 the raw subject may identify a person, such as a staff member's email
 address. The raw values are accepted for at most
-`submissionReceiptRetentionDays`, a period no longer than the one the
+`receiptRetentionDays`, a period no longer than the one the
 message row already holds the issuer and subject for
 (`recordRetentionDays`). The residual is the digest itself: it is not keyed,
 because a keyed digest would let a key rotation free every spent key, the
@@ -867,7 +867,7 @@ has not expired, races an operator, or leaves no trace
 (MESSAGING-SEC-10, enforced).
 
 `retention.payloadRetentionDays` (1 to 30), `recordRetentionDays` (up to ten
-years), and `submissionReceiptRetentionDays` (up to the record period) are
+years), and `receiptRetentionDays` (up to 365 days and the record period) are
 validated and recorded at start. The payload and record periods count from
 the instant the message's dispatch job reached a terminal state,
 `delivered`, `dead-lettered`, `expired`, or `cancelled`, which the job row
@@ -881,7 +881,7 @@ idempotency row stays with the message, the request hash, any stored
 receipt, and the raw issuer, subject, and key nulled, holding only their
 digest and its times, so a repeat, exact or changed, is still
 `410 idempotency.expired` (MESSAGING-DEC-17), whatever audit hash key the
-runtime holds then. Past `submissionReceiptRetentionDays` the stored receipt
+runtime holds then. Past `receiptRetentionDays` the stored receipt
 is dropped together with the raw issuer, subject, and key, the request hash
 stays, and the same caller's exact repeat of its key is
 `410 idempotency.expired` and a changed one `409 idempotency.key-reused`
@@ -1098,3 +1098,15 @@ deployment's edge proxy to bound an authenticated flood on this route as on
 every other.
 
 When a caller must be bound to its issuer and subject, configure the Messaging caller profile with `principalClaim: sub`. Other profiles retain the product’s existing configured principal ownership rule, and cannot substitute a different principal to observe an original receipt.
+
+## One name and bound for the idempotency receipt window
+
+`retention.submissionReceiptRetentionDays` is renamed
+`retention.receiptRetentionDays`, the name BReg and Scheduling use for the
+same window, and its maximum narrows from 3650 to 365 days, BReg's bound; it
+remains at most `recordRetentionDays`. The old key is refused naming the new
+one. The sweep, the default of 7 days, and what a receipt holds are
+unchanged; a deployment that had set more than 365 days is refused at startup
+and keeps the raw issuer, subject, and key for less time once it lowers the
+value. `a_removed_key_names_the_key_that_replaced_it` and the out-of-range
+cases in `config.rs` pin the name and the bound.

@@ -148,8 +148,8 @@ impl SchedulingAuthenticator {
                 .verify_context(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::Profile)?;
         }
-        // Casework exchanges preserve approved subjects in the signed
-        // `identity` object. Keep only an object-shaped value. The shared
+        // A task-grant exchange preserves the subjects its source authority
+        // approved in the signed `identity` object. Keep only an object-shaped value. The shared
         // binding validates its field and value bounds before any use. The
         // offline path that `unchecked-final-fifteen-minutes` selects does not
         // require this member, so absence or an older shape remains a

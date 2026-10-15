@@ -299,7 +299,7 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
     });
     let task_status = json!([{"sourceIssuer":"https://tasks.example.test","baseUrl":grant_origin,
         "tokenEndpoint":issuer.token_endpoint(),"clientAssertionAudience":issuer.issuer(),
-        "clientId":"grant-status-reader","privateKeyRef":"secret:file/status-key","caseworkResource":"urn:tasks:native"}]);
+        "clientId":"grant-status-reader","privateKeyRef":"secret:file/status-key","statusResource":"urn:tasks:native"}]);
     let service = breg_service::Breg::start_citizen(
         &issuer,
         citizen_project::project(),

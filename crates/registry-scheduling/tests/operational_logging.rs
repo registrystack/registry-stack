@@ -52,7 +52,7 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
         "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"destination": "stdout", "hashKeyRef": "secret:env/SCHEDULING_TEST_AUDIT_KEY"},
         "destinations": {},
-        "retention": {"attemptReceiptRetentionDays": 7}
+        "retention": {"receiptRetentionDays": 7}
     });
     let runtime_path = root.path().join("runtime.yaml");
     std::fs::write(

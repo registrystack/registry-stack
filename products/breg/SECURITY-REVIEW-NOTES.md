@@ -3580,3 +3580,17 @@ changes-requested selects the provider's current policy again unless pinned.
 Use a complete exact pin when the version chosen at submission must be the
 version that decides. ID-only selection intentionally trusts provider policy
 administration until first acceptance, then preserves exact correlation.
+
+## The task-grant status resource is named for what it binds
+
+A `taskGrantStatus` entry names the audience its status credential is
+requested for `statusResource` (was `caseworkResource`), because Coordinator
+or an external task authority can answer grant status as well as Casework.
+This is authorization configuration: the key selects the resource the
+runtime's own status credential is issued for. The rename changes no
+behavior. The value is read, validated as an absolute resource URI, and sent
+exactly as before, and the old key is refused with `config.removed-key`
+naming `statusResource` rather than read as an alias, so a file cannot carry
+both spellings with different values. Tests:
+`a_task_status_casework_resource_is_refused_naming_status_resource`, plus the
+existing structural refusal tests that now use `statusResource`.

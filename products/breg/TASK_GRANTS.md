@@ -89,7 +89,7 @@ taskGrantStatus:
     clientAssertionAudience: https://identity.example.gov
     clientId: breg-task-status
     privateKeyRef: secret:file/breg-task-status-private-jwk
-    caseworkResource: urn:casework:case-management
+    statusResource: urn:casework:case-management
 ```
 
 `statusScope` and `statusPath` are optional. Omitted, BReg requests the

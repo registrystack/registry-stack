@@ -53,10 +53,10 @@ pub const PACKAGE_COMMAND: &str = "schedulingctl package";
 /// before the retention sweep erases it. The default is a floor, not a
 /// recommendation: a jurisdiction's retention schedule approves the deployed
 /// value, and the deployed value is what the audit entries record.
-pub const DEFAULT_ATTEMPT_RECEIPT_RETENTION_DAYS: u32 = 7;
+pub const DEFAULT_RECEIPT_RETENTION_DAYS: u32 = 7;
 
 /// The longest a stored idempotency receipt may stay replayable, in days.
-pub const MAX_ATTEMPT_RECEIPT_RETENTION_DAYS: u32 = 65_535;
+pub const MAX_RECEIPT_RETENTION_DAYS: u32 = 365;
 
 /// The longest a canonical hook envelope may be retained for retry and
 /// dead-letter inspection, in days.
@@ -94,11 +94,20 @@ pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "retention.attemptReceiptDays",
-        replacement: "Rename retention.attemptReceiptDays to retention.attemptReceiptRetentionDays",
+        replacement: "Rename retention.attemptReceiptDays to retention.receiptRetentionDays",
+    },
+    RemovedKey {
+        path: "retention.attemptReceiptRetentionDays",
+        replacement:
+            "Rename retention.attemptReceiptRetentionDays to retention.receiptRetentionDays",
     },
     RemovedKey {
         path: "retention.hookPayloadDays",
         replacement: "Rename retention.hookPayloadDays to retention.hookPayloadRetentionDays",
+    },
+    RemovedKey {
+        path: "taskGrantStatus.*.caseworkResource",
+        replacement: "Rename caseworkResource to statusResource in each taskGrantStatus entry",
     },
 ];
 
@@ -569,16 +578,16 @@ const fn default_hook_maximum_attempts() -> u8 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetentionConfig {
     /// How long a stored idempotency receipt stays replayable, from one
-    /// through 65535 days.
+    /// through 365 days.
     #[serde(
-        default = "default_attempt_receipt_retention_days",
-        deserialize_with = "bounded_u32::<_, 1, MAX_ATTEMPT_RECEIPT_RETENTION_DAYS>"
+        default = "default_receipt_retention_days",
+        deserialize_with = "bounded_u32::<_, 1, MAX_RECEIPT_RETENTION_DAYS>"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(range(min = 1, max = MAX_ATTEMPT_RECEIPT_RETENTION_DAYS))
+        schemars(range(min = 1, max = MAX_RECEIPT_RETENTION_DAYS))
     )]
-    pub attempt_receipt_retention_days: u32,
+    pub receipt_retention_days: u32,
     /// Lifetime of canonical hook envelopes retained for retry and
     /// dead-letter inspection, from one through thirty days.
     #[serde(
@@ -595,14 +604,14 @@ pub struct RetentionConfig {
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
-            attempt_receipt_retention_days: DEFAULT_ATTEMPT_RECEIPT_RETENTION_DAYS,
+            receipt_retention_days: DEFAULT_RECEIPT_RETENTION_DAYS,
             hook_payload_retention_days: default_hook_payload_retention_days(),
         }
     }
 }
 
-const fn default_attempt_receipt_retention_days() -> u32 {
-    DEFAULT_ATTEMPT_RECEIPT_RETENTION_DAYS
+const fn default_receipt_retention_days() -> u32 {
+    DEFAULT_RECEIPT_RETENTION_DAYS
 }
 
 const fn default_hook_payload_retention_days() -> u32 {
@@ -1308,7 +1317,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         | ["destinations", "reminders", "url"]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
         ["taskGrantStatus", _, "sourceIssuer"]
-        | ["taskGrantStatus", _, "caseworkResource"]
+        | ["taskGrantStatus", _, "statusResource"]
         | ["taskGrantStatus", _, "clientAssertionAudience"] => "urn:deferred:status",
         _ => DEFAULT_STAND_IN,
     }
@@ -1378,7 +1387,7 @@ pub enum RuntimeConfigError {
         "the runtime configuration must state how a task grant is checked before capacity work; add taskGrantStatus with the task authorities whose grant status Scheduling checks, or unchecked-final-fifteen-minutes"
     )]
     MissingTaskGrantStatus,
-    #[error("taskGrantStatus must bind at most 32 unique absolute source issuers, safe service/token URLs, non-empty client and assertion audience, an absolute Casework resource, one status scope token, and a status path with one {{grantId}} segment")]
+    #[error("taskGrantStatus must bind at most 32 unique absolute source issuers, safe service/token URLs, non-empty client and assertion audience, an absolute status resource, one status scope token, and a status path with one {{grantId}} segment")]
     InvalidTaskGrantStatus,
     #[error(
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
@@ -1538,7 +1547,7 @@ impl RuntimeConfigError {
                 "Add taskGrantStatus listing the task authorities whose grant status Scheduling checks, or write taskGrantStatus: unchecked-final-fifteen-minutes to accept only a grant with at most fifteen minutes left, without a revocation check."
             }
             Self::InvalidTaskGrantStatus => {
-                "Configure at most 32 distinct absolute source issuers with safe service/token URLs, non-empty client and assertion audience, an absolute Casework resource, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment, then retry."
+                "Configure at most 32 distinct absolute source issuers with safe service/token URLs, non-empty client and assertion audience, an absolute status resource, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment, then retry."
             }
             Self::AllowedClientsRequired => {
                 "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
@@ -1831,7 +1840,7 @@ holdPolicy:
             "taskGrantStatus": "unchecked-final-fifteen-minutes",
             "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "destinations": {},
-            "retention": {"attemptReceiptRetentionDays": 7}
+            "retention": {"receiptRetentionDays": 7}
         })
     }
 
@@ -1902,7 +1911,7 @@ holdPolicy:
             config.authentication.oidc.explain_scope,
             "scheduling-explain"
         );
-        assert_eq!(config.retention.attempt_receipt_retention_days, 7);
+        assert_eq!(config.retention.receipt_retention_days, 7);
         assert_eq!(config.retention.hook_payload_retention_days, 7);
         assert!(config.destinations.reminders.is_none());
         assert!(config.destinations.hooks.is_empty());
@@ -1922,7 +1931,7 @@ holdPolicy:
             "clientAssertionAudience":"https://identity.example.test",
             "clientId":"scheduling-task-status",
             "privateKeyRef":"secret:file/missing-status-key",
-            "caseworkResource":"urn:example:casework",
+            "statusResource":"urn:example:casework",
             "caBundleRef":"secret:file/missing-root-ca"
         });
         for (field, value) in [
@@ -1940,7 +1949,7 @@ holdPolicy:
             ("clientId", ""),
             ("clientId", "  "),
             ("clientAssertionAudience", ""),
-            ("caseworkResource", "relative-resource"),
+            ("statusResource", "relative-resource"),
             ("statusScope", "two scopes"),
             ("statusPath", "/v1/task-grants/status"),
             ("statusPath", "relative/{grantId}"),
@@ -1999,7 +2008,7 @@ holdPolicy:
                 "clientAssertionAudience":"urn:identity:test",
                 "clientId":"scheduling-task-status",
                 "privateKeyRef":"secret:file/missing-status-key",
-                "caseworkResource":"urn:example:casework",
+                "statusResource":"urn:example:casework",
                 "caBundleRef":"secret:file/missing-root-ca"
             }))
             .collect::<Vec<_>>());
@@ -2020,7 +2029,7 @@ holdPolicy:
             "clientAssertionAudience": "urn:identity:test",
             "clientId": "status-client",
             "privateKeyRef": "secret:file/missing-status-key",
-            "caseworkResource": "urn:casework:test"
+            "statusResource": "urn:casework:test"
         }]);
         let path = write_operator(root.path(), document);
         let check = check_runtime(&path, None, false);
@@ -2052,7 +2061,7 @@ holdPolicy:
             "clientAssertionAudience": "${SCHEDULING_STATUS_CHECK_UNSET_AUDIENCE}",
             "clientId": "status-client",
             "privateKeyRef": "secret:file/missing-status-key",
-            "caseworkResource": "${SCHEDULING_STATUS_CHECK_UNSET_RESOURCE}",
+            "statusResource": "${SCHEDULING_STATUS_CHECK_UNSET_RESOURCE}",
             "statusScope": "${SCHEDULING_STATUS_CHECK_UNSET_SCOPE}",
             "statusPath": "${SCHEDULING_STATUS_CHECK_UNSET_PATH}"
         }]);
@@ -2086,7 +2095,7 @@ holdPolicy:
             "clientAssertionAudience": "https://identity.example.test",
             "clientId": "scheduling-task-status",
             "privateKeyRef": "secret:file/task-status-private-jwk",
-            "caseworkResource": "urn:example:casework",
+            "statusResource": "urn:example:casework",
             "caBundleRef": "secret:file/institution-root-ca"
         }]);
         let config = RuntimeConfig::load(write_operator(root.path(), document))
@@ -2119,7 +2128,7 @@ holdPolicy:
             "clientAssertionAudience": "https://identity.example.test",
             "clientId": "scheduling-task-status",
             "privateKeyRef": "secret:file/task-status-private-jwk",
-            "caseworkResource": "urn:example:casework"
+            "statusResource": "urn:example:casework"
         });
         let load = |entry: serde_json::Value| {
             let mut document = operator_value(&package, "development-loopback");
@@ -2414,7 +2423,13 @@ holdPolicy:
                 "retention",
                 "attemptReceiptDays",
                 "/retention/attemptReceiptDays",
-                "retention.attemptReceiptRetentionDays",
+                "retention.receiptRetentionDays",
+            ),
+            (
+                "retention",
+                "attemptReceiptRetentionDays",
+                "/retention/attemptReceiptRetentionDays",
+                "retention.receiptRetentionDays",
             ),
             (
                 "retention",
@@ -2436,6 +2451,34 @@ holdPolicy:
                 error.suggested_action()
             );
         }
+    }
+
+    #[test]
+    fn a_task_status_casework_resource_is_refused_naming_status_resource() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["taskGrantStatus"] = serde_json::json!([{
+            "sourceIssuer": "https://casework.example.test/task-authority",
+            "baseUrl": "https://casework.example.test",
+            "tokenEndpoint": "https://identity.example.test/oauth2/token",
+            "clientAssertionAudience": "https://identity.example.test",
+            "clientId": "scheduling-task-status",
+            "privateKeyRef": "secret:file/missing-status-key",
+            "caseworkResource": "urn:example:casework"
+        }]);
+        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.removed-key".to_owned(),
+                "/taskGrantStatus/0/caseworkResource".to_owned()
+            )
+        );
+        assert!(
+            error.suggested_action().contains("statusResource"),
+            "{}",
+            error.suggested_action()
+        );
     }
 
     #[test]
@@ -2566,9 +2609,15 @@ holdPolicy:
             ),
             (
                 "retention",
-                serde_json::json!({"attemptReceiptRetentionDays": 0}),
+                serde_json::json!({"receiptRetentionDays": 0}),
                 "config.out-of-range",
-                "/retention/attemptReceiptRetentionDays",
+                "/retention/receiptRetentionDays",
+            ),
+            (
+                "retention",
+                serde_json::json!({"receiptRetentionDays": 366}),
+                "config.out-of-range",
+                "/retention/receiptRetentionDays",
             ),
             (
                 "retention",
@@ -3026,10 +3075,10 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
-        document["retention"]["attemptReceiptRetentionDays"] = serde_json::json!(canary);
+        document["retention"]["receiptRetentionDays"] = serde_json::json!(canary);
 
         let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
-        assert_eq!(error.pointer(), "/retention/attemptReceiptRetentionDays");
+        assert_eq!(error.pointer(), "/retention/receiptRetentionDays");
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
         };
@@ -3277,7 +3326,7 @@ holdPolicy:
             "clientAssertionAudience": "urn:identity:test",
             "clientId": "scheduling-status",
             "privateKeyRef": "secret:file/status-key",
-            "caseworkResource": "urn:casework:test",
+            "statusResource": "urn:casework:test",
             "statusScopes": "canary-a",
             "scopes": "canary-b"
         }]);

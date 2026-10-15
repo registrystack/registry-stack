@@ -2252,7 +2252,7 @@ fn local_task_grant_status(state: &State, clients: &Clients) -> Vec<Value> {
                 "clientAssertionAudience": state.issuer_origin(),
                 "clientId": status.client,
                 "privateKeyRef": format!("secret:file/task-status-{id}-client-assertion-key"),
-                "caseworkResource": client_resource(state, clients, &status.client)
+                "statusResource": client_resource(state, clients, &status.client)
             })
         })
         .collect()

@@ -13,7 +13,7 @@
 //!   idempotency record stays, holding only the digest of the caller and
 //!   the key and its times, so the key stays spent;
 //! - a submission receipt, the stored answer an idempotent replay returns,
-//!   is erased when its `submissionReceiptRetentionDays` end, together with the raw
+//!   is erased when its `receiptRetentionDays` end, together with the raw
 //!   issuer, subject, and key beside it, and its key stays spent under
 //!   their digest.
 //!

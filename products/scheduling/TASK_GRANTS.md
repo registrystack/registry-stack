@@ -210,7 +210,7 @@ taskGrantStatus:
     clientAssertionAudience: https://identity.example.test/realms/registry
     clientId: scheduling-task-status
     privateKeyRef: secret:file/scheduling-task-status-private-jwk
-    caseworkResource: urn:example:casework
+    statusResource: urn:example:casework
 ```
 
 Register `scheduling-task-status` with the identity provider for private-key

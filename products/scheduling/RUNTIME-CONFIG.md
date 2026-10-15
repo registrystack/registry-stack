@@ -29,8 +29,10 @@ kind: SchedulingRuntimeConfig
 
 The earlier `registry.registrystack.org/scheduling-runtime/v1alpha1` envelope
 is refused with a diagnostic naming this one. So are the renamed keys
-`audit.retainDays`, `retention.attemptReceiptDays`, and
-`retention.hookPayloadDays`, each naming the key that replaced it.
+`audit.retainDays`, `retention.attemptReceiptDays`,
+`retention.attemptReceiptRetentionDays`, `retention.hookPayloadDays`, and
+`caseworkResource` in a `taskGrantStatus` entry, each naming the key that
+replaced it.
 `schedulingctl check PROJECT --runtime-config FILE` reads a runtime file the
 way startup does, against the project's policy, with no package, database,
 network, or secret material, and reports every refusal at its file, line,
@@ -205,13 +207,13 @@ taskGrantStatus:
     clientAssertionAudience: https://identity.example.test/realms/registry
     clientId: scheduling-task-status
     privateKeyRef: secret:file/scheduling-task-status-private-jwk
-    caseworkResource: urn:example:casework
+    statusResource: urn:example:casework
     caBundleRef: secret:file/institution-root-ca
 ```
 
 Offline runtime checks require one to 32 entries with distinct absolute
 `sourceIssuer` identifiers, safe service and token URLs, non-empty client and
-assertion audience, an absolute Casework resource, one status scope token, and
+assertion audience, an absolute status resource, one status scope token, and
 a status path with one `{grantId}` segment. They validate secret
 reference structure without resolving the private key or CA bundle or contacting
 an endpoint. Activation repeats the structural check and verifies key and CA
@@ -221,7 +223,7 @@ contents.
 `baseUrl` selects that authority's HTTPS API. `tokenEndpoint`,
 `clientAssertionAudience`, `clientId`, and `privateKeyRef` configure the
 private-key JWT client credential used to obtain a token for
-`caseworkResource` with the `statusScope` scope. The private key is a JWK
+`statusResource` with the `statusScope` scope. The private key is a JWK
 whose `kid` selects its registered public key. `caBundleRef` is optional and
 applies a private CA bundle to both outbound HTTPS connections.
 
@@ -329,8 +331,8 @@ bindings are allowed so retained events captured under an earlier policy can
 finish with their exact original binding. Startup refuses if a retained event's
 binding is no longer available.
 
-`retention.attemptReceiptRetentionDays` covers idempotency attempt receipts
-from 1 through 65535 days; listing cursors keep their fixed fifteen-minute
+`retention.receiptRetentionDays` covers idempotency attempt receipts
+from 1 through 365 days; listing cursors keep their fixed fifteen-minute
 lifetime. `retention.hookPayloadRetentionDays` sets the canonical observer payload's retry and
 dead-letter lifetime from 1 through 30 days. Both configured values default to
 seven days, which is not a jurisdictional recommendation. Appointment, history,

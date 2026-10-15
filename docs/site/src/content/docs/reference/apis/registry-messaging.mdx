@@ -41,7 +41,7 @@ scoped to the verified issuer and principal. The access profile's `principalClai
 principal from the verified token; with `principalClaim: sub`, it is the token subject. The same key with the
 same request answers the stored receipt again, and the same key with a different request is refused
 with `idempotency.key-reused`, whatever the key's age. The same request under a key whose stored
-receipt is older than the deployment's `retention.submissionReceiptRetentionDays` is refused with
+receipt is older than the deployment's `retention.receiptRetentionDays` is refused with
 `idempotency.expired`, because the first answer is no longer held. Retention then clears the raw
 issuer, principal, and key from the row and keeps only a SHA-256 digest of them beside the request
 hash, so the key stays spent for that caller alone; another caller's identical key is a fresh
@@ -73,7 +73,7 @@ and may already be sending. A `403` or `422` answer to an exact retry does not s
 attempt failed; do not resubmit under a new key on that answer alone. To retry the original
 submission through the submission route, have the operator restore the caller's access with an active package that again
 lists the sender profile, template, and locale and still carries the template version the first
-attempt named, then retry under the same key within `retention.submissionReceiptRetentionDays`. A package
+attempt named, then retry under the same key within `retention.receiptRetentionDays`. A package
 that retired that version answers the retry with `404 template.not-found`, and the retry must still
 render and fit the sender profile under the restored package, or it is refused again. A retry that
 passes authorization and renders answers the stored receipt, which carries the first attempt's

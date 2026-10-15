@@ -234,7 +234,7 @@ invariants:
       retention.payloadRetentionDays after its dispatch job reached a terminal
       state, a record is deleted retention.recordRetentionDays after it, and a
       submission receipt is dropped when its
-      retention.submissionReceiptRetentionDays end. Each terminal job is
+      retention.receiptRetentionDays end. Each terminal job is
       locked before its payload is erased, so an operator requeue that commits
       first keeps the payload.
     refusal: >-

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: a `taskGrantStatus` entry names its status resource
+  `statusResource` (was `caseworkResource`), since any task authority, not
+  only Casework, can answer grant status. The old key is refused with
+  `config.removed-key` naming `statusResource`. Migration: rename the key;
+  the value stays as it is.
+
 - `bregctl dev` pulls the same pinned PostgreSQL image from Docker Hub after
   ECR Public throttled hosted development journeys. Existing owned containers
   at the prior exact ECR reference remain valid.

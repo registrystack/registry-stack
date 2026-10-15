@@ -200,6 +200,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename attachmentVerification.kind to attachmentVerification.type; the value stays as it is",
     },
     REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RemovedKey {
+        path: "taskGrantStatus.*.caseworkResource",
+        replacement: "rename caseworkResource to statusResource in each taskGrantStatus entry; the value stays as it is",
+    },
 ];
 
 /// The shared reader's refusal of a runtime configuration file: every
@@ -705,7 +709,7 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         | "sourceIssuer"
         | "tokenEndpoint"
         | "clientAssertionAudience"
-        | "caseworkResource"]
+        | "statusResource"]
         | ["reviewAuthorities", _, "endpoint"]
         | ["reviewAuthorities", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
             "https://deferred.invalid/"

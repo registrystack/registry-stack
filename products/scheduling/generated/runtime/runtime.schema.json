@@ -423,19 +423,19 @@
       "additionalProperties": false,
       "description": "Retention periods the retention sweep enforces. Every value is deployment\nconfiguration, never policy: a jurisdiction's retention schedule approves\nthe deployed numbers, and changing one is an operational event.",
       "properties": {
-        "attemptReceiptRetentionDays": {
-          "default": 7,
-          "description": "How long a stored idempotency receipt stays replayable, from one\nthrough 65535 days.",
-          "format": "uint32",
-          "maximum": 65535,
-          "minimum": 1,
-          "type": "integer"
-        },
         "hookPayloadRetentionDays": {
           "default": 7,
           "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection, from one through thirty days.",
           "format": "uint32",
           "maximum": 30,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "receiptRetentionDays": {
+          "default": 7,
+          "description": "How long a stored idempotency receipt stays replayable, from one\nthrough 365 days.",
+          "format": "uint32",
+          "maximum": 365,
           "minimum": 1,
           "type": "integer"
         }
@@ -496,10 +496,6 @@
           "$ref": "#/$defs/SecretReference",
           "description": "PEM CA bundle for the authority and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
         },
-        "caseworkResource": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
-        },
         "clientAssertionAudience": {
           "$ref": "#/$defs/ExternalId"
         },
@@ -518,6 +514,10 @@
           "description": "The status route appended to `baseUrl`'s path. It starts with `/` and\nhas exactly one whole `{grantId}` segment; every other segment uses\nonly letters, digits, `-`, `.`, `_`, and `~`. Omitted,\n`/v1/task-grants/{grantId}/status`.",
           "type": "string"
         },
+        "statusResource": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
+        },
         "statusScope": {
           "$ref": "#/$defs/ExternalId",
           "default": "casework:grants:status",
@@ -534,7 +534,7 @@
         "clientAssertionAudience",
         "clientId",
         "privateKeyRef",
-        "caseworkResource"
+        "statusResource"
       ],
       "type": "object"
     },

@@ -510,7 +510,7 @@ async fn activated_task_status(
             "clientAssertionAudience": base,
             "clientId": "scheduling-status",
             "privateKeyRef": format!("secret:env/{secret_name}"),
-            "caseworkResource": "urn:casework:test"
+            "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
     let registry = TaskGrantStatusRegistry::activate(
@@ -4625,7 +4625,7 @@ fn sealed_deployment(
         "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
-        "retention": {"attemptReceiptRetentionDays": 7},
+        "retention": {"receiptRetentionDays": 7},
     });
     let operator = root.join("runtime.yaml");
     std::fs::write(

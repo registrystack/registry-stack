@@ -4,7 +4,7 @@
 //! `retention.payloadRetentionDays` after the message reached a terminal
 //! state, its record is deleted `retention.recordRetentionDays` after, a
 //! submission receipt expires at the end of
-//! `retention.submissionReceiptRetentionDays`, and nothing of a message
+//! `retention.receiptRetentionDays`, and nothing of a message
 //! still sending or in an unknown outcome is ever erased.
 //!
 //! A message's dispatch state and its age are set directly in the schema,

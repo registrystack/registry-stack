@@ -332,10 +332,6 @@
           "$ref": "#/$defs/SecretReference",
           "description": "PEM CA bundle for the authority and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
         },
-        "caseworkResource": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
-        },
         "clientAssertionAudience": {
           "$ref": "#/$defs/ExternalId"
         },
@@ -354,6 +350,10 @@
           "description": "The status route appended to `baseUrl`'s path. It starts with `/` and\nhas exactly one whole `{grantId}` segment; every other segment uses\nonly letters, digits, `-`, `.`, `_`, and `~`. Omitted,\n`/v1/task-grants/{grantId}/status`.",
           "type": "string"
         },
+        "statusResource": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
+        },
         "statusScope": {
           "$ref": "#/$defs/ExternalId",
           "default": "casework:grants:status",
@@ -370,7 +370,7 @@
         "clientAssertionAudience",
         "clientId",
         "privateKeyRef",
-        "caseworkResource"
+        "statusResource"
       ],
       "type": "object"
     },

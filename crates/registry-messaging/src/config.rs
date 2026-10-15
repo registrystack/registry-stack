@@ -127,7 +127,11 @@ pub const MESSAGING_REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "retention.submissionReceiptDays",
-        replacement: "Write retention.submissionReceiptRetentionDays with the same value.",
+        replacement: "Write retention.receiptRetentionDays with the same value.",
+    },
+    RemovedKey {
+        path: "retention.submissionReceiptRetentionDays",
+        replacement: "Write retention.receiptRetentionDays with the same value.",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -148,7 +152,8 @@ pub const DEFAULT_PAYLOAD_RETENTION_DAYS: u16 = 7;
 pub const MAXIMUM_PAYLOAD_RETENTION_DAYS: u16 = 30;
 pub const DEFAULT_RECORD_RETENTION_DAYS: u16 = 90;
 pub const MAXIMUM_RECORD_RETENTION_DAYS: u16 = 3650;
-pub const DEFAULT_SUBMISSION_RECEIPT_RETENTION_DAYS: u16 = 7;
+pub const DEFAULT_RECEIPT_RETENTION_DAYS: u16 = 7;
+pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u16 = 365;
 
 /// The most trust profiles one runtime document declares.
 pub const MAXIMUM_TLS_TRUST_PROFILES: usize = 64;
@@ -383,16 +388,17 @@ pub struct RetentionConfig {
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
     pub record_retention_days: u16,
     /// How long a submission receipt stays replayable under its idempotency
-    /// key, from one day to the record period.
+    /// key, from one day to the record period and at most 365 days.
     #[serde(
-        default = "default_submission_receipt_retention_days",
-        deserialize_with = "typed::bounded_u16::<_, 1, 3650>"
+        default = "default_receipt_retention_days",
+        deserialize_with = "typed::bounded_u16::<_, 1, 365>"
     )]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
-    pub submission_receipt_retention_days: u16,
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 365)))]
+    pub receipt_retention_days: u16,
 }
 
 const _: () = assert!(MAXIMUM_PAYLOAD_RETENTION_DAYS == 30);
+const _: () = assert!(MAXIMUM_RECEIPT_RETENTION_DAYS == 365);
 const _: () = assert!(MAXIMUM_RECORD_RETENTION_DAYS == 3650);
 
 impl Default for RetentionConfig {
@@ -400,7 +406,7 @@ impl Default for RetentionConfig {
         Self {
             payload_retention_days: DEFAULT_PAYLOAD_RETENTION_DAYS,
             record_retention_days: DEFAULT_RECORD_RETENTION_DAYS,
-            submission_receipt_retention_days: DEFAULT_SUBMISSION_RECEIPT_RETENTION_DAYS,
+            receipt_retention_days: DEFAULT_RECEIPT_RETENTION_DAYS,
         }
     }
 }
@@ -413,7 +419,7 @@ impl RetentionConfig {
         serde_json::json!({
             "payloadRetentionDays": self.payload_retention_days,
             "recordRetentionDays": self.record_retention_days,
-            "submissionReceiptRetentionDays": self.submission_receipt_retention_days,
+            "receiptRetentionDays": self.receipt_retention_days,
         })
     }
 }
@@ -426,8 +432,8 @@ const fn default_record_retention_days() -> u16 {
     DEFAULT_RECORD_RETENTION_DAYS
 }
 
-const fn default_submission_receipt_retention_days() -> u16 {
-    DEFAULT_SUBMISSION_RECEIPT_RETENTION_DAYS
+const fn default_receipt_retention_days() -> u16 {
+    DEFAULT_RECEIPT_RETENTION_DAYS
 }
 
 /// A rule a runtime document must satisfy on its own; it records every
@@ -694,7 +700,7 @@ impl RuntimeConfig {
         if retention.record_retention_days < retention.payload_retention_days {
             findings.push(RuntimeConfigError::RecordRetentionShorterThanPayload);
         }
-        if retention.submission_receipt_retention_days > retention.record_retention_days {
+        if retention.receipt_retention_days > retention.record_retention_days {
             findings.push(RuntimeConfigError::ReceiptRetentionLongerThanRecord);
         }
     }
@@ -1254,7 +1260,7 @@ pub enum RuntimeConfigError {
     #[error("retention.recordRetentionDays must be at least retention.payloadRetentionDays")]
     RecordRetentionShorterThanPayload,
     #[error(
-        "retention.submissionReceiptRetentionDays must be at most \
+        "retention.receiptRetentionDays must be at most \
          retention.recordRetentionDays"
     )]
     ReceiptRetentionLongerThanRecord,
@@ -1330,9 +1336,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference => "/database".to_owned(),
             Self::PlaintextDatabase => "/database/testOnlyPlaintext".to_owned(),
             Self::RecordRetentionShorterThanPayload => "/retention/recordRetentionDays".to_owned(),
-            Self::ReceiptRetentionLongerThanRecord => {
-                "/retention/submissionReceiptRetentionDays".to_owned()
-            }
+            Self::ReceiptRetentionLongerThanRecord => "/retention/receiptRetentionDays".to_owned(),
             Self::TooManyTlsTrustProfiles => "/tlsTrustProfiles".to_owned(),
             Self::UndeclaredTrustProfile { provider } => {
                 provider_pointer(provider, "tlsTrustProfile")
@@ -1440,7 +1444,7 @@ impl RuntimeConfigError {
                 "Raise retention.recordRetentionDays to at least retention.payloadRetentionDays."
             }
             Self::ReceiptRetentionLongerThanRecord => {
-                "Lower retention.submissionReceiptRetentionDays to at most retention.recordRetentionDays."
+                "Lower retention.receiptRetentionDays to at most retention.recordRetentionDays."
             }
             Self::TooManyTlsTrustProfiles => {
                 "Declare at most 64 profiles under tlsTrustProfiles, removing those no provider names."
@@ -1957,8 +1961,12 @@ pub(crate) mod tests {
                 "/retention/recordRetentionDays",
             ),
             (
-                json!({"submissionReceiptRetentionDays": 0}),
-                "/retention/submissionReceiptRetentionDays",
+                json!({"receiptRetentionDays": 0}),
+                "/retention/receiptRetentionDays",
+            ),
+            (
+                json!({"recordRetentionDays": 3650, "receiptRetentionDays": 366}),
+                "/retention/receiptRetentionDays",
             ),
         ] {
             let mut value = base();
@@ -1985,20 +1993,20 @@ pub(crate) mod tests {
         value["retention"] = json!({
             "recordRetentionDays": 10,
             "payloadRetentionDays": 5,
-            "submissionReceiptRetentionDays": 11
+            "receiptRetentionDays": 11
         });
         let error = load(value).unwrap_err();
         assert!(
             matches!(error, RuntimeConfigError::ReceiptRetentionLongerThanRecord),
             "{error}"
         );
-        assert_eq!(error.pointer(), "/retention/submissionReceiptRetentionDays");
+        assert_eq!(error.pointer(), "/retention/receiptRetentionDays");
 
         let mut value = base();
         value["retention"] = json!({
             "payloadRetentionDays": 30,
             "recordRetentionDays": 30,
-            "submissionReceiptRetentionDays": 30
+            "receiptRetentionDays": 30
         });
         load(value).unwrap();
     }
@@ -2012,7 +2020,13 @@ pub(crate) mod tests {
                 "retention",
                 "submissionReceiptDays",
                 json!(7),
+                "retention.receiptRetentionDays",
+            ),
+            (
+                "retention",
                 "submissionReceiptRetentionDays",
+                json!(7),
+                "retention.receiptRetentionDays",
             ),
             ("audit", "retainDays", json!(30), "audit.retentionDays"),
         ] {

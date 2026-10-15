@@ -270,7 +270,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             policy_digest,
             audit_hasher,
             audit,
-            config.retention.attempt_receipt_retention_days,
+            config.retention.receipt_retention_days,
         )
         .with_hooks(hooks)
         .with_task_grant_status(task_grant_status),
@@ -343,7 +343,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // The whole of retention, and deliberately not all of retention. This
     // sweep erases two things: idempotency attempt receipts, with the raw
     // caller and key they were filed under, after the configured
-    // `retention.attemptReceiptRetentionDays`, and listing cursors, after
+    // `retention.receiptRetentionDays`, and listing cursors, after
     // the fifteen minutes the listing contract gives them. Appointments,
     // their history, and the delivery outbox are never swept, by decision
     // and not by omission: committed scheduling data has

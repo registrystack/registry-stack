@@ -18,7 +18,7 @@
 //! same key with the same canonical request replays the stored status and
 //! receipt; the same key with another request is refused with
 //! `idempotency.key-reused`, whatever the key's age; the same request under
-//! a key whose receipt is older than `retention.submissionReceiptRetentionDays` is
+//! a key whose receipt is older than `retention.receiptRetentionDays` is
 //! refused with `idempotency.expired`. A replay is authorized and rendered again against
 //! the active package before its receipt is answered.
 //!
@@ -1203,7 +1203,7 @@ impl MessageService {
             links: MessageLinks::for_message(&message_id.to_string()),
         })
         .map_err(|_| Refusal::Problem(ProblemCode::ServiceUnavailable))?;
-        let receipt_expires = now + days(self.retention.submission_receipt_retention_days);
+        let receipt_expires = now + days(self.retention.receipt_retention_days);
         let inserted = transaction
             .execute(
                 "INSERT INTO messaging_idempotency \

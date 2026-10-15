@@ -3269,7 +3269,7 @@ mod tests {
             "clientAssertionAudience": base,
             "clientId": "scheduling-status",
             "privateKeyRef": format!("secret:env/{secret_name}"),
-            "caseworkResource": "urn:casework:test"
+            "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
         let registry = TaskGrantStatusRegistry::activate(

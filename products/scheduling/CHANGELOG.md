@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: a `taskGrantStatus` entry names its status resource
+  `statusResource` (was `caseworkResource`), since any task authority, not
+  only Casework, can answer grant status. The old key is refused with
+  `config.removed-key` naming `statusResource`. Migration: rename the key;
+  the value stays as it is.
+
+- BREAKING: `retention.attemptReceiptRetentionDays` is renamed
+  `retention.receiptRetentionDays`, the name BReg and Messaging use for the
+  same window, and its maximum is 365 days (was 65535). The old key is
+  refused with `config.removed-key` naming the new one. Migration: rename the
+  key and keep a value of at most 365.
+
 - BREAKING: reminder events are delivered as the shared hook envelope that
   appointment observers receive, so a receiver parses one envelope. The body
   drops `specversion`; `source` is `urn:registrystack:scheduling:<id>`;

@@ -173,7 +173,7 @@ audit:
 retention:
   payloadRetentionDays: 7
   recordRetentionDays: 90
-  submissionReceiptRetentionDays: 7
+  receiptRetentionDays: 7
 providers:
   mail-relay:
     type: smtp
@@ -287,9 +287,9 @@ and signs, so a reverse proxy in front of the runtime must not change it.
 | --- | --- | --- |
 | `payloadRetentionDays` | 7 | 1 to 30 |
 | `recordRetentionDays` | 90 | `payloadRetentionDays` to 3650 |
-| `submissionReceiptRetentionDays` | 7 | 1 to `recordRetentionDays` |
+| `receiptRetentionDays` | 7 | 1 to 365, and at most `recordRetentionDays` |
 
-`submissionReceiptRetentionDays` is also the idempotency window: the same request under a key
+`receiptRetentionDays` is also the idempotency window: the same request under a key
 whose stored receipt is older is refused with `410 idempotency.expired`, and a different request
 under the key is refused with `409 idempotency.key-reused` whatever the key's age. A submission
 whose `expiresAt` falls after its payload period is refused. These values are defaults, not a
@@ -303,7 +303,7 @@ retry keeps its payload:
 | --- | --- |
 | `payloadRetentionDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
 | `recordRetentionDays` after the terminal state | The message record, with its attempts and receipts, and the request hash of its idempotency key. The key stays spent, held only as a digest of the caller and the key with its times, and a repeat of it, with the same request or another, is refused with `idempotency.expired` |
-| `submissionReceiptRetentionDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of the request is refused with `idempotency.expired` and a changed request with `idempotency.key-reused`, and another caller's identical key is fresh |
+| `receiptRetentionDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of the request is refused with `idempotency.expired` and a changed request with `idempotency.key-reused`, and another caller's identical key is fresh |
 
 A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
 The runtime sweeps once at start and then hourly with the runtime credential. A sweep erases in

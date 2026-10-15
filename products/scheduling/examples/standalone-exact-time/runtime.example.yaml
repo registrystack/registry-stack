@@ -114,7 +114,7 @@ taskGrantStatus: unchecked-final-fifteen-minutes
 #     clientAssertionAudience: https://identity.example.test/realms/registry
 #     clientId: scheduling-task-status
 #     privateKeyRef: secret:file/scheduling-task-status-private-jwk
-#     caseworkResource: urn:example:casework
+#     statusResource: urn:example:casework
 audit:
   # One single-writer destination. `file`, the default, appends to the
   # absolute path, rotates at rotateBytes (default 100 MiB), and deletes
@@ -143,5 +143,5 @@ retention:
   # bounded lifetimes. Appointment, reminder, and history retention are
   # deferred; audit.retentionDays bounds rotated audit files. Seven days is a
   # default, not a jurisdictional recommendation.
-  attemptReceiptRetentionDays: 7
+  receiptRetentionDays: 7
   hookPayloadRetentionDays: 7

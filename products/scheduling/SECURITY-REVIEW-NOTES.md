@@ -1167,3 +1167,28 @@ unchanged too: the optional bearer credential
 receiver that needs to authenticate the sender relies on that bearer and on
 TLS. `a_due_intent_renders_as_the_shared_hook_envelope` and the PostgreSQL
 dispatch test pin the shape on the wire.
+
+## The task-grant status resource is named for what it binds
+
+A `taskGrantStatus` entry names the audience its status credential is
+requested for `statusResource` (was `caseworkResource`), because Coordinator
+or an external task authority can answer grant status as well as Casework.
+This is authorization configuration: the key selects the resource the
+runtime's own status credential is issued for. The rename changes no
+behavior. The value is read, validated as an absolute resource URI, and sent
+exactly as before, and the old key is refused with `config.removed-key`
+naming `statusResource` rather than read as an alias, so a file cannot carry
+both spellings with different values. Tests:
+`a_task_status_casework_resource_is_refused_naming_status_resource`, plus the
+existing structural refusal tests that now use `statusResource`.
+
+## One name and bound for the idempotency receipt window
+
+`retention.attemptReceiptRetentionDays` is renamed
+`retention.receiptRetentionDays`, the name BReg and Messaging use for the same
+window, and its maximum narrows from 65535 to 365 days, BReg's bound. The old
+key is refused naming the new one. The sweep, the default of 7 days, and what
+a receipt holds are unchanged; a deployment that had set more than 365 days is
+refused at startup and keeps raw caller identifiers for less time once it
+lowers the value. `a_removed_runtime_key_names_the_key_that_replaced_it` and
+the out-of-range cases in `config.rs` pin the name and the bound.

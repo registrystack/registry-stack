@@ -401,6 +401,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Time allowed to drain on shutdown | `shutdownGraceMilliseconds` | `shutdownTimeoutSeconds` |
 | Longest accepted token lifetime | `maximumTokenLifetimeSeconds` | `maxTokenLifetimeSeconds` |
 | How long records of a kind are kept | `retentionDays`, or `<thing>RetentionDays` where one block keeps several kinds | `retainDays`, `retention.<thing>Days` |
+| How long an idempotency receipt stays replayable, from 1 through 365 days | `receiptRetentionDays` | `attemptReceiptRetentionDays`, `submissionReceiptRetentionDays` |
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 
