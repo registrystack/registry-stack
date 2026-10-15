@@ -57,10 +57,10 @@ INTENDED = {
         "serde",
         ("platform-testing", "dev"),
     ],
-    "client": ["platform", "review-protocol", "serde"],
+    "client": ["platform", "serde"],
     "client-node": ["client", "serde"],
     "client-py": ["client", "serde"],
-    "stack-client": ["client", "breg-client", "messaging-client", "scheduling-client"],
+    "stack-client": ["breg-client", "messaging-client", "scheduling-client"],
     "cli-docs": ["runtime", "breg", "bregctl", "messaging", "scheduling", "schedulingctl"],
     "breg": ["record", "platform"],
     "breg-client": ["record", "platform"],
@@ -178,15 +178,11 @@ class RuntimeTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
-    def test_client_reuses_only_the_named_runtime_free_review_protocol(self):
-        self.assertEqual(MODULE.COORDINATOR_CLIENT_SUPPORT, {"registry-review-protocol"})
+    def test_client_reaches_only_shared_platform_primitives(self):
         self.assertEqual(MODULE.violations(metadata()), [])
-        for dependency in ("review-client", "casework-core", "breg-client"):
+        for dependency in ("review-protocol", "review-client", "casework-core", "breg-client"):
             with self.subTest(dependency=dependency):
                 self.assertIn("registry-coordinator-client reaches", failures(client=["platform", dependency]))
-        carried = failures(**{"review-protocol": ["casework-core"]})
-        for client in MODULE.COORDINATOR_CLIENTS:
-            self.assertIn(f"{client} reaches", carried)
 
     def test_the_client_reaching_the_runtime_is_refused(self):
         refused = [
@@ -205,7 +201,7 @@ class ClientTests(unittest.TestCase):
     def test_the_client_reaching_another_product_client_is_refused(self):
         self.assertIn(
             "registry-coordinator-client reaches package(s) other than the Coordinator "
-            "client and registry-platform-* and registry-review-protocol: registry-messaging-client, registry-messaging-core",
+            "client and registry-platform-*: registry-messaging-client, registry-messaging-core",
             failures(client=["platform", "messaging-client"]),
         )
 
@@ -250,10 +246,10 @@ class DependentTests(unittest.TestCase):
         )
 
     def test_reaching_the_coordinator_through_an_allowed_dependent_is_refused(self):
-        found = failures(evidence=["platform", "stack-client"], bregctl=["breg", "cli-docs"])
+        found = failures(evidence=["platform", "cli-docs"], bregctl=["breg", "cli-docs"])
         self.assertIn(
             "registry-evidence depends on Coordinator package(s) it is not listed for: "
-            "registry-coordinator-client",
+            "registry-coordinator",
             found,
         )
         self.assertIn(
@@ -262,25 +258,24 @@ class DependentTests(unittest.TestCase):
             found,
         )
 
-    def test_the_facade_reaching_the_runtime_is_refused(self):
-        self.assertIn(
-            "registry-stack-client depends on Coordinator package(s) it is not listed for: "
-            "registry-coordinator",
-            failures(stack_client=["client", "runtime"]),
-        )
+    def test_the_facade_reaching_a_coordinator_crate_is_refused(self):
+        for dependency, reached in (("client", "registry-coordinator-client"), ("runtime", "registry-coordinator")):
+            with self.subTest(dependency=dependency):
+                self.assertIn(
+                    "registry-stack-client depends on Coordinator package(s) it is not listed for: "
+                    + reached,
+                    failures(stack_client=[dependency]),
+                )
 
-    def test_the_allowed_dependents_are_exactly_the_facade_and_the_cli_reference(self):
+    def test_the_only_allowed_dependent_is_the_cli_reference(self):
         self.assertEqual(
             MODULE.ALLOWED_DEPENDENTS,
-            {
-                "registry-cli-docs": frozenset({"registry-coordinator"}),
-                "registry-stack-client": frozenset({"registry-coordinator-client"}),
-            },
+            {"registry-cli-docs": frozenset({"registry-coordinator"})},
         )
 
     def test_casework_tooling_cannot_reach_coordinator_through_any_dependency_kind(self):
         self.assertEqual(MODULE.violations(metadata()), [])
-        for dependency in ["client", "stack-client", "runtime"]:
+        for dependency in ["client", "cli-docs", "runtime"]:
             for kind in [None, "dev", "build"]:
                 with self.subTest(dependency=dependency, kind=kind):
                     self.assertIn(

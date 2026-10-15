@@ -271,14 +271,12 @@ product's database. The runtime may depend on product clients, product cores,
 `registry-record`, and `registry-platform-*`, and never on a product runtime,
 adopter tooling, a supporting service, or a binding; its client reaches
 `registry-platform-*` only.
-No product crate depends on a Coordinator crate: only
-`registry-stack-client`, on the client, and `registry-cli-docs`, on the
-runtime for the CLI reference, may. The Coordinator dependency-direction gate
-enforces both directions on the whole forward closure, and the Casework,
-Scheduling, and Messaging gates refuse the Coordinator from their side.
-Casework adopter tests may reach the Coordinator client through the unified
-client facade. The gate excludes that test-only allowance from the shipped
-`registry-caseworkctl` normal and build dependency closure.
+No product crate depends on a Coordinator crate: only `registry-cli-docs`, on
+the runtime for the CLI reference, may. The Coordinator dependency-direction
+gate enforces both directions on the whole forward closure, and the Casework,
+Scheduling, and Messaging gates refuse the Coordinator from their side. The
+Coordinator reaches Casework through `registry-casework-client` alone, never
+`registry-casework-core` directly.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
