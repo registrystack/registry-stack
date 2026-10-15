@@ -20,9 +20,11 @@
 //!   second caller to add later.
 //! - Phase `before` on plain writes (`created`, `patched`). That would put a
 //!   script on a product's write path and is its own security decision.
-//! - Orchestration: fan-in, compensation, whole-flow visibility. A later
-//!   orchestrator correlates on the envelope's `causation.root`, which already
-//!   exists, so orchestrating changes nothing in the products.
+//! - Orchestration: fan-in, compensation, whole-flow visibility. An
+//!   orchestrator correlates on a reference the product stores with its own
+//!   record and treats a received event as a wake hint to re-read that
+//!   record, never on the envelope's `causation.root`, so orchestrating
+//!   changes nothing in the products.
 //! - Folding a product's existing notification path into the handler path. A
 //!   notification is a handler whose answer is empty; re-expressing it that
 //!   way is a refactor for after the library exists.
