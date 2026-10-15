@@ -157,7 +157,7 @@ rolling a key means replacing the referenced document and restarting
 Scheduling. The removed `jwksUri` key is refused with a diagnostic naming
 `jwksSource` `type: uri` as its replacement. `scopeClaim` defaults to `scope`,
 the claim stock ThunderID emits. `readsScope` defaults to `scheduling:read`
-and `explainScope` to `scheduling-explain`; the two must differ, because the explain path can name member-level causes the public
+and `explainScope` to `scheduling:explain`; the two must differ, because the explain path can name member-level causes the public
 availability read never discloses. `allowedClients` lists the exact client ids
 the runtime admits, and every file writes it, development loopback included:
 a list of at least one distinct client. An omitted member, an empty list, and

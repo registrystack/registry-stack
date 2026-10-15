@@ -24,11 +24,14 @@
   hook envelope the Events and observers section of the README describes.
 
 - BREAKING: `authentication.oidc.scopeClaim` defaults to `scope` (was
-  `registry_scopes`) and `readsScope` to `scheduling:read` (was
-  `scheduling-read`), the values every maintained example sets. A read or
-  explain refusal for a missing scope logs the claim and scope it expected.
-  Migration: a deployment whose issuer emits `registry_scopes` or the
-  `scheduling-read` scope sets `scopeClaim` and `readsScope` explicitly.
+  `registry_scopes`), `readsScope` to `scheduling:read` (was
+  `scheduling-read`), the values every maintained example sets, and
+  `explainScope` to `scheduling:explain` (was `scheduling-explain`), so both
+  scope defaults take the colon form. A read or explain refusal for a missing
+  scope logs the claim and scope it expected. Migration: a deployment whose
+  issuer emits `registry_scopes`, the `scheduling-read` scope, or the
+  `scheduling-explain` scope sets `scopeClaim`, `readsScope`, or
+  `explainScope` explicitly.
 
 - Appointment observers read their allowed projection fields from the
   policy model instead of a second copy in the runtime.

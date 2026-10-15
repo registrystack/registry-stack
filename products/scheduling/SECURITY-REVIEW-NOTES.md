@@ -1139,11 +1139,12 @@ widest one at hand.
 
 `scopeClaim` defaults to `scope` and `readsScope` to `scheduling:read`, the
 values every maintained example, template, and native exchange already set
-explicitly. `explainScope` keeps `scheduling-explain`, and the rule that the
-explain scope differs from the read scope is unchanged. A deployment that
-relied on the earlier defaults (`registry_scopes`, `scheduling-read`) now
-fails closed: its readers receive `403 profile.not-authorized` until the file
-names the claim and scope its issuer emits. No token gains a route it did not
+explicitly. `explainScope` defaults to `scheduling:explain`, the same colon
+form, and the rule that the explain scope differs from the read scope is
+unchanged. A deployment that relied on the earlier defaults
+(`registry_scopes`, `scheduling-read`, `scheduling-explain`) now fails closed:
+its readers receive `403 profile.not-authorized` until the file names the
+claim and scope its issuer emits. No token gains a route it did not
 have, because the change selects which single claim and scope are read and
 never widens the match.
 

@@ -77,7 +77,7 @@ authentication:
     # the claim stock ThunderID emits.
     scopeClaim: scope
     # The read scope defaults to `scheduling:read` and the explain scope to
-    # `scheduling-explain`; the two must differ. `allowedClients` names the
+    # `scheduling:explain`; the two must differ. `allowedClients` names the
     # client ids the runtime admits. It is required in every file, development
     # loopback included: an omitted or empty list is refused when the file is
     # read, and `unrestricted` is a startup refusal, because it would admit

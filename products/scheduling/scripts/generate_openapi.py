@@ -889,7 +889,7 @@ def document(contract: dict) -> dict:
                     "type": "http",
                     "scheme": "bearer",
                     "bearerFormat": "JWT",
-                    "description": "A fresh access token from the configured issuer, for this deployment's audience, signed by a key the issuer published. Catalogue, availability, and owned-record reads demand the configured reads scope (scheduling:read by default); the explain path demands the configured explain scope (scheduling-explain by default), which is never the reads scope. A mutating route demands no scope at all: its authority is the complete task grant the token carries, whose scheduling permissions the service checks against the offering's service and location and the action the route performs (hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel). A token with partial grant claims is refused rather than half-trusted.",
+                    "description": "A fresh access token from the configured issuer, for this deployment's audience, signed by a key the issuer published. Catalogue, availability, and owned-record reads demand the configured reads scope (scheduling:read by default); the explain path demands the configured explain scope (scheduling:explain by default), which is never the reads scope. A mutating route demands no scope at all: its authority is the complete task grant the token carries, whose scheduling permissions the service checks against the offering's service and location and the action the route performs (hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel). A token with partial grant claims is refused rather than half-trusted.",
                 },
             },
             "schemas": schemas(entries),
@@ -1470,7 +1470,7 @@ def verify_source(repository_root: Path) -> None:
     ):
         marker(service_source, f"pub const {action}: &str = ", "service")
     marker(config_source, 'fn default_reads_scope() -> String {\n    "scheduling:read".to_owned()', "config")
-    marker(config_source, 'fn default_explain_scope() -> String {\n    "scheduling-explain".to_owned()', "config")
+    marker(config_source, 'fn default_explain_scope() -> String {\n    "scheduling:explain".to_owned()', "config")
     marker(httpsec_source, "pub const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;", "httpsec")
     problem_body = re.search(
         r"#\[serde\(rename_all = \"camelCase\"\)\]\s*pub struct ProblemBody\s*\{(?P<body>.*?)^\}",

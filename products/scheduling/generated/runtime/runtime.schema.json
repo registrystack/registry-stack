@@ -330,7 +330,7 @@
           "type": "string"
         },
         "explainScope": {
-          "default": "scheduling-explain",
+          "default": "scheduling:explain",
           "description": "The scope the separately authorized explain path requires.",
           "type": "string"
         },

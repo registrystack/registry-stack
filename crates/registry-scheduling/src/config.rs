@@ -386,7 +386,7 @@ fn default_reads_scope() -> String {
     "scheduling:read".to_owned()
 }
 fn default_explain_scope() -> String {
-    "scheduling-explain".to_owned()
+    "scheduling:explain".to_owned()
 }
 
 /// The audit journal: where it is written and the key its hashes use.
@@ -1909,7 +1909,7 @@ holdPolicy:
         assert_eq!(config.authentication.oidc.reads_scope, "scheduling:read");
         assert_eq!(
             config.authentication.oidc.explain_scope,
-            "scheduling-explain"
+            "scheduling:explain"
         );
         assert_eq!(config.retention.receipt_retention_days, 7);
         assert_eq!(config.retention.hook_payload_retention_days, 7);
