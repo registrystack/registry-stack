@@ -96,3 +96,23 @@ required-features = ["postgres-test"]
 name = "review_acceptance_postgres"
 path = "tests/review_acceptance_postgres.rs"
 required-features = ["postgres-test"]
+
+[[test]]
+name = "review_postgres"
+path = "tests/review_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "review_http"
+path = "tests/review_http.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "review_payment_fixture_postgres"
+path = "tests/review_payment_fixture_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "breg_review_journey"
+path = "tests/breg_review_journey.rs"
+required-features = ["postgres-test"]
