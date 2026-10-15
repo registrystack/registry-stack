@@ -14,6 +14,7 @@
     - ['`evaluation.uncertain`', '409', 'An evaluation may have completed at its provider, so the run is never evaluated again.']
     - ['`event.invalid`', '400', 'The event envelope, source, type, schema, or trigger mapping does not match the authored contract.']
     - ['`event.source-unavailable`', '503', 'The configured event source key cannot be read. Restore that binding before redelivery.']
+    - ['`event.too-large`', '413', 'The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array or members per object, and 16384 bytes per string. Project fewer or smaller fields into the event.']
     - ['`event.unauthenticated`', '401', 'The delivery signature, signed metadata, or delivery time cannot be verified.']
     - ['`execution.held`', '409', 'Execution is under restore hold until an operator releases it.']
     - ['`workflow.not-served`', '404', 'This deployment does not serve the named workflow.']

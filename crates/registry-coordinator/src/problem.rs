@@ -52,6 +52,7 @@ pub const DEPLOYMENT_REFUSED_PROBLEM: &str = "deployment.refused";
 pub const EVALUATION_UNCERTAIN_PROBLEM: &str = "evaluation.uncertain";
 pub const EVENT_INVALID_PROBLEM: &str = "event.invalid";
 pub const EVENT_SOURCE_UNAVAILABLE_PROBLEM: &str = "event.source-unavailable";
+pub const EVENT_TOO_LARGE_PROBLEM: &str = "event.too-large";
 pub const EVENT_UNAUTHENTICATED_PROBLEM: &str = "event.unauthenticated";
 pub const EXECUTION_HELD_PROBLEM: &str = "execution.held";
 pub const WORKFLOW_NOT_SERVED_PROBLEM: &str = "workflow.not-served";
@@ -99,6 +100,7 @@ pub enum ProblemCode {
     EvaluationUncertain,
     EventInvalid,
     EventSourceUnavailable,
+    EventTooLarge,
     EventUnauthenticated,
     ExecutionHeld,
     IdempotencyKeyInvalid,
@@ -147,6 +149,7 @@ impl ProblemCode {
         Self::EvaluationUncertain,
         Self::EventInvalid,
         Self::EventSourceUnavailable,
+        Self::EventTooLarge,
         Self::EventUnauthenticated,
         Self::ExecutionHeld,
         Self::IdempotencyKeyInvalid,
@@ -195,6 +198,7 @@ impl ProblemCode {
             Self::EvaluationUncertain => EVALUATION_UNCERTAIN_PROBLEM,
             Self::EventInvalid => EVENT_INVALID_PROBLEM,
             Self::EventSourceUnavailable => EVENT_SOURCE_UNAVAILABLE_PROBLEM,
+            Self::EventTooLarge => EVENT_TOO_LARGE_PROBLEM,
             Self::EventUnauthenticated => EVENT_UNAUTHENTICATED_PROBLEM,
             Self::ExecutionHeld => EXECUTION_HELD_PROBLEM,
             Self::WorkflowNotServed => WORKFLOW_NOT_SERVED_PROBLEM,
@@ -277,7 +281,7 @@ impl ProblemCode {
             | Self::RetryRefused
             | Self::RunDefinitionIncompatible
             | Self::RunPayloadErased => 409,
-            Self::RequestBodyTooLarge => 413,
+            Self::EventTooLarge | Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
             Self::RequestUnprocessable => 422,
             Self::RuntimeFailure => 500,
@@ -304,6 +308,7 @@ impl ProblemCode {
             Self::EvaluationUncertain => "Evaluation outcome uncertain",
             Self::EventInvalid => "Event contract refused",
             Self::EventSourceUnavailable => "Event source unavailable",
+            Self::EventTooLarge => "Event too large",
             Self::EventUnauthenticated => "Event authentication refused",
             Self::ExecutionHeld => "Execution held",
             Self::WorkflowNotServed => "Workflow not served",
@@ -374,6 +379,7 @@ impl ProblemCode {
             }
             Self::EventInvalid => "The signed event must satisfy the accepted canonical envelope and typed event contract.",
             Self::EventSourceUnavailable => "Restore the configured event source signing key and its enabled secret provider before retrying delivery.",
+            Self::EventTooLarge => "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array or members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
             Self::EventUnauthenticated => "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
             Self::ExecutionHeld => {
                 "Execution is under restore hold until an operator releases it."
@@ -477,6 +483,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "list-limit-invalid" => ProblemCode::RequestLimitOutOfRange,
         "event-invalid" => ProblemCode::EventInvalid,
         "event-source-unavailable" => ProblemCode::EventSourceUnavailable,
+        "event-too-large" => ProblemCode::EventTooLarge,
         "event-unauthenticated" => ProblemCode::EventUnauthenticated,
         "reason-invalid" => ProblemCode::RequestReasonInvalid,
         "retention-invalid" => ProblemCode::RequestRetentionInvalid,
@@ -702,7 +709,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 43);
+        assert_eq!(ProblemCode::ALL.len(), 44);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -721,6 +728,7 @@ mod tests {
                 ProblemCode::EventSourceUnavailable,
                 503,
             ),
+            ("event-too-large", ProblemCode::EventTooLarge, 413),
         ] {
             assert_eq!(for_error(internal), Some(public));
             assert_eq!(public.http_status(), status);
