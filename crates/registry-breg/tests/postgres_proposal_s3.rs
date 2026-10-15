@@ -489,6 +489,44 @@ async fn s3_put_get_remove_and_exact_replay_without_storage_requests() {
     fixture.finish().await;
 }
 
+/// An upload to a rejected Proposal answers 409 `proposal.rejected`, as it
+/// does with database storage, before any byte reaches S3. The review path to
+/// rejection is covered in `postgres_proposal`; this case marks the stored
+/// Proposal rejected directly so it pins only the S3 staging order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s3_upload_to_a_rejected_proposal_answers_rejected_before_transport() {
+    let s3 = S3Fixture::new().await;
+    let storage = s3.storage.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("synthetic-author", "zone-a"),
+        move |mutations| mutations.with_attachment_storage(storage),
+    )
+    .await;
+    let draft = start(&fixture, "After", "s3-rejected-start").await;
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_state SET state='rejected'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let requests = s3.state.requests.load(Ordering::SeqCst);
+    let response = raw_upload(&fixture.http, &draft, "support", "s3-rejected-upload").await;
+    let status = response.status();
+    let problem: Value = response.json().await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "proposal.rejected", "{problem}");
+    assert_eq!(
+        s3.state.requests.load(Ordering::SeqCst),
+        requests,
+        "the rejection precedes any storage request"
+    );
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s3_integrity_binding_quarantine_and_authority_refusals_precede_transport() {
     let s3 = S3Fixture::new().await;

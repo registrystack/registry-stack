@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Apply this release to a fresh database; it carries no state migration
+  from 0.41.
 - BREAKING: a Review result from Registry Casework names the policy outcome
   it settled on, and BReg reads it. Upgrade Casework and every review
   producer, including BReg, in the same release. A 0.41 BReg refuses an
@@ -143,8 +145,9 @@
   is `review`. Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer
   409 `proposal.rejected`, including after a package activation changes the
   Action revision, and each command link reads `review-rejected` with
-  recovery `receipt-only`. The OpenAPI documents declare 409 on every
-  Proposal command.
+  recovery `receipt-only`. An attachment upload or removal is an Edit and
+  answers the same with either attachment storage. The OpenAPI documents
+  declare 409 on every Proposal command and attachment write.
   `applicationStatus.state` reads `rejected`. A changes-requested result keeps
   the Proposal `submitted` and revisable and records a `review-returned`
   event. Proposal `state`, event `transition` and `authorityKind`, and the

@@ -536,7 +536,7 @@ permitted transitions. The execution mode is fixed by the package.
 | Resource | Contract |
 | --- | --- |
 | `/v1/actions/{action}/proposals` | Start a draft for the selected Action under Start authority. |
-| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. `turn=party`, `official` or `nobody` keeps only Proposals waiting on that turn. |
+| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. `turn=party`, `official` or `nobody` keeps only Proposals waiting on that turn. A page may hold fewer than `limit` items; keep paging while `nextCursor` is present. |
 | `/v1/proposals/{proposal_id}` | Read the Proposal under current ownership, target, and disclosure grants. |
 | `/v1/proposals/{proposal_id}/submissions/{submission_version}` | Read one exact submission under the same Get authority: its frozen `effectDigest`, its `review` result, its `decision` when one was made, and its `application` outcome as separate members. Only the current submission reports application progress. Answers 410 `proposal.submission_expired` once the result window has lapsed and no application receipt remains. |
 | Promoted transition links | Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply only when currently authorized. |
