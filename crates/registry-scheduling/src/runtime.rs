@@ -13,8 +13,9 @@
 //! transaction and can never mutate Scheduling from a receiver's response.
 //!
 //! For reminders,
-//! each due outbox intent is rendered as one CloudEvents 1.0 JSON event and
-//! POSTed to the operator-configured destination, exactly once per claim, with
+//! each due outbox intent is rendered as one shared hook envelope in canonical
+//! JSON and POSTed with `content-type: application/json` to the
+//! operator-configured destination, exactly once per claim, with
 //! the transport and the notification bus wholly external (INT-02). When no
 //! destination is configured the outbox is the boundary: intents are recorded
 //! and marked local, never pretended delivered.

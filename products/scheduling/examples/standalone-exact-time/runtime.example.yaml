@@ -124,7 +124,8 @@ audit:
   path: /var/lib/registry-scheduling/audit.ndjson
   hashKeyRef: secret:file/scheduling-audit-key
 destinations: {}
-  # Where due reminder intents are delivered as CloudEvents 1.0 events. An
+  # Where due reminder intents are delivered as the shared hook envelope,
+  # application/json over HTTPS POST (see the README Events section). An
   # absent reminders destination is a supported deployment: the intents stay
   # readable in the outbox and are marked local, never pretended delivered.
   # reminders:
