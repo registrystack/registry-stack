@@ -319,12 +319,17 @@ impl Store {
                 .ok_or_else(|| {
                     refused("payload-erased", "the Review request payload was erased")
                 })?;
-            let lifecycle = review
-                .result
-                .as_ref()
-                .map_or(ReviewRequestLifecycle::Reviewing, |result| {
-                    lifecycle(result.status)
-                });
+            let held = row.get::<_, bool>(15) || row.get::<_, bool>(17);
+            let lifecycle = if held {
+                ReviewRequestLifecycle::Reviewing
+            } else {
+                review
+                    .result
+                    .as_ref()
+                    .map_or(ReviewRequestLifecycle::Reviewing, |result| {
+                        lifecycle(result.status)
+                    })
+            };
             let view = ReviewRequestView {
                 request_id: run,
                 subject: review.accepted.subject,
@@ -335,9 +340,13 @@ impl Store {
                 active_stage: matches!(lifecycle, ReviewRequestLifecycle::Reviewing)
                     .then(|| row.get(7)),
                 created_at: row.get(1),
-                updated_at: review
-                    .result
-                    .map_or_else(|| row.get(1), |result| result.completed_at),
+                updated_at: if held {
+                    row.get(1)
+                } else {
+                    review
+                        .result
+                        .map_or_else(|| row.get(1), |result| result.completed_at)
+                },
             };
             tx.commit().await.map_err(unavailable)?;
             Ok(view)
@@ -447,6 +456,7 @@ impl Store {
         limit: u32,
     ) -> Result<ReviewResultFeedPage> {
         self.audited("review-feed",actor,None,None,async {
+            const MAX_SCANNED_CANDIDATES: usize = 1_000;
             if !(1..=100).contains(&limit) { return Err(refused("request.invalid","choose a Review feed limit from 1 to 100")); }
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
@@ -456,14 +466,31 @@ impl Store {
             let after=if let Some(cursor)=cursor {
                 Some(tx.query_opt(&format!("SELECT COALESCE(review_completed_at,completed_at) FROM {}.runs WHERE run_id=$1 AND owner_hash=$2 AND workflow_id=ANY($3) AND review_available_until IS NOT NULL AND review_source=ANY($4)",self.namespace),&[&cursor,&owner,&workflows,&sources]).await.map_err(unavailable)?.and_then(|row|row.get::<_,Option<DateTime<Utc>>>(0)).ok_or_else(||refused("request.invalid","use a cursor from this producer's Review feed"))?)
             } else {None};
-            let ids=tx.query(&format!("SELECT run_id FROM {0}.runs WHERE owner_hash=$1 AND workflow_id=ANY($2) AND review IS NOT NULL AND review_available_until>transaction_timestamp() AND (review_completed_at IS NOT NULL OR completed_at+(review_available_until-deadline_at)>transaction_timestamp()) AND review_source=ANY($6) AND NOT restore_review_required AND NOT(SELECT restore_hold FROM {0}.control WHERE id) AND (review_completed_at IS NOT NULL OR (state IN ('finished','cancelled','cancelled-after-effect') AND completed_at<=deadline_at)) AND ($3::timestamptz IS NULL OR (COALESCE(review_completed_at,completed_at),run_id)>($3,$4)) ORDER BY COALESCE(review_completed_at,completed_at),run_id LIMIT $5",self.namespace),&[&owner,&workflows,&after,&cursor,&(i64::from(limit)+1),&sources]).await.map_err(unavailable)?;
+            let mut scan_after=after;
+            let mut scan_cursor=cursor;
+            let mut scanned=0;
             let mut items=Vec::new();
-            for id in ids {
-                let run:Uuid=id.get(0);
-                let (row,now)=self.review_row(&tx,run,actor,producer,workflows).await?;
-                if let Some(result)=self.review_from_row(&tx,run,&row,producer).await?.and_then(|review|review.result).filter(|result| result.available_until>now && !row.get::<_,bool>(15) && !row.get::<_,bool>(17)) {
-                    items.push(ReviewResultFeedEntry{event_id:result.result_id,request_id:run,result_id:result.result_id,completed_at:result.completed_at});
+            loop {
+                let ids=tx.query(&format!("SELECT run_id,COALESCE(review_completed_at,completed_at) FROM {0}.runs WHERE owner_hash=$1 AND workflow_id=ANY($2) AND review IS NOT NULL AND review_available_until>transaction_timestamp() AND (review_completed_at IS NOT NULL OR completed_at+(review_available_until-deadline_at)>transaction_timestamp()) AND review_source=ANY($6) AND NOT restore_review_required AND NOT(SELECT restore_hold FROM {0}.control WHERE id) AND (review_completed_at IS NOT NULL OR (state IN ('finished','cancelled','cancelled-after-effect') AND completed_at<=deadline_at)) AND ($3::timestamptz IS NULL OR (COALESCE(review_completed_at,completed_at),run_id)>($3,$4)) ORDER BY COALESCE(review_completed_at,completed_at),run_id LIMIT $5",self.namespace),&[&owner,&workflows,&scan_after,&scan_cursor,&(i64::from(limit)+1),&sources]).await.map_err(unavailable)?;
+                let exhausted=ids.len()<=limit as usize;
+                for id in ids {
+                    if scanned==MAX_SCANNED_CANDIDATES {
+                        return Err(unavailable("Review feed candidates changed during the page; retry the page"));
+                    }
+                    scanned+=1;
+                    let run:Uuid=id.get(0);
+                    scan_after=Some(id.get(1));
+                    scan_cursor=Some(run);
+                    let (row,now)=self.review_row(&tx,run,actor,producer,workflows).await?;
+                    if let Some(result)=self.review_from_row(&tx,run,&row,producer).await?.and_then(|review|review.result).filter(|result| result.available_until>now && !row.get::<_,bool>(15) && !row.get::<_,bool>(17)) {
+                        items.push(ReviewResultFeedEntry{event_id:result.result_id,request_id:run,result_id:result.result_id,completed_at:result.completed_at});
+                    }
+                    if items.len()>limit as usize { break; }
                 }
+                // A row can become held after the candidate query and before
+                // its protected reload. Refill instead of treating the short
+                // filtered window as the end of the producer's feed.
+                if items.len()>limit as usize || exhausted { break; }
             }
             let next_cursor=if items.len()>limit as usize {items.truncate(limit as usize);items.last().map(|entry|entry.event_id)}else{None};
             tx.commit().await.map_err(unavailable)?;

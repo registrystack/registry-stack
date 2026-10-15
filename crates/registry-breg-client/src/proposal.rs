@@ -313,7 +313,7 @@ impl BRegProposal {
         Ok(proposal)
     }
     fn validate(&self) -> Result<(), BaseRegistryClientError> {
-        if Uuid::parse_str(&self.id).is_err()
+        if !canonical_proposal_id(&self.id)
             || self.submission_version == 0
             || self.revision == 0
             || self.state == BRegProposalState::Submitted && self.effect_digest.is_none()
@@ -780,7 +780,7 @@ impl BRegPreparedProposal {
                 .availability
                 .as_ref()
                 .is_some_and(|availability| availability.observed_revision != data.revision)
-            || Uuid::parse_str(&data.proposal_id).is_err()
+            || !canonical_proposal_id(&data.proposal_id)
             || !digest(&data.action_revision)
             || transition_target(&data.link.operation, data.state, data.submission_version)
                 .is_none()
@@ -816,9 +816,7 @@ impl BaseRegistryClient {
         binding: &BRegProposalReviewBinding,
         id: &str,
     ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
-        if binding.source != self.source_binding()
-            || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
-        {
+        if binding.source != self.source_binding() || !canonical_proposal_id(id) {
             return Err(refusal());
         }
         let link = BRegProposalLink {
@@ -866,9 +864,7 @@ impl BaseRegistryClient {
     ) -> BRegObservation<BRegProposal> {
         let mut retry_after = BRegRetryAfter::Absent;
         let outcome = async {
-            if binding.source != self.source_binding()
-                || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
-            {
+            if binding.source != self.source_binding() || !canonical_proposal_id(id) {
                 return Err(refusal());
             }
             let link = BRegProposalLink {
@@ -1330,7 +1326,7 @@ fn transition_target(
     }
 }
 fn valid_review_document(document: &BRegProposalReviewDocument, is_context: bool) -> bool {
-    Uuid::parse_str(&document.id).is_ok_and(|value| value.to_string() == document.id)
+    canonical_proposal_id(&document.id)
         && identifier(&document.action_id)
         && digest(&document.action_revision)
         && document.submission_version > 0
@@ -1417,6 +1413,9 @@ fn proposal_instant(value: &str) -> Option<OffsetDateTime> {
     (value.len() <= 64)
         .then(|| OffsetDateTime::parse(value, &Rfc3339).ok())
         .flatten()
+}
+fn canonical_proposal_id(value: &str) -> bool {
+    Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
 }
 fn valid_cursor(cursor: &str) -> bool {
     !cursor.is_empty()
@@ -1772,6 +1771,18 @@ mod tests {
             invalid[field] = value;
             assert!(
                 BRegPreparedProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err()
+            );
+        }
+        for id in [
+            "123E4567-E89B-42D3-A456-426614174000",
+            "123e4567e89b42d3a456426614174000",
+            "00000000-0000-0000-0000-000000000000",
+        ] {
+            let mut invalid = evidence.clone();
+            invalid["proposal_id"] = json!(id);
+            assert!(
+                BRegPreparedProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+                "prepared Proposal identifier {id}"
             );
         }
     }
@@ -2587,6 +2598,16 @@ mod tests {
             .read_proposal_review_by_id(&binding, "../other")
             .await
             .is_err());
+        for id in [
+            "123E4567-E89B-42D3-A456-426614174000",
+            "123e4567e89b42d3a456426614174000",
+            "00000000-0000-0000-0000-000000000000",
+        ] {
+            assert!(source
+                .read_proposal_review_by_id(&binding, id)
+                .await
+                .is_err());
+        }
     }
     #[test]
     fn application_receipts_refuse_internal_actor_and_reason_projections() {
@@ -2784,6 +2805,8 @@ mod tests {
         for id in [
             "../secret",
             "00000000-0000-4000-8000-00000000000A",
+            "123e4567e89b42d3a456426614174000",
+            "00000000-0000-0000-0000-000000000000",
             "invalid",
         ] {
             assert!(source.get_proposal(&binding, id).await.is_err());
