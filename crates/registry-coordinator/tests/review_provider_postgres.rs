@@ -305,6 +305,77 @@ async fn exact_admission_result_restart_feed_and_current_ownership_share_one_run
 }
 
 #[tokio::test]
+async fn malformed_cancellation_is_refused_without_spending_the_key_or_changing_the_result() {
+    let h = Harness::new(86400).await;
+    let accepted = h.admit(h.request(), "cancel-validation").await;
+    for reason in ["".into(), " ".into(), "bad\nreason".into(), "x".repeat(257)] {
+        let error = h
+            .store
+            .cancel_review_owned(
+                accepted.request_id,
+                &h.actor,
+                &h.producer,
+                &h.workflows(),
+                "cancel-key",
+                &ReviewCancelRequest {
+                    subject: accepted.subject.clone(),
+                    reason,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "request.invalid");
+    }
+    let cancellation = ReviewCancelRequest {
+        subject: accepted.subject.clone(),
+        reason: "cancellation-private-canary@example.invalid".into(),
+    };
+    for key in [String::new(), "x".repeat(257)] {
+        assert_eq!(
+            h.store
+                .cancel_review_owned(
+                    accepted.request_id,
+                    &h.actor,
+                    &h.producer,
+                    &h.workflows(),
+                    &key,
+                    &cancellation,
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "start-key-invalid"
+        );
+    }
+    assert!(matches!(
+        h.store
+            .review_result_owned(accepted.request_id, &h.actor, &h.producer, &h.workflows())
+            .await
+            .unwrap(),
+        ReviewLookup::Pending
+    ));
+    assert!(matches!(
+        h.store
+            .cancel_review_owned(
+                accepted.request_id,
+                &h.actor,
+                &h.producer,
+                &h.workflows(),
+                "cancel-key",
+                &cancellation,
+            )
+            .await
+            .unwrap(),
+        ReviewCancelResponse::Cancelled { result } if result.status == ReviewResultStatus::Cancelled
+    ));
+    assert_eq!(
+        h.result(accepted.request_id).await.status,
+        ReviewResultStatus::Cancelled
+    );
+    h.cleanup().await;
+}
+
+#[tokio::test]
 async fn cancellation_and_finish_have_one_immutable_winner() {
     let h = Harness::new(86400).await;
     for index in 0..8 {
@@ -1006,7 +1077,7 @@ async fn feed_rechecks_a_restore_flag_changed_while_its_candidate_row_is_locked(
 }
 
 #[tokio::test]
-async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bodies() {
+async fn cancellation_refuses_owned_malformed_input_and_conceals_foreign_and_expired_requests() {
     use registry_coordinator::{
         access::{Action, Authenticator, ClientPolicy},
         deployment,
@@ -1029,6 +1100,7 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
     let accepted = h.admit(h.request(), "router-erased").await;
     h.worker().tick().await.unwrap();
     h.result(accepted.request_id).await;
+    let active = h.admit(h.request(), "router-active").await;
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     assert_eq!(
         h.store
@@ -1103,10 +1175,38 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
     let server =
         tokio::spawn(async move { axum::serve(listener, http::router(state)).await.unwrap() });
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    for (caller, id, status) in [
-        ("breg-client", accepted.request_id, 410),
-        ("other-client", accepted.request_id, 404),
-        ("breg-client", Uuid::new_v4(), 404),
+    let empty_reason = serde_json::to_string(&ReviewCancelRequest {
+        subject: active.subject.clone(),
+        reason: String::new(),
+    })
+    .unwrap();
+    for (caller, id, status, body) in [
+        (
+            "breg-client",
+            accepted.request_id,
+            410,
+            "{malformed-private-canary",
+        ),
+        (
+            "other-client",
+            accepted.request_id,
+            404,
+            "{malformed-private-canary",
+        ),
+        (
+            "breg-client",
+            Uuid::new_v4(),
+            404,
+            "{malformed-private-canary",
+        ),
+        ("breg-client", active.request_id, 400, empty_reason.as_str()),
+        (
+            "other-client",
+            active.request_id,
+            404,
+            empty_reason.as_str(),
+        ),
+        ("breg-client", Uuid::new_v4(), 404, empty_reason.as_str()),
     ] {
         let token = issuer.issue_access_token(
             caller,
@@ -1124,7 +1224,7 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
             )
             .header("content-type", "application/json")
             .header("idempotency-key", "expired-router-key")
-            .body("{malformed-private-canary")
+            .body(body.to_owned())
             .send()
             .await
             .unwrap();
@@ -1134,6 +1234,8 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
             problem["code"],
             if status == 410 {
                 "review.result-expired"
+            } else if status == 400 {
+                "request.invalid"
             } else {
                 "run.not-visible"
             }
@@ -1143,7 +1245,43 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
             .unwrap()
             .starts_with(registry_coordinator::problem::PROBLEM_TYPE_BASE));
         assert!(!problem.to_string().contains("malformed-private-canary"));
+        assert!(!problem.to_string().contains(&active.subject.id));
     }
+    assert!(matches!(
+        h.store
+            .review_result_owned(active.request_id, &h.actor, &h.producer, &h.workflows())
+            .await
+            .unwrap(),
+        ReviewLookup::Pending
+    ));
+    let response = client
+        .post(format!(
+            "{url}/v1/review-requests/{}/cancel",
+            active.request_id
+        ))
+        .bearer_auth(issuer.issue_access_token(
+            "breg-client",
+            "breg-client",
+            "urn:coordinator:review-test",
+            "review:request",
+            chrono::Utc::now().timestamp() + 300,
+        ))
+        .header(
+            registry_review_protocol::REVIEW_PROFILE_HEADER,
+            &h.producer.profile,
+        )
+        .header("idempotency-key", "expired-router-key")
+        .json(&ReviewCancelRequest {
+            subject: active.subject.clone(),
+            reason: "synthetic-valid-cancellation".into(),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(
+        matches!(response.json::<ReviewCancelResponse>().await.unwrap(), ReviewCancelResponse::Cancelled { result } if result.status == ReviewResultStatus::Cancelled && result.subject == active.subject)
+    );
     let response = client
         .put(format!("{url}/v1/review-requests"))
         .send()
