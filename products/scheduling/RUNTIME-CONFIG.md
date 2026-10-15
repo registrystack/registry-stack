@@ -306,8 +306,9 @@ refuses writes. An expired hold writes its history entry as `system` and no
 audit entry.
 
 `destinations` is optional. `destinations.reminders` is the one place due
-reminder intents are delivered, as CloudEvents 1.0 events over HTTPS POST with
-`bearerTokenRef` as the optional bearer secret. The URL is one reviewed
+reminder intents are delivered, as the shared hook envelope with
+`content-type: application/json` over HTTPS POST (see the README Events
+section), with `bearerTokenRef` as the optional bearer secret. The URL is one reviewed
 absolute endpoint without userinfo, query, or fragment; plain `http` is
 accepted only for an explicit loopback host, so a plaintext destination can
 never silently point at another machine. Delivery is attempted once per claim

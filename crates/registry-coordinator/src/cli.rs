@@ -660,6 +660,7 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         ProblemCode::ReceiptExpired => "Consult the receiving product's own records for the original command rather than inferring it was not sent, and cancel the run when no further execution is appropriate.",
         ProblemCode::EventInvalid => "Correct the producer event contract or the reviewed trigger's event schema and input mapping before retrying delivery.",
         ProblemCode::EventSourceUnavailable => "Restore the event source signing key and its enabled secret provider in runtime.yaml before retrying delivery.",
+        ProblemCode::EventTooLarge => "Project fewer or smaller fields into the producer's event so it fits the 131072-byte event value profile, then redeliver it.",
         ProblemCode::EventUnauthenticated => "Use the exact configured event source, accepted event type and data schema, and a fresh signature covering the received method, target, headers and canonical body.",
         ProblemCode::EvaluationUncertain => "Inspect the run and cancel it when no further execution is appropriate; retry-same never reevaluates an evaluation that may have completed.",
         ProblemCode::RunPayloadErased => "Retention erased this run's payloads; inspect it, but it can no longer be retried or reconciled.",

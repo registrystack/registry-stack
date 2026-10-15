@@ -8,6 +8,12 @@
   Migration: a deployment whose issuer emits `registry_scopes` sets
   `scopeClaim: registry_scopes` explicitly.
 
+- A token refused because it lacks a scope its access profile requires is
+  logged at `info`, naming the configured `scopeClaim`, the missing scope,
+  and the access profile, and never the token's contents; the line says to
+  issue the scope or set `authentication.oidc.scopeClaim` to the claim the
+  issuer emits.
+
 - BREAKING: `retention.submissionReceiptRetentionDays` is renamed
   `retention.receiptRetentionDays`, the name BReg and Scheduling use for the
   same window, and its maximum is 365 days (was 3650), still at most

@@ -316,7 +316,15 @@ pub fn verify_delivery(
     {
         return Err(invalid_event());
     }
-    crate::functions::check_value(&value).map_err(|_| invalid_event())?;
+    // Signed deliveries may reach the signable bound, but an admitted event
+    // is a workflow value, so it must also fit the structured-value profile.
+    crate::functions::check_value(&value).map_err(|error| {
+        if error.code == "function.value_limit" {
+            event_too_large()
+        } else {
+            invalid_event()
+        }
+    })?;
     // The platform envelope accepts UUID wire spellings. Normalize only the
     // dedup identity, preserving exact bytes for the conflicting-content check.
     let event_id = uuid::Uuid::parse_str(id).map_err(|_| invalid_event())?;
@@ -443,6 +451,20 @@ fn invalid_event() -> CoordinatorError {
     CoordinatorError::new(
         "event-invalid",
         "the committed event does not satisfy the accepted canonical envelope and typed contract",
+    )
+}
+fn event_too_large() -> CoordinatorError {
+    CoordinatorError::new(
+        "event-too-large",
+        format!(
+            "the committed event exceeds the event value profile of {} canonical bytes, {} levels of nesting, {} values, {} items per array, {} members per object, and {} bytes per string; project fewer or smaller fields into the event",
+            crate::functions::MAXIMUM_VALUE_BYTES,
+            crate::functions::MAXIMUM_VALUE_DEPTH,
+            crate::functions::MAXIMUM_VALUE_NODES,
+            crate::functions::MAXIMUM_VALUE_ARRAY_ITEMS,
+            crate::functions::MAXIMUM_VALUE_OBJECT_MEMBERS,
+            crate::functions::MAXIMUM_VALUE_STRING_BYTES,
+        ),
     )
 }
 fn body_too_large() -> CoordinatorError {

@@ -16,7 +16,8 @@
 use std::sync::Arc;
 
 use registry_messaging_core::{
-    AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, VerifiedTokenFacts,
+    AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, MissingScope,
+    VerifiedTokenFacts,
 };
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_oidc::{
@@ -27,6 +28,9 @@ use thiserror::Error;
 
 pub struct MessagingAuthenticator {
     verifier: TokenVerifier,
+    /// The configured claim the verifier reads scopes from, named in the
+    /// refusal log of a token that lacks a scope its profile requires.
+    scope_claim: String,
     claim_names: ClaimNames,
     profiles: AccessProfiles,
     /// Whether the deployment declared any assertion authority at all.
@@ -46,6 +50,7 @@ impl MessagingAuthenticator {
             .validate()
             .expect("the default contextual claim names are valid");
         Self {
+            scope_claim: verifier.scope_claim.clone(),
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             profiles,
@@ -87,9 +92,40 @@ impl MessagingAuthenticator {
         self.profiles
             .resolve(&facts)
             .map_err(|refusal| match refusal {
-                AccessRefusal::Profile => AuthenticationError::Profile,
+                AccessRefusal::Profile => {
+                    // A scope miss is the refusal an operator can fix, often
+                    // by naming the claim the issuer emits. Log the configured
+                    // claim and the configured scope, never the token's own.
+                    if let Some(missing) = self.profiles.missing_scope(&facts) {
+                        tracing::info!(
+                            "{}",
+                            ScopeRefusal {
+                                claim: &self.scope_claim,
+                                missing,
+                            }
+                        );
+                    }
+                    AuthenticationError::Profile
+                }
                 AccessRefusal::Claims => AuthenticationError::Claims,
             })
+    }
+}
+
+/// The value-free sentence logged when a token lacks a scope its access
+/// profile requires.
+struct ScopeRefusal<'a> {
+    claim: &'a str,
+    missing: MissingScope<'a>,
+}
+
+impl std::fmt::Display for ScopeRefusal<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a Messaging request was refused because the token's `{}` claim does not carry the `{}` scope access profile `{}` requires; issue that scope to the client, or set authentication.oidc.scopeClaim to the claim the issuer emits",
+            self.claim, self.missing.scope, self.missing.profile
+        )
     }
 }
 
@@ -169,6 +205,8 @@ pub(crate) mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::smtp::tests::Captured;
 
     pub(crate) const ISSUER: &str = "https://task-token.test";
     pub(crate) const AUDIENCE: &str = "urn:registry-messaging:test";
@@ -404,6 +442,39 @@ pub(crate) mod tests {
         let mut absent = sender_claims();
         absent.as_object_mut().unwrap().remove("registry_scopes");
         assert_eq!(refusal(&token(absent)).await, AuthenticationError::Profile);
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_logs_the_expected_claim_and_scope_and_no_token_contents() {
+        let captured = Captured::install();
+        let credential = token(with(
+            sender_claims(),
+            "registry_scopes",
+            json!("messaging:read"),
+        ));
+        assert_eq!(refusal(&credential).await, AuthenticationError::Profile);
+        let logs = captured.finish();
+        assert!(logs.contains("`registry_scopes` claim"), "{logs}");
+        assert!(logs.contains("`messaging:send` scope"), "{logs}");
+        assert!(logs.contains("access profile `case-notices`"), "{logs}");
+        assert!(logs.contains("authentication.oidc.scopeClaim"), "{logs}");
+        for needle in [
+            credential.as_str(),
+            "messaging:read",
+            "case-system",
+            "registry_actor_kind",
+        ] {
+            assert!(!logs.contains(needle), "logs carry {needle:?}:\n{logs}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_actor_kind_refusal_logs_no_scope_advice() {
+        let captured = Captured::install();
+        let human = token(with(sender_claims(), "registry_actor_kind", json!("human")));
+        assert_eq!(refusal(&human).await, AuthenticationError::Profile);
+        let logs = captured.finish();
+        assert!(!logs.contains("scopeClaim"), "{logs}");
     }
 
     #[tokio::test]

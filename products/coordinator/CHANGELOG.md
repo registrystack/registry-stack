@@ -32,4 +32,6 @@ First release of Registry Coordinator.
 - Signed event intake accepts deliveries up to the 1 MiB Version 1 signable bound, verifies them
   through the shared hooks receiver, and answers a larger one with `request.body-too-large`.
   Delivery counters are canonical positive decimals up to the signed 64-bit range. The admitted
-  event value still fits the 128 KiB structured value profile.
+  event value still fits the 128 KiB structured value profile; an event over that profile is
+  refused with `event.too-large` (413), which names the bounds and asks the producer to project
+  fewer or smaller fields into the event.

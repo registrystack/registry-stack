@@ -1074,6 +1074,9 @@ class Messaging:
             "authentication": {"oidc": {
                 "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
                 "allowedClients": ["case-system", "operations-console"],
+                # The scope claim default differs between releases, and one
+                # runtime file serves both sides, so it is named explicitly.
+                "scopeClaim": "registry_scopes",
                 "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
             "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},

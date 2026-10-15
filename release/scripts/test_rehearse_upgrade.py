@@ -712,6 +712,20 @@ class MessagingUpgradeTest(unittest.TestCase):
             self.ACTIVATED, self.plan("none", [3]), self.plan("activate", []))[0]
         self.assertEqual(differences, ["the package ledger still names a change to apply"])
 
+    def test_the_runtime_reads_scopes_from_the_claim_the_sender_token_carries(self) -> None:
+        # One runtime file serves both sides, so it names the scope claim
+        # rather than relying on a default that differs between releases.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messaging = self.messaging(root)
+            messaging.project, messaging.package = root / "project", root / "package"
+            messaging.secrets, messaging.audit, messaging.port = root, root, 1
+            with unittest.mock.patch.object(MODULE, "dump_yaml") as dump:
+                messaging.author(unittest.mock.Mock())
+        document = dump.call_args.args[1]
+        claim = document["authentication"]["oidc"]["scopeClaim"]
+        self.assertEqual(MODULE.MESSAGING_SENDER[claim], "messaging:send")
+
 
 # JSON is YAML, so the runtime document round-trips without PyYAML.
 

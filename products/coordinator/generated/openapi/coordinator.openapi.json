@@ -381,6 +381,7 @@
               "evaluation.uncertain",
               "event.invalid",
               "event.source-unavailable",
+              "event.too-large",
               "event.unauthenticated",
               "execution.held",
               "idempotency.key-invalid",
@@ -441,6 +442,7 @@
               "https://id.registrystack.org/problems/registry-coordinator/evaluation/uncertain",
               "https://id.registrystack.org/problems/registry-coordinator/event/invalid",
               "https://id.registrystack.org/problems/registry-coordinator/event/source-unavailable",
+              "https://id.registrystack.org/problems/registry-coordinator/event/too-large",
               "https://id.registrystack.org/problems/registry-coordinator/event/unauthenticated",
               "https://id.registrystack.org/problems/registry-coordinator/execution/held",
               "https://id.registrystack.org/problems/registry-coordinator/idempotency/key-invalid",
@@ -1721,6 +1723,7 @@
                       "properties": {
                         "code": {
                           "enum": [
+                            "event.too-large",
                             "request.body-too-large"
                           ]
                         }
@@ -1730,7 +1733,7 @@
                 }
               }
             },
-            "description": "A problem: request.body-too-large."
+            "description": "A problem: event.too-large, request.body-too-large."
           },
           "500": {
             "content": {

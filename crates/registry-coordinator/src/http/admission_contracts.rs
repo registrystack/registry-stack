@@ -39,6 +39,7 @@ fn event_path(paths: &mut Map<String, Value>) {
         P::EventInvalid,
         P::EventUnauthenticated,
         P::EventSourceUnavailable,
+        P::EventTooLarge,
         P::RequestInvalid,
         P::RequestBodyTooLarge,
         P::RequestMethodNotAllowed,

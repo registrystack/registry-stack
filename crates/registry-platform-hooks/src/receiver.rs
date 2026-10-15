@@ -126,7 +126,7 @@ pub enum ReceiverError {
 /// [`MAX_BODY_BYTES`] is refused before the signature is computed; a receiver
 /// that buffers the body applies the same bound before reading it.
 ///
-/// Header values must be visible ASCII, the rule HTTP header values follow.
+/// Header values must be visible ASCII, space or tab.
 pub fn verify_delivery<'a, H>(
     delivery: SignedDelivery<'a, H>,
     freshness: DeliveryFreshness,
