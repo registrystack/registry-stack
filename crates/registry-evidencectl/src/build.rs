@@ -306,7 +306,8 @@ pub(crate) struct TargetDocuments {
     pub(crate) runtime: Vec<u8>,
     pub(crate) governed_bundle: Value,
     pub(crate) normalized_target: Option<registry_evidence_authoring::target::EvidenceTarget>,
-    pub(crate) source_root: Option<PathBuf>,
+    pub(crate) authority_path: PathBuf,
+    pub(crate) authority: Vec<u8>,
     pub(crate) source_path: Option<PathBuf>,
     pub(crate) _stage: Option<tempfile::TempDir>,
 }
@@ -331,9 +332,7 @@ pub(crate) fn compile_with_target(
     // Every project read and copied asset comes from the same descriptor-captured
     // snapshot, even if an editor replaces the original path during delegation.
     let snapshot = crate::project_snapshot::capture_project(project)?;
-    let authority = if let (Some(target_model), Some(root)) =
-        (&target.normalized_target, &target.source_root)
-    {
+    let authority = if let Some(target_model) = &target.normalized_target {
         let (project_model, _) = crate::normalized::read(snapshot.root())
             .map_err(|error| crate::authored::project_refusal(error, snapshot.root(), project))?;
         if target_model.project != project_model.id {
@@ -354,7 +353,8 @@ pub(crate) fn compile_with_target(
         Some(crate::normalized::compiled_authority(
             &project_model,
             target_model,
-            root,
+            &target.authority_path,
+            &target.authority,
         )?)
     } else {
         None

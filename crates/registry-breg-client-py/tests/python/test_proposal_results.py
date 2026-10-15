@@ -307,8 +307,15 @@ class ProposalResultTests(unittest.TestCase):
                     send()
                 self.assertEqual(raised.exception.kind, 'invalid-request')
                 self.assertEqual(len(self.requests), count + 1)
-        self.value = dict(current, actionRevision=successor)
-        self.assertEqual(self.client.read_proposal(prior).document['actionRevision'], successor)
+        for version in [current['submissionVersion'], current['submissionVersion'] + 1]:
+            self.value = dict(copy.deepcopy(current), submissionVersion=version)
+            self.assertEqual(self.client.read_proposal(prior).document['actionRevision'], DIGEST)
+            self.value['actionRevision'] = successor
+            count = len(self.requests)
+            with self.subTest(refresh_version=version), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.read_proposal(prior)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertEqual(len(self.requests), count + 1)
 
     def test_submit_exact_receipt_replay_and_saved_recovery_after_later_progress(self):
         self.value = document()

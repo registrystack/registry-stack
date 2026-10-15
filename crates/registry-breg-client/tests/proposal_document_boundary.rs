@@ -211,6 +211,38 @@ async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_to
 }
 
 #[tokio::test]
+async fn promoted_proposal_reads_preserve_the_held_action_revision() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    for before in ["draft", "submitted"] {
+        let held = fixture.proposal(proposal(before)).await;
+        for (state, version, revision) in [(before, 1, 2), ("submitted", 1, 3), ("draft", 2, 5)] {
+            let mut current = proposal(state);
+            current["submissionVersion"] = json!(version);
+            current["revision"] = json!(revision);
+            fixture.answer(current.clone());
+            assert!(fixture.client.read_proposal(&held).await.is_ok());
+
+            current["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
+            fixture.answer(current.clone());
+            assert!(
+                fixture.client.read_proposal(&held).await.is_err(),
+                "{before}:{state}:{version}:{revision} silently rebound the Action"
+            );
+            // Fresh authorized discovery may deliberately observe the successor.
+            assert!(fixture.client.get_proposal(&binding, ID).await.is_ok());
+            fixture.answer(json!({"items":[current]}));
+            assert!(fixture
+                .client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .is_ok());
+        }
+    }
+}
+
+#[tokio::test]
 async fn proposal_list_binds_only_canonical_non_nil_ids() {
     let fixture = Fixture::start().await;
     let collection = fixture.metadata.select_proposals("writer").unwrap();

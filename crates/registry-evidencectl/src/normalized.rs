@@ -254,6 +254,9 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     let bytes = authored::read_authored_file(&path, "Evidence target")?;
     let target =
         registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?.value;
+    let authority_path = safe_asset(&source_root, &target.authority)?;
+    // Retain authority with the other target inputs before delegated tools run.
+    let authority = authored::read_authored_file(&authority_path, "target authority")?;
     let stage = tempfile::Builder::new()
         .prefix("evidencectl-target-")
         .tempdir()?;
@@ -370,7 +373,8 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
         runtime: authored::to_indented_yaml(&runtime)?.into_bytes(),
         governed_bundle: governance,
         normalized_target: Some(target),
-        source_root: Some(source_root),
+        authority_path,
+        authority,
         source_path: Some(path),
         _stage: Some(stage),
     })
@@ -379,13 +383,12 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
 pub(crate) fn compiled_authority(
     project: &EvidenceProject,
     target: &registry_evidence_authoring::target::EvidenceTarget,
-    root: &Path,
+    path: &Path,
+    bytes: &[u8],
 ) -> Result<Value> {
-    let path = safe_asset(root, &target.authority)?;
-    let bytes = authored::read_authored_file(&path, "target authority")?;
     let decoded = registry_evidence_authoring::target::read_authority(
         &path.to_string_lossy(),
-        &bytes,
+        bytes,
         project,
     )?;
     if decoded.value.target != target.id {

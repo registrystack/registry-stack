@@ -1471,14 +1471,26 @@ async fn automatic_lease_expiring_during_a_write_rolls_back_and_recovers_within_
         .await
         .unwrap();
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET next_attempt_at=clock_timestamp()",&[]).await.unwrap();
-    assert!(fixture
+    // Only the first attempt deliberately expires inside its write. Recovery
+    // retains the two-second action deadline, with lease headroom so ordinary
+    // CI contention cannot turn this success check into a second expiry probe.
+    let recovery_worker = fixture
         .mutations
+        .as_ref()
+        .clone()
+        .with_automatic_proposal_lease_for_test(std::time::Duration::from_secs(5));
+    assert!(recovery_worker
         .run_automatic_proposal_once_for_test()
         .await
         .unwrap());
-    let row=fixture.database.admin.query_one("SELECT state,attempt_count,(SELECT count(*) FROM registry_internal.registry_proposal_applications)
+    let row=fixture.database.admin.query_one("SELECT state,attempt_count,(SELECT count(*) FROM registry_internal.registry_proposal_applications),last_error_code
         FROM registry_internal.registry_proposal_application_jobs",&[]).await.unwrap();
-    assert_eq!(row.get::<_, String>(0), "applied");
+    assert_eq!(
+        row.get::<_, String>(0),
+        "applied",
+        "recovery error: {:?}",
+        row.get::<_, Option<String>>(3)
+    );
     assert_eq!(row.get::<_, i32>(1), 2);
     assert_eq!(row.get::<_, i64>(2), 1);
     fixture.finish().await;

@@ -287,11 +287,16 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
     )?
     .value;
     let (project, _) = crate::normalized::read(&project_root)?;
-    let target_root = crate::normalized::target_directory(&target_path);
+    let authority_path = crate::normalized::safe_asset(
+        crate::normalized::target_directory(&target_path),
+        &target.authority,
+    )?;
+    let authority_bytes = authored::read_authored_file(&authority_path, "target authority")?;
     plan.authority_document = Some(crate::normalized::compiled_authority(
         &project,
         &target,
-        target_root,
+        &authority_path,
+        &authority_bytes,
     )?);
     plan.bundle["authentication"]["oidc"]["requiredScopes"] =
         serde_json::to_value(&target.authentication.oidc.required_scopes)?;

@@ -398,9 +398,19 @@ impl Store {
         key: &str,
         cancellation: &ReviewCancelRequest,
     ) -> Result<ReviewCancelResponse> {
+        cancellation.check().map_err(|_| {
+            refused(
+                "request.invalid",
+                "supply the bound subject and bounded cancellation reason",
+            )
+        })?;
+        if key.is_empty() || key.len() > 256 {
+            return Err(refused(
+                "start-key-invalid",
+                "supply a bounded cancellation key",
+            ));
+        }
         self.audited("review-cancel",actor,Some(run),Some(&cancellation.reason),async {
-            cancellation.check().map_err(|_|refused("request.invalid","supply the bound subject and bounded cancellation reason"))?;
-            if key.is_empty() || key.len()>256 { return Err(refused("start-key-invalid","supply a bounded cancellation key")); }
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             let (row,now)=self.review_row(&tx,run,actor,producer,workflows).await?;
