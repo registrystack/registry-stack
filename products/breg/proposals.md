@@ -208,6 +208,15 @@ the context grant. They do not infer Record permissions or consent from an input
 meaning. Use a record or changes projection when displaying authoritative Record
 values that must follow those current disclosure rules.
 
+Review context and its document downloads require the active Action revision to
+match the frozen submission. After an Action contract changes, BReg conceals the
+old display rather than mapping its inputs or effects through the new definition.
+Where Rebase is available, an authorized caller can explicitly Rebase and submit
+new work under the current Action for fresh Review. Refetching alone does not
+replace the frozen submission.
+Display-free review status remains independently authorized for exact retained
+submission correlation.
+
 ### Show a supporting document
 
 An Action can project a declared document slot into its review context:

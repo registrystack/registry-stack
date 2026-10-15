@@ -174,3 +174,4 @@ traceability:
   - {"id": "BREG-SEC-173", "state": "enforced", "negativeId": "BREG-NEG-173", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "review_context_requires_record_grant_and_current_membership"}}
   - {"id": "BREG-SEC-174", "state": "enforced", "negativeId": "BREG-NEG-174", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "manual_no_review_attachments_cas_concealment_and_exact_receipt"}}
   - {"id": "BREG-SEC-175", "state": "enforced", "negativeId": "BREG-NEG-175", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "explicit_service_assessment_preserves_scope_actor_target_and_record_disclosure"}}
+  - {"id": "BREG-SEC-176", "state": "enforced", "negativeId": "BREG-NEG-176", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "review_context_refuses_active_action_mapping_for_a_retained_submission"}}
