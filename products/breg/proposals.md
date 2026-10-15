@@ -226,7 +226,7 @@ cancelled; a changes-requested result records a `review-returned` event.
 |---|---|
 | `approved`, automatic application | The built-in executor applies the frozen effects. `applicationStatus` reads `applied`, or `blocked` with a recovery hint when an executor refuses them. |
 | `approved`, manual application | The `apply` link becomes available. An authorized caller applies before the approval's `availableUntil`. |
-| `rejected` | The Proposal is `rejected`, a terminal state. Every command link reads `review-rejected` with recovery `receipt-only`: Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer 409 `proposal.rejected`, also after a package activation changes the Action revision. Start a new Proposal to propose the work again. |
+| `rejected` | The Proposal is `rejected`, a terminal state. Every command link reads `review-rejected` with recovery `receipt-only`: Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer 409 `proposal.rejected`, also after a package activation changes the Action revision; an attachment upload or removal is an Edit and answers the same. Start a new Proposal to propose the work again. |
 | `changes-requested` | The Proposal stays `submitted`. Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
 | `answered` | Apply reads `review-ended` with recovery `revise`. An answer is not a decision on a change. |
 | `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A cancel or supersession BReg caused by withdrawing is not an outcome and reads as pending. |
