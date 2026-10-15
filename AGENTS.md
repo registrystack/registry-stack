@@ -179,9 +179,13 @@ what the citizen may see or change is the registry's, under its agent access
 profile; the gateway writes an application's target record and owner itself,
 from the citizen's own linked record and the token subject, and never from tool
 arguments. No product crate depends on it, and it depends on the engine only
-through `registry-breg-client`; `registry-breg` is a dev-dependency for its
-PostgreSQL end-to-end suite. `crates/registry-breg-mcp/clippy.toml` disallows
-the client methods it must never reach, and
+through `registry-breg-client`. Its ignored `native_citizen` integration test
+composes independently built matching `breg`, `bregctl`, and `breg-review`
+executables over public HTTP and runs in the existing BReg `postgres` CI lane.
+The reused Coordinator fixture owns disposable databases and roles; CI aliases
+the BReg test URL and binary paths to its `COORDINATOR_*` inputs.
+`crates/registry-breg-mcp/clippy.toml` disallows the client methods it must never
+reach, and
 `products/breg/scripts/check-mcp-gateway-boundary.sh` proves that list still
 resolves and refuses. `registry-breg-review` (`breg-review`) is the paired
 review page a citizen uses to submit a draft the gateway prepared; it too

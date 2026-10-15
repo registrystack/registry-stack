@@ -54,8 +54,8 @@ async fn client(
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
     let hint = hint.to_owned();
-    let metadata = json!({"metadataVersion":"1","id":"facilities","version":"1","revision":REVISION,"recordTypes":[],"operations":[],
-        "proposals":{"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]}}});
+    let metadata = json!({"metadataVersion":"2","id":"facilities","version":"1","revision":REVISION,"recordTypes":[],"operations":[],
+        "proposals":{"actions":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]}}});
     let router = Router::new()
         .route(
             "/v1/registry",

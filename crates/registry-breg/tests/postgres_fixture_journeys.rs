@@ -67,7 +67,6 @@ const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
 const DATABASE_ID: &str = "fixture-database";
 const INSTANCE_ID: &str = "fixture-instance";
 const AUDIENCE: &str = "urn:breg:fixture-journeys";
-const QUICKSTART_COMPILER_SOURCE_REVISION: &str = "quickstart-source";
 const QUICKSTART_DATABASE_ID: &str = "generic-registry-local-db";
 const QUICKSTART_INSTANCE_ID: &str = "generic_registry_local";
 // Configured WASM runtimes are process-global, so their owning journeys must
@@ -80,7 +79,7 @@ journeys:
   - id: import-reference-data
     steps:
       - id: import-widget
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -92,7 +91,7 @@ journeys:
             - {jurisdiction: zone-a, label: imported, note: reference, quantity: 1}
         expect: {outcome: success, status: 200}
       - id: list-imported-widget
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -103,7 +102,7 @@ journeys:
   - id: refuse-import-outside-boundary
     steps:
       - id: import-other-jurisdiction
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -885,9 +884,14 @@ fn package_fixture_with_modules(
 }
 
 fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageFixture {
+    let source_revision = parse_project_yaml(project)
+        .expect("spatial project fixture parses")
+        .package
+        .expect("spatial project declares its package identity")
+        .source_revision;
     let prepared = prepare_package(PackageBuildRequest {
         from_package_digest: None,
-        compiler_source_revision: QUICKSTART_COMPILER_SOURCE_REVISION.to_owned(),
+        compiler_source_revision: source_revision,
         schema_fingerprint: schema_fingerprint.to_owned(),
         project: PackageSourceFile {
             path: "sources/project.yaml".to_owned(),
@@ -1367,7 +1371,7 @@ fn spatial_map_token(idp: &MockIdp) -> String {
         "registry_actor_kind": "service",
         "registry_principal": "synthetic-qgis-installation",
         "registry_purpose": "service-site-map",
-        "scope": "service-sites:map.read",
+        "scope": "service-sites:map:read",
         "service_zones": "central",
     }))
 }
@@ -1378,7 +1382,7 @@ fn spatial_public_map_token(idp: &MockIdp) -> String {
         "registry_actor_kind": "service",
         "registry_principal": "synthetic-public-map",
         "registry_purpose": "service-site-public-map",
-        "scope": "service-sites:public.read",
+        "scope": "service-sites:public:read",
     }))
 }
 
@@ -1388,7 +1392,7 @@ fn spatial_public_directory_token(idp: &MockIdp) -> String {
         "registry_actor_kind": "service",
         "registry_principal": "synthetic-public-directory",
         "registry_purpose": "service-site-public-directory",
-        "scope": "service-sites:public.read",
+        "scope": "service-sites:public:read",
     }))
 }
 
@@ -1398,7 +1402,7 @@ fn spatial_directory_token(idp: &MockIdp) -> String {
         "registry_actor_kind": "service",
         "registry_principal": "synthetic-directory-reader",
         "registry_purpose": "service-site-directory",
-        "scope": "service-sites:directory.read",
+        "scope": "service-sites:directory:read",
     }))
 }
 
@@ -1408,7 +1412,7 @@ fn spatial_site_token(idp: &MockIdp) -> String {
         "registry_actor_kind": "service",
         "registry_principal": "synthetic-site-reader",
         "registry_purpose": "service-site-map",
-        "scope": "service-sites:site.read",
+        "scope": "service-sites:site:read",
     }))
 }
 

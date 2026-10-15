@@ -162,6 +162,25 @@ fn write(path: &Path, bytes: &[u8]) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+/// The operator lifecycle exercises the maintained generic workflow fixture;
+/// the public `init` default has its own smaller directory model and callers.
+fn operator_project(session: &Session) {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/fixtures/generic-operator-workflows");
+    for relative in [
+        "registry.yaml",
+        "runtime.example.yaml",
+        "dev-clients.yaml",
+        "tests/journeys.yaml",
+        "modules/record-notes/module.yaml",
+    ] {
+        let target = session.project.join(relative);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        write(&target, &fs::read(fixture.join(relative)).unwrap());
+    }
+    session.success(&["project", "lock", session.project.to_str().unwrap()]);
+}
+
 fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) -> Value {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
@@ -196,10 +215,10 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let mut registry: Value =
         serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
-    let record = registry["entities"]
+    let record = registry["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -243,7 +262,7 @@ clients:
 seed:
   - id: event-seed
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {code: synthetic-event-seed, label: Synthetic event seed, status: active}
 "#,
@@ -342,7 +361,7 @@ seed:
             "record-created-b" => "receiver-b",
             _ => panic!("receipt did not name an authored event"),
         };
-        assert_eq!(receipt["entity"], "record");
+        assert_eq!(receipt["recordType"], "record");
         assert_eq!(receipt["trigger"], "created");
         assert_eq!(
             receipt["deliveryId"],
@@ -556,11 +575,11 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let project_file = project.join("registry.yaml");
     let mut definition: Value =
         serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    for entity in definition["entities"].as_array_mut().unwrap() {
+    for entity in definition["recordTypes"].as_array_mut().unwrap() {
         if entity["id"] == "record-group" {
             entity["batch"] = json!({"maximumItems": 4, "maximumBytes": 16384});
         }
@@ -573,7 +592,7 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
         if profile["id"] == "operator" {
             // No direct-create permission can satisfy either the journey's
             // reference setup or the served database's reference seed.
-            profile["permissions"]["entities"][0]["operations"] = json!(["import", "get", "list"]);
+            profile["permissions"]["records"][0]["operations"] = json!(["import", "get", "list"]);
         }
     }
     write(
@@ -588,7 +607,7 @@ journeys:
   - id: purpose-and-import
     steps:
       - id: import-reference
-        entity: record-group
+        recordType: record-group
         accessProfile: operator
         claims:
           principal: fixture-officer
@@ -601,7 +620,7 @@ journeys:
           items: [{code: journey-group, label: Journey reference}]
         expect: {outcome: success, status: 200}
       - id: list-reference
-        entity: record-group
+        recordType: record-group
         accessProfile: operator
         claims:
           principal: fixture-officer
@@ -612,7 +631,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: create-record
-        entity: record
+        recordType: record
         accessProfile: operator
         claims:
           principal: fixture-officer
@@ -625,7 +644,7 @@ journeys:
           data: {code: journey-record, label: Journey record, status: active}
         expect: {outcome: success, status: 201, fields: {code: journey-record, status: active}}
       - id: read-as-same-client
-        entity: record
+        recordType: record
         accessProfile: record-reader
         claims:
           principal: fixture-officer
@@ -656,7 +675,7 @@ clients:
 seed:
   - id: reference-seed
     client: officer
-    entity: record-group
+    recordType: record-group
     accessProfile: operator
     operation: import
     data: {code: seed-group, label: Served reference}
@@ -823,7 +842,7 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let clients = parent.join("clients.yaml");
     write(
         &clients,
@@ -852,7 +871,7 @@ clients:
 seed:
   - id: first-record
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {code: synthetic-dev-record, label: Synthetic local record, status: active}
 "#,
@@ -1405,7 +1424,7 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let client_file = project.join("dev-clients.yaml");
     let mut clients = fs::read(&client_file).unwrap();
     clients.extend_from_slice(
@@ -1413,7 +1432,7 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
 seed:
   - id: source-successor-seed
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {code: synthetic-source-successor, label: Synthetic source successor, status: active}
 "#,

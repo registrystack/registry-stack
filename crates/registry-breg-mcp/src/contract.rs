@@ -27,7 +27,7 @@ pub(crate) struct EditableField {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Contract {
-    pub(crate) registry_revision: String,
+    pub(crate) action_revision: String,
     pub(crate) details_route: String,
     pub(crate) details_fields: Vec<LabelledField>,
     pub(crate) target_api_name: String,
@@ -119,7 +119,7 @@ impl Contract {
             .map(|input| input.api_name.clone())
             .collect();
         Ok(Self {
-            registry_revision: metadata.registry_revision().to_owned(),
+            action_revision: action.definition_revision().to_owned(),
             details_route,
             details_fields,
             target_api_name: target.api_name().to_owned(),

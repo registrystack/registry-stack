@@ -104,6 +104,18 @@ class ProductContractTests(unittest.TestCase):
         self.assertNotIn("kind", create["properties"])
         self.assertIn("ReviewStaffingQuery", document["components"]["schemas"])
 
+    def test_staffing_diagnostic_is_optional_on_both_task_projections(self):
+        schemas = json.loads((PRODUCT / "generated/registry-casework.openapi.json").read_text())["components"]["schemas"]
+        self.assertEqual(schemas["StaffingDiagnostic"]["enum"], ["no-cover-available"])
+        for name in ("ReviewTask", "SupervisoryReviewTask"):
+            self.assertEqual(schemas[name]["properties"]["staffingDiagnostic"]["$ref"], "#/components/schemas/StaffingDiagnostic")
+            self.assertNotIn("anyOf", schemas[name]["properties"]["staffingDiagnostic"])
+            self.assertNotIn("staffingDiagnostic", schemas[name]["required"])
+        self.assertNotIn("AssignmentContext", schemas)
+        self.assertEqual(set(schemas["SupervisoryReviewTask"]["properties"]), {
+            "taskId", "requestId", "queue", "revision", "state", "staffingDiagnostic", "accountabilityEventId"
+        })
+
     def test_cli_report_contract_is_generated_from_one_typed_union(self):
         schemas = sorted(path.name for path in (PRODUCT / "contracts/cli").glob("*.schema.json"))
         self.assertEqual(schemas, ["report.schema.json"])

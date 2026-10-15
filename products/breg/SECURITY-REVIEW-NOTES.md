@@ -3525,3 +3525,58 @@ state to be served with no row lost.
   until the apply transaction ends, and each rebuild reads the table once.
   The registry is in maintenance for that time.
 - No security invariant row changes.
+
+## Review policy selection at first acceptance
+
+An ID-only Review policy selector delegates concrete version and digest choice
+to the configured trusted provider at first durable acceptance. BReg freezes
+the selector in the Proposal submission and stores the concrete accepted
+binding separately. Supplying both `version` and `digest` instead requires that
+exact policy before acceptance; partial pins are invalid.
+
+The threat is substitution of a different policy identity or exact pin before
+acceptance, or substitution of a different request, policy, subject, submission,
+or result after acceptance. `PolicySelection::matches` in
+`crates/registry-review-protocol/src/lib.rs` defines selection.
+`check_accepted` in `crates/registry-review-client/src/client.rs` checks the
+provider response against that selector, subject, and submission digest before
+returning it to `run_one_submission` in
+`crates/registry-breg/src/review_store.rs`. A mismatched response is a protocol
+failure: BReg records `remote-uncertain` without retaining an accepted binding
+or approval. The worker's additional `review-policy-changed` check is defensive;
+the canonical client rejects these mismatches before that branch can run.
+
+Once accepted, the worker refuses a replacement as
+`review-acceptance-changed`, including after operator resubmit. Feed
+reconciliation requires the same exact accepted binding, and
+`crates/registry-breg/src/review_integration.rs` independently checks exact
+result correlation before application. A review decision never grants source
+write authority or bypasses current commit conditions.
+
+### Tests
+
+`first_acceptance_refuses_wrong_policy_id_or_exact_pin` in
+`crates/registry-breg/tests/postgres_proposal_review_delivery.rs` uses the
+existing HTTP provider and real PostgreSQL fixture to return an otherwise
+correlated acceptance with the wrong ID, pinned version, or pinned digest.
+Each is refused without a retained binding, result, or Record mutation. Its
+permitted case accepts a newer version and digest for the same ID and retains
+that exact binding without rewriting the frozen selector.
+`current_policy_delivery_recovers_original_request_without_rewriting_frozen_identity`
+holds lost-response recovery to the original request and idempotency key.
+`operator_resubmit_preserves_acceptance_and_refuses_replacement_after_provider_loss`
+holds operator recovery to the original acceptance and refuses changed policy
+or request bindings. `result_correlation_requires_every_frozen_binding` in
+`review_integration.rs` retains the exact-result negative cases.
+These selection and correlation guarantees are recorded by BREG-SEC-34.
+
+### Accepted residuals and operator choice
+
+The trusted provider may change its policy while first acceptance is pending,
+including switching between human review and automatic assessment. The
+submission recovery window defaults to 30 days; operator resubmit restarts it
+but preserves any existing acceptance. A new submission after
+changes-requested selects the provider's current policy again unless pinned.
+Use a complete exact pin when the version chosen at submission must be the
+version that decides. ID-only selection intentionally trusts provider policy
+administration until first acceptance, then preserves exact correlation.

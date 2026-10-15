@@ -145,7 +145,8 @@
               "readableContextFields": [
                 "changes",
                 "currentAddressLine",
-                "facilityId"
+                "facilityId",
+                "supportingDocument"
               ],
               "readableInputs": [],
               "requesterClients": [],
@@ -223,14 +224,18 @@
               "facilityId": {
                 "input": "facility",
                 "type": "input"
+              },
+              "supportingDocument": {
+                "slot": "supporting-document",
+                "type": "document"
               }
             },
             "id": "facility-address-context"
           },
           "systemApplyGrant": {
             "actionId": "correct-address",
-            "actionRevision": "sha256:919a15cbc3286ec8d870a72e25fc66a8d4da4ef1cff58cbf3f0549ba37caeb9a",
-            "revision": "sha256:8d86e8b8a9a7ca033ead905a72f6e01d941f5eeaceb0010c8a4e503f6c3d660e",
+            "actionRevision": "sha256:70318e95008100a9871aef80bb45eef7f5eed9e98ea65d5ee3ee6bf2d74a6402",
+            "revision": "sha256:1afeab9fd55185d7ec5b63c8cc57fd20685c8801b7b688f60aeccaedb75e882c",
             "targets": [
               {
                 "fields": [],
@@ -452,7 +457,7 @@
         },
         "type": "function"
       },
-      "revision": "sha256:919a15cbc3286ec8d870a72e25fc66a8d4da4ef1cff58cbf3f0549ba37caeb9a"
+      "revision": "sha256:70318e95008100a9871aef80bb45eef7f5eed9e98ea65d5ee3ee6bf2d74a6402"
     },
     {
       "apiName": "deactivateFacility",
@@ -1040,6 +1045,9 @@
       "canonicalId": {
         "apiName": "id",
         "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
         "id": "id",
         "schema": {
           "format": "uuid",
@@ -1057,6 +1065,11 @@
         {
           "apiName": "name",
           "classification": "public",
+          "fieldType": {
+            "maximumLength": 160,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "name",
           "required": true,
           "schema": {
@@ -1069,6 +1082,11 @@
         {
           "apiName": "email",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 254,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "email",
           "required": true,
           "schema": {
@@ -1081,6 +1099,11 @@
         {
           "apiName": "jurisdiction",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "jurisdiction",
           "required": true,
           "schema": {
@@ -1114,6 +1137,9 @@
       "canonicalId": {
         "apiName": "id",
         "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
         "id": "id",
         "schema": {
           "format": "uuid",
@@ -1132,6 +1158,11 @@
         {
           "apiName": "facilityCode",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 64,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "facility-code",
           "required": true,
           "schema": {
@@ -1144,6 +1175,11 @@
         {
           "apiName": "name",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 200,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "name",
           "required": true,
           "schema": {
@@ -1156,6 +1192,11 @@
         {
           "apiName": "addressLine",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 240,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "address-line",
           "required": true,
           "schema": {
@@ -1168,6 +1209,11 @@
         {
           "apiName": "city",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 120,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "city",
           "required": true,
           "schema": {
@@ -1180,6 +1226,11 @@
         {
           "apiName": "postalCode",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 24,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "postal-code",
           "required": true,
           "schema": {
@@ -1192,6 +1243,14 @@
         {
           "apiName": "status",
           "classification": "internal",
+          "fieldType": {
+            "type": "vocabulary-code",
+            "values": [
+              "active",
+              "inactive"
+            ],
+            "vocabulary": "facility-status"
+          },
           "id": "status",
           "required": true,
           "schema": {
@@ -1207,6 +1266,11 @@
         {
           "apiName": "jurisdiction",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "jurisdiction",
           "required": true,
           "schema": {
@@ -1262,6 +1326,9 @@
       "canonicalId": {
         "apiName": "id",
         "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
         "id": "id",
         "schema": {
           "format": "uuid",
@@ -1279,6 +1346,11 @@
         {
           "apiName": "facility",
           "classification": "internal",
+          "fieldType": {
+            "onDelete": "restrict",
+            "target": "facility",
+            "type": "reference"
+          },
           "id": "facility",
           "required": true,
           "schema": {
@@ -1290,6 +1362,11 @@
         {
           "apiName": "operator",
           "classification": "internal",
+          "fieldType": {
+            "onDelete": "restrict",
+            "target": "operator",
+            "type": "reference"
+          },
           "id": "operator",
           "required": true,
           "schema": {
@@ -1301,6 +1378,11 @@
         {
           "apiName": "jurisdiction",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "jurisdiction",
           "required": true,
           "schema": {
@@ -1362,6 +1444,9 @@
       "canonicalId": {
         "apiName": "id",
         "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
         "id": "id",
         "schema": {
           "format": "uuid",
@@ -1380,6 +1465,11 @@
         {
           "apiName": "operatorCode",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 64,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "operator-code",
           "required": true,
           "schema": {
@@ -1392,6 +1482,14 @@
         {
           "apiName": "status",
           "classification": "internal",
+          "fieldType": {
+            "type": "vocabulary-code",
+            "values": [
+              "active",
+              "inactive"
+            ],
+            "vocabulary": "operator-status"
+          },
           "id": "status",
           "required": true,
           "schema": {
@@ -1407,6 +1505,11 @@
         {
           "apiName": "jurisdiction",
           "classification": "internal",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
           "id": "jurisdiction",
           "required": true,
           "schema": {
@@ -1456,6 +1559,6 @@
       "protocol": "id.registrystack.org/protocols/review/v1"
     }
   ],
-  "revision": "sha256:e0c468a615261e0cb708e290fa063db015da8eff2b2d398aafecea59f71361c4",
+  "revision": "sha256:8b532ef79f3c920ec3ba5229adac5704aedd182a2f62a0702a2b94c4c8510a66",
   "statisticalDatasets": []
 }

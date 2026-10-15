@@ -471,6 +471,35 @@ pub(crate) async fn load(
     version: i64,
     slot: &str,
 ) -> Result<Option<StoredAttachment>, MutationError> {
+    let Some(metadata) = live_metadata(client, entity, id, version, slot).await? else {
+        return Ok(None);
+    };
+    let row = client
+        .query_opt(
+            "SELECT b.backend_id,b.content FROM registry_internal.registry_attachment_blobs b JOIN
+         registry_internal.registry_proposal_attachments a ON a.sha256=b.sha256 WHERE
+         a.action_id=$1 AND a.proposal_id=$2 AND a.submission_version=$3 AND a.slot_id=$4 AND
+         a.erased_at IS NULL AND a.sha256=$5 AND b.state='live'",
+            &[&entity, &id, &version, &slot, &metadata.sha256],
+        )
+        .await
+        .map_err(unavailable)?;
+    Ok(row.map(|r| StoredAttachment {
+        metadata,
+        backend_id: r.get(0),
+        content: r.get(1),
+    }))
+}
+
+/// Admit metadata without materializing object bytes. The hash lock and current
+/// verification checks are identical to download admission.
+pub(crate) async fn live_metadata(
+    client: &impl GenericClient,
+    entity: &str,
+    id: Uuid,
+    version: i64,
+    slot: &str,
+) -> Result<Option<AttachmentMetadata>, MutationError> {
     let sql = format!(
         "{METADATA_SELECT} WHERE a.action_id=$1 AND a.proposal_id=$2
         AND a.submission_version=$3 AND a.slot_id=$4 AND a.erased_at IS NULL"
@@ -496,7 +525,7 @@ pub(crate) async fn load(
     // Recheck reference after acquiring the deletion lock.
     let row = client
         .query_opt(
-            "SELECT b.backend_id,b.content FROM registry_internal.registry_attachment_blobs b JOIN
+            "SELECT b.backend_id FROM registry_internal.registry_attachment_blobs b JOIN
              registry_internal.registry_proposal_attachments a ON a.sha256=b.sha256 WHERE
              a.action_id=$1 AND a.proposal_id=$2 AND a.submission_version=$3 AND a.slot_id=$4 AND
              a.erased_at IS NULL AND a.sha256=$5 AND b.state='live'",
@@ -504,11 +533,29 @@ pub(crate) async fn load(
         )
         .await
         .map_err(unavailable)?;
-    Ok(row.map(|r| StoredAttachment {
-        metadata,
-        backend_id: r.get(0),
-        content: r.get(1),
-    }))
+    Ok(row.map(|_| metadata))
+}
+
+pub(crate) async fn require_frozen_reference(
+    client: &impl GenericClient,
+    entity: &str,
+    id: Uuid,
+    version: i64,
+    slot: &str,
+    frozen: &AttachmentManifestEntry,
+) -> Result<(), MutationError> {
+    let live = live_metadata(client, entity, id, version, slot)
+        .await?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let policy = persisted_verification_policy(client).await?;
+    if live.sha256 != frozen.sha256
+        || live.content_type != frozen.content_type
+        || live.byte_size != frozen.byte_size
+        || (policy != "disabled").then_some(policy) != frozen.verification_policy
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
 }
 
 pub(crate) async fn manifest(

@@ -47,6 +47,8 @@ export declare class BaseRegistryClient {
   readProposal(proposal: BRegProposal): Promise<BRegProposal>
   getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
   downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
+  readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome>
+  downloadProposalReviewDocument(binding: BRegProposalReviewBinding, context: any, field: string): Promise<RawOutcome>
   readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome>
   readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome>
   uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
@@ -207,10 +209,14 @@ export declare class BRegIngestionPrefixDigest {
 export type IngestionPrefixDigest = BRegIngestionPrefixDigest
 
 export declare class BRegMetadata {
+  /** Read-only capability inventory for each exact Action/profile pair. */
+  get proposalActions(): any
   /** Caller-filtered inert descriptors. Selectors below remain the only authority constructors. */
   get operations(): any
   selectProposals(profile: string): BRegProposalCollection
   selectProposalGet(profile: string): BRegProposalGetBinding
+  selectProposalReviewContext(profile: string, action: string): BRegProposalReviewBinding
+  selectProposalReviewStatus(profile: string, action: string): BRegProposalReviewBinding
   /** Complete typed caller-filtered Action descriptors. */
   get actions(): any
   /** Original caller-filtered action metadata as exact JSON text. */
@@ -277,6 +283,9 @@ export type ProposalCollection = BRegProposalCollection
 
 export declare class BRegProposalGetBinding {}
 export type ProposalGetBinding = BRegProposalGetBinding
+
+export declare class BRegProposalReviewBinding {}
+export type ProposalReviewBinding = BRegProposalReviewBinding
 
 /**
  * A recovered immediate-action invocation and key. This remains inert until

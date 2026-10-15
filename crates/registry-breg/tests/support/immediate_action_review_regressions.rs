@@ -569,6 +569,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
+        "datasets": [{"id": "test-dataset"}],
         "recordTypes": [{
             "id": "lock-record",
             "primaryDataset": "test-dataset",
@@ -968,6 +969,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
+        "datasets": [{"id": "test-dataset"}],
         "recordTypes": [{
             "id": "wide-record",
             "primaryDataset": "test-dataset",

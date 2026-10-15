@@ -2677,6 +2677,7 @@ fn compile_execution(
             }
             use crate::contract::ProposalContextValueSource;
             let valid = match value {
+                ProposalContextValueSource::Document { slot } => attachments.contains_key(slot),
                 ProposalContextValueSource::Input { input } => {
                     action.inputs.iter().any(|field| &field.id == input)
                 }
@@ -2712,7 +2713,7 @@ fn compile_execution(
                 errors.push(Diagnostic::error(
                     "breg.proposal.context-mapping-invalid",
                     "actions[].execution.proposal.reviewContext.fields",
-                    "context must select an input, an unencrypted referenced Record field, or 1–64 distinct unencrypted fields from frozen Record changes",
+                    "context must select a declared document slot, an input, an unencrypted referenced Record field, or 1–64 distinct unencrypted fields from frozen Record changes",
                 ));
             }
         }

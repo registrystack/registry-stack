@@ -70,10 +70,16 @@ pub(crate) const EXAMPLE_SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[RemovedKey {
-        pointer: "/version",
-        replacement: "Delete `version`; the apiVersion header names the format version.",
-    }],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/version",
+            replacement: "Delete `version`; the apiVersion header names the format version.",
+        },
+        RemovedKey {
+            pointer: "/scenarios/*/steps/*/entity",
+            replacement: "Rename `entity` to `recordType`, keeping the same Record type reference.",
+        },
+    ],
 };
 
 /// An example scenarios catalogue the shared reader or the catalogue checks
@@ -1275,7 +1281,7 @@ async fn execute(
         let retained = if step.operation == Operation::Create {
             let capture =
                 &attempt.captures[step.capture.as_deref().context("create capture missing")?];
-            json!({"recordId":capture.id,"entity":capture.entity})
+            json!({"recordId":capture.id,"recordType":capture.entity})
         } else if matches!(step.operation, Operation::Get | Operation::History) {
             json!({"observed":true})
         } else {
@@ -1640,6 +1646,21 @@ mod tests {
         assert_eq!(diagnostic.code, "config.removed-key");
         assert_eq!(diagnostic.path, "/version");
         assert!(diagnostic.suggested_action.contains("apiVersion"));
+    }
+
+    #[test]
+    fn retired_scenario_record_type_key_has_rename_diagnostic() {
+        let report = catalogue_refusal(&json!({"apiVersion": API_VERSION, "kind": KIND,
+            "scenarios": [{"id": "read", "description": "Read a retained record", "input": "examples/inputs.json",
+                "steps": [{"id": "read-record", "operation": "get", "entity": "record", "client": "reader",
+                    "accessProfile": "reader", "record": "record"}]}]}));
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/scenarios/0/steps/0/entity")
+            .expect("the retired Record type key has its own diagnostic");
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(diagnostic.suggested_action.contains("recordType"));
     }
 
     #[test]
@@ -2340,12 +2361,12 @@ journeys:
         ]})).unwrap()).unwrap();
         fs::write(project.join("examples/scenarios.json"), serde_json::to_vec(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
             {"id":"population","description":"Create action targets","input":"examples/population.json","steps":[
-                {"id":"household","operation":"create","entity":"household","client":"operator","accessProfile":"household-operator","input":"household","capture":"household"},
-                {"id":"center","operation":"create","entity":"service-center","client":"operator","accessProfile":"household-operator","input":"center","capture":"center"}
+                {"id":"household","operation":"create","recordType":"household","client":"operator","accessProfile":"household-operator","input":"household","capture":"household"},
+                {"id":"center","operation":"create","recordType":"service-center","client":"operator","accessProfile":"household-operator","input":"center","capture":"center"}
             ]},
             {"id":"contact","description":"Register a contact with inherited targets","input":"examples/contact.json","steps":[
-                {"id":"contact","operation":"invoke","entity":"person","client":"registrar","accessProfile":"contact-registrar","input":"contact","capture":"person","action":"register-household-contact","result":"person"},
-                {"id":"observe","operation":"get","entity":"household","client":"operator","accessProfile":"household-operator","record":"household"}
+                {"id":"contact","operation":"invoke","recordType":"person","client":"registrar","accessProfile":"contact-registrar","input":"contact","capture":"person","action":"register-household-contact","result":"person"},
+                {"id":"observe","operation":"get","recordType":"household","client":"operator","accessProfile":"household-operator","record":"household"}
             ]}
         ]})).unwrap()).unwrap();
         fs::write(project.join("examples/population.json"), serde_json::to_vec(&json!({
@@ -2389,6 +2410,10 @@ journeys:
             &ports[2],
         ]);
         let population = child(&owned.project, "population", None, None).unwrap();
+        let saved_population = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
+        let retained_create = &saved_population[0].completed["household"];
+        assert_eq!(retained_create["recordType"], "household");
+        assert!(retained_create.get("entity").is_none());
         let parent = population["attempt"].as_str().unwrap().parse().unwrap();
         let mut wrong_input = input;
         wrong_input["contact"]["householdId"] = json!({"recordCapture":"center"});

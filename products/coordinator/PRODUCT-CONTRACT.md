@@ -75,8 +75,11 @@ reachable from both, the call output has no unambiguous schema and is unavailabl
 
 `casework.submit-review-request/v1` and `casework.cancel-review-request/v1` use one configured
 Casework review producer under its own service identity, with no task authority. Submission carries
-the expected `PolicyBinding`, subject, bounded reviewer context, and requester reference. Accepted
-requests and results must match that exact policy, subject, and submission digest. Casework owns
+the expected `PolicySelection`, subject, bounded reviewer context, and requester reference.
+An ID selects the provider's current policy at first acceptance; an optional version and digest
+require an exact pin. Acceptance stores a concrete `PolicyBinding`. Recovery preserves that
+binding and the original selector, and results must match the accepted policy, subject, and
+submission digest. Casework owns
 reviewer authority and outcomes. This standalone review path needs no BReg connection and confers
 no registry mutation authority.
 
@@ -171,6 +174,27 @@ route, which only advances an existing Run's eligible authoritative read.
 An event workflow that writes to its own source must select meaningful state transitions and
 use guards to avoid repeated fresh events. Ordinary product API calls do not propagate event
 causation across products, so the envelope hop bound alone does not prevent those loops.
+
+### Admission security coverage
+
+These references map admission guarantees to maintained tests. They do not assert that a
+particular candidate has run or passed them. The ordinary Rust test lane runs the pure checks;
+`scripts/test-postgres.sh` runs the database-backed library tests and Review-provider suite.
+The native product-events journey additionally exercises a real BReg producer and Coordinator
+receiver over HTTP.
+
+| Guarantee | Owning test |
+|---|---|
+| A signature binds the destination, source, event contract and canonical body. | `event_trigger_tests::substituted_signature_destination_source_and_contract_are_refused` |
+| Delivery attempt time is fresh; an old event commit time alone does not prevent recovery. | `event_trigger_tests::stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused` and `exact_event_identity_survives_retry_replay_and_old_commit_time` |
+| Concurrent delivery, restart and package activation recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` |
+| An admitted event grants no source mutation authority. | `breg_event_native::native_proposal_event_admits_one_run_without_conferring_apply_authority` |
+| Review results remain bound to the original producer, source, workflow and subject under current authority. | `review_provider_postgres::exact_admission_result_restart_feed_and_current_ownership_share_one_run` and `revoked_sources_do_not_disclose_or_starve_the_authorized_result_feed` |
+| Policy identity covers the workflow and outcome mapping; first acceptance fixes the concrete policy across recovery. | `review_provider::derived_policy_pins_workflow_and_mapping_without_duplicate_identity` and `review_provider_postgres::current_selection_recovers_original_acceptance_after_policy_change_and_restart` |
+
+The library tests live in `crates/registry-coordinator/src/event_trigger_tests.rs`; the other
+targets live in `crates/registry-coordinator/tests/`. The dependency-direction and schema gates
+remain the shared assurance for product independence and generated contract drift.
 
 `POST /v1/runs` requires `workflow`, expected `workflowRevision`, `input`, and an idempotency key.
 A fresh start must match the active computed revision. Recovery of an unknown admission retains

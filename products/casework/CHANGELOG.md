@@ -4,7 +4,8 @@
 
 - BREAKING: replace source-owned WorkItems, prepared attempts and source actions
   with one ReviewPolicy/ReviewRequest/ReviewTask/Decision/ReviewResult model.
-  Requests submit the exact compiled policy binding and use context `mode`
+  Requests select a policy by ID, with an optional exact version and digest;
+  accepted requests retain the provider's concrete binding. Context uses `mode`
   `submitted` or `current-source`. There is no source mutation authority or
   retired HTTP/CLI compatibility surface. Use a fresh Casework database;
   retained legacy schemas are refused before mutation, not converted or erased.
@@ -18,6 +19,22 @@
 - Export the shared review submission digest helper through Node and Python
   clients so producers can use exact admission and recovery without implementing
   the protocol canonicalizer.
+- BREAKING: task list, next-task and holdings reads complete their bounded scan
+  before sorting and paging, including unfiltered queues. They refuse an
+  exhausted candidate or source-read budget with `review.query-too-broad`
+  instead of returning a partial page. Defaults are 100 candidates, 25 source
+  reads and 2000 ms. Page size and reference filtering do not reduce the scan;
+  size the policy for the expected query or narrow its queue or exact subject.
+  Supervision and own decisions retain their partial-page contract.
+- Caseload preview and apply intentionally move the complete claimed set for
+  one officer, optionally in one queue, with a cap of 100 tasks. They accept no
+  subset or continuation. Individual task assignments remain separate operations.
+  Supervisory discovery intentionally omits holder identities and due dates;
+  it does not replace a team holdings board.
+- Authorized ReviewTask reads and supervisory rows expose optional
+  `staffingDiagnostic: no-cover-available` after an assignment or absence
+  recompute finds no eligible cover. Responsibility changes and task closure
+  clear the notice. Remove the unused `AssignmentContext` client export.
 
 ## 0.41.0 - 2026-10-13
 

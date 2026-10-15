@@ -105,7 +105,7 @@ export interface AbsenceInput { person: IssuerPrincipal; from: string; until: st
 export interface AbsenceRecord extends AbsenceInput { absenceId: string; revision: SafeInteger }
 export interface AbsencesQuery { cursor?: string; limit?: SafeInteger }
 export interface AbsenceList { directoryRevision: SafeInteger; items: ReadonlyArray<AbsenceRecord>; nextCursor?: string }
-export interface AssignmentContext { owner?: IssuerPrincipal; assignedBy?: IssuerPrincipal; absenceIds: ReadonlyArray<string>; staffingDiagnostic?: 'no-cover-available' }
+export type StaffingDiagnostic = 'no-cover-available'
 export interface AssignmentRequest { assignee: IssuerPrincipal; reason?: string }
 export interface DelegateRequest { delegate: IssuerPrincipal; reason?: string }
 export interface ReviewCaseloadMoveRequest { from: IssuerPrincipal; to: IssuerPrincipal; queue?: string; reason: string }
@@ -293,6 +293,7 @@ export interface ReviewTask {
   revision: SafeInteger
   eligibleProfiles: ReadonlyArray<string>
   state: ReviewTaskState
+  staffingDiagnostic?: StaffingDiagnostic
   decidedByCaller?: boolean
   decisionReceipt?: ReviewDecisionReceipt
 }
@@ -301,14 +302,10 @@ export type SupervisoryReviewTaskState = 'open' | 'held' | 'decided'
 export interface SupervisoryReviewTask {
   taskId: Uuid
   requestId: Uuid
-  subject: SubjectBinding
-  requesterReference: string
-  deadlineAt?: string
-  createdAt: string
-  displayReference?: string
   queue: string
   revision: SafeInteger
   state: SupervisoryReviewTaskState
+  staffingDiagnostic?: StaffingDiagnostic
   accountabilityEventId?: Uuid
 }
 export interface SupervisoryReviewTaskPage { items: ReadonlyArray<SupervisoryReviewTask>; nextCursor?: Uuid; status: PageStatus }

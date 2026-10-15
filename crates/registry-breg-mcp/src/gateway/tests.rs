@@ -387,6 +387,80 @@ async fn a_draft_naming_another_target_is_neither_changed_nor_shown() {
 }
 
 #[tokio::test]
+async fn a_retained_application_is_not_interpreted_under_a_changed_action_revision() {
+    let fixture = Fixture::start().await;
+    let application = fixture.registry.add_application(
+        json!({"address": ADDRESS_A, "newAddressLine": CANARY, "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        draft_request(),
+    );
+    let mut metadata: Value = serde_json::from_slice(crate::mock_registry::METADATA).unwrap();
+    metadata["actions"][0]["revision"] = json!(format!("sha256:{}", "b".repeat(64)));
+    metadata["actions"][0]["inputs"][1]["label"] = json!("Changed input label");
+    fixture.registry.publish_metadata(metadata);
+    let caller = fixture.caller(CITIZEN_A);
+
+    for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW, UPDATE_APPLICATION] {
+        let arguments = if tool == UPDATE_APPLICATION {
+            json!({"applicationId": application.to_string(), "expectedRevision": "1",
+                "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]})
+        } else {
+            json!({"applicationId": application.to_string()})
+        };
+        let value = fixture.call(&caller, tool, arguments).await;
+        assert_eq!(error_code(&value), "stale-application", "{tool}: {value}");
+        assert!(!value.to_string().contains(CANARY), "{tool}: {value}");
+        assert!(
+            !value.to_string().contains("Changed input label"),
+            "{tool}: {value}"
+        );
+        assert!(value.get("reviewUrl").is_none(), "{tool}: {value}");
+    }
+    assert!(fixture.writes().is_empty());
+    assert_eq!(fixture.registry.applications()[&application].revision, 1);
+    assert_eq!(
+        fixture.registry.applications()[&application].data["newLocality"],
+        "Port Selene"
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_action_remains_usable_after_other_registry_metadata_changes() {
+    let fixture = Fixture::start().await;
+    let application = fixture.registry.add_application(
+        json!({"address": ADDRESS_A, "newAddressLine": CANARY, "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        draft_request(),
+    );
+    let mut metadata: Value = serde_json::from_slice(crate::mock_registry::METADATA).unwrap();
+    metadata["revision"] = json!(format!("sha256:{}", "b".repeat(64)));
+    fixture.registry.publish_metadata(metadata);
+    let caller = fixture.caller(CITIZEN_A);
+
+    for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW] {
+        let value = fixture
+            .call(
+                &caller,
+                tool,
+                json!({"applicationId": application.to_string()}),
+            )
+            .await;
+        assert_eq!(value["isError"], false, "{tool}: {value}");
+        if tool == GET_APPLICATION_STATUS {
+            assert!(value.to_string().contains(CANARY));
+        }
+    }
+    let edited = fixture
+        .call(
+            &caller,
+            UPDATE_APPLICATION,
+            json!({"applicationId": application.to_string(), "expectedRevision": "1",
+            "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
+        )
+        .await;
+    assert_eq!(edited["isError"], false, "{edited}");
+    assert_eq!(fixture.registry.applications()[&application].revision, 2);
+}
+
+#[tokio::test]
 async fn an_update_pins_the_target_before_its_edits() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);

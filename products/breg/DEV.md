@@ -322,7 +322,7 @@ clients:
 seed:
   - id: first-record
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data:
       code: synthetic-dev-record
@@ -330,7 +330,7 @@ seed:
       status: active
   - id: reference-record
     client: operator
-    entity: reference-record
+    recordType: reference-record
     accessProfile: reference-loader
     operation: import
     data:

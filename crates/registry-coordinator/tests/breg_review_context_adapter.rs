@@ -36,9 +36,9 @@ fn document() -> Value {
 }
 
 fn metadata(revision: &str, operation: &str) -> Value {
-    json!({"metadataVersion":"1","id":"source","version":"1","revision":revision,
+    json!({"metadataVersion":"2","id":"source","version":"1","revision":revision,
         "recordTypes":[],"operations":[],"proposals":{"actions":[
-            {"actionId":"correct-name","accessProfile":"assessment","operations":[operation]}]}})
+            {"actionId":"correct-name","accessProfile":"assessment","operations":[operation],"readableInputs":[]}]}})
 }
 
 fn response(value: Value) -> ResponseTemplate {

@@ -31,8 +31,8 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
   let downloadBytes;
   const requests = [];
   const wireRequests = [];
-  const metadata = {id: 'registry', version: '1', revision: digest, metadataVersion: '1', recordTypes: [], operations: [],
-    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [],
+  const metadata = {id: 'registry', version: '1', revision: digest, metadataVersion: '2', recordTypes: [], operations: [],
+    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [], actions: [],
       get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['reader']}}};
   const server = http.createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;
@@ -76,7 +76,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
     value = document();
     value.application.resultLinks = [];
     assert.deepEqual(JSON.parse((await client.getProposal(binding, id)).documentJson).application.resultLinks, []);
-    delete value.application;
+    delete value.application; delete value.effectDigest;
     assert.ok(!Object.hasOwn(JSON.parse((await client.getProposal(binding, id)).documentJson), 'application'));
     for (const mutate of [
       item => {item.application.submissionVersion = 1;},
@@ -112,9 +112,71 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       value.context.contract = {id: 'urn:registry:breg:review-context:directory:correct:review', revision: digest, schemaDigest: digest};
       assert.deepEqual((await client.readProposalReviewContext(prior)).value.context.fields, {private: 'private-canary'});
     });
+    await t.test('Proposal documents require a version and state-appropriate frozen evidence', async () => {
+      for (const state of ['draft', 'submitted', 'applied', 'cancelled']) {
+        value = document(); value.state = state; value.submissionVersion = 0;
+        delete value.application;
+        if (state === 'draft') delete value.effectDigest;
+        await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+      }
+      value = document(); value.state = 'submitted'; delete value.application; delete value.effectDigest;
+      await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+      value = document(); value.state = 'draft'; delete value.application;
+      await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+      delete value.effectDigest;
+      assert.equal(JSON.parse((await client.getProposal(binding, id)).documentJson).state, 'draft');
+      value = document(); delete value.application;
+      await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+    });
+    await t.test('Review status preserves pending, terminal and expired evidence and Context excludes results', async () => {
+      value = document(); value.state = 'submitted'; delete value.application;
+      for (const [name, suffix, operation] of [['reviewStatus', 'review-status', 'get-review-status'], ['reviewContext', 'review-context', 'get-review-context']]) {
+        value.links[name] = {method: 'GET', path: `/v1/proposals/${id}/${suffix}`, accessProfile: 'reader', operation};
+      }
+      const prior = await client.getProposal(binding, id);
+      const base = {id, actionId: 'correct', actionRevision: digest, submissionVersion: 2, revision: 8, effectDigest: digest,
+        subject: {source: 'directory', subjectType: 'proposal', id, version: '2', digest},
+        context: {reference: `breg:directory:correct:${id}:2`}, reviewable: true};
+      const configured = {...base, authority: 'review-provider', policy: {id: 'review', version: '1', digest}};
+      const terminal = {state: 'approved', resultId: targetId, completedAt: '2026-10-01T00:00:00.000000Z', availableUntil: '2026-10-02T00:00:00.000000Z'};
+      value = structuredClone(base);
+      assert.ok(!Object.hasOwn((await client.readProposalReviewStatus(prior)).value, 'result'));
+      for (const result of [{state: 'pending'}, ...['approved', 'rejected', 'changes-requested', 'answered', 'cancelled', 'superseded', 'expired'].map(state => ({...terminal, state}))]) {
+        value = {...structuredClone(configured), requestId: id, result};
+        assert.deepEqual((await client.readProposalReviewStatus(prior)).value.result, result);
+      }
+      value = {...structuredClone(configured), result: {state: 'pending'}};
+      assert.equal((await client.readProposalReviewStatus(prior)).value.requestId, undefined);
+      value.result = terminal;
+      await assert.rejects(client.readProposalReviewStatus(prior), error => error.kind === 'invalid-request');
+      const invalidResults = [
+        ...['resultId', 'completedAt', 'availableUntil'].map(field => ({state: 'pending', [field]: terminal[field]})),
+        ...['resultId', 'completedAt', 'availableUntil'].map(field => {const result = {...terminal}; delete result[field]; return result;}),
+        {...terminal, resultId: 'not-a-uuid'}, {...terminal, resultId: '00000000-0000-0000-0000-000000000000'},
+        {...terminal, completedAt: '2026-10-01'}, {...terminal, availableUntil: 'private-canary'},
+        {...terminal, availableUntil: terminal.completedAt}, {...terminal, availableUntil: '2026-09-30T00:00:00Z'},
+        {...terminal, state: 'expired', availableUntil: undefined}, {...terminal, state: 'unknown'},
+      ];
+      for (const result of invalidResults) {
+        value = {...structuredClone(configured), requestId: id, result};
+        const count = requests.length;
+        await assert.rejects(client.readProposalReviewStatus(prior), error => error.kind === 'invalid-request' && !error.message.includes('private-canary'));
+        assert.equal(requests.length, count + 1);
+      }
+      for (const invalid of [{...base, result: {state: 'pending'}}, configured]) {
+        value = structuredClone(invalid);
+        await assert.rejects(client.readProposalReviewStatus(prior), error => error.kind === 'invalid-request');
+      }
+      value = structuredClone(configured);
+      value.context.contract = {id: 'urn:registry:breg:review-context:directory:correct:review', revision: digest, schemaDigest: digest};
+      value.context.fields = {private: 'private-canary'};
+      assert.deepEqual((await client.readProposalReviewContext(prior)).value.context.fields, value.context.fields);
+      value.result = {state: 'pending'};
+      await assert.rejects(client.readProposalReviewContext(prior), error => error.kind === 'invalid-request' && !error.message.includes('private-canary'));
+    });
     await t.test('non-Rebase transitions and attachment writes preserve the bound Action revision', async () => {
       const successor = `sha256:${'b'.repeat(64)}`;
-      value = document(); value.state = 'draft'; delete value.application;
+      value = document(); value.state = 'draft'; delete value.application; delete value.effectDigest;
       value.links.edit = {method: 'POST', path: `/v1/proposals/${id}/edit`, accessProfile: 'reader', operation: 'edit', ifMatch: '"edit-condition"'};
       value.attachments = {support: {id: 'support', required: false, maximumBytes: 1024, contentTypes: ['application/pdf'], classification: 'restricted',
         links: {upload: {method: 'PATCH', path: `/v1/proposals/${id}/attachments/support`, accessProfile: 'reader', operation: 'upload', ifMatch: '"attachment-condition"'},
@@ -143,13 +205,13 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       assert.equal(JSON.parse((await client.readProposal(prior)).documentJson).actionRevision, successor, 'ordinary reads can observe a new revision');
     });
     await t.test('Submit validates the exact receipt while replay and saved recovery retain the original request', async () => {
-      value = document(); value.state = 'draft'; value.submissionVersion = 1; delete value.application;
+      value = document(); value.state = 'draft'; value.submissionVersion = 1; delete value.application; delete value.effectDigest;
       value.links.submit = {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'reader', operation: 'submit', ifMatch: '"submit-condition"'};
       const prior = await client.getProposal(binding, id);
       const initial = structuredClone(value);
       const attempt = client.prepareProposal(prior, 'submit', '{}', 'exact-submit');
       const saved = attempt.toBytes();
-      const receipt = {...structuredClone(initial), revision: 9, state: 'submitted'};
+      const receipt = {...structuredClone(initial), revision: 9, state: 'submitted', effectDigest: digest};
       for (const invalid of [initial, {...receipt, revision: 8}, {...receipt, revision: 10},
         {...receipt, state: 'draft'}, {...receipt, state: 'applied'}, {...receipt, submissionVersion: 2}]) {
         value = invalid;
@@ -162,7 +224,8 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       const sent = wireRequests.at(-1);
       assert.equal(JSON.parse((await client.executeProposal(attempt)).documentJson).revision, 9);
       assert.deepEqual(wireRequests.at(-1), sent);
-      value = {...structuredClone(receipt), revision: 10, state: 'applied'};
+      value = {...structuredClone(receipt), revision: 10, state: 'applied',
+        application: {...document().application, submissionVersion: 1}};
       value.links.submit.availability = {available: false, observedRevision: 10, reason: 'already-applied', recovery: 'receipt-only'};
       const current = await client.readProposal(prior);
       const before = requests.length;
@@ -188,12 +251,13 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
     await t.test('explicit Rebase and exact recovery admit only the next successor Draft', async () => {
       for (const [state, before, after] of [['draft', 1, 1], ['submitted', 2, 3]]) {
         value = document(); value.state = state; value.submissionVersion = before; delete value.application;
+        if (state === 'draft') delete value.effectDigest;
         value.links.rebase = {method: 'POST', path: `/v1/proposals/${id}/rebase`, accessProfile: 'reader', operation: 'rebase', ifMatch: '"rebase-condition"',
           availability: {available: true, observedRevision: 8}};
         const prior = await client.getProposal(binding, id);
         const attempt = client.prepareProposal(prior, 'rebase', '{"input":{}}', `rebase-${state}`);
         const saved = attempt.toBytes();
-        value.state = 'draft'; value.submissionVersion = after; value.revision = 9;
+        value.state = 'draft'; value.submissionVersion = after; value.revision = 9; delete value.effectDigest;
         value.actionRevision = `sha256:${'b'.repeat(64)}`; value.links.rebase.availability.observedRevision = 9;
         const rebased = await client.executeProposal(attempt);
         const restored = BRegPreparedProposal.fromBytes(saved);
@@ -210,11 +274,17 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
 
     await t.test('retained attachment download uses disclosed value size while upload uses current policy', async () => {
       downloadBytes = Buffer.from('%PDF-retained');
-      value = document(); value.state = 'draft'; delete value.application;
+      value = document(); value.state = 'draft'; delete value.application; delete value.effectDigest;
       value.attachments = {support: {id: 'support', required: false, maximumBytes: 4, contentTypes: ['text/plain'], classification: 'restricted',
-        value: {submissionVersion: 2, sha256: createHash('sha256').update(downloadBytes).digest('hex'), contentType: 'application/pdf', byteSize: downloadBytes.length, verificationStatus: 'notRequired'},
+        value: {submissionVersion: 2, uploadedAt: '2026-10-15T00:00:00.000000Z', sha256: createHash('sha256').update(downloadBytes).digest('hex'), contentType: 'application/pdf', byteSize: downloadBytes.length, verificationStatus: 'notRequired'},
         links: {download: {method: 'GET', path: `/v1/proposals/${id}/attachments/support?submissionVersion=2`, accessProfile: 'reader', operation: 'download'},
           upload: {method: 'PATCH', path: `/v1/proposals/${id}/attachments/support`, accessProfile: 'reader', operation: 'upload', ifMatch: '"attachment-condition"'}}}};
+      const disclosed = structuredClone(value);
+      for (const uploadedAt of [undefined, 'private-canary', '2026-10-15']) {
+        value = structuredClone(disclosed); value.attachments.support.value.uploadedAt = uploadedAt;
+        await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request' && !error.message.includes('private-canary'));
+      }
+      value = disclosed;
       const retained = await client.getProposal(binding, id);
       assert.deepEqual((await client.downloadProposalAttachment(retained, 'support')).body, downloadBytes);
       const count = requests.length;

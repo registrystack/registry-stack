@@ -487,7 +487,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"valid-from","type":"timestamp","required":true,"classification":"public"},
               {"id":"valid-to","type":"timestamp","required":false,"classification":"public"}
             ],
-            "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+            "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{
               "type":"temporal-non-overlap","scopeFields":["scope"],
               "startField":"valid-from","endField":"valid-to"

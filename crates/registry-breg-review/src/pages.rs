@@ -123,6 +123,7 @@ async fn refused(
     }
     match refusal {
         Refusal::NotFound => app.problem(Problem::NotFound),
+        Refusal::ActionChanged => app.problem(Problem::ActionChanged),
         Refusal::SignedOut => {
             end_session(app, caller.cookie, sign_in_again(app, request_id, action))
         }

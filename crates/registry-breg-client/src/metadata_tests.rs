@@ -87,7 +87,7 @@ fn fixture() -> Value {
         "id": "business-registry",
         "version": "1.2.3",
         "revision": REVISION,
-        "metadataVersion": "1",
+        "metadataVersion": "2",
         "recordTypes": [{
             "id": "company",
             "datasetIdentifier": "legal-entities",
@@ -142,7 +142,7 @@ fn statistical_dataset() -> Value {
 }
 
 #[test]
-fn runtime_v1_accepts_statistical_datasets_without_adding_entity_authority() {
+fn runtime_v2_accepts_statistical_datasets_without_adding_entity_authority() {
     let mut mixed = fixture();
     mixed["statisticalDatasets"] = json!([statistical_dataset()]);
     let metadata = parse(&mixed);
@@ -377,7 +377,7 @@ fn statistical_dataset_metadata_retains_duplicate_member_and_resource_bounds() {
 }
 
 #[test]
-fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
+fn runtime_v2_promotes_only_exact_direct_create_and_patch_contracts() {
     let metadata = parse(&fixture());
     assert_eq!(metadata.registry_identifier(), "business-registry");
     assert_eq!(metadata.registry_version(), "1.2.3");
@@ -457,13 +457,13 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
 #[test]
 fn duplicate_json_members_are_refused_at_every_depth() {
     let duplicate_root = format!(
-        r#"{{"id":"business-registry","id":"attacker","version":"1","revision":"{REVISION}","metadataVersion":"1","recordTypes":[],"operations":[]}}"#
+        r#"{{"id":"business-registry","id":"attacker","version":"1","revision":"{REVISION}","metadataVersion":"2","recordTypes":[],"operations":[]}}"#
     );
     let error = BRegMetadata::from_slice(duplicate_root.as_bytes()).unwrap_err();
     assert_eq!(error.kind(), BRegMetadataErrorKind::DuplicateMember);
 
     let nested = format!(
-        r#"{{"id":"business-registry","version":"1","revision":"{REVISION}","metadataVersion":"1","recordTypes":[],"operations":[],"extension":{{"key":1,"key":2}}}}"#
+        r#"{{"id":"business-registry","version":"1","revision":"{REVISION}","metadataVersion":"2","recordTypes":[],"operations":[],"extension":{{"key":1,"key":2}}}}"#
     );
     let error = BRegMetadata::from_slice(nested.as_bytes()).unwrap_err();
     assert_eq!(error.kind(), BRegMetadataErrorKind::DuplicateMember);
@@ -685,7 +685,7 @@ fn known_members_keep_their_types_when_unknown_members_are_tolerated() {
 
 #[test]
 fn metadata_version_revision_and_resource_bounds_are_exact() {
-    for invalid in ["0", "2", "1.0"] {
+    for invalid in ["0", "1", "1.0"] {
         let mut value = fixture();
         value["metadataVersion"] = json!(invalid);
         assert_eq!(
@@ -926,69 +926,160 @@ fn unsupported_spatial_vocabulary_omits_only_the_spatial_capability() {
 }
 
 #[test]
-fn attachment_schema_capabilities_are_preserved_without_granting_json_writes() {
+fn scalar_api_names_and_query_field_identities_remain_strict() {
     let mut source = fixture();
-    let descriptor = json!({
-        "requiredForSubmit": true, "maximumBytes": 1024, "contentTypes": ["application/pdf"],
-        "classification": "restricted",
-        "verification": {"statusField": "verificationStatus", "allowedStatuses": ["notRequired", "approved"],
-            "pendingOrRejectedBlocks": ["download", "submit"]},
-        "remove": {"method": "DELETE", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
-            "accessProfile": "company-writer", "authorizationOperation": "patch", "queryParameters": [],
-            "body": "none", "ifMatchRequired": true, "idempotencyKeyRequired": true, "requiredState": "draft"},
-        "upload": {"method": "PATCH", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
-            "accessProfile": "company-writer", "authorizationOperation": "patch", "queryParameters": [],
-            "body": "binary", "ifMatchRequired": true, "idempotencyKeyRequired": true, "requiredState": "draft"},
-        "download": {"method": "GET", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
-            "accessProfile": "company-writer", "authorizationOperation": "get", "queryParameters": ["proposalVersion"],
-            "body": "none", "ifMatchRequired": false, "idempotencyKeyRequired": false, "proposalVersionRequired": true}
+    source["operations"][1]["fields"][0]["apiName"] = json!("supporting-file");
+    assert!(BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap()).is_err());
+    let mut source = fixture();
+    source["operations"][2]["query"] = json!({
+        "kind":"list", "selectableFields":[{"id":"legal-name","apiName":"legal-name"}],
+        "filterableFields":[], "sortableFields":[], "allowCount":false,
+        "defaultPageSize":25,"maximumPageSize":100,"maximumFilterClauses":8,"maximumInValues":16,
+        "pagination":{"parameter":"cursor","opaque":true}, "temporal":{"revisions":false,"snapshot":false}
     });
-    let mut slot = field("supporting-file", "supporting-file");
-    slot["required"] = json!(false);
-    slot["nullable"] = json!(true);
-    slot["readOnly"] = json!(true);
-    slot["schema"] = json!({"anyOf": [{"type": "object"}, {"type": "null"}], "readOnly": true,
-        "x-registry-fieldKind": "attachment", "x-registry-attachment": descriptor});
-    for operation in source["operations"].as_array_mut().unwrap() {
-        operation["fields"]
-            .as_array_mut()
-            .unwrap()
-            .push(slot.clone());
-        operation["readableFields"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("supporting-file"));
-    }
+    assert!(BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap()).is_err());
+}
+
+#[test]
+fn proposal_inventory_preserves_exact_profile_operations_and_readable_inputs() {
+    let mut source = proposal_action_metadata();
+    source["proposals"]["actions"] = json!([
+        {"actionId":"correct-address","accessProfile":"reviewer","operations":["get"],"readableInputs":["address"]},
+        {"actionId":"correct-address","accessProfile":"queue","operations":["list"],"readableInputs":[]},
+        {"actionId":"correct-address","accessProfile":"executor","operations":["apply"],"readableInputs":[]}
+    ]);
     let metadata = parse(&source);
-    let slot = &metadata.operations()[1].fields()[1];
-    assert!(slot.read_only());
-    assert!(!slot.required());
-    assert!(!slot.removable());
-    assert_eq!(slot.schema()["x-registry-attachment"], descriptor);
-    let BRegDirectWrite::Patch(patch) = metadata
-        .select_direct_write("records.company.patch", "company-writer")
-        .unwrap()
-    else {
-        panic!("patch binding")
-    };
-    assert!(!patch.writable_api_names().contains("supporting-file"));
-    let BRegDirectWrite::Create(create) = metadata
-        .select_direct_write("records.company.create", "company-writer")
-        .unwrap()
-    else {
-        panic!("create binding")
-    };
-    assert!(!create.writable_api_names().contains("supporting-file"));
-    source["operations"][1]["patchWritableFields"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("supporting-file"));
+    let entries = metadata.proposal_actions();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].action_identifier(), "correct-address");
+    assert_eq!(entries[0].access_profile(), "reviewer");
+    assert_eq!(entries[0].operations(), ["get"]);
+    assert_eq!(entries[0].readable_inputs(), ["address"]);
+    assert_eq!(entries[1].operations(), ["list"]);
+    assert!(entries[1].readable_inputs().is_empty());
+    assert_eq!(entries[2].operations(), ["apply"]);
+    assert!(entries[2].readable_inputs().is_empty());
+    assert!(metadata.select_action("correct-address", "queue").is_err());
+    assert_eq!(
+        serde_json::to_value(entries).unwrap(),
+        source["proposals"]["actions"]
+    );
+
+    for member in ["actionId", "accessProfile", "operations", "readableInputs"] {
+        let mut malformed = source.clone();
+        malformed["proposals"]["actions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(member);
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&malformed).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape
+        );
+    }
+    let mut duplicate = source.clone();
+    duplicate["proposals"]["actions"][1] = source["proposals"]["actions"][0].clone();
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&duplicate).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::DuplicateIdentifier
+    );
+    source["proposals"]["actions"][1]["readableInputs"] = json!(["address"]);
     assert_eq!(
         BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap())
             .unwrap_err()
             .kind(),
         BRegMetadataErrorKind::Shape
     );
+}
+
+#[test]
+fn proposal_slot_summaries_are_validated_without_creating_byte_authority() {
+    let source = proposal_action_metadata();
+    let metadata = parse(&source);
+    let slot = &metadata.actions()[0].attachments()[0];
+    assert_eq!(slot.identifier(), "supporting-file");
+    assert!(slot.required());
+    assert_eq!(slot.content_types(), ["application/pdf"]);
+    assert_eq!(slot.maximum_bytes(), 1024);
+    assert_eq!(
+        serde_json::to_value(slot).unwrap(),
+        source["actions"][0]["attachments"][0]
+    );
+    for (member, invalid) in [
+        ("maximumBytes", json!(0)),
+        ("maximumBytes", json!(MAX_BREG_ATTACHMENT_BYTES + 1)),
+        ("required", json!("true")),
+        ("contentTypes", json!([])),
+        ("contentTypes", json!(["application/pdf\n"])),
+        ("contentTypes", json!(["application/*"])),
+        ("contentTypes", json!(["Application/pdf"])),
+    ] {
+        let mut malformed = source.clone();
+        malformed["actions"][0]["attachments"][0][member] = invalid;
+        assert!(BRegMetadata::from_slice(&serde_json::to_vec(&malformed).unwrap()).is_err());
+    }
+    let mut duplicate = source;
+    let slot = duplicate["actions"][0]["attachments"][0].clone();
+    duplicate["actions"][0]["attachments"]
+        .as_array_mut()
+        .unwrap()
+        .push(slot);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&duplicate).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::DuplicateIdentifier
+    );
+}
+
+#[test]
+fn old_metadata_version_and_dishonest_old_shapes_cannot_bind_mutations() {
+    // Version refusal precedes interpretation, including a missing required root shape.
+    let source = json!({"metadataVersion":"1"});
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Version
+    );
+    let mut source = fixture();
+    let records = source
+        .as_object_mut()
+        .unwrap()
+        .remove("recordTypes")
+        .unwrap();
+    source["entities"] = records;
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+    let mut source = fixture();
+    for operation in source["operations"].as_array_mut().unwrap() {
+        let value = operation
+            .as_object_mut()
+            .unwrap()
+            .remove("sourceRecordType")
+            .unwrap();
+        operation["sourceEntity"] = value;
+    }
+    assert!(BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap()).is_err());
+    let mut source = proposal_action_metadata();
+    let revision = source["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("revision")
+        .unwrap();
+    source["actions"][0]["definitionRevision"] = revision;
+    let metadata = parse(&source);
+    assert!(metadata.actions().is_empty());
+    assert!(metadata
+        .select_action("correct-address", "reviewer")
+        .is_err());
 }
 
 #[test]
@@ -1068,10 +1159,12 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
 fn proposal_action_metadata() -> Value {
     let mut value = fixture();
     value["proposals"] = json!({"method":"GET","path":"/v1/proposals","accessProfiles":[],
+        "actions":[{"actionId":"correct-address","accessProfile":"reviewer","operations":["get"],"readableInputs":["address"]}],
         "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["reviewer"]}});
     value["actions"] = json!([{
         "id":"correct-address","apiName":"correctAddress","revision":REVISION,
         "display":{"label":"Correct address"},"execution":{"mode":"proposal"},
+        "attachments":[{"id":"supporting-file","required":true,"contentTypes":["application/pdf"],"maximumBytes":1024}],
         "inputMode":"fixed","inputs":[{"id":"address","apiName":"addressLine",
             "label":"New address line","description":"Postal address","schema":{"type":"string","maxLength":100},
             "fieldType":{"type":"string","minimumLength":0,"maximumLength":100},

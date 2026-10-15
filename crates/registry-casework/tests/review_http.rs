@@ -4430,3 +4430,102 @@ async fn submitted_tasks_remain_discoverable_without_spending_human_source_read_
 
     idp.stop().await;
 }
+
+#[tokio::test]
+async fn no_cover_notice_crosses_the_real_router_and_native_client_without_identity_disclosure() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_database(&idp).await;
+    let (request, task) = create_answer_task(&app, &database, &idp, "no-cover-http").await;
+    let absence = Uuid::new_v4();
+    database.execute(
+        "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,
+            starts_at,ends_at,cover_issuer,cover_subject,revision)
+         VALUES($1,$2,'reviewer',now()-interval '1 hour',now()+interval '1 hour',$2,'ineligible-cover',1)",
+        &[&absence, &idp.issuer()]
+    ).await.expect("seed cover that does not serve the review queue");
+    let (client, server) = native_review_client(app).await;
+    let supervisor = human_token(&idp, "supervisor", "supervisor");
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    let nomination = AssignmentRequest {
+        assignee: IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "reviewer".into(),
+        },
+        reason: None,
+    };
+    let blocked = client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            task,
+            1,
+            "assign-no-cover-http",
+            &nomination,
+        )
+        .await
+        .expect("assign without eligible cover over HTTP")
+        .value;
+    assert_eq!(blocked.state, ReviewTaskState::Open);
+    assert_eq!(
+        blocked.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    let visible = client
+        .review_task(CaseworkAuth::new(&reviewer, "staff"), task)
+        .await
+        .expect("reviewer reads notice over HTTP")
+        .value;
+    assert_eq!(visible.staffing_diagnostic, blocked.staffing_diagnostic);
+    let query = SupervisoryReviewTaskQuery {
+        request_id: Some(request.request_id),
+        ..Default::default()
+    };
+    let page = client
+        .supervisory_review_tasks(CaseworkAuth::new(&supervisor, "supervisor"), &query)
+        .await
+        .expect("supervisor reads notice over HTTP")
+        .value;
+    assert_eq!(
+        serde_json::to_value(&page.items[0]).unwrap(),
+        json!({
+            "taskId":task, "requestId":request.request_id, "queue":"review", "revision":2,
+            "state":"open", "staffingDiagnostic":"no-cover-available"
+        })
+    );
+    assert_client_status(
+        client
+            .review_task(CaseworkAuth::new(&supervisor, "supervisor"), task)
+            .await
+            .expect_err("supervisory notice grants no review authority"),
+        404,
+    );
+    database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence],
+        )
+        .await
+        .expect("end cover absence");
+    let assigned = client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            task,
+            blocked.revision,
+            "assign-available-http",
+            &nomination,
+        )
+        .await
+        .expect("assign available reviewer over HTTP")
+        .value;
+    assert_eq!(assigned.staffing_diagnostic, None);
+    let page = client
+        .supervisory_review_tasks(CaseworkAuth::new(&supervisor, "supervisor"), &query)
+        .await
+        .expect("supervision reflects recovered responsibility")
+        .value;
+    assert!(serde_json::to_value(&page.items[0])
+        .unwrap()
+        .get("staffingDiagnostic")
+        .is_none());
+    server.abort();
+    idp.stop().await;
+}

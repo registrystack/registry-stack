@@ -1065,6 +1065,10 @@ fn action_value(value: &breg_client_sdk::BRegActionDescriptor) -> Value {
         "id": value.identifier(), "api_name": value.api_name(), "revision": value.definition_revision(), "display": value.display(), "mode": value.mode(),
         "input_mode": value.input_mode(),
         "maximum_input_string_bytes": value.maximum_input_string_bytes(),
+        "attachments": value.attachments().iter().map(|slot| json!({
+            "id": slot.identifier(), "required": slot.required(),
+            "content_types": slot.content_types(), "maximum_bytes": slot.maximum_bytes(),
+        })).collect::<Vec<_>>(),
         "inputs": value.inputs().iter().map(|input| json!({
             "id": input.identifier(),
             "api_name": input.api_name(),
@@ -1180,6 +1184,15 @@ struct ProposalCollection {
 )]
 struct ProposalGetBinding {
     inner: breg_client_sdk::BRegProposalGetBinding,
+}
+
+#[pyclass(
+    name = "BRegProposalReviewBinding",
+    module = "registry_breg_client",
+    frozen
+)]
+struct ProposalReviewBinding {
+    inner: breg_client_sdk::BRegProposalReviewBinding,
 }
 
 #[pyclass(name = "BRegProposalPage", module = "registry_breg_client", frozen)]
@@ -1323,6 +1336,15 @@ struct Metadata {
 
 #[pymethods]
 impl Metadata {
+    /// Read-only capability inventory for each exact Action/profile pair.
+    #[getter]
+    fn proposal_actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        json_to_python(py, &Value::Array(self.inner.proposal_actions().iter().map(|entry| json!({
+            "action_id": entry.action_identifier(), "access_profile": entry.access_profile(),
+            "operations": entry.operations(), "readable_inputs": entry.readable_inputs(),
+        })).collect()))
+    }
+
     fn select_proposals(&self, py: Python<'_>, profile: &str) -> PyResult<ProposalCollection> {
         self.inner
             .select_proposals(profile)
@@ -1333,6 +1355,30 @@ impl Metadata {
         self.inner
             .select_proposal_get(profile)
             .map(|inner| ProposalGetBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+
+    fn select_proposal_review_context(
+        &self,
+        py: Python<'_>,
+        profile: &str,
+        action: &str,
+    ) -> PyResult<ProposalReviewBinding> {
+        self.inner
+            .select_proposal_review_context(profile, action)
+            .map(|inner| ProposalReviewBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+
+    fn select_proposal_review_status(
+        &self,
+        py: Python<'_>,
+        profile: &str,
+        action: &str,
+    ) -> PyResult<ProposalReviewBinding> {
+        self.inner
+            .select_proposal_review_status(profile, action)
+            .map(|inner| ProposalReviewBinding { inner })
             .map_err(|error| selection_error(py, error))
     }
     #[getter]
@@ -2528,6 +2574,42 @@ impl BaseRegistryClient {
             .map_err(|error| sdk_error(py, error))?;
         raw_value(py, &response.value, &response.metadata)
     }
+    fn read_proposal_review_by_id<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ProposalReviewBinding>,
+        id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_proposal_review_by_id(&binding, id))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
+
+    fn download_proposal_review_document<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ProposalReviewBinding>,
+        context: &Bound<'_, PyAny>,
+        field: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let context = projection_from_python(py, context, "Proposal review context")?;
+        let response = py
+            .detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .download_proposal_review_document(&binding, &context, field),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &response.value, &response.metadata)
+    }
+
     fn read_proposal_review_status<'py>(
         &self,
         py: Python<'py>,
@@ -3069,6 +3151,7 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PreparedProposal>()?;
     module.add_class::<ProposalCollection>()?;
     module.add_class::<ProposalGetBinding>()?;
+    module.add_class::<ProposalReviewBinding>()?;
     module.add_class::<ProposalPage>()?;
     module.add_class::<RecoveredCreate>()?;
     module.add_class::<RecoveredAction>()?;

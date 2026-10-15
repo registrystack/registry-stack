@@ -1,6 +1,6 @@
 {
   "id": "citizen-address-correction",
-  "metadataVersion": "1",
+  "metadataVersion": "2",
   "operations": [
     {
       "accessProfile": "citizen-agent",
@@ -350,6 +350,14 @@
     }
   ],
   "proposals": {
+    "actions": [
+      {
+        "actionId": "correct-address",
+        "accessProfile": "citizen-agent",
+        "operations": ["get", "list", "edit"],
+        "readableInputs": ["address", "new-address-line", "new-locality", "new-postal-code"]
+      }
+    ],
     "method": "GET",
     "path": "/v1/proposals",
     "accessProfiles": [

@@ -540,21 +540,21 @@
           "type": "object",
           "x-registry-passthrough": "The record body is sent to the registry as given; the registry validates it."
         },
-        "entity": {
-          "type": "string"
-        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
         "operation": {
           "$ref": "#/$defs/SeedOperation",
           "default": "create"
+        },
+        "recordType": {
+          "type": "string"
         }
       },
       "required": [
         "id",
         "client",
-        "entity",
+        "recordType",
         "accessProfile",
         "data"
       ],

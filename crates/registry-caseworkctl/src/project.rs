@@ -832,6 +832,7 @@ pub(super) fn check_runtime_config(
 }
 pub(super) fn doctor(path: &Path) -> Result<Value> {
     let inputs = ActivationInputs::load(path)?;
+    inputs.config.check_runtime_secrets(&inputs.resolver)?;
     let refs = inputs.provider_refs();
     let candidate = inputs.candidate(&refs);
     let store = PostgresStore::connect_runtime(&inputs.config.database, &inputs.resolver)?;
@@ -846,4 +847,163 @@ pub(super) fn doctor(path: &Path) -> Result<Value> {
     Ok(
         json!({"ok":plan.refusals.is_empty(),"command":"doctor","runtimeConfig":path,"packageDigest":inputs.package.digest(),"activation":plan,"checks":{"configuration":"ready","package":"ready","database":"ready","audit":"ready"}}),
     )
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const CANARY: &str = "DOCTOR_SECRET_VALUE_CANARY";
+
+    fn setup() -> (tempfile::TempDir, PathBuf) {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("project");
+        init(&project, "standalone-decision").unwrap();
+        let package_root = root.path().join("package");
+        package(&project, &package_root, None).unwrap();
+        let secrets = root.path().join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700)).unwrap();
+        for (name, bytes) in [
+            (
+                "runtime-url",
+                "postgresql://casework@127.0.0.1:1/casework?sslmode=require&connect_timeout=1",
+            ),
+            ("audit-key", CANARY),
+            ("completion-token", CANARY),
+        ] {
+            write_secret(&secrets.join(name), bytes.as_bytes(), 0o600);
+        }
+        let config = json!({
+            "apiVersion":registry_casework::RUNTIME_CONFIG_API_VERSION,"kind":registry_casework::RUNTIME_CONFIG_KIND,
+            "identity":{"databaseId":"doctor-preflight"},"package":{"root":package_root},
+            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+            "secretProviders":{"file":{"root":secrets}},
+            "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/absent-migration-url"},
+            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "audit":{"path":root.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"},
+            "reviewCompletionDestinations":{"receiver":{"url":"https://completion.example.test/reviews","bearerTokenRef":"secret:file/completion-token"}}
+        });
+        let runtime = root.path().join("runtime.yaml");
+        fs::write(&runtime, serde_norway::to_string(&config).unwrap()).unwrap();
+        (root, runtime)
+    }
+
+    fn write_secret(path: &Path, bytes: &[u8], mode: u32) {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn doctor_refuses_startup_only_secrets_before_connecting_to_the_database() {
+        for (name, field) in [
+            ("audit-key", "audit.hashKeyRef"),
+            (
+                "completion-token",
+                "reviewCompletionDestinations.receiver.bearerTokenRef",
+            ),
+        ] {
+            let (root, runtime) = setup();
+            fs::remove_file(root.path().join("secrets").join(name)).unwrap();
+            let error = doctor(&runtime).unwrap_err();
+            let shown = format!("{error:#}");
+            assert!(shown.contains(field), "{shown}");
+            assert!(!shown.contains("database connection"), "{shown}");
+            assert!(!shown.contains(CANARY), "{shown}");
+            for format in ["human", "json"] {
+                let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+                let exit = crate::main_entry_from(
+                    [
+                        "caseworkctl".into(),
+                        "--format".into(),
+                        format.into(),
+                        "doctor".into(),
+                        "--runtime-config".into(),
+                        runtime.as_os_str().to_owned(),
+                    ],
+                    &mut stdout,
+                    &mut stderr,
+                );
+                assert_eq!(
+                    exit,
+                    std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT)
+                );
+                let shown = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr)
+                );
+                assert!(shown.contains(field), "{shown}");
+                assert!(!shown.contains(CANARY), "{shown}");
+                if format == "json" {
+                    let report: Value = serde_json::from_slice(&stdout).unwrap();
+                    assert_eq!(
+                        report["diagnostics"][0]["code"],
+                        "casework.runtime.secret-unavailable"
+                    );
+                    assert!(stderr.is_empty());
+                } else {
+                    assert!(stdout.is_empty());
+                }
+            }
+            assert!(!root.path().join("audit.ndjson").exists());
+        }
+    }
+
+    #[test]
+    fn serving_preflight_accepts_present_secrets_without_a_migration_credential() {
+        let (root, runtime) = setup();
+        let config = load_runtime_config(&runtime).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+        config.check_runtime_secrets(&resolver).unwrap();
+        assert!(!root.path().join("secrets/absent-migration-url").exists());
+        assert!(!root.path().join("audit.ndjson").exists());
+    }
+
+    #[test]
+    fn serving_preflight_names_all_unusable_secrets_without_printing_values() {
+        for condition in ["mode", "empty", "nul", "oversized", "symlink"] {
+            let (root, runtime) = setup();
+            let audit = root.path().join("secrets/audit-key");
+            match condition {
+                "mode" => write_secret(&audit, CANARY.as_bytes(), 0o644),
+                "empty" => write_secret(&audit, b"", 0o600),
+                "nul" => write_secret(&audit, format!("{CANARY}\0").as_bytes(), 0o600),
+                "oversized" => write_secret(
+                    &audit,
+                    &vec![b'x'; registry_platform_config::MAX_SECRET_BYTES + 1],
+                    0o600,
+                ),
+                "symlink" => {
+                    let outside = root.path().join("outside-secret");
+                    write_secret(&outside, CANARY.as_bytes(), 0o600);
+                    fs::remove_file(&audit).unwrap();
+                    std::os::unix::fs::symlink(outside, &audit).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            fs::remove_file(root.path().join("secrets/completion-token")).unwrap();
+            let config = load_runtime_config(&runtime).unwrap();
+            let resolver = secret_resolver(&config).unwrap();
+            let report = config.check_runtime_secrets(&resolver).unwrap_err();
+            let paths = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                paths,
+                [
+                    "/audit/hashKeyRef",
+                    "/reviewCompletionDestinations/receiver/bearerTokenRef"
+                ],
+                "{condition}"
+            );
+            for shown in [report.render_human(), report.to_json_value().to_string()] {
+                assert!(!shown.contains(CANARY), "{condition}: {shown}");
+                assert!(!shown.contains("secret:file/"), "{condition}: {shown}");
+            }
+        }
+    }
 }

@@ -100,7 +100,7 @@ impl BaseRegistryClient {
         self.raw_document(&["v1", "registry"], access_profile).await
     }
 
-    /// Retrieve and strictly validate caller-filtered Registry Metadata v1.
+    /// Retrieve and strictly validate caller-filtered Registry Metadata v2.
     ///
     /// The returned metadata is bound to this client's exact service base.
     /// Parsing metadata bytes directly remains inert and cannot authorize a
@@ -1270,6 +1270,7 @@ impl BaseRegistryClient {
         content_type: Option<&str>,
         key: Option<&BRegIdempotencyKey>,
         maximum_bytes: u64,
+        bound_query: Option<&[(String, String)]>,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let (path, version) = link
             .path()
@@ -1279,7 +1280,9 @@ impl BaseRegistryClient {
             });
         let segments = fixed_operation_segments(path)?;
         let mut pairs = access_profile_query(Some(link.access_profile()))?;
-        if let Some(version) = version {
+        if let Some(query) = bound_query {
+            pairs.extend_from_slice(query);
+        } else if let Some(version) = version {
             pairs.push(("submissionVersion".to_owned(), version.to_owned()));
         }
         let url = self.url_with_query(&segments, &pairs)?;

@@ -1,6 +1,6 @@
 import { CaseworkClient, CaseworkClientError, submissionDigest, type ContentDigest, type SubjectBinding,
   type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
-  type ReviewTask, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
+  type ReviewTask, type SupervisoryReviewTask, type StaffingDiagnostic, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
   type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest } from '../client'
 const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxMutationRetries: 0 })
 const token = 'one-call-secret', profile = 'staff', id = '00000000-0000-4000-8000-000000000001'
@@ -73,3 +73,16 @@ const missingPolicyVersion: ReviewCreateRequest = { ...submitted, policy: { id: 
 // @ts-expect-error an accepted request must retain a concrete policy binding
 const unboundAccepted: ReviewRequestAccepted = { ...accepted, policy: { id: 'review' } }
 void missingPolicyDigest; void missingPolicyVersion; void unboundAccepted
+
+const staffingNotice: StaffingDiagnostic = 'no-cover-available'
+const supervisionNotice: SupervisoryReviewTask = { taskId: id, requestId: id, queue: 'review', revision: 1, state: 'open', staffingDiagnostic: staffingNotice }
+void supervisionNotice
+void client.reviewTasks(token, profile).then(({ value }) => {
+  const diagnostic: StaffingDiagnostic | undefined = value.items[0]?.staffingDiagnostic
+  void diagnostic
+})
+// @ts-expect-error staffing diagnostics use a closed vocabulary
+const unknownStaffingNotice: StaffingDiagnostic = 'unavailable'
+void unknownStaffingNotice
+// @ts-expect-error AssignmentContext was unused and removed from the maintained contract
+import type { AssignmentContext } from '../client'

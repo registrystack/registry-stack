@@ -41,7 +41,10 @@
     "state",
     "cursor",
     "top",
-    "submissionVersion"
+    "submissionVersion",
+    "reviewContextField",
+    "effectDigest",
+    "contextSchemaDigest"
   ],
   "queryOptionBindings": {
     "accessProfile": {
@@ -150,10 +153,28 @@
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "submissionVersion": {
-      "source": "server-issued Proposal attachment download link; callers cannot replace its submission version",
-      "rust": ["BaseRegistryClient.download_proposal_attachment.proposal"],
-      "node": ["BaseRegistryClient.downloadProposalAttachment.proposal"],
-      "python": ["BaseRegistryClient.download_proposal_attachment.proposal"]
+      "source": "server-issued Proposal value or Review context; callers cannot replace its submission version",
+      "rust": ["BaseRegistryClient.download_proposal_attachment.proposal", "BaseRegistryClient.download_proposal_review_document.context"],
+      "node": ["BaseRegistryClient.downloadProposalAttachment.proposal", "BaseRegistryClient.downloadProposalReviewDocument.context"],
+      "python": ["BaseRegistryClient.download_proposal_attachment.proposal", "BaseRegistryClient.download_proposal_review_document.context"]
+    },
+    "reviewContextField": {
+      "source": "explicitly selected projected document field in the exact server-issued Review context",
+      "rust": ["BaseRegistryClient.download_proposal_review_document.field"],
+      "node": ["BaseRegistryClient.downloadProposalReviewDocument.field"],
+      "python": ["BaseRegistryClient.download_proposal_review_document.field"]
+    },
+    "effectDigest": {
+      "source": "exact frozen submission in the server-issued Review context",
+      "rust": ["BaseRegistryClient.download_proposal_review_document.context"],
+      "node": ["BaseRegistryClient.downloadProposalReviewDocument.context"],
+      "python": ["BaseRegistryClient.download_proposal_review_document.context"]
+    },
+    "contextSchemaDigest": {
+      "source": "exact producer contract in the server-issued Review context",
+      "rust": ["BaseRegistryClient.download_proposal_review_document.context"],
+      "node": ["BaseRegistryClient.downloadProposalReviewDocument.context"],
+      "python": ["BaseRegistryClient.download_proposal_review_document.context"]
     }
   },
   "representations": [
@@ -459,9 +480,9 @@
     },
     {
       "id": "proposal-review",
-      "rust": ["read_proposal_review_context", "read_proposal_review_status"],
-      "node": ["readProposalReviewContext", "readProposalReviewStatus"],
-      "python": ["read_proposal_review_context", "read_proposal_review_status"]
+      "rust": ["read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"],
+      "node": ["readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewById", "downloadProposalReviewDocument"],
+      "python": ["read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"]
     }
   ]
 }

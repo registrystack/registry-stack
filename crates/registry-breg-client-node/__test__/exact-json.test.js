@@ -74,7 +74,7 @@ function otherCreateOperation() {
   return {...operation('create'),id:'records.other.create',path:'/v1/records/others',
     sourceRecordType:'other',responseRecordType:'other'};
 }
-const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
+const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'2',
   futureDescription:{label:'Future registry description'},
   recordTypes:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
     operations:['create','patch','list','lookup','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id)},
@@ -258,8 +258,8 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
       edit: {method: 'POST', path: `/v1/proposals/${id}/edit`, accessProfile: profile, operation: 'edit', ifMatch: '"edit-condition"'},
     },
   };
-  const contractDocument = {id: 'proposal-json', version: '1', revision, metadataVersion: '1', recordTypes: [], operations: [],
-    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [],
+  const contractDocument = {id: 'proposal-json', version: '1', revision, metadataVersion: '2', recordTypes: [], operations: [],
+    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [], actions: [],
       get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: [profile]}}};
   const server = http.createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;

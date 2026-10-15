@@ -19,10 +19,18 @@ async fn read(State(seen): State<Seen>, uri: Uri, headers: HeaderMap) -> impl In
     seen.lock()
         .unwrap()
         .push((uri.to_string(), headers, json!(null)));
+    let mut selected = task();
+    if uri
+        .query()
+        .is_some_and(|query| query.contains("ownership=unclaimed"))
+    {
+        selected["state"] = json!("open");
+        selected["staffingDiagnostic"] = json!("no-cover-available");
+    }
     let value = if uri.path().ends_with("next") {
-        task()
+        selected
     } else {
-        json!({"items":[task()],"status":"complete"})
+        json!({"items":[selected],"status":"complete"})
     };
     (
         StatusCode::OK,
@@ -185,8 +193,22 @@ async fn staffing_selectors_and_preview_ids_cross_the_exact_public_routes() {
             .len(),
         1
     );
+    let blocked = client
+        .review_tasks(
+            auth(),
+            &ReviewStaffingQuery {
+                ownership: Some(ReviewTaskOwnership::Unclaimed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked.value.items[0].staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
     let calls = seen.lock().unwrap();
-    assert_eq!(calls.len(), 7);
+    assert_eq!(calls.len(), 8);
     for (path, headers, _) in calls.iter() {
         assert!(path.starts_with("/tenant/v1/"));
         assert_eq!(headers["authorization"], "Bearer staff-token");

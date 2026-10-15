@@ -4293,7 +4293,7 @@ async fn assert_patch_preserved_omitted_field(
         .await
         .expect("administrator can inspect configured post-write event");
     let expected_data = json!({
-        "entity": "widget",
+        "recordType": "widget",
         "recordId": record_id,
         "revision": 2,
         "trigger": "patched",

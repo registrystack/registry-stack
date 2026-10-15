@@ -1,7 +1,6 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// A person is qualified by the issuer that authenticated the subject.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -109,20 +108,6 @@ impl fmt::Debug for EphemeralCredential<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("EphemeralCredential(<redacted>)")
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AssignmentContext {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<IssuerPrincipal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assigned_by: Option<IssuerPrincipal>,
-    #[serde(default)]
-    pub absence_ids: Vec<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub staffing_diagnostic: Option<StaffingDiagnostic>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

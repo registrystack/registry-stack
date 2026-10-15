@@ -58,6 +58,14 @@ declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
 
 metadata.actions[0]?.inputs[0]?.schemaJson.toUpperCase()
+metadata.actions[0]?.attachments[0]?.contentTypes[0]?.toUpperCase()
+metadata.actions[0]?.attachments[0]?.maximumBytes.toFixed()
+metadata.proposalActions[0]?.actionId.toUpperCase()
+metadata.proposalActions[0]?.accessProfile.toUpperCase()
+metadata.proposalActions[0]?.operations[0]?.toUpperCase()
+metadata.proposalActions[0]?.readableInputs[0]?.toUpperCase()
+// @ts-expect-error Inventory is descriptive and read-only.
+metadata.proposalActions[0].operations.push('apply')
 
 if (metadata.statisticalDatasets !== null) {
   const dataset = metadata.statisticalDatasets[0]
@@ -225,3 +233,8 @@ function mayHaveTakenEffect(error: BaseRegistryClientError): boolean {
   return unknown
 }
 void mayHaveTakenEffect
+
+client.readProposalReviewStatus(proposal).then(outcome => {
+  const acceptedRequestId: string | undefined = outcome.value.requestId
+  acceptedRequestId?.toUpperCase()
+})

@@ -91,8 +91,8 @@ fn request(input: Value, operation: Operation) -> CallRequest {
 async fn authority(server: &MockServer, value: Value) -> Arc<Mutex<Value>> {
     Mock::given(method("GET")).and(path("/tenant/base/v1/registry")).and(query_param("accessProfile", "writer"))
         .respond_with(response(json!({"id":"facilities","version":"1","revision":REVISION,
-            "metadataVersion":"1","recordTypes":[],"operations":[],
-            "proposals":{"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]}}})))
+            "metadataVersion":"2","recordTypes":[],"operations":[],
+            "proposals":{"actions":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]}}})))
         .mount(server).await;
     let current = Arc::new(Mutex::new(value));
     let observed = current.clone();
@@ -364,8 +364,8 @@ async fn frozen_transition_response_retains_original_digest(
     let substituted_digest = format!("sha256:{}", "c".repeat(64));
     changed["effectDigest"] = json!(substituted_digest);
     if result_state == "applied" {
-        // Keep the response internally consistent, so this reaches the
-        // Coordinator's saved binding check rather than DTO shape validation.
+        // Keep the response internally consistent. The BReg client's Apply
+        // receipt check still rejects its mismatch with the prepared digest.
         changed["application"]["effectDigest"] = json!(substituted_digest);
     }
     let answer = Arc::new(Mutex::new(changed));
@@ -384,8 +384,15 @@ async fn frozen_transition_response_retains_original_digest(
         .unwrap_or_else(|_| panic!("prepare {name}"));
     let original = prepared.clone();
     let outcome = breg_proposal::execute(&client, "writer", &command, &prepared, transition).await;
+    let expected_code = if transition == Transition::Apply {
+        // Apply carries the digest in its prepared body, so the owning client
+        // rejects it before the Coordinator's saved binding check.
+        "invalid-response"
+    } else {
+        "proposal-binding-mismatch"
+    };
     assert!(
-        matches!(outcome, CallOutcome::Uncertain { code } if code == "proposal-binding-mismatch"),
+        matches!(outcome, CallOutcome::Uncertain { code } if code == expected_code),
         "a changed frozen digest must not release {name} success"
     );
     *answer.lock().unwrap() = correct.clone();

@@ -1297,6 +1297,25 @@ jobs:
           BREG_POSTGRES_LANE: ${{ matrix.lane }}
         run: products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"
 
+      # Reuse the fixture's independently provisioned databases and roles. Its
+      # COORDINATOR_* inputs are aliases here, not a Coordinator dependency.
+      # postgres-test enables the fixture's loopback plaintext database.
+      - name: Native citizen gateway and review authority journey
+        if: matrix.lane == 'postgres'
+        shell: bash
+        env:
+          COORDINATOR_TEST_DATABASE_URL: ${{ env.BREG_TEST_DATABASE_URL }}
+          COORDINATOR_BREG_BIN: ${{ github.workspace }}/target/debug/breg
+          COORDINATOR_BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
+          BREG_REVIEW_NATIVE_BIN: ${{ github.workspace }}/target/debug/breg-review
+        run: |
+          cargo build --locked -p registry-breg -p registry-bregctl -p registry-breg-review \
+            --features registry-breg/postgres-test --bin breg --bin bregctl --bin breg-review
+          cargo test --locked -p registry-breg-mcp --test native_citizen \
+            -- --ignored --exact native_citizen_gateway_and_review_share_engine_owned_authority --test-threads=1 \
+            | tee "${RUNNER_TEMP}/breg-native-citizen.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-native-citizen.log" || { echo "::error::expected one passing native citizen authority journey"; exit 1; }
+
       # The native worker/store library and test-only startup configuration
       # need postgres-test; keep the production-feature variants in the runner.
       # External-issuer cases compile here and execute only in their opt-in runner.
@@ -2033,15 +2052,18 @@ jobs:
 
       - name: Verify retained example recovery after process exit
         # An inexact name filter that selects nothing still exits 0, so the
-        # step names the test exactly and fails unless it reports one pass.
+        # step names each test exactly and fails unless it reports one pass.
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked -p registry-bregctl --lib \
+          for test in \
             dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records \
-            -- --ignored --exact \
-            | tee "${RUNNER_TEMP}/breg-example-recovery.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery.log" || { echo "::error::expected exactly one passing test for native_create_recovers_after_process_exit_without_duplicate_records"; exit 1; }
+            dev::examples::tests::native_invoke_recovers_original_conditions_after_restart; do
+            cargo test --locked -p registry-bregctl --lib \
+              "$test" -- --ignored --exact \
+              | tee "${RUNNER_TEMP}/breg-example-recovery-${test}.log"
+            grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery-${test}.log" || { echo "::error::expected exactly one passing test for ${test}"; exit 1; }
+          done
 
       - name: Execute the Base Registry Engine tutorials from a reader directory
         shell: bash

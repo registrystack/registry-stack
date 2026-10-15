@@ -67,7 +67,7 @@ fn request() -> CallRequest {
 fn metadata() -> Value {
     json!({
         "id":"fixture-registry", "version":"1", "revision":REVISION,
-        "metadataVersion":"1", "recordTypes":[], "operations":[],
+        "metadataVersion":"2", "recordTypes":[], "operations":[],
         "actions":[{
             "id":"update-item", "route":"/v1/actions/update-item",
             "conditionRoute":"/v1/actions/update-item/target-conditions",

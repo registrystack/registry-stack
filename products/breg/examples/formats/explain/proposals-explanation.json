@@ -145,7 +145,8 @@
               "readableContextFields": [
                 "changes",
                 "currentAddressLine",
-                "facilityId"
+                "facilityId",
+                "supportingDocument"
               ],
               "readableInputs": [],
               "requesterClients": [],
@@ -223,14 +224,18 @@
               "facilityId": {
                 "input": "facility",
                 "type": "input"
+              },
+              "supportingDocument": {
+                "slot": "supporting-document",
+                "type": "document"
               }
             },
             "id": "facility-address-context"
           },
           "systemApplyGrant": {
             "actionId": "correct-address",
-            "actionRevision": "sha256:919a15cbc3286ec8d870a72e25fc66a8d4da4ef1cff58cbf3f0549ba37caeb9a",
-            "revision": "sha256:8d86e8b8a9a7ca033ead905a72f6e01d941f5eeaceb0010c8a4e503f6c3d660e",
+            "actionRevision": "sha256:70318e95008100a9871aef80bb45eef7f5eed9e98ea65d5ee3ee6bf2d74a6402",
+            "revision": "sha256:1afeab9fd55185d7ec5b63c8cc57fd20685c8801b7b688f60aeccaedb75e882c",
             "targets": [
               {
                 "fields": [],
@@ -452,7 +457,7 @@
         },
         "type": "function"
       },
-      "revision": "sha256:919a15cbc3286ec8d870a72e25fc66a8d4da4ef1cff58cbf3f0549ba37caeb9a"
+      "revision": "sha256:70318e95008100a9871aef80bb45eef7f5eed9e98ea65d5ee3ee6bf2d74a6402"
     },
     {
       "apiName": "deactivateFacility",

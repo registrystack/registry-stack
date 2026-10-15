@@ -3,7 +3,7 @@
     "id": "attachment-test",
     "version": "1",
     "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "metadataVersion": "1",
+    "metadataVersion": "2",
     "recordTypes": [],
     "operations": [],
     "actions": [
@@ -59,6 +59,14 @@
           "application/pdf"
         ],
         "classification": "restricted",
+        "value": {
+          "submissionVersion": 2,
+          "sha256": "42e7d92feac800b11915213dba3242ddf9bbefb008a091f8d177351c66fbdc68",
+          "contentType": "application/pdf",
+          "byteSize": 24,
+          "uploadedAt": "2026-09-19T00:01:00Z",
+          "verificationStatus": "notRequired"
+        },
         "links": {
           "download": {
             "method": "GET",

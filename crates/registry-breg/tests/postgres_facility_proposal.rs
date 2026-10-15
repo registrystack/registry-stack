@@ -481,6 +481,19 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         )
         .unwrap();
     let edited = author.client.execute_proposal(&edit).await.unwrap().value;
+    let document_bytes = b"%PDF-1.4\nsynthetic canonical review document\n%%EOF\n";
+    let edited = author
+        .client
+        .upload_proposal_attachment(
+            &edited,
+            "supporting-document",
+            "application/pdf",
+            document_bytes,
+            &key("facility-review-document"),
+        )
+        .await
+        .unwrap()
+        .value;
     let submit = author
         .client
         .prepare_proposal(&edited, "submit", json!({}), &key("facility-submit"))
@@ -492,6 +505,68 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         "1 Main Road",
         "pure planning never writes the target"
     );
+    let applier = fixture
+        .client_for(
+            VerifiedRequestClaims::authenticated_with_actor_kind(
+                "registry_principal",
+                "facility-applier",
+                BTreeSet::from(["registry:facility:correction:apply".into()]),
+                Some("facility-administration".into()),
+                BTreeMap::from([(
+                    "jurisdiction".into(),
+                    VerifiedClaimValue::direct_string("zone-a").unwrap(),
+                )]),
+                registry_platform_oidc::ActorKind::Human,
+            )
+            .unwrap(),
+        )
+        .await;
+    let pending_url = format!(
+        "{}/v1/proposals/{}?accessProfile=facility-correction-applier",
+        applier.base_url,
+        submitted.id()
+    );
+    let response = reqwest::get(&pending_url).await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let pending: Value = response.json().await.unwrap();
+    assert_eq!(pending["submissionVersion"], submitted.submission_version());
+    assert_eq!(pending["effectDigest"], submitted.effect_digest().unwrap());
+    assert_eq!(pending["revision"], submitted.revision());
+    assert_eq!(
+        pending["links"]["apply"]["availability"],
+        json!({
+            "available":false,"observedRevision":submitted.revision(),"reason":"pending-review","recovery":"refresh"
+        })
+    );
+    let refused = reqwest::Client::new().post(format!("{}/v1/proposals/{}/apply?accessProfile=facility-correction-applier", applier.base_url, submitted.id()))
+        .header("if-match", pending["links"]["apply"]["ifMatch"].as_str().unwrap())
+        .header("idempotency-key", "facility-pending-review-apply")
+        .json(&json!({"submissionVersion":submitted.submission_version(),"effectDigest":submitted.effect_digest().unwrap()}))
+        .send().await.unwrap();
+    assert_eq!(refused.status(), reqwest::StatusCode::PRECONDITION_FAILED);
+    let problem: Value = refused.json().await.unwrap();
+    assert_eq!(problem["code"], "precondition.failed");
+    assert!(
+        !problem.to_string().contains("pending-review"),
+        "the mutation problem stays concealed; current availability owns the explanation"
+    );
+    let reread: Value = reqwest::get(&pending_url)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        reread["revision"], pending["revision"],
+        "refused Apply leaves the observed lifecycle revision current"
+    );
+    assert_eq!(reread["effectDigest"], pending["effectDigest"]);
+    assert_eq!(
+        reread["links"]["apply"]["availability"],
+        pending["links"]["apply"]["availability"]
+    );
+    assert_eq!(address(&fixture, &facility).await.0, "1 Main Road");
+    drop(applier);
     let reviewer = fixture
         .client_for(claims("registry:proposal:review", "facility-review"))
         .await;
@@ -540,8 +615,16 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         exported.digest
     );
     assert!(context["context"].get("id").is_none());
+    let mut fields = context["context"]["fields"].clone();
+    let document = fields
+        .as_object_mut()
+        .unwrap()
+        .remove("supportingDocument")
+        .unwrap();
+    assert_eq!(document["type"], "document");
+    assert_eq!(document["byteSize"], document_bytes.len());
     assert_eq!(
-        context["context"]["fields"],
+        fields,
         json!({"facilityId":facility,"currentAddressLine":"1 Main Road",
         "changes":[{"recordId":facility,"operation":"patch",
             "before":{"address-line":"1 Main Road","city":"Bangkok","postal-code":"10200"},
@@ -568,6 +651,26 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         submitted.effect_digest().unwrap()
     );
     assert!(purpose_read.context.fields.is_some());
+    let downloaded = reviewer
+        .client
+        .download_proposal_review_document(&binding, &purpose_read, "supportingDocument")
+        .await
+        .unwrap();
+    assert_eq!(downloaded.value.media_type(), "application/pdf");
+    assert_eq!(downloaded.value.as_bytes(), document_bytes);
+    assert_eq!(
+        reqwest::Client::new()
+            .get(format!(
+                "{}/v1/proposals/{}?accessProfile=proposal-reviewer",
+                reviewer.base_url,
+                submitted.id()
+            ))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
     approve(&fixture, &submitted, &review).await;
     assert!(fixture
         .mutations

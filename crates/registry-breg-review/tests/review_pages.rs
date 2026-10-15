@@ -471,6 +471,99 @@ async fn review_shows_current_values_beside_proposed_ones() {
     assert!(!page.body.contains(ADDRESS_A));
 }
 
+fn changed_action_metadata() -> serde_json::Value {
+    let mut metadata = support::metadata();
+    metadata["actions"][0]["revision"] = serde_json::json!(format!("sha256:{}", "b".repeat(64)));
+    metadata["actions"][0]["display"]["label"] = serde_json::json!("Changed service label");
+    metadata["actions"][0]["inputs"][1]["label"] = serde_json::json!("Changed input label");
+    metadata
+}
+
+fn assert_action_changed(page: &support::Page) {
+    assert_eq!(page.status, StatusCode::CONFLICT, "{}", page.body);
+    assert_eq!(page.error_code(), Some("action-changed"));
+    assert!(page.body.contains("Your request is still saved"));
+    assert!(page.body.contains("Contact the service"));
+    for hidden in [
+        "Changed service label",
+        "Changed input label",
+        CURRENT_LINE_A,
+        PROPOSED_LOCALITY,
+        "&lt;script&gt;",
+        "data-values=",
+        "<form",
+    ] {
+        assert!(!page.body.contains(hidden), "{hidden}: {}", page.body);
+    }
+}
+
+#[tokio::test]
+async fn a_retained_draft_is_not_displayed_under_a_changed_action_revision() {
+    let harness = Harness::start().await;
+    harness
+        .environment
+        .registry
+        .publish_metadata(changed_action_metadata());
+    let cookie = cookie_pair(&harness.sign_in(CITIZEN_A).await);
+    let page = harness.get(&review_path(), Some(&cookie)).await;
+
+    assert_action_changed(&page);
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 0);
+    assert_eq!(harness.environment.registry.submits(), 0);
+    assert!(!harness.environment.registry.submitted(REQUEST_ID));
+}
+
+#[tokio::test]
+async fn an_action_changed_since_render_refuses_the_original_submit() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+    assert!(page.body.contains(PROPOSED_LOCALITY));
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 1);
+    harness
+        .environment
+        .registry
+        .publish_metadata(changed_action_metadata());
+
+    let refused = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+
+    assert_action_changed(&refused);
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 1);
+    assert_eq!(harness.environment.registry.submits(), 0);
+    assert!(!harness.environment.registry.submitted(REQUEST_ID));
+}
+
+#[tokio::test]
+async fn an_unchanged_action_can_describe_a_draft_after_other_metadata_changes() {
+    let harness = Harness::start().await;
+    let mut metadata = support::metadata();
+    metadata["revision"] = serde_json::json!(format!("sha256:{}", "b".repeat(64)));
+    harness.environment.registry.publish_metadata(metadata);
+
+    let (cookie, page) = harness.review().await;
+    assert!(page.body.contains(PROPOSED_LOCALITY));
+    let submitted = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[
+                ("csrf", &page.input("csrf").unwrap()),
+                ("view", &page.input("view").unwrap()),
+            ],
+        )
+        .await;
+
+    assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
+    assert!(harness.environment.registry.submitted(REQUEST_ID));
+}
+
 #[tokio::test]
 async fn the_target_read_is_the_profile_get_whatever_reference_comes_first() {
     let harness = Harness::start().await;

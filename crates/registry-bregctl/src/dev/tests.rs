@@ -1672,7 +1672,7 @@ clients:
 seed:
   - id: from-guest
     client: guest
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {}
 "#,
@@ -1934,14 +1934,43 @@ fn rehearsal_tokens_select_distinct_declared_purposes_on_one_logical_client() {
 }
 
 #[test]
+fn retired_seed_record_type_key_has_rename_diagnostic() {
+    let report = config::decode(
+        "clients.yaml",
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients: []
+seed:
+  - id: seed-record
+    client: reader
+    entity: record
+    accessProfile: reader
+    data: {code: synthetic-record}
+"#,
+    )
+    .unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/seed/0/entity")
+        .expect("the retired Record type key has its own diagnostic");
+    assert_eq!(diagnostic.code, "config.removed-key");
+    assert!(diagnostic.suggested_action.contains("recordType"));
+}
+
+#[test]
 fn seed_operation_defaults_to_create_and_accepts_explicit_import() {
     let create: config::Seed = serde_norway::from_str(
-        "id: create-reference\nclient: operator\nentity: reference\naccessProfile: operator\ndata: {code: AA}\n",
+        "id: create-reference\nclient: operator\nrecordType: reference\naccessProfile: operator\ndata: {code: AA}\n",
     )
     .unwrap();
     assert_eq!(create.operation, config::SeedOperation::Create);
+    assert_eq!(create.record_type, "reference");
+    let serialized = serde_json::to_value(&create).unwrap();
+    assert_eq!(serialized["recordType"], "reference");
+    assert!(serialized.get("entity").is_none());
     let imported: config::Seed = serde_norway::from_str(
-        "id: import-reference\nclient: operator\nentity: reference\naccessProfile: operator\noperation: import\ndata: {code: AA}\n",
+        "id: import-reference\nclient: operator\nrecordType: reference\naccessProfile: operator\noperation: import\ndata: {code: AA}\n",
     )
     .unwrap();
     assert_eq!(imported.operation, config::SeedOperation::Import);

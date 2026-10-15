@@ -246,9 +246,29 @@ Read the resulting Directory revision before replacing a team with `PUT /v1/dire
 
 Use the authenticated review-task list, next task, holdings, and supervisory views to confirm the intended staff can work their queues. A caseload move and clock recompute each use a bounded preview followed by apply; when task or Directory state changed, create a fresh preview instead of replaying stale authority. A task reference or cursor grants no access.
 
+Supervisory discovery intentionally omits holder identities and due dates. It provides task and accountability references, not a team holdings board. Select the source officer from the Directory and use an authorized caseload preview to inspect a proposed move. Do not grant reviewer eligibility to obtain a supervisor view.
+
+Caseload preview selects all of that officer's claimed tasks, optionally in one queue, and refuses more than 100 with `review.query-too-broad`. There is no subset, limit, or continuation parameter. Apply moves the exact previewed set atomically. Use queue selection to split a larger caseload when possible, or individual authorized task assignments for a selected subset. Individual assignments have separate revisions and outcomes; they are not an atomic batch.
+
+An authorized task read or supervisory row can show `staffingDiagnostic: no-cover-available` when assignment or absence recompute finds no eligible cover. The notice reveals no holder or source context. Successful assignment, claim, caseload transfer, release, or task closure clears it; a closed task does not display an old notice.
+
 {/* Evidence: crates/registry-casework/src/assignment.rs, bootstrap_directory() and update_directory_team();
     crates/registry-casework/src/review/staffing.rs;
+    crates/registry-casework/tests/review_postgres.rs, staffing_diagnostic_is_disclosed_and_clears_when_responsibility_resumes();
     products/casework/generated/registry-casework.openapi.json. */}
+
+### Size the review queue reads
+
+The `inbox` policy in `casework.yaml` bounds each task-list, next-task and holdings read, including unfiltered reads. These operations complete the candidate scan and current disclosure before sorting and paging. They intentionally refuse the whole read when a scan budget is exhausted; they do not return the partial pages supported by supervision and own decisions.
+
+Defaults are `maximumCandidateScan: 100`, `maximumSourceReads: 25` and `pageDeadlineMilliseconds: 2000`. Candidates later concealed by the source still consume the budgets. A current-source queue can therefore reach its source-read limit before its candidate limit. A smaller page size or visible-reference filter does not reduce the candidate scan. An exact subject or queue selector can narrow it before disclosure.
+
+For a query expected to examine N candidates, allow at least N candidate scans and enough source reads for its current-source candidates. Measure the complete scan against representative source latency and leave time for database work within the deadline. Both count limits are bounded by 10,000 and the deadline by 30,000 ms; raising the candidate limit alone does not raise the other limits. Prefer narrower queues or exact-subject reads when the full scan cannot fit. Exhausted count budgets return `review.query-too-broad`; a source call that reaches the deadline can instead report source unavailability.
+
+{/* Evidence: crates/registry-casework-core/src/config.rs, InboxPolicy;
+    crates/registry-casework/src/review/staffing.rs, review_staffing_tasks();
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    live_read_budget_requires_narrowing_and_exact_subject_narrows_before_scan(). */}
 
 ### Check readiness with doctor
 
@@ -289,7 +309,7 @@ Current-source contract changes need matching producer exports and Casework sche
 | `review.policy-mismatch` on admission | Reconcile the producer's exact pin with the deployed policy before a fresh submission. Preserve the original body and key for recovery. |
 | Current-source task is concealed or unavailable | Check the human's source profile, exact context binding, and required provider purpose. Never substitute the status credential for human display. |
 | `source.bad-gateway` on a display read | Correct the provider/schema mismatch. The warning identifies the policy and validation reason without source values. |
-| `review.query-too-broad` | Narrow the queue, exact subject, or visible reference filter; do not treat a partial walk as the full inbox. |
+| `review.query-too-broad` | The list, next-task or holdings read exceeded its complete-scan budget, or a caseload preview exceeded 100 tasks. Narrow the queue or exact subject, inspect the policy budgets, or split the caseload through separately authorized assignments. No partial staffing result was returned. |
 | `precondition.failed` on a mutation or preview apply | Refresh the task or Directory state and obtain a new preview where required. |
 | `service.unavailable` and `/ready` returns `503` | Check the database and audit writer. For a failed file writer, repair its path/space/permissions and restart; inspect whether the original operation committed. |
 | `casework.activation.retired-schema` or schema-newer refusal | Preserve the database and use a supported release/database pairing. Never alter the migration ledger to bypass the refusal. |

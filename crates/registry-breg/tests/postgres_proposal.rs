@@ -3152,6 +3152,13 @@ async fn narrowed_attachment_disclosure_refuses_the_old_exact_receipt_without_re
 #[cfg(feature = "tooling")]
 async fn retained_attachment_download_survives_tighter_current_upload_policy() {
     let mut source = registry_source(false);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({"id":"retained-document","fields":{"document":{"type":"document","slot":"support"}}});
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("get-review-context"));
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["document"]);
     source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     let fixture =
@@ -3191,6 +3198,23 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
         .http
         .client
         .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let old_metadata = fixture
+        .http
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let old_binding = old_metadata
+        .select_proposal_review_context("clerk", "correct-name")
+        .unwrap();
+    let old_context = fixture
+        .http
+        .client
+        .read_proposal_review_by_id(&old_binding, submitted.id())
         .await
         .unwrap()
         .value;
@@ -3241,6 +3265,40 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
     assert_eq!(raw.status(), reqwest::StatusCode::OK);
     assert_eq!(raw.headers()["content-type"], "text/plain");
     assert_eq!(raw.bytes().await.unwrap().as_ref(), bytes);
+    let binding = metadata
+        .value
+        .select_proposal_review_context("clerk", "correct-name")
+        .unwrap();
+    let context = current
+        .client
+        .read_proposal_review_by_id(&binding, submitted.id())
+        .await
+        .unwrap()
+        .value;
+    assert_ne!(
+        old_context.context.contract.as_ref().unwrap().schema_digest,
+        context.context.contract.as_ref().unwrap().schema_digest
+    );
+    let reviewed = current
+        .client
+        .download_proposal_review_document(&binding, &context, "document")
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(reviewed.media_type(), "text/plain");
+    assert_eq!(
+        reviewed.as_bytes(),
+        bytes,
+        "retained review bytes use the frozen manifest rather than today's upload ceiling"
+    );
+    assert!(
+        current
+            .client
+            .download_proposal_review_document(&binding, &old_context, "document")
+            .await
+            .is_err(),
+        "the former context schema digest remains stale after slot policy changes"
+    );
 
     let action = metadata
         .value

@@ -157,7 +157,7 @@
     {
       "name": "breg-review",
       "invocation": "breg-review",
-      "about": "Serve the citizen review page for Base Registry Engine change requests",
+      "about": "Serve the citizen review page for Base Registry Engine Proposals",
       "long_about": null,
       "usage": "breg-review --runtime-config <FILE> <COMMAND>",
       "arguments": [],

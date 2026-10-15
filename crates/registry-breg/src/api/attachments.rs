@@ -67,6 +67,7 @@ async fn authorize(
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
     operation: ProposalOperation,
+    context_field: Option<&str>,
     method: HttpMethod,
     correlation: &RequestCorrelation,
 ) -> Result<(String, ProposalAuthority), Response> {
@@ -109,16 +110,16 @@ async fn authorize(
         grant.profile_id == authority.common.access_profile()
             && grant.operations.contains(&operation)
     });
-    let allowed = grant.map(|grant| {
-        if operation == ProposalOperation::Get {
-            &grant.readable_attachments
-        } else {
-            &grant.writable_attachments
-        }
+    let allowed = grant.is_some_and(|grant| match operation {
+        ProposalOperation::Get => grant.readable_attachments.contains(slot),
+        ProposalOperation::GetReviewContext => context_field.is_some_and(|field|
+            grant.readable_context_fields.contains(field)
+            && matches!(proposal.review_context.as_ref().and_then(|context| context.fields.get(field)),
+                Some(crate::contract::ProposalContextValueSource::Document { slot: mapped }) if mapped == slot)),
+        ProposalOperation::Edit => grant.writable_attachments.contains(slot),
+        _ => false,
     });
-    if !proposal.attachments.contains_key(slot)
-        || !allowed.is_some_and(|allowed| allowed.contains(slot))
-    {
+    if !proposal.attachments.contains_key(slot) || !allowed {
         return Err(super::proposals::admitted_http_refusal(
             mutations,
             &authority,
@@ -159,6 +160,7 @@ async fn mutate(
         &claims,
         selected.as_deref(),
         ProposalOperation::Edit,
+        None,
         if removal {
             HttpMethod::Delete
         } else {
@@ -325,16 +327,24 @@ async fn download(
     let Ok(id) = Uuid::parse_str(&id) else {
         return concealed();
     };
-    let Ok((selected, version)) = parse_download_query(raw.as_deref()) else {
+    let Ok(query) = parse_download_query(raw.as_deref()) else {
         return concealed();
     };
-    let (_, authority) = match authorize(
+    let (field, operation) = match &query.review {
+        Some(review) => (
+            Some(review.field.as_str()),
+            ProposalOperation::GetReviewContext,
+        ),
+        None => (None, ProposalOperation::Get),
+    };
+    let (action_id, authority) = match authorize(
         &service,
         id,
         &slot,
         &claims,
-        selected.as_deref(),
-        ProposalOperation::Get,
+        query.selected.as_deref(),
+        operation,
+        field,
         HttpMethod::Get,
         &correlation,
     )
@@ -343,8 +353,49 @@ async fn download(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let Some(action) = service
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == action_id)
+    else {
+        return concealed();
+    };
+    let Some(records) = super::proposals::review_record_authorities(
+        &service.registry,
+        action,
+        &claims,
+        &authority,
+        operation,
+    ) else {
+        return super::proposals::admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Get,
+            &correlation,
+            concealed(),
+        )
+        .await;
+    };
+    let review = query
+        .review
+        .as_ref()
+        .map(|review| super::proposals::ReviewContextDocumentRead {
+            field: &review.field,
+            effect_digest: &review.effect_digest,
+            schema_digest: &review.schema_digest,
+            records: &records,
+        });
     match mutations
-        .proposal_attachment_download(id, version, &slot, &authority, &correlation)
+        .proposal_attachment_download(
+            id,
+            query.version,
+            &slot,
+            &authority,
+            review.as_ref(),
+            &correlation,
+        )
         .await
     {
         Ok((content_type, bytes)) => Response::builder()
@@ -364,13 +415,29 @@ async fn download(
     }
 }
 
-fn parse_download_query(raw: Option<&str>) -> Result<(Option<String>, u32), QueryParseError> {
+#[derive(Debug)]
+struct AttachmentDownloadQuery {
+    selected: Option<String>,
+    version: u32,
+    review: Option<ReviewDownloadQuery>,
+}
+#[derive(Debug)]
+struct ReviewDownloadQuery {
+    field: String,
+    effect_digest: String,
+    schema_digest: String,
+}
+
+fn parse_download_query(raw: Option<&str>) -> Result<AttachmentDownloadQuery, QueryParseError> {
     let raw = raw.ok_or(QueryParseError::Invalid)?;
     if raw.len() > MAX_RAW_QUERY_BYTES {
         return Err(QueryParseError::Invalid);
     }
     let mut version = None;
     let mut selected = None;
+    let mut field = None;
+    let mut effect_digest = None;
+    let mut schema_digest = None;
     for pair in raw.split('&') {
         let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
         let (name, value) = (percent_decode(name)?, percent_decode(value)?);
@@ -381,11 +448,45 @@ fn parse_download_query(raw: Option<&str>) -> Result<(Option<String>, u32), Quer
                     return Err(QueryParseError::Invalid);
                 }
             }
-            "accessProfile" if selected.is_none() && !value.is_empty() => selected = Some(value),
+            "accessProfile"
+                if selected.is_none() && registry_platform_yaml::LocalId::new(&value).is_ok() =>
+            {
+                selected = Some(value)
+            }
+            "reviewContextField"
+                if field.is_none() && crate::logical_names::valid_api_name(&value) =>
+            {
+                field = Some(value)
+            }
+            "effectDigest"
+                if effect_digest.is_none()
+                    && registry_platform_yaml::Digest::new(&value).is_ok() =>
+            {
+                effect_digest = Some(value)
+            }
+            "contextSchemaDigest"
+                if schema_digest.is_none()
+                    && registry_platform_yaml::Digest::new(&value).is_ok() =>
+            {
+                schema_digest = Some(value)
+            }
             _ => return Err(QueryParseError::Invalid),
         }
     }
-    Ok((selected, version.ok_or(QueryParseError::Invalid)?))
+    let review = match (field, effect_digest, schema_digest) {
+        (None, None, None) => None,
+        (Some(field), Some(effect_digest), Some(schema_digest)) => Some(ReviewDownloadQuery {
+            field,
+            effect_digest,
+            schema_digest,
+        }),
+        _ => return Err(QueryParseError::Invalid),
+    };
+    Ok(AttachmentDownloadQuery {
+        selected,
+        version: version.ok_or(QueryParseError::Invalid)?,
+        review,
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -407,8 +508,31 @@ mod tests {
         assert_eq!(
             parse_download_query(Some("submissionVersion=2&accessProfile=owner"))
                 .unwrap()
-                .1,
+                .version,
             2
         );
+    }
+
+    #[test]
+    fn review_document_query_is_complete_closed_and_exclusive() {
+        let valid = format!("submissionVersion=1&reviewContextField=supportingDocument&effectDigest=sha256%3A{}&contextSchemaDigest=sha256%3A{}&accessProfile=reviewer_one", "a".repeat(64), "b".repeat(64));
+        let parsed = parse_download_query(Some(&valid)).unwrap();
+        assert_eq!(parsed.review.unwrap().field, "supportingDocument");
+        for invalid in [
+            "submissionVersion=1&reviewContextField=supportingDocument".to_owned(),
+            valid.replace("effectDigest=", "unknown="),
+            valid.replace("submissionVersion=1", "submissionVersion=01"),
+            valid.replace(
+                "reviewContextField=supportingDocument",
+                "reviewContextField=bad-field",
+            ),
+            valid.replace("sha256%3A", "sha256%3Ax"),
+            format!("{valid}&%72eviewContextField=supportingDocument"),
+            format!("{valid}&effectDigest=sha256%3A{}", "a".repeat(64)),
+            format!("{valid}&contextSchemaDigest=sha256%3A{}", "b".repeat(64)),
+            format!("{valid}&accessProfile=owner"),
+        ] {
+            assert!(parse_download_query(Some(&invalid)).is_err(), "{invalid}");
+        }
     }
 }

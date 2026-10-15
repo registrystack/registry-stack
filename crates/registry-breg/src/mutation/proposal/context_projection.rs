@@ -31,6 +31,30 @@ pub(super) async fn fields(
                     .contains(&ProposalOperation::GetReviewContext)
         })
         .ok_or(MutationError::PreconditionFailed)?;
+    let document_contract = if mapping
+        .fields
+        .values()
+        .any(|source| matches!(source, ProposalContextValueSource::Document { .. }))
+    {
+        Some(
+            crate::compiler::review_context::compile_schema(registry, action)
+                .map_err(|_| MutationError::Unavailable)?
+                .ok_or(MutationError::PreconditionFailed)?,
+        )
+    } else {
+        None
+    };
+    frozen
+        .verify_digest(&crate::proposal_workflow::ProposalKey::new(
+            EntityId::new(&document.action_id).map_err(workflow_error)?,
+            RecordId::new(document.proposal_id.to_string()).map_err(workflow_error)?,
+        ))
+        .map_err(workflow_error)?;
+    if frozen.version().get() as i64 != document.header.submission_version
+        || frozen.contract_fingerprint().as_str() != document.action_revision
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
     let targets = if mapping
         .fields
         .values()
@@ -60,6 +84,37 @@ pub(super) async fn fields(
             return Err(MutationError::PreconditionFailed);
         }
         let resolved = match source {
+            ProposalContextValueSource::Document { slot } => {
+                let definition = proposal
+                    .attachments
+                    .get(slot)
+                    .ok_or(MutationError::PreconditionFailed)?;
+                if let Some(manifest) = frozen.attachments().get(slot) {
+                    crate::attachment_store::require_frozen_reference(
+                        tx,
+                        &document.action_id,
+                        document.proposal_id,
+                        document.header.submission_version,
+                        slot,
+                        manifest,
+                    )
+                    .await?;
+                    let schema = document_contract
+                        .as_ref()
+                        .ok_or(MutationError::PreconditionFailed)?;
+                    let path = format!("/v1/proposals/{}/attachments/{}?submissionVersion={}&reviewContextField={}&effectDigest={}&contextSchemaDigest={}",
+                        document.proposal_id, slot, frozen.version().get(), field,
+                        frozen.effect_digest().as_str().replace(':', "%3A"), schema.digest.replace(':', "%3A"));
+                    json!({"type":"document","slotId":slot,"sha256":manifest.sha256,
+                        "contentType":manifest.content_type,"byteSize":manifest.byte_size,
+                        "download":{"method":"GET","operation":"get-review-context",
+                            "accessProfile":authority.common.access_profile(),"path":path}})
+                } else if !definition.required {
+                    Value::Null
+                } else {
+                    return Err(MutationError::PreconditionFailed);
+                }
+            }
             ProposalContextValueSource::Input { input } => frozen
                 .inputs()
                 .get(input)

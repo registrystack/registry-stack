@@ -406,6 +406,27 @@ pub(crate) fn target_directory(path: &Path) -> &Path {
 
 #[cfg(test)]
 #[test]
+fn invalid_asset_paths_are_refused_before_filesystem_lookup() {
+    let temporary = tempfile::tempdir().unwrap();
+    let missing_root = temporary.path().join("not-created");
+    for relative in [
+        "/outside.rhai",
+        "missing/../outside.rhai",
+        "functions/./answer.rhai",
+        "functions//answer.rhai",
+        "functions\\answer.rhai",
+    ] {
+        let error = safe_asset(&missing_root, relative).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "artifact must be a project-relative path without traversal"
+        );
+    }
+    assert!(!missing_root.exists());
+}
+
+#[cfg(test)]
+#[test]
 fn relative_target_filename_uses_the_current_directory() {
     assert_eq!(
         target_directory(Path::new("local-target.yaml")),

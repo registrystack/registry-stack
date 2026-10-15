@@ -880,7 +880,7 @@ fn finish(original: &State, transition: &Transition) -> Result<()> {
 
 /// Keep full-line author notes with their top-level section while normalizing
 /// the changed YAML. This does not pretend to preserve arbitrary YAML layout.
-fn yaml_with_comments(value: &Value, original: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn yaml_with_comments(value: &Value, original: &[u8]) -> Result<Vec<u8>> {
     let object = value
         .as_object()
         .context("source document must be a mapping")?;

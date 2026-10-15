@@ -3023,7 +3023,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
             .routes
             .iter()
             .find(|r| {
-                r.entity_id == seed.entity
+                r.entity_id == seed.record_type
                     && r.operation == operation
                     && r.access_profiles.contains(&seed.access_profile)
             })
@@ -3090,7 +3090,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                 package: &package,
                 breg_url: &breg_origin,
                 access_token_file: &token,
-                entity: &seed.entity,
+                entity: &seed.record_type,
                 operation: DataImportOperation::Create,
                 profile: &seed.access_profile,
                 input: &input,
@@ -3177,7 +3177,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     }
     let open_arguments = crate::import_authority_lifecycle::OpenArguments {
         runtime_config: &runtime_config,
-        entity: &seed.entity,
+        entity: &seed.record_type,
         profile: &seed.access_profile,
         max_items: 1,
         expires_in: "10m",
@@ -3203,7 +3203,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             )?;
             let Some(orphan) = unjournaled_seed_authority(
                 &listed,
-                &seed.entity,
+                &seed.record_type,
                 &seed.access_profile,
                 &input_digest,
                 state.seed_import_intents.get(&seed.id).copied(),
@@ -3215,7 +3215,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                 bail!(
                     "an import authority this seed did not open is already open for entity {}; \
                      close it with `bregctl import-authority close` or let it expire, then start again",
-                    seed.entity
+                    seed.record_type
                 );
             };
             crate::import_authority_lifecycle::close(
@@ -3246,7 +3246,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
         package: &package,
         breg_url: &breg_origin,
         access_token_file: &token,
-        entity: &seed.entity,
+        entity: &seed.record_type,
         operation: DataImportOperation::Create,
         profile: &seed.access_profile,
         input: &input,

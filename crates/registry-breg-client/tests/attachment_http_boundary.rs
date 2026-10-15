@@ -19,6 +19,7 @@ use registry_breg_client::{
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -228,8 +229,14 @@ fn key(value: &str) -> BRegIdempotencyKey {
 }
 fn proposal_document() -> Value {
     let path = format!("/v1/proposals/{RECORD_ID}/attachments/{SLOT}");
+    let sha256: String = Sha256::digest(PDF)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     json!({"id":RECORD_ID,"actionId":"correct","actionRevision":REVISION,"submissionVersion":2,"revision":3,"state":"draft","links":{},
-        "attachments":{SLOT:{"id":SLOT,"required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted","links":{
+        "attachments":{SLOT:{"id":SLOT,"required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted",
+            "value":{"submissionVersion":2,"sha256":sha256,
+                "contentType":"application/pdf","byteSize":PDF.len(),"uploadedAt":"2026-09-19T00:01:00Z","verificationStatus":"notRequired"},"links":{
             "download":{"method":"GET","path":format!("{path}?submissionVersion=2"),"accessProfile":"writer","operation":"download"},
             "upload":{"method":"PATCH","path":path,"accessProfile":"writer","operation":"upload","ifMatch":SERVER_ETAG},
             "remove":{"method":"DELETE","path":path,"accessProfile":"writer","operation":"remove","ifMatch":SERVER_ETAG}}}}})
@@ -248,7 +255,7 @@ async fn selected_with_document(
     document: Value,
     responses: Vec<MockResponse>,
 ) -> (TestClient, BRegProposal) {
-    let metadata = json!({"id":"attachment-test","version":"1","revision":REVISION,"metadataVersion":"1","recordTypes":[],"operations":[],"actions":[{
+    let metadata = json!({"id":"attachment-test","version":"1","revision":REVISION,"metadataVersion":"2","recordTypes":[],"operations":[],"actions":[{
         "id":"correct","apiName":"correct","revision":REVISION,"display":{},"execution":{"mode":"proposal"},"route":"/v1/actions/correct/proposals","inputMode":"fixed","inputs":[],"referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],"access":{"selectedProfile":"writer"},
         "routes":{"start":{"method":"POST","path":"/v1/actions/correct/proposals","operationId":"actions.correct.start","requiresIdempotencyKey":true,"inputSchema":"action-correct-invoke-input","responseSchema":"action-correct-invoke-response"}},
         "bounds":{"maximumTargets":16,"maximumFieldMutations":128,"maximumSnapshotBytes":2097152}}]});
@@ -336,10 +343,6 @@ async fn retained_attachment_download_uses_its_value_bound_and_current_upload_po
     let mut retained = proposal_document();
     retained["attachments"][SLOT]["maximumBytes"] = json!(4);
     retained["attachments"][SLOT]["contentTypes"] = json!(["text/plain"]);
-    retained["attachments"][SLOT]["value"] = json!({
-        "submissionVersion":2,"sha256":"a".repeat(64),"contentType":"application/pdf",
-        "byteSize":PDF.len(),"verificationStatus":"notRequired"
-    });
     let too_large = [PDF, b"x"].concat();
     let oversized = MockResponse::bytes(StatusCode::OK, "application/pdf", &too_large)
         .with_header("content-disposition", "attachment")
@@ -378,6 +381,54 @@ async fn retained_attachment_download_uses_its_value_bound_and_current_upload_po
     retained["attachments"][SLOT]["value"]["byteSize"] =
         json!(registry_breg_client::MAX_BREG_ATTACHMENT_BYTES + 1);
     assert!(BRegProposal::from_slice(&serde_json::to_vec(&retained).unwrap()).is_err());
+}
+
+#[tokio::test]
+async fn download_requires_an_advertised_value_before_credentials_or_http() {
+    let mut document = proposal_document();
+    document["attachments"][SLOT]
+        .as_object_mut()
+        .unwrap()
+        .remove("value");
+    let (fixture, proposal) = selected_with_document(document, vec![]).await;
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    let requests = fixture.requests.lock().unwrap().len();
+    assert!(fixture
+        .client
+        .download_proposal_attachment(&proposal, SLOT)
+        .await
+        .is_err());
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+    assert_eq!(fixture.requests.lock().unwrap().len(), requests);
+}
+
+#[tokio::test]
+async fn download_verifies_frozen_bytes_size_and_media_type() {
+    for (media, bytes) in [
+        ("application/pdf", vec![b'x'; PDF.len()]),
+        ("application/pdf", PDF[..PDF.len() - 1].to_vec()),
+        ("text/plain", PDF.to_vec()),
+    ] {
+        let response = download_response()
+            .without_header("content-type")
+            .with_header("content-type", media);
+        let response = MockResponse {
+            body: bytes,
+            ..response
+        };
+        let (fixture, proposal) = selected(vec![response]).await;
+        assert!(matches!(
+            fixture
+                .client
+                .download_proposal_attachment(&proposal, SLOT)
+                .await,
+            Err(BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::Body,
+                ..
+            })
+        ));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 3);
+    }
 }
 
 #[tokio::test]

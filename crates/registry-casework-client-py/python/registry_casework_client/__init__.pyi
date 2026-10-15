@@ -127,13 +127,7 @@ class HolidaySetDocument(TypedDict):
 class HolidaySetRevisionInput(TypedDict):
     document: HolidaySetDocument
 
-class _AssignmentContextOptional(TypedDict, total=False):
-    owner: IssuerPrincipal
-    assignedBy: IssuerPrincipal
-    staffingDiagnostic: Literal["no-cover-available"]
-
-class AssignmentContext(_AssignmentContextOptional):
-    absenceIds: list[str]
+StaffingDiagnostic: TypeAlias = Literal["no-cover-available"]
 
 DirectoryTargetPurpose: TypeAlias = Literal["assignment", "absence-person", "absence-cover"]
 
@@ -555,6 +549,7 @@ class OwnReviewDecisionPage(_OwnReviewDecisionPageOptional):
     items: list[OwnReviewDecision]
     status: PageStatus
 class _ReviewTaskOptional(TypedDict, total=False):
+    staffingDiagnostic: StaffingDiagnostic
     deadlineAt: str | None
     displayReference: str
     decidedByCaller: bool
@@ -577,6 +572,7 @@ class ReviewTaskPage(_ReviewTaskPageOptional):
     items: list[ReviewTask]
     status: PageStatus
 class _SupervisoryReviewTaskOptional(TypedDict, total=False):
+    staffingDiagnostic: StaffingDiagnostic
     accountabilityEventId: Uuid
 SupervisoryReviewTaskState: TypeAlias = Literal["open", "held", "decided"]
 class SupervisoryReviewTask(_SupervisoryReviewTaskOptional):

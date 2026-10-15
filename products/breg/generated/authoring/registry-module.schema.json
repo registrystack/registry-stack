@@ -3099,6 +3099,23 @@
         {
           "additionalProperties": false,
           "properties": {
+            "slot": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "document",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "input": {
               "$ref": "#/$defs/LocalId"
             },

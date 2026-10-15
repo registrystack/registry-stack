@@ -65,7 +65,7 @@ async fn mocks(server: &MockServer, profile: &str, bearer: &str, display: bool, 
     } else {
         "get-review-status"
     };
-    Mock::given(method("GET")).and(path("/v1/registry")).and(query_param("accessProfile",profile)).and(header("authorization",format!("Bearer {bearer}"))).respond_with(response(json!({"metadataVersion":"1","id":"registry","version":"1","revision":revision,"recordTypes":[],"operations":[],"proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":"correct-address","accessProfile":profile,"operations":[operation]}]}}))).mount(server).await;
+    Mock::given(method("GET")).and(path("/v1/registry")).and(query_param("accessProfile",profile)).and(header("authorization",format!("Bearer {bearer}"))).respond_with(response(json!({"metadataVersion":"2","id":"registry","version":"1","revision":revision,"recordTypes":[],"operations":[],"proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":"correct-address","accessProfile":profile,"operations":[operation],"readableInputs":[]}]}}))).mount(server).await;
     let mut context = json!({"reference":"native-proposal", "contract":export().contract});
     if display {
         context["fields"] = json!({"reference":"REF-42"});
@@ -191,6 +191,10 @@ fn changed_export_schema_bytes_cannot_reuse_the_contract_pin() {
 }
 #[test]
 fn canonical_vendored_schema_matches_the_native_producer_contract() {
+    canonical_export().check().unwrap();
+}
+
+fn canonical_export() -> BregContextExport {
     let schema_bytes = include_str!(
         "../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json"
     );
@@ -200,7 +204,7 @@ fn canonical_vendored_schema_matches_the_native_producer_contract() {
     .unwrap();
     let contract = &index["correct-address"];
     let schema: Value = serde_json::from_str(schema_bytes).unwrap();
-    let export = BregContextExport {
+    BregContextExport {
         api_version: DESCRIPTION_API_VERSION.into(),
         kind: DESCRIPTION_KIND.into(),
         source_namespace: "facility-registry".into(),
@@ -213,8 +217,63 @@ fn canonical_vendored_schema_matches_the_native_producer_contract() {
         },
         schema,
         schema_bytes: schema_bytes.into(),
-    };
-    export.check().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn canonical_document_fields_roundtrip_with_human_bearer_without_fetching_bytes() {
+    for present in [false, true] {
+        let server = MockServer::start().await;
+        let export = canonical_export();
+        let identity = ReviewContextIdentity {
+            subject: SubjectBinding {
+                source: export.source_namespace.clone(),
+                subject_type: "proposal".into(),
+                id: ID.into(),
+                version: "1".into(),
+                digest: ContentDigest::parse(DIGEST).unwrap(),
+            },
+            contract: export.contract.clone(),
+        };
+        let document = if present {
+            json!({"type":"document","slotId":"supporting-document","sha256":"a".repeat(64),
+            "contentType":"application/pdf","byteSize":123,
+            "download":{"method":"GET","operation":"get-review-context","accessProfile":"proposal-reviewer",
+                "path":format!("/v1/proposals/{ID}/attachments/supporting-document?submissionVersion=1&reviewContextField=supportingDocument&effectDigest={}&contextSchemaDigest={}",
+                    DIGEST.replace(':', "%3A"), identity.contract.schema_digest.as_str().replace(':', "%3A"))}})
+        } else {
+            Value::Null
+        };
+        let fields = json!({"facilityId":ID,"currentAddressLine":"1 Main Road","changes":[],"supportingDocument":document});
+        Mock::given(method("GET")).and(path("/v1/registry")).and(query_param("accessProfile", "proposal-reviewer"))
+            .and(header("authorization", "Bearer human-bearer"))
+            .respond_with(response(json!({"metadataVersion":"2","id":"facility-registry","version":"1","revision":DIGEST,"recordTypes":[],"operations":[],
+                "proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},
+                    "actions":[{"actionId":"correct-address","accessProfile":"proposal-reviewer","operations":["get-review-context"],"readableInputs":[]}]}}))).mount(&server).await;
+        Mock::given(method("GET")).and(path(format!("/v1/proposals/{ID}/review-context"))).and(query_param("accessProfile", "proposal-reviewer"))
+            .and(header("authorization", "Bearer human-bearer"))
+            .respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,"submissionVersion":1,"revision":1,
+                "effectDigest":DIGEST,"subject":{"source":identity.subject.source,"subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"reviewable":true,
+                "context":{"reference":"native-proposal","contract":identity.contract,"fields":fields}}))).mount(&server).await;
+        let provider = provider(&server, export);
+        let displayed = provider
+            .human_display(HumanDisplayRequest {
+                identity: &identity,
+                source_profile_id: "proposal-reviewer",
+                credential: EphemeralCredential::new("human-bearer"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(displayed.fields["supportingDocument"], document);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|request| !request.url.path().contains("/attachments/")));
+        assert!(requests
+            .iter()
+            .all(|request| request.headers.get("authorization").unwrap() == "Bearer human-bearer"));
+    }
 }
 
 #[test]
@@ -420,14 +479,14 @@ async fn current_metadata_must_advertise_the_exact_profile_action_and_purpose() 
         let identity = identity(&export);
         let provider = provider(&server, export);
         mocks(&server, "reviewer", "human-bearer", true, DIGEST).await;
-        let mut action = json!({"actionId":"correct-address","accessProfile":"reviewer","operations":["get-review-context"]});
+        let mut action = json!({"actionId":"correct-address","accessProfile":"reviewer","operations":["get-review-context"],"readableInputs":[]});
         action[member] = if member == "operations" {
             json!(["get-review-status"])
         } else {
             json!("other")
         };
         Mock::given(method("GET")).and(path("/v1/registry"))
-            .respond_with(response(json!({"metadataVersion":"1","id":"registry","version":"1","revision":DIGEST,
+            .respond_with(response(json!({"metadataVersion":"2","id":"registry","version":"1","revision":DIGEST,
                 "recordTypes":[],"operations":[],"proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],
                 "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[action]}})))
             .with_priority(1).mount(&server).await;

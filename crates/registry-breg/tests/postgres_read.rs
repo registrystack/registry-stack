@@ -1931,8 +1931,7 @@ fn registry_source() -> String {
             ],
             "temporal":{
               "startField":"valid-from",
-              "endField":"valid-to",
-              "scopeFields":["label"]
+              "endField":"valid-to"
             },
             "constraints":[{
               "type":"temporal-non-overlap",

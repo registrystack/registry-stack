@@ -1,7 +1,7 @@
 # Durable Proposal configuration
 
 Use an Action with `execution.mode: proposal` when a change must remain as durable
-work before application. BReg owns its draft, frozen plan, target authorization,
+work before application. Base Registry Engine (BReg) owns its draft, frozen plan, target authorization,
 guards, local application, receipt, audit, and retention. An external review
 authority owns review policy and decisions.
 
@@ -40,6 +40,13 @@ submissions, including choosing human review or automatic assessment. When the
 registry owner must separately approve policy changes, supply both `version`
 and `digest` alongside `id` from the provider's exported policy binding. Partial
 pins are refused. An unavailable or mismatched policy never grants approval.
+
+Use an exact pin when the policy version chosen at submission must decide the
+review. With an ID-only selector, provider changes before first acceptance can
+affect pending deliveries throughout the recovery window (30 days by default);
+an operator resubmit restarts that window without replacing an existing acceptance.
+A new submission after changes-requested selects the provider's current policy
+again unless pinned.
 
 Omitting `application` selects automatic application by the built-in executor.
 It receives only the compiled system grant for the exact frozen submission,
@@ -83,13 +90,45 @@ Profiles declare `permissions.records`, `permissions.actions`, and
 `permissions.proposals` independently. Start authorizes creation of a draft;
 Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply each
 need their own grant. List requires List authority and conceals other owners'
-and jurisdictions' work before filters or counts. Reading review context also
-requires current record disclosure. A review-status service grant is restricted
-to its named authority and returns no display values.
+and jurisdictions' work before filters or counts. Record and changes projections
+in review context also require current Record disclosure. Frozen input and
+document projections use their declared review-context grants and current
+applicable checks. A review-status service grant is restricted to its named
+authority and returns no display values.
+
+Ownership alone does not preserve access after a target leaves the caller's
+current row boundary. Proposal Get then returns a concealed 404, List omits the
+Proposal, and transitions such as Cancel return the generic precondition refusal.
+The saved Proposal remains governed work, but that caller can no longer view,
+cancel or recover it. An adopter should explain this loss of access and provide
+its service contact path; it must not retain a private copy as substitute authority.
+
+An authorized review-status read includes `requestId` after the Review provider
+has accepted that exact submission. Before acceptance the member is absent.
+Use this provider-issued ID to correlate independently authorized Casework
+history, clocks or notes reads, including a changes-requested explanation.
+The ID grants no Casework access and is absent from human review-context reads.
+Refetch status for the intended submission after Revise or Rebase; do not use a
+previous submission's request ID for new work.
+
+For an audit investigation, correlate the exact Proposal, Action revision,
+submission version and effect digest with the accepted `requestId` and retained
+`resultId`. Read Casework's request history and Decisions under separate current
+Casework authority. Automatic application records BReg's system executor, not
+the human reviewer; an application receipt does not embed the officer's Decision.
+Retain the needed evidence under each product's retention policy before detail
+or receipts expire. This correlation does not bypass either product's disclosure
+checks or recover erased history.
 
 An external Apply or Retry of automatic work requires a verified human with an
 explicit grant. Automatic execution never impersonates that human. Manual Apply
 uses its separately configured current caller authority.
+
+Automatic application is the default. Explicit manual mode has no apply-task
+queue, assignee or due date, and an approval does not open a Casework task to
+apply the change. The adopter owns follow-up: list submitted Proposals, inspect
+their current Apply availability, and arrange who acts before approval expires.
+Casework remains the review provider; BReg owns and authorizes application.
 
 ## Bind an optional review authority
 
@@ -103,6 +142,11 @@ With the binding absent, only operations requiring that authority are disabled.
 Restore it to resume retained work. Approval must be freshly authenticated and
 unexpired before any uncommitted manual or automatic application. Already
 committed receipt recovery follows the local retention contract.
+
+BReg submits every Proposal with `subjectType: proposal`. The Action identity
+comes from the Proposal's `actionId`, not from the subject type. Treat
+`context.reference` as opaque: preserve it for exact correlation and use the
+declared context contract rather than parsing its current spelling.
 
 ## Inspect and resume work
 
@@ -125,6 +169,13 @@ work carries retained application evidence. Blocked work carries a safe reason,
 recovery hint, and currently authorized links. Observation cannot establish
 whether an earlier uncertain Start or Submit executed; recover that command
 with its original prepared request and idempotency key.
+
+Mutation refusals intentionally share a generic 412 for unavailable authority
+and failed preconditions. To show or test why Apply is unavailable, first read
+the authorized Proposal and inspect `links.apply.availability.reason`, such as
+`pending-review`. Check the expected Proposal revision as well. A 412 alone
+does not prove that Review is pending, and availability is an observation, not
+a promise that a later mutation will pass its current checks.
 
 ### Show the frozen changes
 
@@ -156,6 +207,52 @@ Input projections disclose only the selected caller-supplied frozen inputs under
 the context grant. They do not infer Record permissions or consent from an input's
 meaning. Use a record or changes projection when displaying authoritative Record
 values that must follow those current disclosure rules.
+
+### Show a supporting document
+
+An Action can project a declared document slot into its review context:
+
+```yaml
+reviewContext:
+  id: facility-address-context
+  fields:
+    supportingDocument:
+      type: document
+      slot: supporting-document
+```
+
+Grant the reviewer `get-review-context` and include `supportingDocument` in
+`readableContextFields`. The field is `null` when that optional slot was empty
+at submission. Otherwise it contains the frozen document's slot ID, SHA-256,
+media type, byte size and an exact source download link. Proposal `get` and
+`readableAttachments` are separate grants and are unnecessary for this review.
+
+Use the maintained client to select the review binding and download explicitly:
+
+```js
+const metadata = await client.registryContract('proposal-reviewer');
+const binding = metadata.selectProposalReviewContext(
+  'proposal-reviewer', 'correct-address',
+);
+const context = (await client.readProposalReviewById(binding, proposalId)).value;
+const document = await client.downloadProposalReviewDocument(
+  binding, context, 'supportingDocument',
+);
+// document.body contains the verified bytes; document.mediaType identifies them.
+```
+
+Each download requires the exact submission, effect and context schema and
+rechecks current authorization and the complete context's Record/changes
+disclosure before releasing bytes. Revise, Rebase, erased detail or unavailable
+document verification can make a saved link unusable. Refetch the intended
+context explicitly; the client never follows a successor or an external URL.
+
+A document projection cannot infer the subjects described inside an opaque PDF.
+For consent-sensitive review, also declare the authoritative Record or changes
+projection whose current disclosure must hold. A document-only context grants
+the selected frozen content without adding an inferred consent relationship.
+The [facility example](examples/facility/README.md) combines supporting-document
+display with current Record and frozen changes projections.
 
 ## Retain or erase detail
 

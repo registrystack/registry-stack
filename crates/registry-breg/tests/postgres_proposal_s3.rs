@@ -664,6 +664,343 @@ async fn s3_integrity_binding_quarantine_and_authority_refusals_precede_transpor
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_document_binding_refusals_precede_s3_and_revise_never_follows_successor() {
+    let s3 = S3Fixture::new().await;
+    let verification = s3.config.activate_attachment_verification().unwrap();
+    let configured_verification = verification.clone();
+    let mut source = registry_source(false);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({"id":"review-document","fields":{
+        "document":{"type":"document","slot":"support"},"changes":{"type":"changes","recordType":"target","fields":["name"]}}});
+    let mut reviewer = source["accessProfiles"][0].clone();
+    reviewer["id"] = json!("reviewer");
+    reviewer.as_object_mut().unwrap().remove("default");
+    reviewer["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actions");
+    reviewer["permissions"]["records"][0]["operations"] = json!(["get"]);
+    reviewer["permissions"]["records"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("writableFields");
+    reviewer["permissions"]["proposals"][0]["operations"] = json!(["get-review-context"]);
+    reviewer["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["document", "changes"]);
+    reviewer["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableAttachments");
+    reviewer["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("writableAttachments");
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(reviewer);
+    let storage = s3.storage.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("synthetic-author", "zone-a"),
+        move |service| {
+            service
+                .with_attachment_storage(storage)
+                .with_attachment_verification(configured_verification)
+        },
+    )
+    .await;
+    let (audit, _) = registry_breg::audit::test_support::capturing(
+        registry_platform_audit::AuditProfile::production_from_secret_bytes(vec![0x64; 32].into())
+            .unwrap(),
+    );
+    let worker = registry_breg::attachment_verification_worker::AttachmentVerificationWorker::new(
+        fixture.pool.clone(),
+        fixture.identity.clone(),
+        registry_breg::postgres::RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+        Duration::from_secs(2),
+        audit,
+        s3.storage.clone(),
+        verification.clone(),
+    );
+    let draft = start(&fixture, "Frozen", "review-s3-start").await;
+    let client = &fixture.http.client;
+    let uploaded = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"frozen-review-bytes",
+            &key("review-s3-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(worker.run_once().await.unwrap());
+    let uploaded = client.read_proposal(&uploaded).await.unwrap().value;
+    let prepared = client
+        .prepare_proposal(&uploaded, "submit", json!({}), &key("review-s3-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&prepared).await.unwrap().value;
+    let requests = s3.state.requests.load(Ordering::SeqCst);
+    let context_response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/{}/review-context?accessProfile=reviewer",
+            fixture.http.base_url,
+            submitted.id()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(context_response.status(), StatusCode::OK);
+    let context: Value = context_response.json().await.unwrap();
+    assert_eq!(
+        s3.state.requests.load(Ordering::SeqCst),
+        requests,
+        "context metadata never fetches object bytes"
+    );
+    let path = format!(
+        "{}&accessProfile=reviewer",
+        context["context"]["fields"]["document"]["download"]["path"]
+            .as_str()
+            .unwrap()
+    );
+    let download =
+        |base: &str, path: &str| reqwest::Client::new().get(format!("{base}{path}")).send();
+    let response = download(&fixture.http.base_url, &path).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.bytes().await.unwrap().as_ref(),
+        b"frozen-review-bytes"
+    );
+    let requests = s3.state.requests.load(Ordering::SeqCst);
+    for denied in [
+        path.replace("submissionVersion=1", "submissionVersion=2"),
+        path.replace("reviewContextField=document", "reviewContextField=changes"),
+        path.replace("attachments/support", "attachments/hidden"),
+        path.replace("accessProfile=reviewer", "accessProfile=clerk"),
+        path.replace(
+            context["effectDigest"]
+                .as_str()
+                .unwrap()
+                .replace(':', "%3A")
+                .as_str(),
+            &format!("sha256%3A{}", "f".repeat(64)),
+        ),
+        path.replace(
+            context["context"]["contract"]["schemaDigest"]
+                .as_str()
+                .unwrap()
+                .replace(':', "%3A")
+                .as_str(),
+            &format!("sha256%3A{}", "e".repeat(64)),
+        ),
+    ] {
+        assert_eq!(
+            download(&fixture.http.base_url, &denied)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND,
+            "{denied}"
+        );
+    }
+    let wrong_owner = fixture.client_for(claims("other-author", "zone-a")).await;
+    let wrong_target = fixture
+        .client_for(claims("synthetic-author", "zone-b"))
+        .await;
+    for http in [&wrong_owner, &wrong_target] {
+        assert_eq!(
+            download(&http.base_url, &path).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_attachments SET byte_size=byte_size+1",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        download(&fixture.http.base_url, &path)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "live metadata must equal frozen manifest"
+    );
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_attachments SET byte_size=byte_size-1",
+            &[],
+        )
+        .await
+        .unwrap();
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_blobs SET backend_id='different-backend'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        download(&fixture.http.base_url, &path)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_blobs SET backend_id=$1",
+            &[&s3.storage.binding_digest()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        s3.state.requests.load(Ordering::SeqCst),
+        requests,
+        "binding, field, owner and current disclosure refusals precede external reads"
+    );
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification SET verdict='rejected'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        download(&fixture.http.base_url, &path)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "current quarantine conceals saved document link"
+    );
+    assert_eq!(
+        s3.state.requests.load(Ordering::SeqCst),
+        requests,
+        "quarantine admission precedes external read"
+    );
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification SET verdict='approved'",
+            &[],
+        )
+        .await
+        .unwrap();
+    for mode in [1, 2, 3] {
+        s3.state.mode.store(mode, Ordering::SeqCst);
+        assert_eq!(
+            download(&fixture.http.base_url, &path)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable or corrupt bytes never escape"
+        );
+    }
+    s3.state.mode.store(0, Ordering::SeqCst);
+    let revise = client
+        .prepare_proposal(&submitted, "revise", json!({}), &key("review-s3-revise"))
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    let successor = client
+        .upload_proposal_attachment(
+            &revised,
+            "support",
+            "text/plain",
+            b"successor-review-bytes",
+            &key("review-s3-successor-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(worker.run_once().await.unwrap());
+    let successor = client.read_proposal(&successor).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(
+            &successor,
+            "submit",
+            json!({}),
+            &key("review-s3-successor-submit"),
+        )
+        .unwrap();
+    let successor = client.execute_proposal(&submit).await.unwrap().value;
+    let requests = s3.state.requests.load(Ordering::SeqCst);
+    assert_eq!(
+        download(&fixture.http.base_url, &path)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        s3.state.requests.load(Ordering::SeqCst),
+        requests,
+        "a stale link must never fetch successor bytes"
+    );
+    let current: Value = download(
+        &fixture.http.base_url,
+        &format!(
+            "/v1/proposals/{}/review-context?accessProfile=reviewer",
+            successor.id()
+        ),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let current_path = format!(
+        "{}&accessProfile=reviewer",
+        current["context"]["fields"]["document"]["download"]["path"]
+            .as_str()
+            .unwrap()
+    );
+    let cancel = client
+        .prepare_proposal(&successor, "cancel", json!({}), &key("review-s3-cancel"))
+        .unwrap();
+    client.execute_proposal(&cancel).await.unwrap();
+    cleanup(&fixture, s3.storage.clone())
+        .with_verification_policy_for_test(verification.binding_digest())
+        .erase(
+            registry_breg::proposal_retention::ProposalDetailErasureScope {
+                action_id: "correct-name",
+                proposal_id: uuid::Uuid::parse_str(successor.id()).unwrap(),
+                submission_version: 2,
+            },
+        )
+        .await
+        .unwrap();
+    let requests = s3.state.requests.load(Ordering::SeqCst);
+    assert_eq!(
+        download(&fixture.http.base_url, &current_path)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "operator erasure conceals saved current document link"
+    );
+    assert_eq!(s3.state.requests.load(Ordering::SeqCst), requests);
+    drop(wrong_owner);
+    drop(wrong_target);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupted_s3_put_retains_durable_staging_for_operator_cleanup() {
     let s3 = S3Fixture::new().await;
     let storage = s3.storage.clone();

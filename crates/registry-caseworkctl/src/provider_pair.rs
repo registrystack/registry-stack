@@ -209,11 +209,26 @@ pub(super) fn pair(
             .context("provider disappeared")?["description"] = json!(relative);
         let bytes = serde_json::to_vec_pretty(&export)?;
         // Both replacements are prepared before mutation and never change BReg inputs.
-        let policy_bytes = serde_norway::to_string(&document)?;
-        let staged = tempfile::NamedTempFile::new_in(project)?;
-        fs::write(staged.path(), policy_bytes)?;
+        // An existing description already names this exact destination. Leave
+        // authored bytes untouched in that common re-pairing case. Otherwise
+        // normalize the YAML body, retaining its schema modeline and header notes.
+        let staged = if provider.description.as_deref() == Some(relative.as_str()) {
+            None
+        } else {
+            let original = crate::project::read_package_input(&project.join("casework.yaml"))?;
+            let header: String = std::str::from_utf8(&original)?
+                .split_inclusive('\n')
+                .take_while(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
+                .collect();
+            let policy_bytes = format!("{header}{}", serde_norway::to_string(&document)?);
+            let staged = tempfile::NamedTempFile::new_in(project)?;
+            fs::write(staged.path(), policy_bytes)?;
+            Some(staged)
+        };
         fs::write(&file, bytes)?;
-        staged.persist(project.join("casework.yaml"))?;
+        if let Some(staged) = staged {
+            staged.persist(project.join("casework.yaml"))?;
+        }
     }
     Ok(
         json!({"ok":true,"command":"provider pair","applied":apply,"providerId":id,"description":relative,"contract":export.contract,"registryRevision":report["registryRevision"],"readerAuthority":{"profile":provider.service_profiles.get(&registry_casework_core::ReviewContextCapability::ServiceStatus),"operation":"get-review-status","sourceWrites":false},"next":"Bind the provider endpoint and status-reader secret references in runtime.yaml."}),
@@ -223,6 +238,147 @@ pub(super) fn pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pairing_preserves_schema_header_exact_pins_and_existing_description_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = crate::canonical_tempdir();
+        let project = temporary.path().join("review");
+        crate::project::init(&project, "canonical-review").unwrap();
+        let policy_file = project.join("casework.yaml");
+        let with_header_note = fs::read_to_string(&policy_file).unwrap().replacen(
+            '\n',
+            "\n# Retain this offline authoring header.\n",
+            1,
+        );
+        fs::write(&policy_file, with_header_note).unwrap();
+        let original = fs::read(&policy_file).unwrap();
+        let original_value = crate::project::read_project(&project)
+            .unwrap()
+            .document
+            .to_json_value();
+        let package = temporary.path().join("native-package");
+        let relative = "generated/review-context-schemas/correct-address.schema.json";
+        fs::create_dir_all(package.join("generated/review-context-schemas")).unwrap();
+        let schema_bytes = fs::read(project.join("schemas/correct-address.schema.json")).unwrap();
+        let schema: Value = serde_json::from_slice(&schema_bytes).unwrap();
+        fs::write(package.join(relative), &schema_bytes).unwrap();
+        fs::write(
+            package.join("generated/review-context-schemas/index.json"),
+            serde_json::to_vec(&json!({"correct-address":{
+                "id":schema["$id"],"revision":schema["x-registry-definition-revision"],
+                "digest":sha256_uri(&schema_bytes),"path":relative}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let verified = registry_platform_config::write_sum_file(
+            &package,
+            None,
+            &PackageLimits::default(),
+            "bregctl package",
+        )
+        .unwrap();
+        // The fixture CLI supplies only the version/package-check report;
+        // pair still verifies the sealed native bytes and compiled policy.
+        let bregctl = temporary.path().join("bregctl");
+        fs::write(
+            &bregctl,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' 'bregctl {}'\nelse\n  printf '%s\\n' '{{\"ok\":true,\"packageDigest\":\"{}\"}}'\nfi\n",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+                verified.digest()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+        let sums = fs::read(package.join("SHA256SUMS")).unwrap();
+        let untouched = temporary.path().join("outside-destination.txt");
+        fs::write(&untouched, b"preserved").unwrap();
+
+        pair(
+            &project,
+            "facility-proposal-context",
+            &package,
+            "correct-address",
+            &bregctl,
+            false,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&policy_file).unwrap(), original);
+        assert!(!project.join("context-providers").exists());
+        pair(
+            &project,
+            "facility-proposal-context",
+            &package,
+            "correct-address",
+            &bregctl,
+            true,
+        )
+        .unwrap();
+        let paired = fs::read_to_string(&policy_file).unwrap();
+        assert!(paired.starts_with(
+            std::str::from_utf8(&original)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+        ));
+        assert!(paired.contains("# Retain this offline authoring header.\n"));
+        assert!(paired.contains("\napiVersion: "));
+        let description = project.join("context-providers/facility-proposal-context.json");
+        let export: BregContextExport =
+            serde_json::from_slice(&fs::read(&description).unwrap()).unwrap();
+        assert_eq!(export.schema_bytes.as_bytes(), schema_bytes);
+        let mut expected = original_value;
+        expected["contextProviders"][0]["description"] =
+            json!("context-providers/facility-proposal-context.json");
+        assert_eq!(
+            crate::project::read_project(&project)
+                .unwrap()
+                .document
+                .to_json_value(),
+            expected
+        );
+        compare(
+            &project,
+            &package,
+            Some("facility-proposal-context"),
+            &bregctl,
+        )
+        .unwrap();
+
+        let retained = paired.replace(
+            "trustedProducers:",
+            "# Keep this body note when pairing again.\ntrustedProducers:",
+        );
+        fs::write(&policy_file, &retained).unwrap();
+        pair(
+            &project,
+            "facility-proposal-context",
+            &package,
+            "correct-address",
+            &bregctl,
+            true,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&policy_file).unwrap(), retained);
+        assert_eq!(fs::read(package.join("SHA256SUMS")).unwrap(), sums);
+        assert_eq!(fs::read(package.join(relative)).unwrap(), schema_bytes);
+        assert_eq!(fs::read(&untouched).unwrap(), b"preserved");
+
+        fs::write(package.join(relative), b"{}").unwrap();
+        assert!(pair(
+            &project,
+            "facility-proposal-context",
+            &package,
+            "correct-address",
+            &bregctl,
+            true
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&policy_file).unwrap(), retained);
+        assert_eq!(fs::read(&untouched).unwrap(), b"preserved");
+    }
+
     #[test]
     fn native_export_binds_the_context_source_without_a_registry_revision_pin() {
         let temporary = crate::canonical_tempdir();

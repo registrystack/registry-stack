@@ -325,7 +325,7 @@ fn metadata_fixture() -> Value {
         "id": "business-registry",
         "version": "1.2.3",
         "revision": REVISION,
-        "metadataVersion": "1",
+        "metadataVersion": "2",
         "recordTypes": [{
             "id": "company",
             "datasetIdentifier": "legal-entities",

@@ -117,6 +117,8 @@ pub struct MockRegistry {
     /// Whether the metadata also publishes a list of the target entity,
     /// named first among the target field's reference operations.
     target_list_first: AtomicBool,
+    /// Replacement caller-filtered metadata after a package activation.
+    published_metadata: Mutex<Option<Value>>,
     /// How the registry answers the next draft read instead of the draft.
     next_draft_read: Mutex<Option<Injected>>,
     /// A problem the registry answers the next submit with, before any effect.
@@ -186,6 +188,7 @@ impl MockRegistry {
             metadata_response_paused: tokio::sync::Semaphore::new(0),
             release_metadata_response: tokio::sync::Semaphore::new(0),
             target_list_first: AtomicBool::new(false),
+            published_metadata: Mutex::new(None),
             next_draft_read: Mutex::new(None),
             next_submit_problem: Mutex::new(None),
             receipts_expired: AtomicBool::new(false),
@@ -201,6 +204,10 @@ impl MockRegistry {
     /// profile ahead of its get, as a registry exposing both reads does.
     pub fn publish_target_list_first(&self) {
         self.target_list_first.store(true, Ordering::SeqCst);
+    }
+
+    pub fn publish_metadata(&self, metadata: Value) {
+        *self.published_metadata.lock().unwrap() = Some(metadata);
     }
 
     /// Someone else changes `address` itself, leaving every draft naming it
@@ -547,7 +554,11 @@ pub fn metadata() -> Value {
     document["recordTypes"] = json!([{"id":TARGET_ENTITY,"datasetIdentifier":"citizen-address-correction","route":TARGET_ROUTE,
         "schema":format!("/v1/schemas/{TARGET_ENTITY}"),"operations":[{"operation":"get","accessProfile":PROFILE}],"readableFields":TARGET_READABLE}]);
     document["operations"] = json!([target_operation()]);
-    document["proposals"] = json!({"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[PROFILE]}});
+    document["proposals"] = json!({
+        "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[PROFILE]},
+        "actions":[{"actionId":ACTION,"accessProfile":PROFILE,"operations":["get","submit"],
+            "readableInputs":["address","new-address-line","new-locality","new-postal-code","reason","unit"]}]
+    });
     document["actions"][0]["access"]["selectedProfile"] = json!(PROFILE);
     document["actions"][0]
         .as_object_mut()
@@ -570,9 +581,8 @@ pub fn metadata() -> Value {
 }
 
 fn draft_record(identifier: &str, draft: &Draft) -> Value {
-    json!({"id":identifier,"actionId":ACTION,"actionRevision":METADATA_REVISION,"revision":draft.revision,
+    let mut value = json!({"id":identifier,"actionId":ACTION,"actionRevision":METADATA_REVISION,"revision":draft.revision,
     "submissionVersion":draft.submission_version,"state":if draft.submitted {"submitted"} else {"draft"},
-    "effectDigest":EFFECT_DIGEST,
     "input":{"address":draft.target,"newAddressLine":HOSTILE_STREET,"newLocality":PROPOSED_LOCALITY,"newPostalCode":"PS-205","reason":"relocation","unit":null},
     "links":{
         "self":{"method":"GET","path":format!("/v1/proposals/{identifier}"),"operation":"get","accessProfile":PROFILE},
@@ -580,7 +590,11 @@ fn draft_record(identifier: &str, draft: &Draft) -> Value {
             "ifMatch":action_etag(draft.action_generation),"availability":{"available":!draft.submitted,"observedRevision":draft.revision,
                 "reason":if draft.submitted {json!("pending-review")} else {Value::Null},
                 "recovery":if draft.submitted {json!("receipt-only")} else {Value::Null}}}
-    }})
+    }});
+    if draft.submitted {
+        value["effectDigest"] = json!(EFFECT_DIGEST);
+    }
+    value
 }
 
 fn address_record(identifier: &str, address: &Address) -> Value {
@@ -631,7 +645,10 @@ async fn registry_metadata(
         return problem(BRegProblemCode::ResourceNotFound);
     }
     registry.pause_metadata_response_if_requested().await;
-    let metadata = if registry.target_list_first.load(Ordering::SeqCst) {
+    let published = registry.published_metadata.lock().unwrap().clone();
+    let metadata = if let Some(published) = published {
+        published
+    } else if registry.target_list_first.load(Ordering::SeqCst) {
         metadata_with_target_list_first()
     } else {
         metadata()

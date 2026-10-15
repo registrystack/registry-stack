@@ -949,9 +949,6 @@ async fn revision_change_context(
     if provenance_fields.is_empty() {
         return Ok(None);
     }
-    if row.len() < 14 {
-        return Err(ReadServiceError::Unavailable);
-    }
     let Some(commit_position) = row
         .try_get::<_, Option<i64>>(11)
         .map_err(|_| ReadServiceError::Unavailable)?

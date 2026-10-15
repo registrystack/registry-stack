@@ -234,6 +234,8 @@ fn proposal_attachments_require_explicit_bounded_slot_grants() {
         .position(|action| action["id"] == "correct-address")
         .unwrap();
     value["actions"][action_index]["execution"]["proposal"]["attachments"] = json!([{"id":"supporting-file","required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted"}]);
+    value["actions"][action_index]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["supportingDocument"]["slot"] = json!("supporting-file");
     let profile_index = value["accessProfiles"]
         .as_array()
         .unwrap()
@@ -646,6 +648,119 @@ fn review_context_schema_has_exact_bytes_and_no_policy_digest_cycle() {
             .unwrap()
             .revision
     );
+}
+
+#[test]
+fn review_context_document_schema_binds_slot_meaning_and_closed_retained_values() {
+    use registry_breg::{compiler::review_context::compile_schema, contract::parse_project_json};
+    use serde_json::{json, Value};
+    let mut source = project_source();
+    let index = source["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|action| action["id"] == "correct-address")
+        .unwrap();
+    source["actions"][index]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
+        json!({"type":"document","slot":"supporting-document"});
+    let schema_for = |source: &Value| {
+        let registry =
+            compile(&parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap()).unwrap();
+        compile_schema(
+            &registry,
+            registry
+                .actions()
+                .actions
+                .iter()
+                .find(|action| action.id == "correct-address")
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let baseline = schema_for(&source);
+    let schema = &baseline.schema["properties"]["document"];
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(schema)
+        .unwrap();
+    assert!(
+        validator.is_valid(&Value::Null),
+        "absent optional frozen slot"
+    );
+    let value = json!({"type":"document","slotId":"supporting-document","sha256":"a".repeat(64),
+        "contentType":"text/plain","byteSize":2_000_000,
+        "download":{"method":"GET","operation":"get-review-context","accessProfile":"reviewer_one",
+            "path":format!("/v1/proposals/00000000-0000-4000-8000-000000000001/attachments/supporting-document?submissionVersion=1&reviewContextField=document&effectDigest=sha256%3A{}&contextSchemaDigest=sha256%3A{}", "b".repeat(64), "c".repeat(64))}});
+    assert!(
+        validator.is_valid(&value),
+        "retained content need not match today's upload policy"
+    );
+    for (pointer, invalid) in [
+        ("/slotId", json!("other")),
+        ("/sha256", json!("A".repeat(64))),
+        ("/byteSize", json!(0)),
+        ("/byteSize", json!(16 * 1024 * 1024 + 1)),
+        ("/contentType", json!("text/plain; charset=utf-8")),
+        ("/download/operation", json!("get")),
+        ("/download/path", json!("https://other.example/file")),
+    ] {
+        let mut invalid_value = value.clone();
+        *invalid_value.pointer_mut(pointer).unwrap() = invalid;
+        assert!(
+            !validator.is_valid(&invalid_value),
+            "{pointer}: {invalid_value}"
+        );
+    }
+    for pointer in ["", "/download"] {
+        let mut invalid = value.clone();
+        invalid
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("extra".into(), json!(true));
+        assert!(!validator.is_valid(&invalid));
+    }
+    for (key, changed) in [
+        ("classification", json!("internal")),
+        ("maximumBytes", json!(512)),
+        ("contentTypes", json!(["text/plain"])),
+        ("required", json!(true)),
+    ] {
+        let mut changed_source = source.clone();
+        changed_source["actions"][index]["execution"]["proposal"]["attachments"][0][key] = changed;
+        let changed = schema_for(&changed_source);
+        assert_ne!(baseline.revision, changed.revision, "{key}");
+        assert_ne!(baseline.digest, changed.digest, "{key}");
+    }
+    let mut remapped = source.clone();
+    let mut second = remapped["actions"][index]["execution"]["proposal"]["attachments"][0].clone();
+    second["id"] = json!("alternate");
+    remapped["actions"][index]["execution"]["proposal"]["attachments"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    remapped["actions"][index]["execution"]["proposal"]["reviewContext"]["fields"]["document"]
+        ["slot"] = json!("alternate");
+    assert_ne!(baseline.digest, schema_for(&remapped).digest);
+    let mut pinned = source.clone();
+    pinned["actions"][index]["execution"]["proposal"]["review"]["policy"]["version"] = json!("1");
+    pinned["actions"][index]["execution"]["proposal"]["review"]["policy"]["digest"] =
+        json!(format!("sha256:{}", "d".repeat(64)));
+    assert_eq!(baseline.bytes, schema_for(&pinned).bytes);
+    source["actions"][index]["execution"]["proposal"]["reviewContext"]["fields"]["document"]
+        ["slot"] = json!("unknown");
+    assert!(
+        compile(&parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap())
+            .unwrap_err()
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.proposal.context-mapping-invalid")
+    );
+    source["actions"][index]["execution"]["proposal"]["reviewContext"]["fields"]["document"]
+        ["extra"] = json!(true);
+    assert!(parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err());
 }
 #[test]
 fn immediate_mode_cannot_bypass_target_proposal_policy() {
@@ -1406,4 +1521,102 @@ fn frozen_change_projection_requires_explicit_unique_existing_fields() {
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err(),
         "one context field has one source"
     );
+}
+
+#[test]
+fn retired_authoring_keys_point_to_governed_replacements() {
+    use registry_breg::contract::{read_module_yaml, read_project_yaml};
+    use serde_json::json;
+
+    let retired = json!({
+        "changeControl": {"requiredFor": ["patch"]},
+        "changeRequest": {},
+        "accessProfiles": [{"requestVisibility": "owner", "readableRequestFields": ["reason"]}]
+    });
+    let actions = json!([{
+        "commitGuards": {"targets": [{"equalsInput": "reason"}]},
+        "plan": {"type": "fixed", "effects": [{"set": {"reason": {"fromField": "reason"}}}]}
+    }]);
+    let mut project = project_source();
+    project["recordTypes"][0] = retired.clone();
+    project["actions"] = actions.clone();
+    let report =
+        read_project_yaml("registry.json", &serde_json::to_vec(&project).unwrap()).unwrap_err();
+    for (path, replacement) in [
+        ("/recordTypes/0/changeControl", "mutationPolicy"),
+        ("/recordTypes/0/changeRequest", "execution.proposal"),
+        (
+            "/recordTypes/0/accessProfiles/0/requestVisibility",
+            "ownership: caller",
+        ),
+        (
+            "/recordTypes/0/accessProfiles/0/readableRequestFields",
+            "readableInputs",
+        ),
+        (
+            "/actions/0/commitGuards/targets/0/equalsInput",
+            "equalsFromInput",
+        ),
+        (
+            "/actions/0/plan/effects/0/set/reason/fromField",
+            "fromInput",
+        ),
+    ] {
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|d| d.path == path)
+            .unwrap();
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(
+            diagnostic.suggested_action.contains(replacement),
+            "{}",
+            report.render_human()
+        );
+    }
+    let module = json!({"apiVersion": "id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind": "BRegModule", "recordTypes": [retired.clone()], "extendRecordTypes": [retired], "actions": actions});
+    let report =
+        read_module_yaml("module.json", &serde_json::to_vec(&module).unwrap()).unwrap_err();
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .all(|d| d.code == "config.removed-key"),
+        "{}",
+        report.render_human()
+    );
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|d| d.path == "/extendRecordTypes/0/changeControl"
+            && d.suggested_action.contains("mutationPolicy")));
+}
+
+#[test]
+fn retired_request_hook_points_to_proposal_observers() {
+    use registry_breg::contract::read_project_yaml;
+    use serde_json::json;
+    let mut project = project_source();
+    project["recordTypes"][0]["hooks"] = json!([{
+        "id": "observe-lifecycle", "phase": "after", "trigger": "request-lifecycle", "projection": []
+    }]);
+    let report =
+        read_project_yaml("registry.json", &serde_json::to_vec(&project).unwrap()).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|d| d.path == "/recordTypes/0/hooks/0/trigger")
+        .unwrap();
+    assert!(
+        diagnostic
+            .suggested_action
+            .contains("execution.proposal.hooks"),
+        "{}",
+        report.render_human()
+    );
+    assert!(diagnostic.suggested_action.contains("transitions"));
+    // The same authored hook still accepts its committed Record trigger.
+    project["recordTypes"][0]["hooks"][0]["trigger"] = json!("created");
+    read_project_yaml("registry.json", &serde_json::to_vec(&project).unwrap()).unwrap();
 }

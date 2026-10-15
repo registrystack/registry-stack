@@ -1369,8 +1369,8 @@ def classify(
                 }
             )
 
-    # The PostgreSQL lane starts the real Evidence service. This is an
-    # integration test edge, not a production runtime Cargo dependency.
+    # The PostgreSQL lane starts real Evidence and the native citizen journey.
+    # Their test-only edges are not production runtime Cargo dependencies.
     breg_contracts = (
         registry_record_cross_product
         or bool(affected & BREG_PACKAGES)
@@ -1381,6 +1381,7 @@ def classify(
                 "crates/registry-casework/src/**",
                 "crates/registry-casework-core/src/task_grant.rs",
                 "crates/registry-thunderid-tooling/**",
+                "crates/registry-coordinator/tests/support/breg_service.rs",
             )
             for path in paths
         )

@@ -10,7 +10,7 @@ const targetId = '00000000-0000-4000-8000-000000000001';
 const applicationId = '00000000-0000-4000-8000-000000000002';
 const metadata = {
   id: 'fixture-registry', version: '1',
-  revision: `sha256:${'a'.repeat(64)}`, metadataVersion: '1', recordTypes: [], operations: [],
+  revision: `sha256:${'a'.repeat(64)}`, metadataVersion: '2', recordTypes: [], operations: [],
   actions: [{
     id: 'update-item', apiName: 'updateItem', revision: `sha256:${'b'.repeat(64)}`, display: {}, execution: {mode: 'immediate'}, route: '/v1/actions/update-item',
     conditionRoute: '/v1/actions/update-item/target-conditions',

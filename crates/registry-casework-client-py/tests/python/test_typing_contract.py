@@ -24,6 +24,16 @@ class TypingContractTests(unittest.TestCase):
         fields = {node.target.id: ast.unparse(node.annotation) for node in classes["PolicyIdSelection"].body if isinstance(node, ast.AnnAssign)}
         self.assertEqual(fields, {"id": "str", "version": "NotRequired[Never]", "digest": "NotRequired[Never]"})
 
+    def test_staffing_notices_use_the_same_optional_closed_type(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
+        self.assertNotIn("AssignmentContext", classes)
+        alias = next(node.value for node in module.body if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "StaffingDiagnostic")
+        self.assertEqual(ast.unparse(alias), "Literal['no-cover-available']")
+        for name in ("_ReviewTaskOptional", "_SupervisoryReviewTaskOptional"):
+            fields = {node.target.id: ast.unparse(node.annotation) for node in classes[name].body if isinstance(node, ast.AnnAssign)}
+            self.assertEqual(fields["staffingDiagnostic"], "StaffingDiagnostic")
+
     def test_task_grant_reads_name_the_optional_source_profile(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
         client = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "CaseworkClient")
@@ -124,7 +134,7 @@ class TypingContractTests(unittest.TestCase):
         }
         self.assertEqual(
             optional_task_fields,
-            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str"},
+            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str", "staffingDiagnostic": "StaffingDiagnostic"},
         )
         self.assertEqual(
             ast.unparse(aliases["ReviewTaskOwnership"].value),

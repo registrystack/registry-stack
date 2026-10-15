@@ -14,7 +14,8 @@ caseworkctl provider pair ./review --provider-id facility-proposal-context \
   --breg-package BREG_PACKAGE --action-id correct-address --apply
 ```
 
-Pairing imports the exact source, Action, context contract and schema bytes.
+Pairing verifies the native source, Action and context contract against the
+already vendored schema and exact pins, then writes the provider description.
 The registry revision is diagnostic metadata; unrelated package changes do not
 change the accepted context binding. Configure `runtime.yaml` with
 `contextProviders.facility-registry`

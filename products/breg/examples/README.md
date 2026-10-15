@@ -80,5 +80,5 @@ contain the canonical contracts. The latter includes generated TypeScript and
 Python project types used by `facility/console/`; the console tests use metadata
 and generated clients rather than lifecycle URL construction.
 
-For a locally deployed service, the maintained [development runbook](../../DEV.md)
+For a locally deployed service, the maintained [development runbook](../DEV.md)
 owns PostgreSQL, authentication, package activation and the `bregctl dev` lifecycle.

@@ -131,9 +131,16 @@
                 "id",
                 "apiName",
                 "schema",
+                "fieldType",
                 "required",
                 "classification"
               ],
+              "properties": {
+                "fieldType": {
+                  "type": "object",
+                  "x-registry-passthrough": "The compiled FieldTypeSource, as in query field summaries; its internal shape follows the engine's field type contract."
+                }
+              },
               "x-registry-passthrough": "Normalized logical field schema and effective classification; compiler-owned metadata."
             }
           },
