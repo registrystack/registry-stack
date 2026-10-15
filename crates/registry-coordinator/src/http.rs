@@ -122,8 +122,8 @@ pub fn router(state: HttpState) -> Router {
             registry_review_protocol::REVIEW_COMPLETIONS_PATH,
             post(review_completion),
         )
-        .with_state(state.clone());
-    http_edge(routes.merge(crate::review_provider::router().with_state(state)))
+        .with_state(state);
+    http_edge(routes)
 }
 fn http_edge(router: Router) -> Router {
     router
@@ -692,13 +692,6 @@ mod problem_tests {
                 if status.starts_with('2') || ["live", "ready"].contains(&id) && status == "503" {
                     continue;
                 }
-                if id == "reviewResult" && ["404", "410"].contains(&status.as_str()) {
-                    assert!(
-                        response.get("content").is_none(),
-                        "{id} {status} is bodyless"
-                    );
-                    continue;
-                }
                 let schema = &response["content"]["application/problem+json"]["schema"];
                 let expected = "#/components/schemas/Problem";
                 assert_eq!(schema["allOf"][0]["$ref"], expected, "{id} {status}");
@@ -868,7 +861,7 @@ async fn workflow_contract(
         c.authorize(Action::Start, Some(&workflow))?;
         let package = s.workflows.get(&workflow).ok_or_else(|| CoordinatorError::new("workflow-absent", "this deployment does not serve the named workflow"))?;
         deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
-        Ok(json!({"workflow":package.definition.workflow.id, "workflowRevision":package.definition.digest, "input":package.definition.workflow.input, "outcomes":package.definition.workflow.outcomes, "reviewPolicy":crate::review_provider::policy_binding(&package.definition.workflow,&package.definition.digest)?}))
+        Ok(json!({"workflow":package.definition.workflow.id, "workflowRevision":package.definition.digest, "input":package.definition.workflow.input, "outcomes":package.definition.workflow.outcomes}))
     }.await)
 }
 
@@ -1627,5 +1620,5 @@ pub fn openapi() -> Value {
       "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"}}}
     });
     admission_contracts::extend(&mut paths, &mut schemas);
-    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary, except the shared Review result protocol's bodyless not-found and expired responses."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."},"eventSource":{"type":"apiKey","in":"header","name":"X-Registry-Signature","description":"The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens."}},"schemas":schemas},"paths":paths})
+    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."},"eventSource":{"type":"apiKey","in":"header","name":"X-Registry-Signature","description":"The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens."}},"schemas":schemas},"paths":paths})
 }

@@ -145,8 +145,11 @@ fn refusal(outcome: CallOutcome, expected: &str) {
     }
 }
 
+/// The applicant drives a Proposal in the Base Registry Engine. A pin to a
+/// Proposal Action is refused before any mutation request, even when the live
+/// contract still declares the same Proposal Action.
 #[tokio::test]
-async fn proposal_mode_starts_only_a_draft_and_retains_the_exact_action_pin() {
+async fn a_proposal_mode_pin_is_refused_before_any_mutation_request() {
     let server = MockServer::start().await;
     let mut contract = metadata();
     let action = &mut contract["actions"][0];
@@ -161,46 +164,19 @@ async fn proposal_mode_starts_only_a_draft_and_retains_the_exact_action_pin() {
         .respond_with(response(contract))
         .mount(&server)
         .await;
-    let draft = json!({"id":APPLICATION,"actionId":"update-item","actionRevision":FINGERPRINT,
-        "submissionVersion":1,"revision":1,"state":"draft",
-        "links":{"self":{"method":"GET","path":format!("/v1/proposals/{APPLICATION}"),"accessProfile":"writer","operation":"get"}}});
-    let returned = Arc::new(Mutex::new(draft.clone()));
-    let peer = returned.clone();
-    Mock::given(method("POST"))
-        .and(path("/tenant/base/v1/actions/update-item"))
-        .respond_with(move |_: &wiremock::Request| response(peer.lock().unwrap().clone()))
-        .expect(2)
-        .mount(&server)
-        .await;
     let client = client(&server, Arc::new(CountingToken::default()));
     let mut command = request();
     command.operation_contract.as_mut().unwrap().mode = BRegActionMode::Proposal;
-    let prepared = prepare(&client, "writer", &command)
-        .await
-        .unwrap_or_else(|_| panic!("prepare proposal"));
-    match execute(&client, "writer", &command, &prepared).await {
-        CallOutcome::Success(value) => assert_eq!(value, json!({"proposal":draft})),
-        _ => panic!("proposal start returns draft, never an application receipt"),
+    match prepare(&client, "writer", &command).await {
+        Err(outcome) => refusal(outcome, "action-unavailable"),
+        Ok(_) => panic!("a Proposal Action pin is refused"),
     }
-    *returned.lock().unwrap() = receipt();
-    assert!(
-        matches!(
-            execute(&client, "writer", &command, &prepared).await,
-            CallOutcome::Uncertain { .. }
-        ),
-        "a successful status with another operation's result cannot prove draft creation"
-    );
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| request.method == "POST")
-            .count(),
-        2
-    );
-    assert!(requests
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
         .iter()
-        .all(|request| !request.url.path().ends_with("/submit")));
+        .all(|request| request.method == "GET"));
 }
 
 #[tokio::test]

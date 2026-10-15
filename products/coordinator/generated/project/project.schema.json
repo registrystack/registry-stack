@@ -542,10 +542,6 @@
           },
           "type": "object"
         },
-        "review": {
-          "$ref": "#/$defs/ReviewPolicy",
-          "description": "Exposes this Workflow as an exact product-neutral Review policy."
-        },
         "start": {
           "$ref": "#/$defs/LocalId",
           "description": "The stable Step ID every Run begins at."
@@ -710,12 +706,7 @@
         "external.get/v1",
         "evaluation.evaluate/v1",
         "casework.submit-review-request/v1",
-        "casework.cancel-review-request/v1",
-        "breg.submit-proposal/v1",
-        "breg.apply-proposal/v1",
-        "breg.retry-proposal/v1",
-        "breg.cancel-proposal/v1",
-        "breg.read-review-context/v1"
+        "casework.cancel-review-request/v1"
       ],
       "type": "string"
     },
@@ -801,65 +792,6 @@
           "type": "object"
         }
       ]
-    },
-    "ReviewOutcome": {
-      "additionalProperties": false,
-      "description": "An authored terminal Workflow outcome has exactly one Review meaning.",
-      "properties": {
-        "outcome": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "Authored outcome code required for rejected, changes-requested and\nanswered statuses; omit it for approved, cancelled and superseded."
-        },
-        "status": {
-          "$ref": "#/$defs/ReviewResultStatus",
-          "description": "Shared terminal Review status emitted for this completed Workflow outcome."
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "ReviewPolicy": {
-      "additionalProperties": false,
-      "description": "Fixed Review meanings and result availability for this Workflow revision.",
-      "properties": {
-        "outcomes": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ReviewOutcome"
-          },
-          "description": "Map every declared Workflow outcome exactly once to its Review status\nand optional outcome code. Workflow completion alone grants no approval.",
-          "maxProperties": 64,
-          "minProperties": 1,
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "resultRetentionSeconds": {
-          "default": 86400,
-          "description": "Seconds a terminal Review result remains available after completion.\nDefaults to one day; reads and cancellation never renew this window.",
-          "format": "uint32",
-          "maximum": 31536000,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "outcomes"
-      ],
-      "type": "object"
-    },
-    "ReviewResultStatus": {
-      "enum": [
-        "approved",
-        "rejected",
-        "changes-requested",
-        "answered",
-        "cancelled",
-        "superseded"
-      ],
-      "type": "string"
     },
     "Schema": {
       "description": "A whole JSON Schema or one compile-time schema reference. Schema keywords\nretain their independently owned JSON Schema spelling.",

@@ -165,10 +165,8 @@ impl Store {
                 Some(runtime),
                 expected_revision,
                 None,
-                None,
             )
             .await
-            .map(|admission| admission.run_id)
         })
         .await
     }
@@ -197,11 +195,9 @@ impl Store {
                 binding,
                 Some(runtime),
                 &definition.digest,
-                None,
                 Some((event_binding, trigger)),
             )
             .await
-            .map(|admission| admission.run_id)
         })
         .await
     }
@@ -574,7 +570,7 @@ impl Store {
             .collect();
         let counts=tx.query_one(&format!("SELECT count(*) FILTER(WHERE uncertain),min(next_attempt_at) FILTER(WHERE state='pending') FROM {}.jobs",self.namespace),&[]).await.map_err(unavailable)?;
         let retained = tx.query_one(&format!(
-            "SELECT count(*),min(r.completed_at) FROM {}.runs r WHERE {} AND r.payload_erased_at IS NULL AND r.completed_at IS NOT NULL AND NOT r.restore_review_required AND (r.review_available_until IS NULL OR r.review_available_until<=transaction_timestamp())",
+            "SELECT count(*),min(r.completed_at) FROM {}.runs r WHERE {} AND r.payload_erased_at IS NULL AND r.completed_at IS NOT NULL AND NOT r.restore_review_required",
             self.namespace, self.terminal_retention_predicate()), &[]).await.map_err(unavailable)?;
         Ok(DoctorStatus {
             database_id: row.get(0),
@@ -945,16 +941,16 @@ impl Store {
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             let database_now:DateTime<Utc>=tx.query_one("SELECT transaction_timestamp()",&[]).await.map_err(unavailable)?.get(0);
             if before>database_now{return Err(refused("retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
-            let rows=tx.query(&format!("SELECT r.run_id FROM {}.runs r WHERE r.completed_at<$1 AND {} AND r.payload_erased_at IS NULL AND NOT r.restore_review_required AND (r.review_available_until IS NULL OR r.review_available_until<=transaction_timestamp()) ORDER BY r.completed_at,r.run_id LIMIT $2",self.namespace,self.terminal_retention_predicate()),&[&before,&i64::from(limit)]).await.map_err(unavailable)?;
+            let rows=tx.query(&format!("SELECT r.run_id FROM {}.runs r WHERE r.completed_at<$1 AND {} AND r.payload_erased_at IS NULL AND NOT r.restore_review_required ORDER BY r.completed_at,r.run_id LIMIT $2",self.namespace,self.terminal_retention_predicate()),&[&before,&i64::from(limit)]).await.map_err(unavailable)?;
             let mut erased=0;
             for row in &rows {
                 let run:Uuid=row.get(0);
                 // Same job-then-run order as Dispatch and cancellation. Recheck
                 // eligibility after locking; a stale candidate is never erased.
                 tx.query(&format!("SELECT step FROM {}.jobs WHERE run_id=$1 ORDER BY step FOR UPDATE",self.namespace),&[&run]).await.map_err(unavailable)?;
-                let eligible=tx.query_opt(&format!("SELECT run_id FROM {}.runs r WHERE run_id=$1 AND completed_at<$2 AND {} AND payload_erased_at IS NULL AND NOT restore_review_required AND (review_available_until IS NULL OR review_available_until<=transaction_timestamp()) FOR UPDATE",self.namespace,self.terminal_retention_predicate()),&[&run,&before]).await.map_err(unavailable)?;
+                let eligible=tx.query_opt(&format!("SELECT run_id FROM {}.runs r WHERE run_id=$1 AND completed_at<$2 AND {} AND payload_erased_at IS NULL AND NOT restore_review_required FOR UPDATE",self.namespace,self.terminal_retention_predicate()),&[&run,&before]).await.map_err(unavailable)?;
                 if eligible.is_none(){continue;}
-                tx.execute(&format!("UPDATE {}.runs SET snapshot=NULL,input=NULL,outputs=NULL,terminal_output=NULL,review=NULL,payload_erased_at=transaction_timestamp() WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
+                tx.execute(&format!("UPDATE {}.runs SET snapshot=NULL,input=NULL,outputs=NULL,terminal_output=NULL,payload_erased_at=transaction_timestamp() WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 tx.execute(&format!("UPDATE {}.jobs SET command=NULL WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 tx.execute(&format!("DELETE FROM {}.completion_waits WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 erased+=1;

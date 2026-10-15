@@ -256,9 +256,6 @@ struct AuthoredWorkflow {
     /// Optional authenticated product-event starts keyed by stable trigger ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     event_triggers: BTreeMap<LocalId, AuthoredEventTrigger>,
-    /// Exposes this Workflow as an exact product-neutral Review policy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    review: Option<crate::review_provider::ReviewPolicy>,
     /// The typed Workflow start input, or a mapping supplying the called Operation input.
     input: Schema,
     /// Maximum seconds from Run admission to expiry, from 1 to 31536000.
@@ -764,16 +761,6 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 },
             );
         }
-        if uses == Operation::SubmitBregProposal {
-            completions.insert(
-                "application".into(),
-                CompletionDefinition {
-                    kind: CompletionKind::BregApplication {},
-                    output: crate::contracts::breg_application_schema().clone(),
-                    revision: String::new(),
-                },
-            );
-        }
         authored_completions.insert(id.clone(), operation.completions);
         operations.insert(
             id,
@@ -1076,7 +1063,6 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         start: project.workflow.start.into_string(),
         steps,
         outcomes,
-        review: project.workflow.review,
         event_triggers,
     })
 }

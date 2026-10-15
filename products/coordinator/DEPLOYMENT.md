@@ -544,8 +544,8 @@ credentials, and does not migrate, activate or change recovery holds. JSON outpu
 returns `status: checked`, `databaseId`, `workflowsDigest`, `workflows` (each workflow's
 package digest), `schemaVersion`,
 `runtimeRole` and the checked `active` activation. Refused checks exit nonzero
-with `deployment.refused` for deployment-contract refusals or
-`live-binding-conflict` for incompatible retained bindings, with operator recovery
+with `coordinator.deployment.refused` for deployment-contract refusals or
+`coordinator.command.live-binding-conflict` for incompatible retained bindings, with operator recovery
 advice. This report does not
 replace the service's audit and recovery readiness checks.
 
@@ -595,8 +595,8 @@ Adding an unrelated logical connection does not change a workflow binding digest
 Reusing an idempotency key returns the original run rather than creating new work.
 
 This source version creates protected state schema version 4. Earlier protected
-state layouts are refused: apply reports `schema-version`, and runtime state
-access, including `deployment-status`, fails closed as `store-unavailable`.
+state layouts are refused: apply reports `coordinator.command.schema-version`, and runtime state
+access, including `deployment-status`, fails closed as `coordinator.command.store-unavailable`.
 Apply does not adopt or rewrite them. Settle retained work with its matching
 binary, then create a fresh namespace and database identity for this version.
 Keep the original keys, packages, and audit history until retention permits
@@ -781,10 +781,9 @@ workflows. `limit` takes 1 to 100 and defaults to 20. Use `state` to filter by e
 permissions. The order is admission time and run ID, newest first. Keep the run ID a
 start returns for direct lookup with `GET /v1/runs/{run}`. Use the
 authenticated HTTP API for application integration, through the maintained
-Coordinator client where one fits: `registry_stack_client::coordinator` in
-Rust, or the `coordinator` namespace of the unified Node.js and Python
-clients, which published packages carry from the release that admits the
-Coordinator. The client resends an admission whose outcome is unknown only
+Coordinator client where one fits: the `registry-coordinator-client` Rust
+crate, or its Node.js and Python bindings built from source. The unified
+Registry Stack clients do not yet carry the Coordinator. The client resends an admission whose outcome is unknown only
 under its original key; retain that key through recovery, as with the key file.
 
 Settled terminal history remains inspectable with its recorded binding identity
@@ -873,9 +872,9 @@ it keeps one; after that the step reports an expired receipt and the effect
 stays unresolved.
 
 A `wait-for` observes a named completion, correlated to an earlier accepted call.
-Casework exposes `result`; BReg Proposal submission exposes `application`; external GET can
+Casework exposes `result`; external GET can
 expose an authored bounded-poll completion. These observations are read-only and spend no
-mutation attempt. Pending Casework and BReg reads default to 900 seconds. Casework allows
+mutation attempt. Pending Casework reads default to 900 seconds. Casework allows
 `resultCheckSeconds` from 60 to 86,400 seconds; an external completion declares `intervalSeconds`.
 
 The durable read floor is at least 30 seconds. Top-level `minimumObservationIntervalSeconds`
@@ -888,7 +887,7 @@ Transient outages leave observations pending within the original deadline. Inval
 blocked, or mismatched evidence holds the wait for investigation; it cannot route as a negative
 business outcome. `retry-same` retains the same completion identity, floor, and timeout.
 An ended wait cannot be restarted. Timeout can take `onTimeout`, or report `wait-timed-out`.
-It neither cancels a Proposal nor establishes that BReg failed to apply one.
+It does not cancel work in the owning product.
 
 An optional `onCancel` takes an authored forward cleanup path. An active read records the intent
 and routes when the lease settles or expires. Repeating cancellation preserves cleanup.

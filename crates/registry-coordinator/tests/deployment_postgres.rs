@@ -1174,15 +1174,6 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                 "POST",
                 "/v1/runs/00000000-0000-4000-8000-000000000001/retry-same",
             ),
-            ("POST", "/v1/review-requests"),
-            (
-                "GET",
-                "/v1/review-requests/00000000-0000-4000-8000-000000000001",
-            ),
-            (
-                "POST",
-                "/v1/review-requests/00000000-0000-4000-8000-000000000001/cancel",
-            ),
         ] {
             let response = http
                 .request(method.parse().unwrap(), format!("{origin}{path}"))
@@ -4705,13 +4696,8 @@ async fn restoring_a_two_flow_backup_keeps_every_flow_and_its_runs() {
 #[tokio::test]
 #[ignore = "requires built Node/Python bindings, TypeScript compiler, and Pyright"]
 async fn generated_typed_clients_start_get_and_cancel_real_runs() {
-    generated_typed_client_journeys(&[
-        "delayed-follow-up",
-        "external-job",
-        "standalone-review",
-        "proposal-follow-up",
-    ])
-    .await;
+    generated_typed_client_journeys(&["delayed-follow-up", "external-job", "standalone-review"])
+        .await;
 }
 
 #[tokio::test]
@@ -4761,9 +4747,6 @@ async fn generated_typed_client_journeys(projects: &[&str]) {
                 serde_json::to_value(&external.connections["jobs"]).unwrap();
             f.doc["connections"]["jobs"]["baseUrl"] = json!(jobs.as_ref().unwrap().uri());
         }
-        if workflow == "proposal-follow-up" {
-            f.doc["connections"]["facilities"] = f.doc["connections"]["applications"].clone();
-        }
         if workflow == "standalone-review" {
             let authorization = f.doc["connections"]["applications"]["authorization"].clone();
             f.doc["connections"]["review"] = json!({
@@ -4790,7 +4773,7 @@ async fn generated_typed_client_journeys(projects: &[&str]) {
                 json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()})
             }
             "external-job" => json!({"jobId":"sdk-synthetic-job"}),
-            "standalone-review" | "proposal-follow-up" => serde_json::from_slice(
+            "standalone-review" => serde_json::from_slice(
                 &fs::read(examples.join(workflow).join("input.json")).unwrap(),
             )
             .unwrap(),
@@ -4825,8 +4808,8 @@ export function jobId(value: Outcome): string {
         let modules = directory.join("node_modules/@registrystack");
         fs::create_dir_all(&modules).unwrap();
         std::os::unix::fs::symlink(
-            repository.join("crates/registry-stack-client-node"),
-            modules.join("client"),
+            repository.join("crates/registry-coordinator-client-node"),
+            modules.join("coordinator-client-native"),
         )
         .unwrap();
         let tsc = std::env::var("COORDINATOR_SDK_TSC")
@@ -4940,13 +4923,8 @@ assert cancelled['status']['state'] == 'cancelled'
 "#,
         )
         .unwrap();
-        let python_types = directory.join("python-types/registry_client/coordinator");
+        let python_types = directory.join("python-types/registry_coordinator_client");
         fs::create_dir_all(&python_types).unwrap();
-        fs::write(
-            directory.join("python-types/registry_client/__init__.pyi"),
-            "",
-        )
-        .unwrap();
         std::os::unix::fs::symlink(
             repository.join("crates/registry-coordinator-client-py/python/registry_coordinator_client/__init__.pyi"),
             python_types.join("__init__.pyi"),

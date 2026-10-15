@@ -302,7 +302,11 @@ async fn harness() -> Harness {
     );
     store.migrate().await.expect("isolated migration");
     let project = tempfile::tempdir().expect("project");
-    std::fs::write(project.path().join("facilities.json"), include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json")).unwrap();
+    std::fs::write(
+        project.path().join("facilities.json"),
+        include_str!("fixtures/breg-contracts/facilities.contract.json"),
+    )
+    .unwrap();
     std::fs::write(project.path().join("applications.json"), include_str!("../../../products/coordinator/examples/governed-action-follow-up/generated/applications.contract.json")).unwrap();
     std::fs::write(project.path().join("workflow.yaml"), WORKFLOW).expect("workflow");
     std::fs::write(project.path().join("functions.rhai"), FUNCTIONS).expect("functions");

@@ -86,14 +86,6 @@ impl OperationDescriptor {
                 "authenticatedWake":true,
                 "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
             }),
-            id if id == Operation::SubmitBregProposal.as_str() => json!({
-                "name":"application", "profile":"breg-application",
-                "acceptedBinding":["id","actionId","actionRevision","submissionVersion","effectDigest"],
-                "authority":"current-proposal-get-profile",
-                "terminalEvidence":"exact-application-evidence-or-cancelled-proposal",
-                "authenticatedWake":false,
-                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
-            }),
             id if id == Operation::ExternalGet.as_str() => json!({
                 "profile":"bounded-poll", "specializationRequired":true,
                 "acceptedBinding":["saved-command"],
@@ -260,11 +252,6 @@ macro_rules! operation_catalog {
             EvaluateDecision => "evaluation.evaluate/v1", evaluation("evaluation"), evaluate;
             SubmitReviewRequest => "casework.submit-review-request/v1", mutation("casework", false, false), submit_review_request;
             CancelReviewRequest => "casework.cancel-review-request/v1", mutation("casework", false, false), cancel_review_request;
-            SubmitBregProposal => "breg.submit-proposal/v1", mutation("breg", false, true), breg_proposal;
-            ApplyBregProposal => "breg.apply-proposal/v1", mutation("breg", false, true), breg_proposal;
-            RetryBregProposal => "breg.retry-proposal/v1", mutation("breg", false, true), breg_proposal;
-            CancelBregProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), breg_proposal;
-            ReadBregReviewContext => "breg.read-review-context/v1", read("breg"), read_breg_review_context;
         }
     };
 }
@@ -303,30 +290,9 @@ pub fn failure_code(code: &str) -> Option<&'static str> {
         "review-result-expired" => Some("review-result-expired"),
         "completion-unusable-retry-after" => Some("completion-unusable-retry-after"),
         "external-unusable-retry-after" => Some("external-unusable-retry-after"),
-        "submission-stale" => Some("submission-stale"),
-        "submission-missing" => Some("submission-missing"),
-        "application-evidence-missing" => Some("application-evidence-missing"),
-        "application-binding-mismatch" => Some("application-binding-mismatch"),
         "action-contract-changed" => Some("action-contract-changed"),
         "action-contract-missing" => Some("action-contract-missing"),
         "target-conditions-mismatch" => Some("target-conditions-mismatch"),
-        "proposal-unavailable" => Some("proposal-unavailable"),
-        "proposal-binding-mismatch" => Some("proposal-binding-mismatch"),
-        "proposal-revision-changed" => Some("proposal-revision-changed"),
-        "proposal-not-draft" => Some("proposal-not-draft"),
-        "proposal-not-visible" => Some("proposal-not-visible"),
-        "proposal-blocked" => Some("proposal-blocked"),
-        "proposal-contract-changed" => Some("proposal-contract-changed"),
-        "proposal-review-unavailable" => Some("proposal-review-unavailable"),
-        "proposal-dependency-outage" => Some("proposal-dependency-outage"),
-        "proposal-lease-expired" => Some("proposal-lease-expired"),
-        "proposal-application-refused" => Some("proposal-application-refused"),
-        "proposal-attempts-exhausted" => Some("proposal-attempts-exhausted"),
-        "observation-backoff-unusable" => Some("observation-backoff-unusable"),
-        "application-blocked" => Some("application-blocked"),
-        "proposal-unknown" => Some("proposal-unknown"),
-        "application-status-invalid" => Some("application-status-invalid"),
-        "retry-after-invalid" => Some("retry-after-invalid"),
         "action-unavailable" => Some("action-unavailable"),
         "prepared-command-mismatch" => Some("prepared-command-mismatch"),
         "external-invalid-command" => Some("external-invalid-command"),
@@ -374,14 +340,6 @@ mod tests {
             (
                 Operation::CancelReviewRequest,
                 "casework.cancel-review-request/v1",
-            ),
-            (Operation::SubmitBregProposal, "breg.submit-proposal/v1"),
-            (Operation::ApplyBregProposal, "breg.apply-proposal/v1"),
-            (Operation::RetryBregProposal, "breg.retry-proposal/v1"),
-            (Operation::CancelBregProposal, "breg.cancel-proposal/v1"),
-            (
-                Operation::ReadBregReviewContext,
-                "breg.read-review-context/v1",
             ),
         ];
         assert_eq!(

@@ -120,6 +120,11 @@ async fn binding(
     if action.definition_revision() != expected.action_revision || action.mode() != expected.mode {
         return Err(refused("action-contract-changed"));
     }
+    // The applicant drives a Proposal in the Base Registry Engine; this
+    // operation invokes only immediate Actions.
+    if action.mode() == BRegActionMode::Proposal {
+        return Err(refused("action-unavailable"));
+    }
     Ok(action)
 }
 
@@ -209,25 +214,6 @@ pub async fn execute(
         Ok(invocation) => invocation,
         Err(_) => return refused("prepared-command-mismatch"),
     };
-    if action.mode() == BRegActionMode::Proposal {
-        return match client.start_proposal(&action, &invocation, &key).await {
-            Ok(answer)
-                if answer.value.state() != registry_breg_client::BRegProposalState::Draft
-                    || answer.value.application().is_some() =>
-            {
-                CallOutcome::Uncertain {
-                    code: "invalid-response".into(),
-                }
-            }
-            Ok(answer) => match serde_json::to_value(answer.value) {
-                Ok(proposal) => CallOutcome::Success(serde_json::json!({"proposal":proposal})),
-                Err(_) => CallOutcome::Uncertain {
-                    code: "invalid-response".into(),
-                },
-            },
-            Err(error) => failure(error, true),
-        };
-    }
     match client.invoke_action(&action, &invocation, &key).await {
         Ok(answer) => match serde_json::to_value(answer.value) {
             Ok(value) => CallOutcome::Success(value),

@@ -68,8 +68,6 @@ pub struct Workflow {
     pub start: String,
     pub steps: BTreeMap<String, Step>,
     pub outcomes: BTreeMap<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review: Option<crate::review_provider::ReviewPolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub event_triggers: BTreeMap<String, crate::event_trigger::EventTrigger>,
 }
@@ -266,7 +264,6 @@ pub struct CompletionDefinition {
 )]
 pub enum CompletionKind {
     CaseworkResult {},
-    BregApplication {},
     BoundedPoll {
         interpret: String,
         interval_seconds: u32,
@@ -1189,10 +1186,6 @@ fn semantic_revision(snapshot: &Snapshot) -> Result<String> {
         semantic["eventTriggers"] =
             serde_json::to_value(&flow.event_triggers).map_err(|_| fail("definition.canonical"))?;
     }
-    if let Some(review) = &flow.review {
-        semantic["review"] =
-            serde_json::to_value(review).map_err(|_| fail("definition.canonical"))?;
-    }
     let bytes = registry_platform_canonical_json::canonicalize_json(&semantic)
         .map_err(|_| fail("definition.canonical"))?;
     Ok(sha256_uri(&bytes))
@@ -1299,11 +1292,6 @@ pub(crate) fn offered(product: &str) -> String {
 /// step, since reachability and cycles mean nothing across a broken edge.
 fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
     let mut findings = crate::event_trigger::workflow_findings(flow);
-    if let Some(review) = &flow.review {
-        if let Err(error) = review.check(flow) {
-            findings.push(error);
-        }
-    }
     for (field, size, minimum, maximum) in [
         ("steps", flow.steps.len(), 1, 64),
         ("connections", flow.connections.len(), 0, 16),
@@ -1362,10 +1350,6 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                 CompletionKind::CaseworkResult {} => {
                     operation.uses == Operation::SubmitReviewRequest
                         && completion.output == *crate::contracts::casework_completion_schema()
-                }
-                CompletionKind::BregApplication {} => {
-                    operation.uses == Operation::SubmitBregProposal
-                        && completion.output == *crate::contracts::breg_application_schema()
                 }
                 CompletionKind::BoundedPoll {
                     interpret,

@@ -1055,3 +1055,15 @@ fn scenario_reconciliation_requires_an_uncertain_mutation() {
     assert_eq!(reconciled.call_attempts["book"], 3);
     assert_eq!(reconciled.frozen_commands, 2);
 }
+
+#[test]
+fn a_workflow_review_block_is_refused_without_a_compatibility_shim() {
+    let mut workflow = authored_value(WORKFLOW);
+    workflow["workflow"]["review"] = json!({"outcomes": {"sent": {"status": "approved"}}});
+    let error = refused(load(&workflow.to_string(), SOURCE));
+    let message = error.to_string();
+    assert!(
+        message.contains("`review` is not a member of this mapping"),
+        "{message}"
+    );
+}

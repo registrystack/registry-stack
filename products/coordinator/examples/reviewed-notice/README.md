@@ -112,6 +112,7 @@ registrations, completion secret and package digest. Follow the
 recovery.
 
 The review wait names `completion: {step: submit-review, name: result}`. Casework remains the
-review authority. This example does not submit or apply a BReg Proposal; use the
-[Proposal follow-up](../proposal-follow-up/README.md) for that separate path. Completion wake-ups
+review authority. This example does not submit or apply a BReg Proposal; the applicant drives a
+Proposal in BReg, and a Workflow follows it through the
+[Product events](../product-events/README.md) path. Completion wake-ups
 respect the durable observation floor and do not provide a result the workflow can trust directly.

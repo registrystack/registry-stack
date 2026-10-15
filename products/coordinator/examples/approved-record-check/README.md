@@ -4,9 +4,8 @@ Use this synthetic example when a run must read one Base Registry Engine (BReg)
 record under a Casework approval instead of a standing service identity. The
 run waits until the input's `notBefore`, reads the record with the approved
 grant, and finishes with the record identifier. The workflow, deterministic
-scenarios and runtime template form one complete project. `functions.rhai`
-declares no functions, because every mapping is a reference in
-`workflow.yaml`.
+scenarios and runtime template form one complete project. The project has no
+`functions.rhai`, because every mapping is a reference in `workflow.yaml`.
 
 From the repository root, run the offline authoring commands:
 

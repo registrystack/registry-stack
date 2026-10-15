@@ -1302,28 +1302,6 @@ fn correlate(
                 None => Ok(()),
             }
         }
-        CompletionKind::BregApplication {} => {
-            let accepted = outputs.get(request).ok_or_else(|| {
-                error(
-                    "scenario.wait-event",
-                    format!("/waits/{step}/value"),
-                    "the accepted frozen Proposal submission is unavailable",
-                    "Provide the exact accepted submission reply on the preceding call.",
-                )
-            })?;
-            let current = value.get("proposal").ok_or_else(|| {
-                error(
-                    "scenario.wait-event",
-                    format!("/waits/{step}/value/proposal"),
-                    "the application completion carries no Proposal",
-                    "Provide the authoritative Proposal representation.",
-                )
-            })?;
-            match crate::breg_proposal::classify_application(accepted, current) {
-                crate::breg_proposal::ApplicationObservation::Complete(expected) if expected == *value => Ok(()),
-                _ => Err(error("scenario.wait-event", format!("/waits/{step}/value"), "the completion does not prove the exact accepted frozen submission applied or closed", "Retain the accepted Proposal locator, Action revision, submission version, effect digest and durable application evidence.")),
-            }
-        }
         CompletionKind::BoundedPoll { .. } => Ok(()),
     }
 }

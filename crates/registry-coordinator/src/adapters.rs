@@ -457,17 +457,6 @@ impl TaskConnection {
     }
 }
 
-fn proposal_transition(operation: Operation) -> Option<crate::breg_proposal::Transition> {
-    use crate::breg_proposal::Transition;
-    match operation {
-        Operation::SubmitBregProposal => Some(Transition::Submit),
-        Operation::ApplyBregProposal => Some(Transition::Apply),
-        Operation::CancelBregProposal => Some(Transition::Cancel),
-        Operation::RetryBregProposal => Some(Transition::Retry),
-        _ => None,
-    }
-}
-
 async fn read_record(
     client: &BaseRegistryClient,
     options: &BRegRecordOptions,
@@ -535,16 +524,6 @@ impl AdapterSet for HttpAdapters {
                 _ => Err(refused("operation-unbound")),
             };
         }
-        if let Some(transition) = proposal_transition(request.operation) {
-            return match self.connections.get(&request.connection) {
-                Some(Connection::Breg {
-                    client, profile, ..
-                }) => crate::breg_proposal::prepare(client, profile, request, transition)
-                    .await
-                    .map(Some),
-                _ => Err(refused("operation-unbound")),
-            };
-        }
         Ok(None)
     }
 
@@ -567,19 +546,6 @@ impl AdapterSet for HttpAdapters {
                     }),
                     Some(bytes),
                 ) => crate::breg_action::execute(client, profile, request, bytes).await,
-                _ => refused("operation-unbound"),
-            };
-        }
-        if let Some(transition) = proposal_transition(request.operation) {
-            return match (self.connections.get(&request.connection), prepared) {
-                (
-                    Some(Connection::Breg {
-                        client, profile, ..
-                    }),
-                    Some(bytes),
-                ) => {
-                    crate::breg_proposal::execute(client, profile, request, bytes, transition).await
-                }
                 _ => refused("operation-unbound"),
             };
         }
@@ -609,12 +575,6 @@ impl AdapterSet for HttpAdapters {
 
     async fn call(&self, request: &CallRequest) -> CallOutcome {
         match (self.connections.get(&request.connection), request.operation) {
-            (
-                Some(Connection::Breg {
-                    client, profile, ..
-                }),
-                Operation::ReadBregReviewContext,
-            ) => crate::breg_review_context::read(client, profile, &request.input).await,
             (Some(Connection::External(connection)), Operation::ExternalGet) => {
                 connection.get(&request.input, false).await
             }
@@ -730,31 +690,12 @@ impl AdapterSet for HttpAdapters {
         accepted: &serde_json::Value,
         completion: &crate::definition::CompletionDefinition,
     ) -> CompletionObservation {
-        use crate::{breg_proposal::ApplicationObservation, definition::CompletionKind};
+        use crate::definition::CompletionKind;
         match (&completion.kind, self.connections.get(&request.connection)) {
             (CompletionKind::CaseworkResult {}, Some(Connection::Casework(connection)))
                 if request.operation == Operation::SubmitReviewRequest =>
             {
                 connection.read_result(accepted).await
-            }
-            (
-                CompletionKind::BregApplication {},
-                Some(Connection::Breg {
-                    client, profile, ..
-                }),
-            ) if request.operation == Operation::SubmitBregProposal => {
-                match crate::breg_proposal::observe_application(client, profile, accepted).await {
-                    ApplicationObservation::Pending { retry_after } => {
-                        CompletionObservation::Pending { retry_after }
-                    }
-                    ApplicationObservation::Complete(value) => {
-                        CompletionObservation::Settled(value)
-                    }
-                    ApplicationObservation::Retryable { code, retry_after } => {
-                        CompletionObservation::Retryable { code, retry_after }
-                    }
-                    ApplicationObservation::Hold { code } => CompletionObservation::Hold { code },
-                }
             }
             _ => CompletionObservation::Hold {
                 code: "operation-unbound".into(),

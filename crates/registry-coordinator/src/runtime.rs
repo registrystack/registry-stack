@@ -815,22 +815,15 @@ impl RuntimeConfig {
         }
         for (name, step) in &workflow.steps {
             if let crate::definition::Step::Call { call, .. } = step {
-                if matches!(
-                    call.operation,
-                    crate::protocol::Operation::InvokeBregAction
-                        | crate::protocol::Operation::SubmitBregProposal
-                        | crate::protocol::Operation::ApplyBregProposal
-                        | crate::protocol::Operation::RetryBregProposal
-                        | crate::protocol::Operation::CancelBregProposal
-                        | crate::protocol::Operation::ReadBregReviewContext
-                ) && self
-                    .connections
-                    .get(&call.connection)
-                    .is_some_and(|binding| {
-                        binding
-                            .authorization()
-                            .is_some_and(|auth| auth.task_authority.is_some())
-                    })
+                if call.operation == crate::protocol::Operation::InvokeBregAction
+                    && self
+                        .connections
+                        .get(&call.connection)
+                        .is_some_and(|binding| {
+                            binding
+                                .authorization()
+                                .is_some_and(|auth| auth.task_authority.is_some())
+                        })
                 {
                     return Err(CoordinatorError::new("workflow-binding", "this BReg operation requires an explicitly permitted service profile")
                         .at("workflow.yaml", format!("/workflow/steps/{name}/operation"))

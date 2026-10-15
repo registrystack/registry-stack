@@ -36,9 +36,7 @@ use uuid::Uuid;
 
 mod readiness;
 mod recovery;
-mod review_provider;
 pub use recovery::DoctorStatus;
-pub use review_provider::ReviewLookup;
 
 enum InspectionBinding<'a> {
     RecordedOrRuntime(&'a crate::runtime::RuntimeConfig),
@@ -117,12 +115,6 @@ pub struct Actor {
     pub subject: String,
     pub client_id: String,
     pub operator: bool,
-}
-
-/// One transactional admission, including its immutable Review response when applicable.
-struct AdmissionOutcome {
-    run_id: Uuid,
-    accepted_review: Option<registry_review_protocol::ReviewRequestAccepted>,
 }
 
 pub struct StoreSecurity {
@@ -766,8 +758,7 @@ impl Store {
             CREATE TABLE {0}.runs (
             run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
             workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
-            snapshot jsonb, input jsonb, outputs jsonb, review jsonb, review_source text, event_binding text,
-            review_available_until timestamptz, review_completed_at timestamptz,
+            snapshot jsonb, input jsonb, outputs jsonb, event_binding text,
             binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
             outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
             cancel_requested boolean NOT NULL DEFAULT false, authored_cancel_requested boolean NOT NULL DEFAULT false,
@@ -941,16 +932,6 @@ impl Store {
             return (!accepted.request_id.is_nil())
                 .then(|| self.wait_key(&call.connection, accepted.request_id));
         }
-        if matches!(
-            contract.kind,
-            crate::definition::CompletionKind::BregApplication {}
-        ) {
-            let bytes = serde_json::to_vec(accepted).ok()?;
-            let accepted = registry_breg_client::BRegProposal::from_slice(&bytes).ok()?;
-            if accepted.submission_version() == 0 || accepted.effect_digest().is_none() {
-                return None;
-            }
-        }
         let bytes = registry_platform_canonical_json::canonicalize_json(accepted).ok()?;
         Some(self.security.keys.commitment(
             "completion-wait",
@@ -980,10 +961,8 @@ impl Store {
             None,
             &definition.digest,
             None,
-            None,
         )
         .await
-        .map(|admission| admission.run_id)
     }
 
     fn admission_identity(
@@ -1070,9 +1049,8 @@ impl Store {
         binding_digest: &str,
         runtime: Option<&crate::runtime::RuntimeConfig>,
         expected_revision: &str,
-        review: Option<&crate::review_provider::ReviewAdmission>,
         event: Option<(&str, &crate::event_trigger::EventTrigger)>,
-    ) -> Result<AdmissionOutcome> {
+    ) -> Result<Uuid> {
         let event_binding = event.map(|(binding, _)| binding);
         if binding_digest.is_empty() || binding_digest.len() > 256 {
             return Err(refused(
@@ -1091,11 +1069,7 @@ impl Store {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
         self.lock_admission(&tx).await?;
-        if review.is_some() {
-            if let Some(accepted) = self.recover_review_admission(&tx, &identity, &input_digest).await? {
-                return Ok(AdmissionOutcome { run_id: accepted.request_id, accepted_review: Some(accepted) });
-            }
-        } else if let Some(row) = tx
+        if let Some(row) = tx
             .query_opt(
                 &format!(
                     "SELECT run_id,input_digest,definition_digest,event_binding FROM {}.runs WHERE start_identity=$1",
@@ -1115,42 +1089,12 @@ impl Store {
                     "this producer, workflow and idempotency key already names different admitted work",
                 ));
             }
-            let run_id = row.get(0);
-            return Ok(AdmissionOutcome { run_id, accepted_review: None });
+            return Ok(row.get(0));
         }
         if expected_revision != definition.digest {
             return Err(refused("workflow-revision-mismatch", "the expected Workflow revision is not active; discover the active contract before starting new work"));
         }
         let run = Uuid::new_v4();
-        let retained_review = if let Some(review) = review {
-            if review.request.result_constraints.is_some() {
-                return Err(refused("request.invalid","this Review provider does not declare structured results; omit resultConstraints").at("request","$.resultConstraints"));
-            }
-            let binding =
-                crate::review_provider::policy_binding(&definition.workflow, &definition.digest)?
-                    .ok_or_else(|| {
-                    refused("workflow-absent", "this Workflow does not provide Review")
-                })?;
-            if !review.request.policy.matches(&binding) {
-                return Err(refused(
-                    "workflow-revision-mismatch",
-                    "the expected Review policy is not active",
-                ));
-            }
-            Some(
-                review.retain(
-                    run,
-                    binding,
-                    definition
-                        .workflow
-                        .review
-                        .as_ref()
-                        .expect("checked Review policy"),
-                )?,
-            )
-        } else {
-            None
-        };
         if let Some(runtime) = runtime {
             self.check_live_bindings(&tx, runtime).await?;
         }
@@ -1171,38 +1115,7 @@ impl Store {
         let sealed_snapshot = self.seal(run, "snapshot", "", &snapshot)?;
         let sealed_input = self.seal(run, "input", "", &input)?;
         let sealed_outputs = self.seal(run, "outputs", "", &BTreeMap::<String, Value>::new())?;
-        let review_source = retained_review.as_ref().map(|review| {
-            self.security.keys.commitment(
-                "review-source",
-                &[
-                    self.security.database_id.as_bytes(),
-                    producer.as_bytes(),
-                    review.accepted.subject.source.as_bytes(),
-                ],
-            )
-        });
-        let sealed_review = retained_review
-            .as_ref()
-            .map(|review| self.seal(run, "review", "", review))
-            .transpose()?;
-        // Before a terminal read seals the exact result, this upper bound
-        // prevents retention from erasing any result still promised by policy.
-        let review_until = retained_review
-            .as_ref()
-            .map(|review| {
-                deadline
-                    .checked_add_signed(chrono::Duration::seconds(i64::from(
-                        review.policy.result_retention_seconds,
-                    )))
-                    .ok_or_else(|| {
-                        refused(
-                            "admission-invalid",
-                            "Review retention exceeds the supported clock",
-                        )
-                    })
-            })
-            .transpose()?;
-        tx.execute(&format!("INSERT INTO {}.runs (run_id,start_identity,input_digest,workflow_id,workflow_version,definition_digest,snapshot,input,binding_digest,step,admitted_at,deadline_at,outputs,owner_hash,review,review_available_until,event_binding,review_source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)", self.namespace), &[&run, &identity, &input_digest, &definition.workflow.id, &definition.workflow.version, &definition.digest, &sealed_snapshot, &sealed_input, &binding_digest, &definition.workflow.start, &now, &deadline, &sealed_outputs, &producer,&sealed_review,&review_until,&event_binding,&review_source]).await.map_err(unavailable)?;
+        tx.execute(&format!("INSERT INTO {}.runs (run_id,start_identity,input_digest,workflow_id,workflow_version,definition_digest,snapshot,input,binding_digest,step,admitted_at,deadline_at,outputs,owner_hash,event_binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)", self.namespace), &[&run, &identity, &input_digest, &definition.workflow.id, &definition.workflow.version, &definition.digest, &sealed_snapshot, &sealed_input, &binding_digest, &definition.workflow.start, &now, &deadline, &sealed_outputs, &producer,&event_binding]).await.map_err(unavailable)?;
         enqueue(
             &tx,
             &self.table,
@@ -1226,10 +1139,7 @@ impl Store {
         .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         self.metrics.record_run_admitted();
-        Ok(AdmissionOutcome {
-            run_id: run,
-            accepted_review: retained_review.map(|review| review.accepted),
-        })
+        Ok(run)
     }
 
     async fn require_unheld(&self, tx: &Transaction<'_>) -> Result<()> {

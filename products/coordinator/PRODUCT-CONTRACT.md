@@ -40,32 +40,20 @@ downstream authority. Credentials are acquired for each attempt, and each receiv
 current policy. Waits, retries, restarts, and recovery never renew an approval or alter its original
 principal, resource, scopes, bounds, or deadline.
 
-## Governed Actions and Proposals
+## Governed Actions
 
 `breg.invoke-action/v1` imports an exact Base Registry Engine (BReg) Action using `action.contract` and `action.id`.
-Compilation pins the generated Action revision, mode, review policy, application policy, input,
-output, and declared refusals. The maintained BReg client verifies current metadata without
-silently replacing a saved command or condition. Immediate Actions return exact application
-results. Proposal Actions create a draft and return it under `proposal`.
-
-Starting a draft, submitting a Proposal, and applying a submission are separate effects.
-`breg.submit-proposal/v1` evaluates the plan, freezes the selected submission, and exposes the
-named `application` completion. Draft creation has no declared-refusal route. A known no-effect
-plan refusal stops the generic submission operation without application observation or a notice;
-Submit exposes no Action-specific typed refusal edge.
-The observer correlates the exact Proposal ID, Action ID and revision, submission version, and
-effect digest. Only authoritative application evidence settles `applied`; review approval is not
-application evidence. A closed Proposal settles `closed`. Blocked, mismatched, unknown, or
-uncertain application state holds the wait and cannot become a terminal business-failure branch.
-The original prepared command and submission identity stay fixed across recovery.
-
-`breg.apply-proposal/v1`, `breg.retry-proposal/v1`, and `breg.cancel-proposal/v1` are explicit calls
-subject to the receiving BReg policy. A Review-provider workflow may assess a Proposal, but BReg
-independently decides application under its current policy and commit-time conditions.
+Compilation pins the generated Action revision, mode, input, output, and declared refusals. The
+maintained BReg client verifies current metadata without silently replacing a saved command or
+condition. The operation invokes immediate Actions and returns their exact application results.
+Compilation refuses a Proposal Action with `coordinator.operation.proposal-action`, and
+preparation refuses one with `action-unavailable`. The applicant drives a Proposal in BReg, and
+BReg decides application under its current policy and commit-time conditions. A Workflow follows
+that Proposal through a committed BReg product event or a later `breg.read-record/v1` read.
 A notice after application is a separate `messaging.submit-message/v1` call,
 authorized by Messaging. A refused notice leaves the registry application intact.
 
-An immediate Action call may declare `onDeclaredRefusal`. Only a validated owner-declared no-effect refusal
+An Action call may declare `onDeclaredRefusal`. Only a validated owner-declared no-effect refusal
 routes there, as `{refusalCode}`. Authentication, authorization, transport, protocol, and
 preparation failures stay operational failures. A later refusal cannot settle an earlier uncertain
 attempt. Success and refusal outputs are available only on their respective routes; after a join
@@ -112,7 +100,7 @@ There is no external write operation, arbitrary HTTP method, or dynamic destinat
 
 Read observations have a persistent floor of at least 30 seconds, including after restarts,
 wake-ups, retry, and timeout. `minimumObservationIntervalSeconds` can raise that deployment-wide
-floor, up to 86,400 seconds. Casework and BReg pending reads default to 900 seconds. Casework
+floor, up to 86,400 seconds. Casework pending reads default to 900 seconds. Casework
 `resultCheckSeconds` accepts 60 to 86,400. An external completion's `intervalSeconds` is constrained
 by the operation and deployment floor. Retry hints can postpone observations within the host's
 86,400-second ceiling. Invalid or excessive retry hints hold the wait instead of accelerating it.
@@ -134,28 +122,9 @@ is not calibrated across providers or a guarantee of correctness.
 
 ## Admission and integration
 
-A Workflow may expose the shared Review protocol with `workflow.review`. Every declared
-terminal outcome maps to one explicit Review status and, where required, an outcome code.
-The computed Workflow revision pins that mapping, graph, Functions and contracts; project ID
-and human version identify its `PolicyBinding`. Workflow metadata returns `reviewPolicy`, or
-null when Review admission is unavailable. A completed workflow is approval only when its
-authored outcome maps to `approved`.
-
-Review producer policies bind an authenticated client to its producer identity, source
-namespace, profile, allowed sources and workflows. `POST /v1/review-requests` admits the exact
-shared `ReviewCreateRequest` as the ordinary Run input. The request and Run share one ID and
-transactional admission path. The original subject, submission digest and policy stay fixed.
-Results are immutable and available for the declared `resultRetentionSeconds`, default 86400,
-from completion. Cancellation cannot renew a deadline or overwrite a completed outcome.
-Recovery holds also govern result release and retention. If an assessment calls Casework,
-Coordinator uses its own independently registered producer and computes that downstream
-submission's binding rather than forwarding the upstream producer identity.
-
-`breg.read-review-context/v1` reads only the exact frozen Proposal context allowed to its service
-assessment grant. A reviewed earlier condition is evidence of that observation, not current
-commit authority. BReg rechecks its own authorization, optimistic concurrency and authored
-conditions when applying. Stale conditions refuse application without changing the reviewed
-submission; a revised submission requires a fresh assessment.
+Coordinator is not a Review provider. A project that declares `workflow.review` is refused, and
+the runtime serves no `/v1/review-requests` route. When a Workflow needs human review it submits
+its own request to Casework under its independently registered producer identity.
 
 An authored `workflow.eventTriggers` entry accepts a logical source, exact event type and
 data-schema identity, a schema for the full event and an ordinary typed input mapping.
@@ -180,7 +149,7 @@ causation across products, so the envelope hop bound alone does not prevent thos
 
 These references map admission guarantees to maintained tests. They do not assert that a
 particular candidate has run or passed them. The ordinary Rust test lane runs the pure checks;
-`scripts/test-postgres.sh` runs the database-backed library tests and Review-provider suite.
+`scripts/test-postgres.sh` runs the database-backed library tests and integration suites.
 The native product-events journey additionally exercises a real BReg producer and Coordinator
 receiver over HTTP.
 
@@ -190,8 +159,6 @@ receiver over HTTP.
 | Delivery attempt time is fresh; an old event commit time alone does not prevent recovery. | `event_trigger_tests::stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused` and `exact_event_identity_survives_retry_replay_and_old_commit_time` |
 | Concurrent delivery, restart, package activation and local source alias renaming recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` and `source_alias_rename_recovers_one_original_run_after_restart` |
 | An admitted event grants no source mutation authority. | `breg_event_native::native_proposal_event_admits_one_run_without_conferring_apply_authority` |
-| Review results remain bound to the original producer, source, workflow and subject under current authority. | `review_provider_postgres::exact_admission_result_restart_feed_and_current_ownership_share_one_run` and `revoked_sources_do_not_disclose_or_starve_the_authorized_result_feed` |
-| Policy identity covers the workflow and outcome mapping; first acceptance fixes the concrete policy across recovery. | `review_provider::derived_policy_pins_workflow_and_mapping_without_duplicate_identity` and `review_provider_postgres::current_selection_recovers_original_acceptance_after_policy_change_and_restart` |
 
 The library tests live in `crates/registry-coordinator/src/event_trigger_tests.rs`; the other
 targets live in `crates/registry-coordinator/tests/`. The dependency-direction and schema gates
@@ -322,12 +289,9 @@ database identity. There are no legacy authoring aliases or automatic state conv
 Offline checking and deterministic scenarios prove graph, mapping, schema, Function, and branch
 behavior. Adapter HTTP checks, PostgreSQL state checks, and native service journeys establish their
 own separately scoped assertions. Mock replies never prove human review or registry application.
-The native reviewed Proposal journey composes the owning BReg and Casework services, correlates
-the exact frozen submission and authoritative application, then requests a separate Messaging
-notice. Approval produces one accepted notice only after application; rejection remains held and
-cancellation closes without a notice. Its disposable clock advance checks observation semantics,
-while the separate 961-second deferred-appointment journey checks the real long-wait boundary.
-Neither establishes provider delivery or distributed rollback.
+The native service journeys compose the owning BReg, Casework, Scheduling and Messaging
+services; the 961-second deferred-appointment journey checks the real long-wait boundary. They do
+not establish provider delivery or distributed rollback.
 See [contributor checks](README.md#verify-a-change).
 
 Coordinator does not provide SQL steps, dynamic fan-out, arbitrary HTTP methods, automatic
