@@ -1618,7 +1618,7 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
         "Name": format!("/{}", state.container_name()),
         "Config": { "Labels": { (LABEL): state.owner }, "Image": IMAGE },
     });
-    for image in [CANONICAL_IMAGE, IMAGE] {
+    for image in [CANONICAL_IMAGE, IMAGE, LEGACY_ECR_IMAGE] {
         let mut owned = container.clone();
         owned["Config"]["Image"] = json!(image);
         verified_container(&state, &owned).unwrap();
@@ -1638,6 +1638,10 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
     for image in [
         IMAGE.replace("67f41722", "07f41722"),
         CANONICAL_IMAGE.replace("67f41722", "07f41722"),
+        LEGACY_ECR_IMAGE.replace("67f41722", "07f41722"),
+        IMAGE.replace(":17.11@", ":17.10@"),
+        CANONICAL_IMAGE.replace(":17.11@", ":17.10@"),
+        LEGACY_ECR_IMAGE.replace(":17.11@", ":17.10@"),
         format!("untrusted.example/{CANONICAL_IMAGE}"),
         "postgres:17.11".to_owned(),
         "public.ecr.aws/docker/library/postgres:17.11".to_owned(),

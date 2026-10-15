@@ -55,11 +55,11 @@ use zeroize::Zeroizing;
 const DATABASE_ID: &str = "breg-dev-database";
 const MIGRATION_ROLE: &str = "breg_dev_migration";
 const RUNTIME_ROLE: &str = "breg_dev_runtime";
-// Pull the digest-identical Docker Official Images mirror. Public help keeps
-// the canonical upstream tag and digest, whose image identity is unchanged.
-const IMAGE: &str = "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+// Pull the pinned Docker Official Images reference from Docker Hub.
+const IMAGE: &str = "docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const LEGACY_ECR_IMAGE: &str = "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const SPATIAL_IMAGE: &str =
     "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6";
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
@@ -124,8 +124,8 @@ enum DevAction {
     /// A resident supervisor owns this project's PostgreSQL and ThunderID
     /// containers plus its Base Registry Engine (BReg) child. The database runs
     /// the pinned image
-    /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
-    /// the Docker Official Images mirror of postgres:17.11 at that digest, or,
+    /// docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// the Docker Official Images reference at that digest, or,
     /// when the compiled schema requires PostGIS, the Docker Hub image
     /// postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6,
     /// which the supervisor pulls on the first start. Each supervised
@@ -2244,7 +2244,7 @@ fn verified_container(state: &State, container: &Value) -> Result<()> {
     let image = container["Config"]["Image"].as_str();
     let expected_image = state.database_image();
     let image_matches = image == Some(expected_image)
-        || (!state.requires_postgis && image == Some(CANONICAL_IMAGE));
+        || (!state.requires_postgis && matches!(image, Some(CANONICAL_IMAGE | LEGACY_ECR_IMAGE)));
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
         || !image_matches
