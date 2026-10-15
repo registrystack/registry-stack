@@ -42,9 +42,10 @@ export interface CorrectAddressReviewContext {
   readonly "changes": ReadonlyArray<Readonly<Record<string, unknown>>>;
   readonly "currentAddressLine": string;
   readonly "facilityId": string;
+  readonly "supportingDocument": Readonly<Record<string, unknown>> | null;
 }
 
-export const CorrectAddressReviewContextContract = {"digest":"sha256:255f3ea2814ff5e5a255888fa5d63efb39b863a75cca6b5444cf0429565ee4f0","id":"urn:registry:breg:review-context:facility-registry:correct-address:facility-address-context","path":"generated/review-context-schemas/correct-address.schema.json","revision":"sha256:b7f0f2255d4839227b1b0dded88db230d0eef8b7a9a02f26665118c1ed857a25"} as const;
+export const CorrectAddressReviewContextContract = {"digest":"sha256:33542e9f3cc7b5e16a6d9e50709d38318040147e0576b151e1fccc0455626869","id":"urn:registry:breg:review-context:facility-registry:correct-address:facility-address-context","path":"generated/review-context-schemas/correct-address.schema.json","revision":"sha256:d66f9fa80d136e3f8a9e8c30bf03e5922e7ecfe980854282413f6e4f07694b47"} as const;
 export interface CorrectAddressInput {
   readonly "facilityId": string;
   readonly "addressLine": string;

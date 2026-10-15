@@ -244,6 +244,7 @@ pub(crate) enum Problem {
     AuditUnavailable,
     RegistryUnavailable,
     RegistryRefused,
+    ActionChanged,
     RequestConflict,
     RateLimited,
     Internal,
@@ -335,6 +336,12 @@ impl Problem {
                 "request-conflict",
                 "Request changed",
                 "This request changed while it was being submitted. Open it again.",
+            ),
+            Self::ActionChanged => (
+                StatusCode::CONFLICT,
+                "action-changed",
+                "Service changed",
+                "This service changed after the request was prepared. Your request is still saved. Contact the service to update it before reviewing again.",
             ),
             Self::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,

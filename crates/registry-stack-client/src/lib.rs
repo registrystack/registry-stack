@@ -19,12 +19,12 @@ pub mod breg {
         BRegProblemCode, BRegProposal, BRegProposalApplication, BRegProposalAttachment,
         BRegProposalAttachmentValue, BRegProposalCollection, BRegProposalGetBinding,
         BRegProposalLink, BRegProposalPage, BRegProposalQuery, BRegProposalResultReference,
-        BRegProposalReviewContext, BRegProposalReviewDocument, BRegProposalReviewResult,
-        BRegProposalReviewSubject, BRegProposalState, BRegProtocolFailure, BRegRawDocument,
-        BRegRecordFormat, BRegRecordOptions, BRegRecoveryHint, BRegRequestError,
-        BRegResponseMetadata, BRegVerifiedWebhookDelivery, BRegWebhookDelivery,
-        BRegWebhookVerificationError, BaseRegistryClient, BaseRegistryClientConfig,
-        BaseRegistryClientError, PolicySelection, Uuid,
+        BRegProposalReviewBinding, BRegProposalReviewContext, BRegProposalReviewDocument,
+        BRegProposalReviewResult, BRegProposalReviewSubject, BRegProposalState,
+        BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
+        BRegRecoveryHint, BRegRequestError, BRegResponseMetadata, BRegVerifiedWebhookDelivery,
+        BRegWebhookDelivery, BRegWebhookVerificationError, BaseRegistryClient,
+        BaseRegistryClientConfig, BaseRegistryClientError, PolicySelection, Uuid,
     };
 }
 

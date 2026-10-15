@@ -223,6 +223,11 @@ pub struct ProposalGetBinding {
     inner: registry_breg_client::BRegProposalGetBinding,
 }
 
+#[napi(js_name = "BRegProposalReviewBinding")]
+pub struct ProposalReviewBinding {
+    inner: registry_breg_client::BRegProposalReviewBinding,
+}
+
 #[napi(object, object_from_js = false)]
 pub struct ProposalPage {
     pub items: Vec<Proposal>,
@@ -2025,6 +2030,7 @@ fn action_descriptor_value(value: &registry_breg_client::BRegActionDescriptor) -
         "id": value.identifier(), "apiName": value.api_name(), "revision": value.definition_revision(), "display": value.display(), "mode": value.mode(),
         "inputMode": value.input_mode(),
         "maximumInputStringBytes": value.maximum_input_string_bytes(),
+        "attachments": value.attachments(),
         "inputs": value.inputs().iter().map(|input| json!({
             "id": input.identifier(), "apiName": input.api_name(),
             "label": input.label(), "description": input.description(),
@@ -2129,6 +2135,12 @@ pub struct Metadata {
 
 #[napi]
 impl Metadata {
+    /// Read-only capability inventory for each exact Action/profile pair.
+    #[napi(getter)]
+    pub fn proposal_actions(&self) -> Value {
+        serde_json::to_value(self.inner.proposal_actions()).expect("validated Proposal inventory")
+    }
+
     /// Caller-filtered inert descriptors. Selectors below remain the only authority constructors.
     #[napi(getter)]
     pub fn operations(&self) -> Value {
@@ -2196,6 +2208,30 @@ impl Metadata {
         self.inner
             .select_proposal_get(&profile)
             .map(|inner| ProposalGetBinding { inner })
+            .map_err(selection_error)
+    }
+
+    #[napi]
+    pub fn select_proposal_review_context(
+        &self,
+        profile: String,
+        action: String,
+    ) -> Result<ProposalReviewBinding> {
+        self.inner
+            .select_proposal_review_context(&profile, &action)
+            .map(|inner| ProposalReviewBinding { inner })
+            .map_err(selection_error)
+    }
+
+    #[napi]
+    pub fn select_proposal_review_status(
+        &self,
+        profile: String,
+        action: String,
+    ) -> Result<ProposalReviewBinding> {
+        self.inner
+            .select_proposal_review_status(&profile, &action)
+            .map(|inner| ProposalReviewBinding { inner })
             .map_err(selection_error)
     }
 
@@ -2909,6 +2945,36 @@ impl BaseRegistryClient {
     ) -> Result<RawOutcome> {
         self.inner
             .download_proposal_attachment(&proposal.inner, &slot)
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn read_proposal_review_by_id(
+        &self,
+        binding: &ProposalReviewBinding,
+        id: String,
+    ) -> Result<CompleteOutcome> {
+        let response = self
+            .inner
+            .read_proposal_review_by_id(&binding.inner, &id)
+            .await
+            .map_err(client_error)?;
+        complete_value(response.value, response.metadata)
+    }
+
+    #[napi]
+    pub async fn download_proposal_review_document(
+        &self,
+        binding: &ProposalReviewBinding,
+        context: Value,
+        field: String,
+    ) -> Result<RawOutcome> {
+        let context = serde_json::from_value(context)
+            .map_err(|_| binding_error("invalid-request", "Proposal review context is invalid"))?;
+        self.inner
+            .download_proposal_review_document(&binding.inner, &context, &field)
             .await
             .map(raw_value)
             .map_err(client_error)

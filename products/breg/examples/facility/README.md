@@ -69,6 +69,17 @@ review authority, and applies it automatically only after fresh approval. The
 registry independently checks current source authority and target revisions.
 Startup, registration, reads, and no-review changes work without Casework.
 
+The optional `supporting-document` PDF slot is projected as `supportingDocument`
+under the reviewer's `get-review-context` grant. An empty frozen slot is `null`.
+A populated field contains bounded metadata and a source download link; the
+download reruns the complete context's current Record/Changes disclosure.
+The reviewer needs no Proposal `get` or attachment read grant. The canonical
+PostgreSQL journey uploads a synthetic document and downloads its exact bytes
+with the maintained review-context client. For consent-sensitive deployments,
+keep an authoritative Record/Changes projection that identifies the subject
+whose current consent governs the review; document contents do not establish
+that binding themselves.
+
 Configure that independent authority in `dev-clients.yaml` before starting the
 session. The authority must serve the shared Review protocol and a compatible
 `facility-address-review` policy, with its own authenticated reviewer access.

@@ -37,6 +37,10 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey {
+            pointer: "/seed/*/entity",
+            replacement: "Rename `entity` to `recordType`, keeping the same Record type reference.",
+        },
+        RemovedKey {
             pointer: "/version",
             replacement: "Delete `version`; the apiVersion header names the format version.",
         },
@@ -578,7 +582,7 @@ pub(super) struct Seed {
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     pub client: String,
-    pub entity: String,
+    pub record_type: String,
     pub access_profile: String,
     #[serde(default)]
     pub operation: SeedOperation,
@@ -1266,7 +1270,7 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
     for seed in &clients.seed {
         if !identifier(&seed.id)
             || !seeds.insert(&seed.id)
-            || !identifier(&seed.entity)
+            || !identifier(&seed.record_type)
             || !clients.clients.iter().any(|client| {
                 client.id == seed.client && client.access_profiles.contains(&seed.access_profile)
             })

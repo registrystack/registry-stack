@@ -9,6 +9,8 @@ use std::fmt;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
+mod review_document;
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -780,6 +782,8 @@ impl BRegPreparedProposal {
                 .is_some_and(|availability| availability.observed_revision != data.revision)
             || Uuid::parse_str(&data.proposal_id).is_err()
             || !digest(&data.action_revision)
+            || transition_target(&data.link.operation, data.state, data.submission_version)
+                .is_none()
         {
             return Err(refusal());
         }
@@ -833,31 +837,7 @@ impl BaseRegistryClient {
         let is_context = binding.operation == "get-review-context";
         if document.id != id
             || document.action_id != binding.action
-            || !digest(&document.action_revision)
-            || document.submission_version == 0
-            || document.revision == 0
-            || !digest(&document.effect_digest)
-            || document.subject.subject_type != "proposal"
-            || document.subject.id != id
-            || document.subject.version != document.submission_version.to_string()
-            || document.subject.digest != document.effect_digest
-            || document.subject.source.is_empty()
-            || document.subject.source.len() > 512
-            || document.context.reference.is_empty()
-            || document.context.reference.len() > 2048
-            || document.context.contract.as_ref().is_some_and(|contract| {
-                !contract.id.starts_with("urn:registry:breg:review-context:")
-                    || contract.id.len() > 2048
-                    || contract.id.chars().any(char::is_control)
-                    || !digest(&contract.revision)
-                    || !digest(&contract.schema_digest)
-            })
-            || document.authority.is_some() != document.policy.is_some()
-            || document
-                .policy
-                .as_ref()
-                .is_some_and(|policy| policy.check().is_err())
-            || !valid_review_projection(&document, is_context)
+            || !valid_review_document(&document, is_context)
         {
             return Err(refusal());
         }
@@ -948,32 +928,11 @@ impl BaseRegistryClient {
             || document.action_revision != proposal.action_revision
             || document.submission_version != proposal.submission_version
             || document.revision < proposal.revision
-            || !digest(&document.effect_digest)
             || proposal
                 .effect_digest
                 .as_deref()
                 .is_some_and(|digest| digest != document.effect_digest)
-            || document.subject.subject_type != "proposal"
-            || document.subject.id != proposal.id
-            || document.subject.version != proposal.submission_version.to_string()
-            || document.subject.digest != document.effect_digest
-            || document.subject.source.is_empty()
-            || document.subject.source.len() > 512
-            || document.context.reference.is_empty()
-            || document.context.reference.len() > 2048
-            || document.context.contract.as_ref().is_some_and(|contract| {
-                !contract.id.starts_with("urn:registry:breg:review-context:")
-                    || contract.id.len() > 2048
-                    || contract.id.chars().any(char::is_control)
-                    || !digest(&contract.revision)
-                    || !digest(&contract.schema_digest)
-            })
-            || document.authority.is_some() != document.policy.is_some()
-            || document
-                .policy
-                .as_ref()
-                .is_some_and(|policy| policy.check().is_err())
-            || !valid_review_projection(&document, operation == "reviewContext")
+            || !valid_review_document(&document, operation == "reviewContext")
         {
             return Err(refusal());
         }
@@ -1010,12 +969,16 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let (slot, link) = self.proposal_slot(proposal, slot, "download")?;
         // Retained bytes may predate a narrower current upload policy.
-        let maximum_bytes = slot
-            .value
-            .as_ref()
-            .map_or(slot.maximum_bytes, |value| value.byte_size);
-        self.proposal_attachment_exchange(link, None, None, None, maximum_bytes)
-            .await
+        let value = slot.value.as_ref().ok_or_else(refusal)?;
+        let response = self
+            .proposal_attachment_exchange(link, None, None, None, value.byte_size, None)
+            .await?;
+        crate::attachment::verify_download(
+            response,
+            &value.content_type,
+            value.byte_size,
+            &value.sha256,
+        )
     }
     pub async fn upload_proposal_attachment(
         &self,
@@ -1042,6 +1005,7 @@ impl BaseRegistryClient {
                 Some(content_type),
                 Some(key),
                 slot.maximum_bytes,
+                None,
             )
             .await?;
         self.proposal_attachment_response(proposal, link, response)
@@ -1054,7 +1018,7 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
         let (slot, link) = self.proposal_slot(proposal, slot, "remove")?;
         let response = self
-            .proposal_attachment_exchange(link, None, None, Some(key), slot.maximum_bytes)
+            .proposal_attachment_exchange(link, None, None, Some(key), slot.maximum_bytes, None)
             .await?;
         self.proposal_attachment_response(proposal, link, response)
     }
@@ -1183,7 +1147,9 @@ impl BaseRegistryClient {
         body: Value,
         key: &BRegIdempotencyKey,
     ) -> Result<BRegPreparedProposal, BaseRegistryClientError> {
-        if proposal.source.as_deref() != Some(self.source_binding().as_str()) {
+        if proposal.source.as_deref() != Some(self.source_binding().as_str())
+            || transition_target(operation, proposal.state, proposal.submission_version).is_none()
+        {
             return Err(refusal());
         }
         let link = proposal
@@ -1342,19 +1308,57 @@ fn transition_progress(
     prior_revision: u64,
     current: &BRegProposal,
 ) -> bool {
-    use BRegProposalState::{Applied, Cancelled, Draft, Submitted};
-    let (state, version) = match (operation, prior_state) {
-        ("edit", Draft) | ("rebase", Draft) => (Draft, Some(prior_version)),
-        ("submit", Draft) | ("retry", Submitted) => (Submitted, Some(prior_version)),
-        ("revise" | "rebase", Submitted) => (Draft, prior_version.checked_add(1)),
-        ("cancel", Draft | Submitted) => (Cancelled, Some(prior_version)),
-        ("apply", Submitted) => (Applied, Some(prior_version)),
-        _ => return false,
-    };
-    prior_revision.checked_add(1) == Some(current.revision)
-        && current.state == state
-        && version == Some(current.submission_version)
+    transition_target(operation, prior_state, prior_version).is_some_and(|(state, version)| {
+        prior_revision.checked_add(1) == Some(current.revision)
+            && current.state == state
+            && version == current.submission_version
+    })
 }
+fn transition_target(
+    operation: &str,
+    prior_state: BRegProposalState,
+    prior_version: u32,
+) -> Option<(BRegProposalState, u32)> {
+    use BRegProposalState::{Applied, Cancelled, Draft, Submitted};
+    match (operation, prior_state) {
+        ("edit", Draft) | ("rebase", Draft) => Some((Draft, prior_version)),
+        ("submit", Draft) | ("retry", Submitted) => Some((Submitted, prior_version)),
+        ("revise" | "rebase", Submitted) => Some((Draft, prior_version.checked_add(1)?)),
+        ("cancel", Draft | Submitted) => Some((Cancelled, prior_version)),
+        ("apply", Submitted) => Some((Applied, prior_version)),
+        _ => None,
+    }
+}
+fn valid_review_document(document: &BRegProposalReviewDocument, is_context: bool) -> bool {
+    Uuid::parse_str(&document.id).is_ok_and(|value| value.to_string() == document.id)
+        && identifier(&document.action_id)
+        && digest(&document.action_revision)
+        && document.submission_version > 0
+        && document.revision > 0
+        && digest(&document.effect_digest)
+        && document.subject.subject_type == "proposal"
+        && document.subject.id == document.id
+        && document.subject.version == document.submission_version.to_string()
+        && document.subject.digest == document.effect_digest
+        && !document.subject.source.is_empty()
+        && document.subject.source.len() <= 512
+        && !document.context.reference.is_empty()
+        && document.context.reference.len() <= 2048
+        && document.context.contract.as_ref().is_none_or(|contract| {
+            contract.id.starts_with("urn:registry:breg:review-context:")
+                && contract.id.len() <= 2048
+                && !contract.id.chars().any(char::is_control)
+                && digest(&contract.revision)
+                && digest(&contract.schema_digest)
+        })
+        && document.authority.is_some() == document.policy.is_some()
+        && document
+            .policy
+            .as_ref()
+            .is_none_or(|policy| policy.check().is_ok())
+        && valid_review_projection(document, is_context)
+}
+
 fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bool) -> bool {
     if is_context {
         document.context.contract.is_some()
@@ -1369,7 +1373,10 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
                         .is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == id)
             })
             && document.result.is_some() == document.policy.is_some()
-            && document.result.as_ref().is_none_or(valid_review_result)
+            && document.result.as_ref().is_none_or(|result| {
+                valid_review_result(result)
+                    && (result.state == "pending" || document.request_id.is_some())
+            })
     }
 }
 fn valid_review_result(result: &BRegProposalReviewResult) -> bool {
@@ -1781,14 +1788,19 @@ mod tests {
                 &client,
                 transition_document(operation, state, version, revision),
             );
-            let attempt = client
-                .prepare_proposal(
-                    &prior,
-                    operation,
-                    body,
-                    &BRegIdempotencyKey::parse("overflow-transition").unwrap(),
-                )
-                .unwrap();
+            let attempt = client.prepare_proposal(
+                &prior,
+                operation,
+                body,
+                &BRegIdempotencyKey::parse("overflow-transition").unwrap(),
+            );
+            // An impossible successor submission is now refused during preparation.
+            // Revision overflow remains a receipt-validation boundary.
+            if version == u32::MAX {
+                assert!(attempt.is_err(), "{operation}");
+                continue;
+            }
+            let attempt = attempt.unwrap();
             *response.lock().unwrap() = transition_document(
                 operation,
                 if operation == "submit" {

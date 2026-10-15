@@ -13,8 +13,8 @@ from registry_breg_client import BaseRegistryClient, BaseRegistryClientError, BR
 ID = '00000000-0000-4000-8000-000000000001'
 TARGET = '00000000-0000-4000-8000-000000000003'
 DIGEST = 'sha256:' + 'a' * 64
-METADATA = {'id': 'registry', 'version': '1', 'revision': DIGEST, 'metadataVersion': '1', 'recordTypes': [], 'operations': [],
-            'proposals': {'method': 'GET', 'path': '/v1/proposals', 'accessProfiles': [],
+METADATA = {'id': 'registry', 'version': '1', 'revision': DIGEST, 'metadataVersion': '2', 'recordTypes': [], 'operations': [],
+            'proposals': {'method': 'GET', 'path': '/v1/proposals', 'accessProfiles': [], 'actions': [],
                           'get': {'method': 'GET', 'path': '/v1/proposals/{proposal_id}', 'accessProfiles': ['reader']}}}
 
 
@@ -233,9 +233,14 @@ class ProposalResultTests(unittest.TestCase):
         self.value = copy.deepcopy(base)
         self.assertNotIn('result', self.client.read_proposal_review_status(prior)['value'])
         for result in [{'state': 'pending'}] + [dict(terminal, state=state) for state in ('approved', 'rejected', 'changes-requested', 'answered', 'cancelled', 'superseded', 'expired')]:
-            self.value = dict(copy.deepcopy(configured), result=result)
+            self.value = dict(copy.deepcopy(configured), requestId=ID, result=result)
             with self.subTest(result=result):
                 self.assertEqual(self.client.read_proposal_review_status(prior)['value']['result'], result)
+        self.value = dict(copy.deepcopy(configured), result={'state': 'pending'})
+        self.assertNotIn('requestId', self.client.read_proposal_review_status(prior)['value'])
+        self.value['result'] = terminal
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.read_proposal_review_status(prior)
         invalid_results = [{'state': 'pending', field: terminal[field]} for field in ('resultId', 'completedAt', 'availableUntil')]
         for field in ('resultId', 'completedAt', 'availableUntil'):
             result = dict(terminal)
@@ -248,7 +253,7 @@ class ProposalResultTests(unittest.TestCase):
                             dict(terminal, availableUntil=terminal['completedAt']), dict(terminal, availableUntil='2026-09-30T00:00:00Z'),
                             expired, dict(terminal, state='unknown')]
         for result in invalid_results:
-            self.value = dict(copy.deepcopy(configured), result=result)
+            self.value = dict(copy.deepcopy(configured), requestId=ID, result=result)
             count = len(self.requests)
             with self.subTest(invalid_result=result), self.assertRaises(BaseRegistryClientError) as raised:
                 self.client.read_proposal_review_status(prior)

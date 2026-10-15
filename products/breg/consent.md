@@ -164,6 +164,22 @@ A gated profile needs `actorKind`, `requesterClients` that a declared
 recipient organization lists, and `requiredPurposes` drawn from the consent
 record's purpose vocabulary.
 
+### Proposal review context
+
+Authoritative Record and changes projections in a Proposal's review context
+use the reviewer's current Record permissions, including applicable consent.
+The same complete context disclosure is checked when downloading a projected
+review document, so withdrawing required consent also refuses a saved document
+link on its next use.
+
+Input and document projections select frozen submission content. They cannot
+infer a subject or consent relationship from a value or the contents of a PDF.
+Include an authoritative Record or changes projection when consent must govern
+that review. Grant only the required `readableContextFields`; review documents
+need `get-review-context`, without a broader Proposal `get` grant. See
+[supporting documents](proposals.md#show-a-supporting-document) for the authored
+mapping and client operation.
+
 ### The recipient feed
 
 A recipient reads the decisions addressed to it through a profile bounded by

@@ -31,8 +31,8 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
   let downloadBytes;
   const requests = [];
   const wireRequests = [];
-  const metadata = {id: 'registry', version: '1', revision: digest, metadataVersion: '1', recordTypes: [], operations: [],
-    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [],
+  const metadata = {id: 'registry', version: '1', revision: digest, metadataVersion: '2', recordTypes: [], operations: [],
+    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [], actions: [],
       get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['reader']}}};
   const server = http.createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;
@@ -142,9 +142,13 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       value = structuredClone(base);
       assert.ok(!Object.hasOwn((await client.readProposalReviewStatus(prior)).value, 'result'));
       for (const result of [{state: 'pending'}, ...['approved', 'rejected', 'changes-requested', 'answered', 'cancelled', 'superseded', 'expired'].map(state => ({...terminal, state}))]) {
-        value = {...structuredClone(configured), result};
+        value = {...structuredClone(configured), requestId: id, result};
         assert.deepEqual((await client.readProposalReviewStatus(prior)).value.result, result);
       }
+      value = {...structuredClone(configured), result: {state: 'pending'}};
+      assert.equal((await client.readProposalReviewStatus(prior)).value.requestId, undefined);
+      value.result = terminal;
+      await assert.rejects(client.readProposalReviewStatus(prior), error => error.kind === 'invalid-request');
       const invalidResults = [
         ...['resultId', 'completedAt', 'availableUntil'].map(field => ({state: 'pending', [field]: terminal[field]})),
         ...['resultId', 'completedAt', 'availableUntil'].map(field => {const result = {...terminal}; delete result[field]; return result;}),
@@ -154,7 +158,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         {...terminal, state: 'expired', availableUntil: undefined}, {...terminal, state: 'unknown'},
       ];
       for (const result of invalidResults) {
-        value = {...structuredClone(configured), result};
+        value = {...structuredClone(configured), requestId: id, result};
         const count = requests.length;
         await assert.rejects(client.readProposalReviewStatus(prior), error => error.kind === 'invalid-request' && !error.message.includes('private-canary'));
         assert.equal(requests.length, count + 1);

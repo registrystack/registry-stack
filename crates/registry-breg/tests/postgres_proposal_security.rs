@@ -4,6 +4,9 @@
 #[path = "support/client_http.rs"]
 #[allow(dead_code)]
 mod client_http;
+#[path = "support/consent_fixture.rs"]
+#[allow(dead_code)]
+mod consent_fixture;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -395,6 +398,25 @@ async fn review_context_requires_record_grant_and_current_membership() {
         .push(json!("changes"));
     source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "edit", "submit", "cancel"]);
+    source["actions"][0]["execution"]["proposal"]["attachments"] = json!([
+        {"id":"support","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"},
+        {"id":"absent","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"},
+        {"id":"private","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
+    ]);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
+        json!({"type":"document","slot":"support"});
+    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["optionalDocument"] =
+        json!({"type":"document","slot":"absent"});
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableAttachments"] =
+        json!(["support"]);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["writableAttachments"] =
+        json!(["support"]);
+    source["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context"]);
+    source["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("document"), json!("optionalDocument")]);
     let fixture = client_http::ClientFixture::start_with_mutations(
         compile(source),
         clerk(),
@@ -413,13 +435,27 @@ async fn review_context_requires_record_grant_and_current_membership() {
     .await;
     assert_eq!(code, StatusCode::CREATED, "{draft}");
     let id = draft["id"].as_str().unwrap();
+    let upload = reqwest::Client::new()
+        .patch(format!(
+            "{}/v1/proposals/{id}/attachments/support?accessProfile=clerk",
+            fixture.http.base_url
+        ))
+        .header("if-match", etag.as_deref().unwrap())
+        .header("idempotency-key", "review-document-upload")
+        .header("content-type", "text/plain")
+        .body("frozen-review-document")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload.status(), StatusCode::OK);
+    let etag = upload.headers()["etag"].to_str().unwrap().to_owned();
     let (code, value, _) = send(
         &fixture.http,
         Method::POST,
         &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
         json!({}),
         Some("review-submit"),
-        etag.as_deref(),
+        Some(&etag),
     )
     .await;
     assert_eq!(code, StatusCode::OK, "{value}");
@@ -521,6 +557,55 @@ async fn review_context_requires_record_grant_and_current_membership() {
             "recordId":target,"operation":"patch","before":{"name":"current-name-canary"},"after":{"name":"Proposed"}
         }])
     );
+    let document = &value["context"]["fields"]["document"];
+    assert_eq!(document["type"], "document");
+    assert_eq!(document["byteSize"], "frozen-review-document".len());
+    assert!(value["context"]["fields"]["optionalDocument"].is_null());
+    let saved_download = format!(
+        "{}&accessProfile=task-reviewer",
+        document["download"]["path"].as_str().unwrap()
+    );
+    let response = reqwest::Client::new()
+        .get(format!("{}{}", reader.base_url, saved_download))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "text/plain");
+    assert_eq!(response.headers()["content-disposition"], "attachment");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(
+        response.bytes().await.unwrap().as_ref(),
+        b"frozen-review-document"
+    );
+    let wrong_digest = format!("sha256%3A{}", "f".repeat(64));
+    for refused in [
+        format!("/v1/proposals/{id}?accessProfile=task-reviewer"),
+        format!("/v1/proposals/{id}/attachments/support?submissionVersion=1&accessProfile=task-reviewer"),
+        saved_download.replace("attachments/support", "attachments/private"),
+        saved_download.replace("reviewContextField=document", "reviewContextField=optionalDocument"),
+        saved_download.replace("submissionVersion=1", "submissionVersion=2"),
+        saved_download.replace(value["effectDigest"].as_str().unwrap().replace(':', "%3A").as_str(), &wrong_digest),
+        saved_download.replace(value["context"]["contract"]["schemaDigest"].as_str().unwrap().replace(':', "%3A").as_str(), &wrong_digest),
+        saved_download.replace("accessProfile=task-reviewer", "accessProfile=clerk"),
+    ] {
+        let response = reqwest::Client::new().get(format!("{}{}", reader.base_url, refused)).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{refused}");
+    }
+    for method in [Method::PATCH, Method::DELETE, Method::POST] {
+        let denied_path = if method == Method::POST {
+            format!("/v1/proposals/{id}/submit?accessProfile=task-reviewer")
+        } else {
+            saved_download.clone()
+        };
+        let response = reqwest::Client::new()
+            .request(method, format!("{}{}", reader.base_url, denied_path))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
     let (code, concealed, _) = send(
         &reader,
         Method::GET,
@@ -551,6 +636,15 @@ async fn review_context_requires_record_grant_and_current_membership() {
             code,
             StatusCode::NOT_FOUND,
             "missing static Record permission disclosed context: {value}"
+        );
+        assert_eq!(
+            reqwest::Client::new()
+                .get(format!("{}{}", caller.base_url, saved_download))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
         );
     }
     for (claim, value) in [
@@ -602,6 +696,253 @@ async fn review_context_requires_record_grant_and_current_membership() {
         "committed membership revocation disclosed context: {value}"
     );
     assert!(!value.to_string().contains("current-name-canary"));
+    assert_eq!(
+        reqwest::Client::new()
+            .get(format!("{}{}", reader.base_url, saved_download))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "a saved document link must rerun current membership"
+    );
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.\"{}\" SET \"{column}\"=true WHERE record_id=$1::text::uuid",
+                entity.physical_table
+            ),
+            &[&membership],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reqwest::Client::new()
+            .get(format!("{}{}", reader.base_url, saved_download))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    status.active.store(false, Ordering::SeqCst);
+    assert_eq!(
+        send(&reader, Method::GET, &path, Value::Null, None, None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        reqwest::Client::new()
+            .get(format!("{}{}", reader.base_url, saved_download))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "a saved document link must check task-grant status"
+    );
+    status.active.store(true, Ordering::SeqCst);
+    fixture.audit_capture.fail_after(1);
+    let failed_audit = reqwest::Client::new()
+        .get(format!("{}{}", reader.base_url, saved_download))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        failed_audit.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "terminal audit failure withholds exact document bytes"
+    );
+    assert!(!failed_audit
+        .text()
+        .await
+        .unwrap()
+        .contains("frozen-review-document"));
+    drop(reader);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saved_review_document_requires_current_subject_consent() {
+    let mut project = source(false);
+    let consent = consent_fixture::source();
+    let mut decision = consent["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["id"] == "consent-decision")
+        .unwrap()
+        .clone();
+    decision["primaryDataset"] = json!("directory");
+    decision["fields"][0]["target"] = json!("target");
+    project["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .push(decision);
+    let mut record_consent = consent["actions"][0].clone();
+    record_consent["inputs"][0]["target"] = json!("target");
+    project["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(record_consent);
+    project["recipients"] = json!({"organizations":[{"id":"review-org","name":"Review organization","contact":"privacy@example.test","clients":["agent-client"]}]});
+    project["vocabularies"] = json!([
+        {"id":"data-use-purpose","values":["registry-administration"]},
+        {"id":"consent-decision","values":["given","withdrawn","refused","invalidated"]}
+    ]);
+    project["actions"][0]["execution"]["proposal"]["attachments"] = json!([
+        {"id":"support","required":true,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
+    ]);
+    project["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
+        json!({"type":"document","slot":"support"});
+    project["accessProfiles"][0]["permissions"]["proposals"][0]["readableAttachments"] =
+        json!(["support"]);
+    project["accessProfiles"][0]["permissions"]["proposals"][0]["writableAttachments"] =
+        json!(["support"]);
+    project["accessProfiles"][0]["permissions"]["actions"].as_array_mut().unwrap().push(json!({"action":"record-consent","operations":["invoke"],
+        "targets":[{"recordType":"target","rowBoundaries":"unrestricted"},{"recordType":"consent-decision","rowBoundaries":"unrestricted"}],"results":["decision"]}));
+    project["accessProfiles"][1]["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actions");
+    project["accessProfiles"][1]["permissions"]["records"][0]["requireConsent"] =
+        json!([{"record":"consent-decision","on":"id"}]);
+    project["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context"]);
+    project["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["currentName", "proposedName", "document"]);
+    let status = Arc::new(Status {
+        active: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(project),
+        clerk(),
+        move |service| service.with_task_status(status),
+    )
+    .await;
+    let (_, target) = seed(&fixture).await;
+    let (code, draft, etag) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"Consented proposed name"}}),
+        Some("consent-document-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let upload = reqwest::Client::new()
+        .patch(format!(
+            "{}/v1/proposals/{id}/attachments/support?accessProfile=clerk",
+            fixture.http.base_url
+        ))
+        .header("if-match", etag.unwrap())
+        .header("idempotency-key", "consent-document-upload")
+        .header("content-type", "text/plain")
+        .body("consent-bound-document-bytes")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload.status(), StatusCode::OK);
+    let etag = upload.headers()["etag"].to_str().unwrap().to_owned();
+    let (code, submitted, _) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
+        json!({}),
+        Some("consent-document-submit"),
+        Some(&etag),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{submitted}");
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&fixture.registry, &idp).await;
+    let reader = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(token(
+                90,
+                json!([
+                    {"collection":format!("proposal:{id}"),"operations":["get-review-context"]},
+                    {"collection":"targets","operations":["get","list"]}
+                ]),
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    let context_path = format!("/v1/proposals/{id}/review-context?accessProfile=task-reviewer");
+    assert_eq!(
+        send(&reader, Method::GET, &context_path, Value::Null, None, None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND,
+        "no current consent"
+    );
+    let consent_input = |decision: &str| {
+        json!({"input":{"subject":target,"recipient":"review-org","purpose":"registry-administration",
+        "scope":"task-reviewer","decision":decision,"effectiveAt":chrono::Utc::now().to_rfc3339(),"expiresAt":(chrono::Utc::now()+chrono::Duration::days(1)).to_rfc3339()}})
+    };
+    let (code, given, _) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/record-consent?accessProfile=clerk",
+        consent_input("given"),
+        Some("consent-document-given"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{given}");
+    let (code, context, _) =
+        send(&reader, Method::GET, &context_path, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::OK, "{context}");
+    assert_review_contract(&fixture.registry, &context);
+    let path = format!(
+        "{}&accessProfile=task-reviewer",
+        context["context"]["fields"]["document"]["download"]["path"]
+            .as_str()
+            .unwrap()
+    );
+    let download = reqwest::Client::new()
+        .get(format!("{}{}", reader.base_url, path))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(
+        download.bytes().await.unwrap().as_ref(),
+        b"consent-bound-document-bytes"
+    );
+    let (code, revoked, _) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/record-consent?accessProfile=clerk",
+        consent_input("withdrawn"),
+        Some("consent-document-withdrawn"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{revoked}");
+    assert_eq!(
+        send(&reader, Method::GET, &context_path, Value::Null, None, None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        reqwest::Client::new()
+            .get(format!("{}{}", reader.base_url, path))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "cached document metadata cannot bypass current subject consent"
+    );
     drop(reader);
     fixture.finish().await;
 }
@@ -809,6 +1150,12 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
     source["actions"][0]["execution"]["proposal"]["attachments"] = json!([
         {"id":"support","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
     ]);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
+        json!({"type":"document","slot":"support"});
+    source["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("document"));
     for profile in [0, 1] {
         source["accessProfiles"][profile]["permissions"]["proposals"][0]["readableAttachments"] =
             json!(["support"]);
@@ -883,6 +1230,22 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
                 .unwrap(),
         )
         .await;
+    let (code, displayed, _) = send(
+        &current,
+        Method::GET,
+        &format!("/v1/proposals/{id}/review-context?accessProfile=task-reviewer"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{displayed}");
+    let review_download = format!(
+        "{}&accessProfile=task-reviewer",
+        displayed["context"]["fields"]["document"]["download"]["path"]
+            .as_str()
+            .unwrap()
+    );
     for (index, path) in [
         format!("/v1/proposals/{id}?accessProfile=task-reviewer"),
         format!("/v1/proposals/{id}/review-context?accessProfile=task-reviewer"),
@@ -890,6 +1253,7 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
         format!(
             "/v1/proposals/{id}/attachments/support?accessProfile=task-reviewer&submissionVersion=1"
         ),
+        review_download,
     ]
     .into_iter()
     .enumerate()

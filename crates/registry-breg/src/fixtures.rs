@@ -83,6 +83,10 @@ pub const JOURNEYS_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey {
+            pointer: "/journeys/*/steps/*/entity",
+            replacement: "Rename `entity` to `recordType`, keeping the same Record type reference.",
+        },
+        RemovedKey {
             pointer: "/journeys/*/steps/*/request/operation",
             replacement: "Name the request form with `type:`, for example `type: create`. Proposal submission uses `type: proposal`, `transition: submit`, and `proposalCapture` naming an earlier Proposal capture.",
         },
@@ -5778,6 +5782,28 @@ mod tests {
         ] {
             assert!(action_from_json(json!({"type": operation})).is_err());
         }
+    }
+
+    #[test]
+    fn retired_journey_record_type_key_has_rename_diagnostic() {
+        let bytes = serde_json::to_vec(
+            &json!({"apiVersion": JOURNEYS_API_VERSION, "kind": JOURNEYS_KIND,
+            "journeys": [{"id": "read", "steps": [{"id": "read-record", "entity": "record",
+                "accessProfile": "reader", "request": {"type": "get", "recordCapture": "record"},
+                "expect": {"outcome": "success", "status": 200}}]}]}),
+        )
+        .unwrap();
+        let report = match read_journey_document(&bytes) {
+            Err(FixtureError::JourneyDocument(report)) => report,
+            _ => panic!("expected a document refusal"),
+        };
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/journeys/0/steps/0/entity")
+            .expect("the retired Record type key has its own diagnostic");
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(diagnostic.suggested_action.contains("recordType"));
     }
 
     fn action_from_json(value: Value) -> Result<ActionSource, serde_json::Error> {

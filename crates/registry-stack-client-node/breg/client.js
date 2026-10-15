@@ -223,6 +223,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['startProposal'], ['readProposal'], ['getProposal'], ['listProposals'], ['executeProposal'],
   ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
   ['readProposalReviewStatus'], ['readProposalReviewContext'],
+  ['readProposalReviewById'], ['downloadProposalReviewDocument', [1], [1]],
   ['getRecordJson', [2]], ['listRecordsJson', [1]], ['continueListJson', [0], [0]],
   ['getGeoJsonRecordJson', [2]], ['listGeoJsonRecordsJson', [1]],
   ['continueGeoJsonListJson', [0], [0]],
@@ -292,6 +293,7 @@ const BRegPreparedProposal = preparedClass(native.BRegPreparedProposal, 'BRegPre
 for (const name of [
   'selectCreate', 'selectPatch',
   'selectAction', 'selectTombstone', 'selectBatch', 'selectProposals', 'selectProposalGet',
+  'selectProposalReviewContext', 'selectProposalReviewStatus',
 ]) {
   const original = native.BRegMetadata.prototype[name];
   native.BRegMetadata.prototype[name] = function (...args) {
@@ -376,6 +378,7 @@ module.exports = {
   BRegProposal: native.BRegProposal,
   BRegProposalCollection: native.BRegProposalCollection,
   BRegProposalGetBinding: native.BRegProposalGetBinding,
+  BRegProposalReviewBinding: native.BRegProposalReviewBinding,
   BRegActionBinding: native.BRegActionBinding,
   BRegActionTargetConditions: native.BRegActionTargetConditions,
   BRegTombstoneBinding: native.BRegTombstoneBinding,

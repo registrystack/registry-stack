@@ -9,6 +9,30 @@
   Build packages from the current project format and apply them to a fresh
   database. This baseline provides no compatibility layer or state migration
   for the removed contracts.
+- BREAKING: Rust, Node.js and Python clients use standalone Proposal methods.
+  In Node, `immediateActions` and `selectImmediateAction` become `actions` (with
+  a declared mode) and `selectAction`; Action `contractFingerprint` becomes
+  `revision`, and BReg-owned `Entity` identifiers become `RecordType` identifiers.
+  Replace lifecycle methods with `startProposal`, `prepareProposal`,
+  `executeProposal` and `recoverProposal`; replace request attachments with
+  `uploadProposalAttachment`, `downloadProposalAttachment` and
+  `deleteProposalAttachment`. Request history is replaced by explicit
+  `getProposal` and `listProposals` observations. Rust and Python expose the
+  corresponding snake-case methods. Recovery requires a fresh authorized
+  Proposal read. See the [Node client](../../crates/registry-breg-client-node/README.md#standalone-proposals)
+  and [Python client](../../crates/registry-breg-client-py/README.md#standalone-proposals)
+  for the replacement flows.
+- BReg metadata uses version 2 and describes each profile's Proposal operations,
+  readable inputs and governed document-slot requirements. The client refuses
+  older metadata versions; regenerate packages and update clients together.
+- Review context can project a declared supporting document without granting
+  ordinary Proposal Get. Downloads use the frozen submission's bytes and
+  recheck current context disclosure, verification and retention. Review status
+  exposes the accepted provider `requestId` for independently authorized
+  history and notes reads; human context does not expose that ID.
+- `bregctl dev` seeds and retained example results use `recordType`. Removed
+  authoring keys name their replacements, and model inspection includes each
+  field's compiled `fieldType`, including fields absent from query projections.
 - Review policies select the provider's current policy by ID by default. An
   optional complete version and digest pin requires an exact policy. Once
   accepted, a Review keeps its exact policy and frozen submission identity

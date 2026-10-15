@@ -460,6 +460,11 @@ pub struct ProposalReviewContextSource {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ProposalContextValueSource {
+    Document {
+        #[serde(deserialize_with = "local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+        slot: String,
+    },
     Input {
         #[serde(deserialize_with = "local_id")]
         #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
@@ -3723,6 +3728,7 @@ pub struct HookSource {
     /// When the hook runs relative to the triggering transaction.
     pub phase: HookPhase,
     /// Committed record change that can produce this hook.
+    #[serde(deserialize_with = "record_event_trigger")]
     pub trigger: EventTrigger,
     /// Optional field tests, combined with AND. Omit to run on every matching trigger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4218,6 +4224,22 @@ pub enum EventTrigger {
     Tombstoned,
 }
 
+fn record_event_trigger<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<EventTrigger, D::Error> {
+    let trigger = String::deserialize(deserializer)?;
+    if trigger == "request-lifecycle" {
+        return Err(Invalid::expected(
+            "a committed Record event trigger",
+            "Move this observer to the Action's `execution.proposal.hooks`, with optional `transitions` selecting the Proposal lifecycle events and the existing governed `handler`. Record hooks use `created`, `patched`, or `tombstoned`. See products/breg/proposals.md.",
+        )
+        .into_error());
+    }
+    EventTrigger::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(
+        trigger,
+    ))
+}
+
 pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
     parse_json_value(bytes, "project")?;
     read_project_yaml("registry.json", bytes)
@@ -4266,9 +4288,58 @@ pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 const HANDLER_TYPE_REPLACEMENT: &str =
     "Rename `kind` to `type`, keeping its value: `type: rhai`, `type: wasm`, or `type: url`.";
 
+const CHANGE_REQUEST_REPLACEMENT: &str = "Declare one Action with `execution.mode: proposal` and its `execution.proposal` review, application and retention policy. Proposal state is owned by the Action, not a Record type. See products/breg/proposals.md.";
+const CHANGE_CONTROL_REPLACEMENT: &str = "Replace `changeControl.requiredFor` with `mutationPolicy`, setting each governed operation (`create`, `patch`, or `tombstone`) to `proposal-required`. Declare Actions with `execution.mode: proposal` for those writes; keep their review and application policy under `execution.proposal`. See products/breg/proposals.md.";
+const REQUEST_VISIBILITY_REPLACEMENT: &str = "Move Proposal authority into the profile's `permissions.proposals` entry for the Action. Use `ownership: caller` for owner-only access, and explicitly retain the required `operations` and target `rowBoundaries`. See products/breg/proposals.md.";
+const READABLE_REQUEST_FIELDS_REPLACEMENT: &str = "Declare the profile's `permissions.proposals` entry for the Action with explicit `readableInputs`, `readableAttachments`, and `readableContextFields` for the disclosure it needs. Review status uses the separate `get-review-status` operation; do not widen Record or Proposal grants. See products/breg/proposals.md.";
+const EQUALS_INPUT_REPLACEMENT: &str =
+    "Rename `equalsInput` to `equalsFromInput`, keeping the same input reference.";
+const FROM_FIELD_REPLACEMENT: &str =
+    "Rename `fromField` to `fromInput`, keeping the same input reference.";
+
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
 const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/recordTypes/*/changeControl",
+        replacement: CHANGE_CONTROL_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/requestVisibility",
+        replacement: REQUEST_VISIBILITY_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/readableRequestFields",
+        replacement: READABLE_REQUEST_FIELDS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/accessProfiles/*/permissions/records/*/requestVisibility",
+        replacement: REQUEST_VISIBILITY_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/accessProfiles/*/permissions/records/*/readableRequestFields",
+        replacement: READABLE_REQUEST_FIELDS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/commitGuards/targets/*/equalsInput",
+        replacement: EQUALS_INPUT_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/commitGuards/evidence/*/requires/*/equalsInput",
+        replacement: EQUALS_INPUT_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/requires/*/equalsInput",
+        replacement: EQUALS_INPUT_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/plan/effects/*/set/*/fromField",
+        replacement: FROM_FIELD_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/effects/*/set/*/fromField",
+        replacement: FROM_FIELD_REPLACEMENT,
+    },
     RemovedKey {
         pointer: "/recordTypes/*/accessProfiles/*/membershipBoundaries/*/membershipEntity",
         replacement: "Rename `membershipEntity` to `membershipRecordType`.",
@@ -4295,7 +4366,7 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     },
     RemovedKey {
         pointer: "/recordTypes/*/changeRequest",
-        replacement: "Declare one Action with `execution.mode: proposal` and its `execution.proposal` review, application and retention policy. Proposal state is owned by the Action, not a Record type.",
+        replacement: CHANGE_REQUEST_REPLACEMENT,
     },
     RemovedKey {
         pointer: "/registry",
@@ -4377,6 +4448,66 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
 
 /// Members a module no longer accepts, each with the member that replaced it.
 const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/actions/*/requires",
+        replacement: "Use `commitGuards` for conditions checked when the Action commits. Declare target revision guards under `commitGuards.targets`.",
+    },
+    RemovedKey {
+        pointer: "/actions/*/effects",
+        replacement: "Put effects under `plan: {type: fixed, effects: [...]}` and declare `execution.mode` as `immediate` or `proposal`.",
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/changeRequest",
+        replacement: CHANGE_REQUEST_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/changeControl",
+        replacement: CHANGE_CONTROL_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/requestVisibility",
+        replacement: REQUEST_VISIBILITY_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/readableRequestFields",
+        replacement: READABLE_REQUEST_FIELDS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/changeRequest",
+        replacement: CHANGE_REQUEST_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/changeControl",
+        replacement: CHANGE_CONTROL_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/accessProfiles/*/requestVisibility",
+        replacement: REQUEST_VISIBILITY_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/accessProfiles/*/readableRequestFields",
+        replacement: READABLE_REQUEST_FIELDS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/commitGuards/targets/*/equalsInput",
+        replacement: EQUALS_INPUT_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/commitGuards/evidence/*/requires/*/equalsInput",
+        replacement: EQUALS_INPUT_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/requires/*/equalsInput",
+        replacement: EQUALS_INPUT_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/plan/effects/*/set/*/fromField",
+        replacement: FROM_FIELD_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/effects/*/set/*/fromField",
+        replacement: FROM_FIELD_REPLACEMENT,
+    },
     RemovedKey {
         pointer: "/recordTypes/*/accessProfiles/*/membershipBoundaries/*/membershipEntity",
         replacement: "Rename `membershipEntity` to `membershipRecordType`.",

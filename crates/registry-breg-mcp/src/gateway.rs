@@ -294,12 +294,15 @@ impl Gateway {
             .get_proposal(&get, &application.to_string())
             .await?
             .value;
+        if proposal.action_id() != self.spec.action {
+            return Err(ToolError::new(ToolErrorCode::NotFound));
+        }
+        require_action_revision(&session.contract, &proposal)?;
         let input = proposal
             .input()
             .ok_or(ToolError::new(ToolErrorCode::NotFound))?;
-        if proposal.action_id() != self.spec.action
-            || input.get(&session.contract.target_api_name)
-                != Some(&Value::String(own.record_identifier.clone()))
+        if input.get(&session.contract.target_api_name)
+            != Some(&Value::String(own.record_identifier.clone()))
         {
             return Err(ToolError::new(ToolErrorCode::NotFound));
         }
@@ -369,6 +372,8 @@ impl Gateway {
             .after_mutation()
         })?
         .value;
+        require_action_revision(&session.contract, &current)
+            .map_err(|_| ToolError::new(ToolErrorCode::UnexpectedResponse).after_mutation())?;
         if current
             .input()
             .and_then(|input| input.get(&session.contract.target_api_name))
@@ -509,7 +514,15 @@ fn application_summary(proposal: &BRegProposal) -> Value {
     json!({"applicationId":proposal.id(),"revision":proposal.revision().to_string(),
         "status":proposal.state(),"title":proposal.title(),"blockedReason":proposal.blocked_reason()})
 }
+fn require_action_revision(contract: &Contract, proposal: &BRegProposal) -> Result<(), ToolError> {
+    if contract.action_revision != proposal.action_revision() {
+        return Err(ToolError::new(ToolErrorCode::StaleApplication));
+    }
+    Ok(())
+}
+
 fn application_value(contract: &Contract, proposal: &BRegProposal) -> Result<Value, ToolError> {
+    require_action_revision(contract, proposal)?;
     let input = proposal
         .input()
         .ok_or(ToolError::new(ToolErrorCode::NotFound))?;

@@ -58,6 +58,13 @@ pub(crate) struct ProposalRecordReadAuthority {
     pub context: crate::postgres::ClaimContext,
 }
 
+pub(crate) struct ReviewContextDocumentRead<'a> {
+    pub field: &'a str,
+    pub effect_digest: &'a str,
+    pub schema_digest: &'a str,
+    pub records: &'a BTreeMap<String, ProposalRecordReadAuthority>,
+}
+
 fn permission_matches(
     permission: &CompiledProposalPermission,
     claims: &VerifiedRequestClaims,
@@ -975,74 +982,8 @@ async fn review_read(
         )
         .await;
     };
-    let records = (|| {
-        let mut records = BTreeMap::new();
-        if operation == ProposalOperation::GetReviewContext {
-            let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-                return None;
-            };
-            let Some(mapping) = &proposal.review_context else {
-                return None;
-            };
-            for source in mapping.fields.values() {
-                use crate::contract::ProposalContextValueSource;
-                let target = match source {
-                    ProposalContextValueSource::Input { .. } => continue,
-                    ProposalContextValueSource::Record { input, .. } => {
-                        let input = action
-                            .inputs
-                            .iter()
-                            .find(|declared| declared.id == *input)?;
-                        let crate::contract::FieldTypeSource::Reference { target, .. } =
-                            &input.field_type
-                        else {
-                            return None;
-                        };
-                        target
-                    }
-                    ProposalContextValueSource::Changes { record_type, .. } => record_type,
-                };
-                let entity = service.registry.entities().get(target)?;
-                let profile = entity
-                    .access_profiles
-                    .get(authority.common.access_profile())?;
-                if !profile.operations.contains(&Operation::Get)
-                    || authorize_profile_claims(profile, &claims).is_err()
-                {
-                    return None;
-                }
-                let Ok(task_grant) = task_grant_binding(profile, &claims) else {
-                    return None;
-                };
-                let row_boundaries = boundaries(&profile.row_boundaries, &claims)?;
-                let Ok(mut context) = crate::postgres::ClaimContext::for_compiled(
-                    &service.registry,
-                    target,
-                    claims.principal().map(str::to_owned),
-                    authority.common.access_profile(),
-                    claims.purpose().map(str::to_owned),
-                    row_boundaries,
-                )
-                .and_then(|context| context.with_recipients(claims.recipients().clone())) else {
-                    return None;
-                };
-                if let Some(binding) = task_grant {
-                    let Ok(bound) = context.with_task_grant(binding) else {
-                        return None;
-                    };
-                    context = bound;
-                }
-                records.insert(
-                    target.clone(),
-                    ProposalRecordReadAuthority {
-                        fields: profile.readable_fields.iter().cloned().collect(),
-                        context,
-                    },
-                );
-            }
-        }
-        Some(records)
-    })();
+    let records =
+        review_record_authorities(&service.registry, action, &claims, &authority, operation);
     let Some(records) = records else {
         return admitted_http_refusal(
             mutations,
@@ -1061,6 +1002,84 @@ async fn review_read(
         Err(MutationError::PreconditionFailed) => concealed(),
         Err(error) => proposal_problem(error),
     }
+}
+
+/// The complete context's ordinary Record authority is shared by JSON display
+/// and document downloads. A saved link must not bypass current disclosure.
+pub(crate) fn review_record_authorities(
+    registry: &CompiledRegistry,
+    action: &CompiledAction,
+    claims: &VerifiedRequestClaims,
+    authority: &ProposalAuthority,
+    operation: ProposalOperation,
+) -> Option<BTreeMap<String, ProposalRecordReadAuthority>> {
+    let mut records = BTreeMap::new();
+    if operation == ProposalOperation::GetReviewContext {
+        let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            return None;
+        };
+        let Some(mapping) = &proposal.review_context else {
+            return None;
+        };
+        for source in mapping.fields.values() {
+            use crate::contract::ProposalContextValueSource;
+            let target = match source {
+                ProposalContextValueSource::Input { .. }
+                | ProposalContextValueSource::Document { .. } => continue,
+                ProposalContextValueSource::Record { input, .. } => {
+                    let input = action
+                        .inputs
+                        .iter()
+                        .find(|declared| declared.id == *input)?;
+                    let crate::contract::FieldTypeSource::Reference { target, .. } =
+                        &input.field_type
+                    else {
+                        return None;
+                    };
+                    target
+                }
+                ProposalContextValueSource::Changes { record_type, .. } => record_type,
+            };
+            let entity = registry.entities().get(target)?;
+            let profile = entity
+                .access_profiles
+                .get(authority.common.access_profile())?;
+            if !profile.operations.contains(&Operation::Get)
+                || authorize_profile_claims(profile, claims).is_err()
+            {
+                return None;
+            }
+            let Ok(task_grant) = task_grant_binding(profile, claims) else {
+                return None;
+            };
+            let row_boundaries = boundaries(&profile.row_boundaries, claims)?;
+            let Ok(mut context) = crate::postgres::ClaimContext::for_compiled(
+                registry,
+                target,
+                claims.principal().map(str::to_owned),
+                authority.common.access_profile(),
+                claims.purpose().map(str::to_owned),
+                row_boundaries,
+            )
+            .and_then(|context| context.with_recipients(claims.recipients().clone())) else {
+                return None;
+            };
+            if let Some(binding) = task_grant {
+                let Ok(bound) = context.with_task_grant(binding) else {
+                    return None;
+                };
+                context = bound;
+            }
+            records.insert(
+                target.clone(),
+                ProposalRecordReadAuthority {
+                    fields: profile.readable_fields.iter().cloned().collect(),
+                    context,
+                },
+            );
+        }
+    }
+    Some(records)
 }
 
 pub(super) async fn list(

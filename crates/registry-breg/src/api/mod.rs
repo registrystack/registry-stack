@@ -623,7 +623,7 @@ async fn registry_metadata(
         "version": service.registry.version(),
         "revision": service.registry.revision(),
         "recordTypes": entities,
-        "metadataVersion": "1",
+        "metadataVersion": "2",
         "operations": operations,
     });
     if !visible_statistics.is_empty() {
@@ -675,6 +675,13 @@ async fn registry_metadata(
             .remove("conditionRoute");
         description["requiredConditionKeys"] = json!([]);
         description["resultEffects"] = json!([]);
+        if let Some(attachments) = description["attachments"].as_array_mut() {
+            attachments.retain(|slot| {
+                slot["id"]
+                    .as_str()
+                    .is_some_and(|id| grant.readable_attachments.contains(id))
+            });
+        }
         if let Some(inputs) = description["inputs"].as_array_mut() {
             inputs.retain(|input| {
                 input["id"]
@@ -715,7 +722,16 @@ async fn registry_metadata(
         metadata["proposals"] = json!({"method":"GET","path":"/v1/proposals", "accessProfiles":list_profiles,
             "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":get_profiles},
             "actions":inventory.into_iter().map(|((action,profile),operations)|json!({
-                "actionId":action,"accessProfile":profile,"operations":operations})).collect::<Vec<_>>()});
+                "actionId":action,"accessProfile":profile,"operations":operations,
+                "readableInputs":if operations.contains(&"get") { service.registry.actions().actions.iter()
+                    .find(|candidate| candidate.id == action)
+                    .and_then(|candidate| match &candidate.execution {
+                        crate::model::CompiledActionExecution::Proposal { proposal } => proposal.permissions.iter()
+                            .find(|grant| grant.profile_id == profile),
+                        _ => None,
+                    }).map(|grant| grant.readable_inputs.clone()).expect("visible Proposal grant")
+                } else { BTreeSet::new() }
+            })).collect::<Vec<_>>()});
     }
     // A peer that runs in lock-step with this engine release, such as a
     // Casework source adapter, compares this header with its own release and

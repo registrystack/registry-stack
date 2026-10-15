@@ -1,10 +1,15 @@
 # Caller-filtered application metadata
 
-`GET /v1/registry?accessProfile=<profile>` describes the active registry contract
+`GET /v1/registry?accessProfile=<profile>` describes the active
+Base Registry Engine (BReg) contract
 under the selected caller and profile. Discovery grants no authority: execution
 rechecks current package identity, verified claims, fields, rows, and operation
 grants. Unknown and ungranted work remains concealed. Discard metadata, records,
 ETags, cursors, and drafts when caller or profile identity changes.
+
+The served format is `metadataVersion: "2"`. Clients refuse version 1 before
+interpreting its shape; there are no aliases for retired members. Unknown
+optional extensions remain ignorable within the validated version-2 grammar.
 
 ## Record types and operations
 
@@ -27,7 +32,7 @@ record authority. A link or relationship never grants target disclosure.
 
 ## Actions
 
-One Action descriptor carries a fixed `execution.mode`: `immediate` or `proposal`.
+One Action descriptor carries a fixed `mode`: `immediate` or `proposal`.
 It includes stable identity and revision, public names, typed inputs, reference
 inputs, bounds, permitted results, required capabilities, and the promoted route
 for Invoke or Start. Selection validates the descriptor before producing an
@@ -40,6 +45,20 @@ Proposal with its own locator and revision. Generated TypeScript and Python
 project types come from the same compiled contract; generic metadata clients
 remain available. The facility console uses these contracts for typed Action
 inputs, titles, reference navigation, refusals, and Proposal resumption.
+
+For build-time form generation, `bregctl generate actions PROJECT --output DIR`
+writes the public `action-contracts/v1` document and its schema under
+`generated/`. Check the format version and each Action's revision when consuming
+it. This export is a build artifact, not an activated-package discovery endpoint.
+It describes the authored contract without a caller's grants; use runtime
+metadata and promoted Proposal links for current permissions and availability.
+Regenerate it when the authored Action changes.
+
+A caller-visible Proposal Action includes declared `attachments` summaries:
+slot `id`, `required`, `contentTypes`, and `maximumBytes`. A starter can explain
+document requirements before creating a draft. A Get-only Action description
+includes only that profile's readable slots. These summaries disclose no bytes
+or lifecycle links and grant no upload, download, or delete authority.
 
 ## Proposals and promoted links
 
@@ -63,6 +82,14 @@ condition. Never substitute a record ETag, invent a lifecycle URL, or follow a
 credential-bearing redirect. Refetch after a transition and select a new link.
 List requires explicit List authority and conceals inaccessible work before
 filtering or counting; Get alone does not permit collection discovery.
+
+`proposals.actions` is a read-only inventory of each visible `actionId` and
+`accessProfile` pair, its `operations`, and its `readableInputs`. Rust exposes
+`proposal_actions()`, Node exposes `proposalActions`, and Python exposes
+`proposal_actions` from one validated client model. Profiles are never unioned.
+Start does not imply Get, and List or Apply can be advertised without a Start
+route. Hosts can use the exact inventory to choose their UI; per-Proposal links
+still determine currently available lifecycle operations.
 
 Attachments expose only granted slots and operations. Respect each slot's byte
 bound, content types, required-for-submit rule, verification status, and current

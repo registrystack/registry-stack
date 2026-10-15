@@ -14,6 +14,10 @@ A Record type, relationship, route, field, access profile, and event exists only
 when an active Registry package declares it. For example, an establishment's
 assignment to its operating business is an ordinary configured relationship.
 
+BReg authoring uses `recordTypes` and `recordType`; `manifestProjection.entities`
+keeps Registry Manifest vocabulary, and the record envelope
+`entityTypeIdentifier` keeps the independent Registry Record contract.
+
 The product starts with two executables:
 
 - `breg` loads one verified package and serves its configured REST

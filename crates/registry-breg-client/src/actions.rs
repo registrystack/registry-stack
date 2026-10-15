@@ -1039,7 +1039,7 @@ mod tests {
             "id": "fixture-registry",
             "version": "1",
             "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "metadataVersion": "1",
+            "metadataVersion": "2",
             "recordTypes": [],
             "operations": [],
             "actions": [{

@@ -2,6 +2,7 @@
 import json
 import threading
 import unittest
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from bootstrap import ensure_built
 
@@ -12,8 +13,9 @@ ID = '00000000-0000-4000-8000-000000000001'
 REVISION = 'sha256:' + 'a' * 64
 METADATA = {
     'id': 'proposal-lookup', 'version': '1', 'revision': REVISION,
-    'metadataVersion': '1', 'recordTypes': [], 'operations': [], 'actions': [],
+    'metadataVersion': '2', 'recordTypes': [], 'operations': [], 'actions': [],
     'proposals': {'method': 'GET', 'path': '/v1/proposals', 'accessProfiles': [],
+                  'actions': [{'actionId': 'correct', 'accessProfile': 'reader', 'operations': ['get'], 'readableInputs': ['address-line']}],
                   'get': {'method': 'GET', 'path': '/v1/proposals/{proposal_id}', 'accessProfiles': ['reader']}},
 }
 PROPOSAL = {
@@ -26,6 +28,58 @@ PROPOSAL = {
 
 
 class ProposalLookupTests(unittest.TestCase):
+    def test_metadata_inventory_summaries_and_version_refusals(self):
+        fixture = Path(__file__).resolve().parents[3] / 'registry-breg-client/tests/fixtures/attachments.json'
+        document = json.loads(fixture.read_text())['metadata']
+        document['actions'][0]['attachments'] = [{'id': 'supporting-file', 'required': True,
+                                                'contentTypes': ['application/pdf'], 'maximumBytes': 1024}]
+        document['proposals'] = {'actions': [
+            {'actionId': 'correct', 'accessProfile': 'queue', 'operations': ['list'], 'readableInputs': []},
+            {'actionId': 'correct', 'accessProfile': 'executor', 'operations': ['apply'], 'readableInputs': []}]}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                payload = json.dumps(document).encode()
+                self.send_response(200)
+                for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                 ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'),
+                                 ('vary', 'authorization, accept'), ('content-length', str(len(payload)))]:
+                    self.send_header(key, val)
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/')
+            metadata = client.registry_contract('writer')
+            self.assertEqual(metadata.proposal_actions, [
+                {'action_id': 'correct', 'access_profile': 'queue', 'operations': ['list'], 'readable_inputs': []},
+                {'action_id': 'correct', 'access_profile': 'executor', 'operations': ['apply'], 'readable_inputs': []}])
+            self.assertEqual(metadata.actions[0]['attachments'], [{'id': 'supporting-file', 'required': True,
+                                                                  'content_types': ['application/pdf'], 'maximum_bytes': 1024}])
+            with self.assertRaises(BaseRegistryClientError):
+                metadata.select_action('correct', 'queue')
+            document = {'metadataVersion': '1'}
+            with self.assertRaises(BaseRegistryClientError):
+                client.registry_contract('writer')
+            document = dict(METADATA)
+            document['entities'] = document.pop('recordTypes')
+            with self.assertRaises(BaseRegistryClientError):
+                client.registry_contract('reader')
+            document = json.loads(json.dumps(METADATA))
+            del document['proposals']['actions'][0]['readableInputs']
+            with self.assertRaises(BaseRegistryClientError):
+                client.registry_contract('reader')
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
     def test_get_only_capability_retains_origin_prefix_and_projection(self):
         requests = []
 
@@ -51,6 +105,8 @@ class ProposalLookupTests(unittest.TestCase):
         try:
             client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
             metadata = client.registry_contract('reader')
+            self.assertEqual(metadata.proposal_actions, [{'action_id': 'correct', 'access_profile': 'reader',
+                                                         'operations': ['get'], 'readable_inputs': ['address-line']}])
             with self.assertRaises(BaseRegistryClientError):
                 metadata.select_proposals('reader')
             binding = metadata.select_proposal_get('reader')

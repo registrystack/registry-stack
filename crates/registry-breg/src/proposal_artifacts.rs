@@ -37,11 +37,28 @@ pub(crate) fn append_proposal_openapi(
                     }
                 }
             }
-            for slot_id in grant
+            let document_fields = proposal
+                .review_context
+                .as_ref()
+                .into_iter()
+                .flat_map(|context| context.fields.iter())
+                .filter_map(|(field, source)| match source {
+                    crate::contract::ProposalContextValueSource::Document { slot }
+                        if permitted(ProposalOperation::GetReviewContext)
+                            && grant.readable_context_fields.contains(field) =>
+                    {
+                        Some((field, slot))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let slot_ids = grant
                 .readable_attachments
                 .iter()
                 .chain(grant.writable_attachments.iter())
-            {
+                .chain(document_fields.iter().map(|(_, slot)| *slot))
+                .collect::<BTreeSet<_>>();
+            for slot_id in slot_ids {
                 let Some(slot) = proposal.attachments.get(slot_id) else {
                     continue;
                 };
@@ -49,8 +66,9 @@ pub(crate) fn append_proposal_openapi(
                 let methods = [
                     (
                         "get",
-                        permitted(ProposalOperation::Get)
-                            && grant.readable_attachments.contains(slot_id),
+                        (permitted(ProposalOperation::Get)
+                            && grant.readable_attachments.contains(slot_id))
+                            || document_fields.iter().any(|(_, slot)| *slot == slot_id),
                     ),
                     (
                         "patch",
@@ -75,7 +93,24 @@ pub(crate) fn append_proposal_openapi(
                     );
                     if method == "get" {
                         operation["parameters"].as_array_mut().unwrap().push(json!({"name":"submissionVersion","in":"query","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
-                        operation["responses"]["200"]["content"] = json!({"application/octet-stream":{"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}});
+                        for (name, schema) in [
+                            (
+                                "reviewContextField",
+                                json!({"type":"string","pattern":"^[a-z][a-zA-Z0-9]{0,63}$"}),
+                            ),
+                            (
+                                "effectDigest",
+                                json!({"type":"string","pattern":"^sha256:[a-f0-9]{64}$"}),
+                            ),
+                            (
+                                "contextSchemaDigest",
+                                json!({"type":"string","pattern":"^sha256:[a-f0-9]{64}$"}),
+                            ),
+                        ] {
+                            operation["parameters"].as_array_mut().unwrap().push(json!({"name":name,"in":"query","required":false,"schema":schema,
+                                "description":"All three review-context query members are required together and select only get-review-context authority. Omit all three for ordinary get authority."}));
+                        }
+                        operation["responses"]["200"]["content"] = json!({"application/octet-stream":{"schema":{"type":"string","format":"binary","maxLength":crate::contract::MAX_ATTACHMENT_BYTES}}});
                     } else if method == "patch" {
                         let content=slot.content_types.iter().map(|mime|(mime.clone(),json!({"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}))).collect::<Map<_,_>>();
                         operation["requestBody"] = json!({"required":true,"content":content});

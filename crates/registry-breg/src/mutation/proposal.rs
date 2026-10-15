@@ -2440,6 +2440,18 @@ impl MutationCoordinator {
                 }
             }
             ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) => {
+                if let CompiledActionExecution::Proposal { proposal } = &action.execution {
+                    if proposal.review_context.as_ref().is_some_and(|context| {
+                        context.fields.values().any(|source| {
+                            matches!(
+                                source,
+                                crate::contract::ProposalContextValueSource::Document { .. }
+                            )
+                        })
+                    }) {
+                        self.verify_proposal_attachment_binding(tx).await?;
+                    }
+                }
                 value["context"]["fields"] = Value::Object(
                     context_projection::fields(tx, registry, document, authority, records, frozen)
                         .await?,

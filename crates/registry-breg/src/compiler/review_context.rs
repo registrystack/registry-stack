@@ -43,7 +43,7 @@ pub fn compile_schema_from_parts(
         Diagnostic::error(
             "breg.proposal.context-schema-invalid",
             format!("actions[id={}].execution.proposal.reviewContext", action.id),
-            "review-context fields must retain their compiled input, Record or frozen-change binding",
+            "review-context fields must retain their compiled input, document, Record or frozen-change binding",
         )
     };
     let mut properties = Map::new();
@@ -51,6 +51,16 @@ pub fn compile_schema_from_parts(
     let mut bindings = Map::new();
     for (name, projection) in &context.fields {
         let (schema, classification, binding) = match projection {
+            ProposalContextValueSource::Document { slot } => {
+                let declared = proposal.attachments.get(slot).ok_or_else(&invalid)?;
+                (
+                    document_schema(slot, declared.required),
+                    declared.classification,
+                    json!({"kind":"frozen-document","slot":slot,"required":declared.required,
+                        "classification":declared.classification,"contentTypes":declared.content_types,
+                        "maximumBytes":declared.maximum_bytes,"transport":"breg-review-context-document/v1"}),
+                )
+            }
             ProposalContextValueSource::Input { input } => {
                 let input = action
                     .inputs
@@ -165,4 +175,27 @@ fn digest(bytes: &[u8]) -> String {
         "sha256:{}",
         crate::immediate_actions::hex_lower(&Sha256::digest(bytes))
     )
+}
+
+fn document_schema(slot: &str, required: bool) -> Value {
+    let value = json!({"type":"object","additionalProperties":false,
+    "required":["type","slotId","sha256","contentType","byteSize","download"],
+    "properties":{
+        "type":{"const":"document"},"slotId":{"const":slot},
+        "sha256":{"type":"string","pattern":"^[a-f0-9]{64}$","minLength":64,"maxLength":64},
+        "contentType":{"type":"string","minLength":3,"maxLength":255,"pattern":"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$"},
+        "byteSize":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+        "download":{"type":"object","additionalProperties":false,
+            "required":["method","operation","accessProfile","path"],"properties":{
+                "method":{"const":"GET"},"operation":{"const":"get-review-context"},
+                "accessProfile":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                "path":{"type":"string","minLength":1,"maxLength":2048,
+                    "pattern":"^/v1/proposals/[0-9a-f-]{36}/attachments/[a-z][a-z0-9_-]{0,63}\\?submissionVersion=[1-9][0-9]{0,9}&reviewContextField=[a-z][a-zA-Z0-9]{0,63}&effectDigest=sha256%3A[0-9a-f]{64}&contextSchemaDigest=sha256%3A[0-9a-f]{64}$"}
+            }}
+    }});
+    if required {
+        value
+    } else {
+        json!({"anyOf":[value,{"type":"null"}]})
+    }
 }

@@ -2052,15 +2052,18 @@ jobs:
 
       - name: Verify retained example recovery after process exit
         # An inexact name filter that selects nothing still exits 0, so the
-        # step names the test exactly and fails unless it reports one pass.
+        # step names each test exactly and fails unless it reports one pass.
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked -p registry-bregctl --lib \
-            dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records \
-            -- --ignored --exact \
-            | tee "${RUNNER_TEMP}/breg-example-recovery.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery.log" || { echo "::error::expected exactly one passing test for native_create_recovers_after_process_exit_without_duplicate_records"; exit 1; }
+          for test in \
+            native_create_recovers_after_process_exit_without_duplicate_records \
+            native_invoke_recovers_original_conditions_after_restart; do
+            cargo test --locked -p registry-bregctl --lib \
+              "dev::examples::tests::${test}" -- --ignored --exact \
+              | tee "${RUNNER_TEMP}/breg-example-recovery-${test}.log"
+            grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery-${test}.log" || { echo "::error::expected exactly one passing test for ${test}"; exit 1; }
+          done
 
       - name: Execute the Base Registry Engine tutorials from a reader directory
         shell: bash

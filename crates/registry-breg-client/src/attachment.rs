@@ -5,6 +5,29 @@ pub const MAX_BREG_ATTACHMENT_CONTENT_TYPES: usize = 16;
 pub const MAX_BREG_ATTACHMENT_SLOTS: usize = 8;
 pub const MAX_BREG_ATTACHMENT_CONTENT_TYPE_BYTES: usize = 255;
 
+/// Check downloaded bytes against the exact frozen document advertisement.
+pub(crate) fn verify_download(
+    response: crate::BRegComplete<crate::BRegRawDocument>,
+    content_type: &str,
+    byte_size: u64,
+    sha256: &str,
+) -> Result<crate::BRegComplete<crate::BRegRawDocument>, crate::BaseRegistryClientError> {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(response.value.as_bytes());
+    let actual_hash: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    if response.value.media_type() != content_type
+        || response.value.as_bytes().len() as u64 != byte_size
+        || actual_hash != sha256
+    {
+        return Err(crate::BaseRegistryClientError::protocol(
+            200,
+            crate::BRegProtocolFailure::Body,
+            Some(response.metadata.trace_id().clone()),
+        ));
+    }
+    Ok(response)
+}
+
 /// The exact concrete media type grammar the engine compiles and serves: one
 /// lowercase `type/subtype` pair with no parameters and no wildcard.
 #[must_use]

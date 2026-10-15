@@ -54,7 +54,7 @@ before(async () => {
       id: 'test-registry',
       version: '1.0.0',
       revision: `sha256:${'a'.repeat(64)}`,
-      metadataVersion: '1',
+      metadataVersion: '2',
       recordTypes: [],
       operations: [],
     }));

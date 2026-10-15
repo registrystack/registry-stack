@@ -616,6 +616,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                 "canonicalId": {"id": record_type.canonical_id.id,
                     "apiName": record_type.canonical_id.api_name,
                     "classification": record_type.canonical_id.classification,
+                    "fieldType": record_type.canonical_id.field_type,
                     "schema": field_value_schema(&record_type.canonical_id.field_type, false)},
                 "tombstone": record_type.tombstone, "batch": record_type.batch,
                 "temporal": record_type.temporal, "geojson": record_type.geojson,
@@ -633,11 +634,13 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                 })).collect::<Vec<_>>(),
                 "fields": record_type.stored_fields.iter().map(|field| json!({
                     "id": field.logical.id, "apiName": field.logical.api_name,
+                    "fieldType": field.logical.field_type,
                     "schema": field_value_schema(&field.logical.field_type, !field.required),
                     "classification": field.logical.classification,
                     "required": field.required, "validTimeRole": field.valid_time_role,
                 })).chain(record_type.derived_fields.values().map(|field| json!({
                     "id": field.logical.id, "apiName": field.logical.api_name,
+                    "fieldType": field.logical.field_type,
                     "schema": field_value_schema(&field.logical.field_type, true),
                     "classification": field.logical.classification,
                     "required": false, "derivation": field.derivation_id,
@@ -1089,7 +1092,17 @@ pub(crate) fn public_action_metadata_entry(
             "maximumSnapshotBytes": action.maximum_snapshot_bytes,
         }
     });
-    if action.execution.is_proposal() {
+    if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+        metadata["attachments"] = json!(proposal
+            .attachments
+            .values()
+            .map(|slot| json!({
+                "id": slot.id,
+                "required": slot.required,
+                "contentTypes": slot.content_types,
+                "maximumBytes": slot.maximum_bytes,
+            }))
+            .collect::<Vec<_>>());
         metadata
             .as_object_mut()
             .expect("action metadata object")

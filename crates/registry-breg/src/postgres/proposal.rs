@@ -253,6 +253,7 @@ impl PostgresRecordMutationService {
         version: u32,
         slot: &str,
         authority: &ProposalAuthority,
+        review: Option<&crate::api::proposals::ReviewContextDocumentRead<'_>>,
         correlation: &crate::correlation::RequestCorrelation,
     ) -> Result<(String, Vec<u8>), MutationError> {
         let _attempt = self
@@ -286,16 +287,47 @@ impl PostgresRecordMutationService {
                 proposal_store::DocumentLock::Update,
             )
             .await?;
-            self.coordinator
-                .authorize_proposal_document(
+            if review.is_some() {
+                if authority.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) {
+                    return Err(MutationError::PreconditionFailed);
+                }
+                self.coordinator.authorize_proposal_review_read(
                     guarded.transaction(),
                     &self.registry,
                     &document,
                     authority,
-                )
-                .await?;
+                ).await?;
+            } else {
+                if authority.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get) {
+                    return Err(MutationError::PreconditionFailed);
+                }
+                self.coordinator.authorize_proposal_document(
+                    guarded.transaction(), &self.registry, &document, authority,
+                ).await?;
+            }
             if document.header.submission_version != i64::from(version) {
                 return Err(MutationError::PreconditionFailed);
+            }
+            if let Some(review) = review {
+                let action = self.registry.actions().actions.iter().find(|action| action.id == document.action_id)
+                    .ok_or(MutationError::PreconditionFailed)?;
+                let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution else {
+                    return Err(MutationError::PreconditionFailed);
+                };
+                if !matches!(proposal.review_context.as_ref().and_then(|context| context.fields.get(review.field)),
+                    Some(crate::contract::ProposalContextValueSource::Document { slot: mapped }) if mapped == slot) {
+                    return Err(MutationError::PreconditionFailed);
+                }
+                // Run the entire ordinary context disclosure, including consent
+                // and membership, under this same transaction before any bytes.
+                let context = self.coordinator.proposal_review_value(
+                    guarded.transaction(), &self.registry, &document, authority, review.records,
+                ).await?;
+                if context["effectDigest"].as_str() != Some(review.effect_digest)
+                    || context["context"]["contract"]["schemaDigest"].as_str() != Some(review.schema_digest)
+                    || context["context"]["fields"][review.field].is_null() {
+                    return Err(MutationError::PreconditionFailed);
+                }
             }
             self.coordinator
                 .verify_proposal_attachment_binding(guarded.transaction())

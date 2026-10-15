@@ -26,6 +26,8 @@ pub(crate) enum Refusal {
     /// The registry refused or concealed a read, or the draft names no
     /// readable target. Rendered as the one neutral not-found page.
     NotFound,
+    /// The current Action metadata cannot describe this retained draft.
+    ActionChanged,
     /// The registry no longer accepts the person's token.
     SignedOut,
     /// The registry definitely declined the request, so it had no effect.
@@ -103,6 +105,11 @@ pub(crate) async fn load(
                 && action.access_profile() == profile.access_profile
         })
         .ok_or(Refusal::NotFound)?;
+    // Retained inputs belong to the Action revision that prepared them.
+    // Bind that revision before interpreting a target, field name or label.
+    if action.definition_revision() != proposal.action_revision() {
+        return Err(Refusal::ActionChanged);
+    }
     let target_input = action
         .reference_inputs()
         .iter()

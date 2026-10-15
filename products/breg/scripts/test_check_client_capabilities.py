@@ -13,7 +13,7 @@ class CapabilityInventoryTests(unittest.TestCase):
     def query_binding_inputs(self):
         root = CHECK.ROOT
         inventory = CHECK.json.loads(CHECK.INVENTORY.read_text())
-        rust = "\n".join(path.read_text() for path in (root / "crates/registry-breg-client/src").glob("*.rs"))
+        rust = "\n".join(path.read_text() for path in (root / "crates/registry-breg-client/src").rglob("*.rs"))
         node = (root / "crates/registry-breg-client-node/client.d.ts").read_text()
         python = (root / "crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi").read_text()
         return inventory, rust, node, python
@@ -86,12 +86,26 @@ class CapabilityInventoryTests(unittest.TestCase):
     def test_attachment_version_uses_the_promoted_proposal_not_a_caller_version(self):
         inventory, rust, node, python = self.query_binding_inputs()
         binding = inventory["queryOptionBindings"]["submissionVersion"]
-        self.assertEqual(binding["rust"], ["BaseRegistryClient.download_proposal_attachment.proposal"])
+        self.assertEqual(binding["rust"], ["BaseRegistryClient.download_proposal_attachment.proposal", "BaseRegistryClient.download_proposal_review_document.context"])
         without_proposal = node.replace("downloadProposalAttachment(proposal:", "downloadProposalAttachment(unbound:")
         self.assertIn(
             "submissionVersion: missing node query-option declaration BaseRegistryClient.downloadProposalAttachment.proposal",
             CHECK.check_query_option_bindings(inventory, rust, without_proposal, python),
         )
+
+
+    def test_review_document_queries_use_bound_context_and_selected_field(self):
+        inventory, rust, node, python = self.query_binding_inputs()
+        for option in ["effectDigest", "contextSchemaDigest"]:
+            self.assertEqual(inventory["queryOptionBindings"][option]["rust"],
+                             ["BaseRegistryClient.download_proposal_review_document.context"])
+        self.assertEqual(inventory["queryOptionBindings"]["reviewContextField"]["rust"],
+                         ["BaseRegistryClient.download_proposal_review_document.field"])
+        without_context = node.replace(
+            "context: BRegProposalReviewDocument, field: string", "unbound: BRegProposalReviewDocument, field: string")
+        errors = CHECK.check_query_option_bindings(inventory, rust, without_context, python)
+        self.assertIn("effectDigest: missing node query-option declaration BaseRegistryClient.downloadProposalReviewDocument.context", errors)
+        self.assertEqual(CHECK.check_query_option_bindings(inventory, rust, node, python), [])
 
 
 if __name__ == "__main__":

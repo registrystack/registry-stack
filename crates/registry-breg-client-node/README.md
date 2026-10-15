@@ -1,6 +1,6 @@
 # registry-breg-client-node
 
-Internal napi-rs binding for the Rust `registry-breg-client` SDK. It is built
+Internal napi-rs binding for the Base Registry Engine (BReg) Rust client. It is built
 into the public `@registrystack/client` package and is not published as a
 standalone npm package.
 
@@ -163,7 +163,7 @@ idempotency key.
 optional change or correction context. It enforces the served item and body
 bounds, writable fields, per-patch ETags, bounded reason text, and source
 references before sending one atomic request. `tombstoneRecord` requires the
-selected entity binding, record UUID, current strong ETag, and caller-chosen
+selected Record type binding, record UUID, current strong ETag, and caller-chosen
 idempotency key. Exact JSON variants preserve large integer values in inputs
 and receipts.
 
@@ -220,6 +220,13 @@ does not recover an uncertain command. To retain a Start attempt, use
 `prepareActionJson` before `startProposal`, then `recoverActionJson` and
 `executeRecoveredProposalStart` with fresh Action authority and the original
 inputs and key. Protect saved bytes as private application state.
+
+Transition recovery requires a freshly authorized Proposal observation, obtained
+with Get or as an item from List, and a matching transition or receipt-only
+recovery link. The Get flow needs a current `get` grant; an authorized List item
+can also supply the observation. Losing all such read access, including access
+to a current target row, prevents recovery by that caller. Preserve the original
+attempt for an authorized operator; do not infer failure or send it under a new key.
 
 ## Proposal attachments
 

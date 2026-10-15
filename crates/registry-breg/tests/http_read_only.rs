@@ -3917,7 +3917,7 @@ async fn workspace_metadata_keeps_route_fields_selectors_and_query_capabilities_
         .await;
     assert_eq!(response.headers()["cache-control"], "no-store");
     let document = body_json(response).await;
-    assert_eq!(document["metadataVersion"], "1");
+    assert_eq!(document["metadataVersion"], "2");
     assert!(document["revision"].is_string());
     let path = metadata_operation(&document, "records.household.path.people");
     assert_eq!(path["sourceRecordType"], "household");

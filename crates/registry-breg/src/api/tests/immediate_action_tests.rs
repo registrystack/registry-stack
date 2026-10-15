@@ -1047,6 +1047,168 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     assert_eq!(refused.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn proposal_metadata_roundtrips_exact_profile_inventory_and_document_requirements() {
+    use registry_breg_client::BRegMetadata;
+    use tower::ServiceExt;
+
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.actions[0].execution = serde_json::from_value(json!({
+        "mode":"proposal", "proposal": {
+            "review":{"type":"none"}, "application":{"mode":"manual"}, "retention":{"mode":"retain"},
+            "attachments":[
+                {"id":"supporting-file","required":true,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted"},
+                {"id":"private-file","required":false,"maximumBytes":2048,"contentTypes":["image/png"],"classification":"restricted"}
+            ]
+        }
+    })).unwrap();
+    let mut hidden = project.actions[0].clone();
+    hidden.id = "hidden-rename".into();
+    project.actions.push(hidden);
+    project.access_profiles.clear();
+    for (profile, starts, operations, readable, slots) in [
+        (
+            "author",
+            true,
+            json!(["get"]),
+            json!(["case-ref"]),
+            json!(["supporting-file"]),
+        ),
+        ("starter", true, json!([]), json!([]), json!([])),
+        (
+            "reader",
+            false,
+            json!(["get"]),
+            json!(["case-ref"]),
+            json!(["supporting-file"]),
+        ),
+        ("queue", false, json!(["list"]), json!([]), json!([])),
+        ("executor", false, json!(["apply"]), json!([]), json!([])),
+        ("hidden", true, json!(["get"]), json!([]), json!([])),
+    ] {
+        let action = if profile == "hidden" {
+            "hidden-rename"
+        } else {
+            "rename-case"
+        };
+        let targets = json!([{"recordType":"case","rowBoundaries":"unrestricted"}]);
+        let actions = if starts {
+            json!([{"action":action,"operations":["start"],"targets":targets}])
+        } else {
+            json!([])
+        };
+        let proposals = if operations.as_array().unwrap().is_empty() {
+            json!([])
+        } else {
+            json!([{"action":action,"operations":operations,"ownership":"caller","targets":targets,
+                "readableInputs":readable,"readableAttachments":slots}])
+        };
+        project.access_profiles.push(serde_json::from_value(json!({
+            "id":profile,"principalClaim":"registry_principal",
+            "requiredScopes":[if profile == "hidden" { "case.hidden" } else { "case.rename" }],
+            "requiredPurposes":["case-management"], "permissions":{"actions":actions,"proposals":proposals}
+        })).unwrap());
+    }
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let service = Arc::new(service_for(registry, true));
+    let caller = claims(
+        "registry_principal",
+        ["case.rename"],
+        Some("case-management"),
+        true,
+    );
+    for profile in ["author", "starter", "reader", "queue", "executor"] {
+        let mut request = axum::http::Request::builder()
+            .uri(format!("/v1/registry?accessProfile={profile}"))
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(caller.clone());
+        let response = super::super::router(service.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{profile}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let document = response_json(response).await;
+        assert_eq!(document["metadataVersion"], "2");
+        let rendered = document.to_string();
+        for hidden in [
+            "hidden-rename",
+            "case.hidden",
+            "rowBoundaries",
+            "reviewPolicy",
+            "registry_principal",
+        ] {
+            assert!(!rendered.contains(hidden), "{profile} leaked {hidden}");
+        }
+        let metadata = BRegMetadata::from_slice(&serde_json::to_vec(&document).unwrap()).unwrap();
+        if profile == "starter" {
+            assert!(metadata.proposal_actions().is_empty());
+            assert!(document.get("proposals").is_none());
+        } else {
+            let inventory = metadata.proposal_actions();
+            assert_eq!(inventory.len(), 1);
+            assert_eq!(inventory[0].access_profile(), profile);
+            assert_eq!(inventory[0].action_identifier(), "rename-case");
+            assert_eq!(
+                inventory[0].operations(),
+                [match profile {
+                    "queue" => "list",
+                    "executor" => "apply",
+                    _ => "get",
+                }]
+            );
+            assert_eq!(
+                inventory[0].readable_inputs(),
+                if matches!(profile, "author" | "reader") {
+                    vec!["case-ref"]
+                } else {
+                    vec![]
+                }
+            );
+        }
+        if matches!(profile, "queue" | "executor") {
+            assert!(metadata.actions().is_empty());
+            assert!(document.get("actions").is_none());
+        } else {
+            let action = &metadata.actions()[0];
+            assert_eq!(action.access_profile(), profile);
+            if profile == "reader" {
+                assert_eq!(action.inputs().len(), 1);
+                assert_eq!(action.inputs()[0].identifier(), "case-ref");
+                assert_eq!(action.attachments().len(), 1);
+                assert!(action.invoke_path().is_none());
+                assert!(!rendered.contains("private-file"));
+            } else {
+                assert_eq!(action.inputs().len(), 2);
+                assert_eq!(action.attachments().len(), 2);
+                assert!(action.invoke_path().is_some());
+            }
+            let slot = action
+                .attachments()
+                .iter()
+                .find(|slot| slot.identifier() == "supporting-file")
+                .unwrap();
+            assert!(slot.required());
+            assert_eq!(slot.maximum_bytes(), 1024);
+            assert_eq!(slot.content_types(), ["application/pdf"]);
+        }
+    }
+    let mut request = axum::http::Request::builder()
+        .uri("/v1/registry?accessProfile=hidden")
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(caller);
+    assert_eq!(
+        super::super::router(service)
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
 async fn response_json(response: Response) -> Value {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();

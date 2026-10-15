@@ -157,6 +157,7 @@ actions:
             facilityId: {type: input, input: facility}
             currentAddressLine: {type: record, input: facility, field: address-line}
             changes: {type: changes, recordType: facility, fields: [address-line, city, postal-code]}
+            supportingDocument: {type: document, slot: supporting-document}
         retention: {mode: retain}
         attachments:
           - {id: supporting-document, required: false, maximumBytes: 1048576, contentTypes: [application/pdf], classification: restricted}
@@ -343,7 +344,7 @@ accessProfiles:
       proposals:
         - action: correct-address
           operations: [get-review-context]
-          readableContextFields: [facilityId, currentAddressLine, changes]
+          readableContextFields: [facilityId, currentAddressLine, changes, supportingDocument]
           targets:
             - recordType: facility
               rowBoundaries:

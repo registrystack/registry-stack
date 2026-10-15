@@ -25,7 +25,7 @@ clients:
 seed:
 - id: active
   client: operator
-  entity: record
+  recordType: record
   accessProfile: operator
   data:
     code: SYNTHETIC-ACTIVE
@@ -34,7 +34,7 @@ seed:
     label: SYNTHETIC-PRIVATE-LABEL
 - id: retired
   client: operator
-  entity: record
+  recordType: record
   accessProfile: operator
   data:
     code: SYNTHETIC-RETIRED
@@ -43,7 +43,7 @@ seed:
     label: SYNTHETIC-PRIVATE-LABEL
 - id: missing-status
   client: operator
-  entity: record
+  recordType: record
   accessProfile: operator
   data:
     code: SYNTHETIC-MISSING

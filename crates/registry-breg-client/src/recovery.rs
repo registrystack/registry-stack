@@ -71,6 +71,8 @@ struct CreateEvidence {
 capsule!(BRegPreparedCreate, CreateEvidence);
 
 fn create_identity(binding: &BRegCreateBinding) -> Value {
+    // `entity` is part of the opaque version-1 CreateEvidence identity, not
+    // project authoring. Changing it requires an explicit evidence version bump.
     serde_json::json!({
         "registry": binding.registry_identifier(),
         "dataset": binding.dataset_identifier(),

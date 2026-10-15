@@ -91,8 +91,8 @@ fn request(input: Value, operation: Operation) -> CallRequest {
 async fn authority(server: &MockServer, value: Value) -> Arc<Mutex<Value>> {
     Mock::given(method("GET")).and(path("/tenant/base/v1/registry")).and(query_param("accessProfile", "writer"))
         .respond_with(response(json!({"id":"facilities","version":"1","revision":REVISION,
-            "metadataVersion":"1","recordTypes":[],"operations":[],
-            "proposals":{"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]}}})))
+            "metadataVersion":"2","recordTypes":[],"operations":[],
+            "proposals":{"actions":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]}}})))
         .mount(server).await;
     let current = Arc::new(Mutex::new(value));
     let observed = current.clone();

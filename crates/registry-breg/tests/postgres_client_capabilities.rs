@@ -34,7 +34,7 @@ fn registry() -> registry_breg::CompiledRegistry {
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
           {"id":"valid-to","type":"date","classification":"internal"}
         ],
-        "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
+        "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       },{
         "id":"timestamp-entry","primaryDataset":"test-dataset","route":"timestamp-entries","mutationMode":"mutable","classification":"internal",
@@ -43,7 +43,7 @@ fn registry() -> registry_breg::CompiledRegistry {
           {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
           {"id":"valid-to","type":"timestamp","classification":"internal"}
         ],
-        "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
+        "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       }],
       "accessProfiles":[{

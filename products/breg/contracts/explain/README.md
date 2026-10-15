@@ -42,6 +42,13 @@ references to `recordType`. Query operations use `recordType` in place of
 and no longer describe the removed request operations. Lifecycle inspection
 replaces the request state machine with the Proposal state machine.
 
+Model field entries always include `id`, `apiName`, `required`, `classification`,
+`schema` and `fieldType`, including fields absent from every query projection.
+`fieldType` carries the same compiled type object as query field summaries, so
+a form can distinguish multiline `text` from a bounded `string` and discover a
+reference's target. Its internal shape follows the engine field type contract;
+the JSON value `schema` remains the validation contract for field values.
+
 Consumers of these seven formats must select the corresponding `v1alpha5`
 schema and use the native fields above. `ProposalsExplanation` starts at
 `v1alpha1`. Event inspection adds the owning hook phase and Proposal transition

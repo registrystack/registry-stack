@@ -198,6 +198,54 @@ fn explain_model_matches_contract() {
 }
 
 #[test]
+fn model_field_types_describe_unprojected_text_without_a_query_join() {
+    let project = tempfile::tempdir().unwrap();
+    let source = std::fs::read_to_string(
+        fixture_path("products/breg/examples/minimal").join("registry.yaml"),
+    )
+    .unwrap()
+    .replace(
+        "id: name, type: string, required: true, minimumLength: 1",
+        "id: name, type: text, required: true",
+    )
+    .replace(
+        "readableFields: [name, email, jurisdiction]",
+        "readableFields: [email, jurisdiction]",
+    );
+    std::fs::write(project.path().join("registry.yaml"), source).unwrap();
+    let model = explain("model", project.path());
+    let fields = model["recordTypes"][0]["fields"].as_array().unwrap();
+    let field = |id: &str| fields.iter().find(|field| field["id"] == id).unwrap();
+    assert_eq!(field("name")["fieldType"]["type"], "text");
+    assert_eq!(field("email")["fieldType"]["type"], "string");
+    let queries = explain("queries", project.path());
+    assert!(queries["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|operation| {
+            operation["apiFields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|field| field["field"] != "name")
+        }));
+    let schema = load_schema("ModelExplanation");
+    assert!(schema.is_valid(&model));
+    for invalid in [Value::Null, json!("text")] {
+        let mut changed = model.clone();
+        changed["recordTypes"][0]["fields"][0]["fieldType"] = invalid;
+        assert!(!schema.is_valid(&changed));
+    }
+    let mut missing = model;
+    missing["recordTypes"][0]["fields"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("fieldType");
+    assert!(!schema.is_valid(&missing));
+}
+
+#[test]
 fn explain_access_matches_contract() {
     for (name, relative) in FIXTURES {
         let explanation = explain("access", &fixture_path(relative));

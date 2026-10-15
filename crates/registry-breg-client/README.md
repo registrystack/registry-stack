@@ -1,7 +1,7 @@
 # Base Registry Engine Rust client
 
-`registry-breg-client` is the canonical bounded Rust client for Base Registry
-Engine. Its public API uses the BReg technical family and the
+`registry-breg-client` is the canonical bounded Rust client for
+Base Registry Engine (BReg). Its public API uses the BReg technical family and the
 `BaseRegistryClient` entry point.
 
 One method performs one explicitly initiated HTTP exchange, except that a
@@ -226,6 +226,13 @@ Submit freezes the exact submission. Apply carries `submissionVersion` and
 and no NUL. Persist `BRegPreparedProposal` before dispatch; after restart,
 `recover_proposal` restores the original condition, body and key under current
 ordinary authority. A later status read does not recover an uncertain command.
+
+Recovery requires a freshly authorized Proposal observation, obtained with Get
+or as an item from List, and a matching transition or receipt-only recovery link.
+The Get flow needs a current `get` grant; an authorized List item can also supply
+the observation. Losing all such read access, including access to a current
+target row, prevents recovery by that caller. Preserve the evidence for an
+authorized operator; do not infer failure or submit the mutation under a new key.
 
 Use `select_proposal_get` on the current `registry_contract`, then use
 `get_proposal` for an authorized representation. Its optional `applicationStatus`

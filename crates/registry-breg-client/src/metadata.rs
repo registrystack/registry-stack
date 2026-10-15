@@ -1,6 +1,6 @@
 //! Bounded, caller-bound Base Registry Engine runtime metadata.
 //!
-//! Only the served `GET /v1/registry` metadata v1 document can produce an
+//! Only the served `GET /v1/registry` metadata v2 document can produce an
 //! executable operation binding. Generated entity summaries and older
 //! metadata artifacts are deliberately insufficient authority.
 
@@ -916,6 +916,76 @@ pub enum BRegActionMode {
     Proposal,
 }
 
+/// Declared document requirement on one caller-visible Proposal Action.
+/// This summary grants no access to a Proposal or its bytes.
+#[derive(Clone, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegActionAttachmentDescriptor {
+    id: String,
+    required: bool,
+    content_types: Vec<String>,
+    maximum_bytes: u64,
+}
+
+impl BRegActionAttachmentDescriptor {
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+    pub fn content_types(&self) -> &[String] {
+        &self.content_types
+    }
+    pub const fn maximum_bytes(&self) -> u64 {
+        self.maximum_bytes
+    }
+}
+
+impl fmt::Debug for BRegActionAttachmentDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegActionAttachmentDescriptor")
+            .field("required", &self.required)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Read-only Proposal capability inventory for one exact Action/profile pair.
+/// Operations are descriptive; runtime Proposal links govern execution.
+#[derive(Clone, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegProposalActionDescriptor {
+    action_id: String,
+    access_profile: String,
+    operations: Vec<String>,
+    readable_inputs: Vec<String>,
+}
+
+impl BRegProposalActionDescriptor {
+    pub fn action_identifier(&self) -> &str {
+        &self.action_id
+    }
+    pub fn access_profile(&self) -> &str {
+        &self.access_profile
+    }
+    pub fn operations(&self) -> &[String] {
+        &self.operations
+    }
+    pub fn readable_inputs(&self) -> &[String] {
+        &self.readable_inputs
+    }
+}
+
+impl fmt::Debug for BRegProposalActionDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegProposalActionDescriptor")
+            .field("operation_count", &self.operations.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Complete descriptive metadata for one caller-visible Action.
 #[derive(Clone, PartialEq)]
 pub struct BRegActionDescriptor {
@@ -930,6 +1000,7 @@ pub struct BRegActionDescriptor {
     input_mode: Option<String>,
     maximum_input_string_bytes: Option<u64>,
     inputs: Vec<BRegActionInputDescriptor>,
+    attachments: Vec<BRegActionAttachmentDescriptor>,
     reference_inputs: Vec<BRegActionReferenceInputDescriptor>,
     required_condition_keys: Vec<String>,
     result_effects: Vec<BRegActionResultEffectDescriptor>,
@@ -968,6 +1039,10 @@ impl BRegActionDescriptor {
     #[must_use]
     pub fn inputs(&self) -> &[BRegActionInputDescriptor] {
         &self.inputs
+    }
+    #[must_use]
+    pub fn attachments(&self) -> &[BRegActionAttachmentDescriptor] {
+        &self.attachments
     }
     #[must_use]
     pub fn reference_inputs(&self) -> &[BRegActionReferenceInputDescriptor] {
@@ -1009,7 +1084,7 @@ impl fmt::Debug for BRegActionDescriptor {
     }
 }
 
-/// Validated Base Registry Engine runtime metadata v1 for one caller projection.
+/// Validated Base Registry Engine runtime metadata v2 for one caller projection.
 #[derive(Clone, PartialEq)]
 pub struct BRegMetadata {
     id: String,
@@ -1020,6 +1095,7 @@ pub struct BRegMetadata {
     action_metadata: Option<Value>,
     statistical_datasets: Option<Value>,
     proposals: Option<Value>,
+    proposal_actions: Vec<BRegProposalActionDescriptor>,
     actions: Vec<BRegActionDescriptor>,
     source_binding: Option<String>,
 }
@@ -1049,11 +1125,11 @@ impl BRegMetadata {
         action: &str,
         status: bool,
     ) -> Result<crate::BRegProposalReviewBinding, BRegMetadataSelectionError> {
+        if self.proposals.is_none() {
+            return Err(selection_error(BRegMetadataSelectionErrorKind::NotFound));
+        }
         crate::BRegProposalReviewBinding::from_metadata(
-            self.proposals
-                .as_ref()
-                .and_then(|value| value.get("actions"))
-                .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?,
+            &serde_json::to_value(&self.proposal_actions).expect("validated Proposal inventory"),
             self.source_binding
                 .as_ref()
                 .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?,
@@ -1098,7 +1174,7 @@ impl BRegMetadata {
         )
         .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
     }
-    /// Parse runtime metadata v1 bytes using duplicate-key detection and
+    /// Parse runtime metadata v2 bytes using duplicate-key detection and
     /// resource bounds before interpreting known members. Unknown object
     /// members are ignored; required capabilities still gate execution.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, BRegMetadataError> {
@@ -1154,13 +1230,19 @@ impl BRegMetadata {
         self.statistical_datasets.as_ref()
     }
 
-    /// Returns complete typed caller-filtered immediate-action descriptors.
+    /// Exact caller-visible Action/profile Proposal inventory, without execution authority.
+    #[must_use]
+    pub fn proposal_actions(&self) -> &[BRegProposalActionDescriptor] {
+        &self.proposal_actions
+    }
+
+    /// Returns complete typed caller-filtered Action descriptors.
     #[must_use]
     pub fn actions(&self) -> &[BRegActionDescriptor] {
         &self.actions
     }
 
-    /// Promote one complete caller-visible immediate-action contract.
+    /// Promote one complete caller-visible Invoke or Start contract.
     pub fn select_action(
         &self,
         action_identifier: &str,
@@ -2382,7 +2464,7 @@ impl fmt::Debug for BRegPatchBinding {
 fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
     let mut root = object(value)?;
     let metadata_version = string(required(&mut root, "metadataVersion")?)?;
-    if metadata_version != "1" {
+    if metadata_version != "2" {
         return Err(metadata_error(BRegMetadataErrorKind::Version));
     }
     let id = identifier(required(&mut root, "id")?)?;
@@ -2400,7 +2482,16 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         .map(parse_operation)
         .collect::<Result<Vec<_>, _>>()?;
     let action_metadata = root.remove("actions");
-    let proposals = root.remove("proposals");
+    let mut proposals = root.remove("proposals");
+    let proposal_actions = match proposals.as_mut() {
+        None => Vec::new(),
+        Some(value) => {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+            parse_proposal_actions(required(object, "actions")?)?
+        }
+    };
     let statistical_datasets = root
         .remove("statisticalDatasets")
         .map(parse_statistical_datasets)
@@ -2426,6 +2517,7 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         action_metadata,
         statistical_datasets,
         proposals,
+        proposal_actions,
         actions,
         source_binding: None,
     })
@@ -2632,17 +2724,6 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
     }
-    if fields.iter().any(|field| {
-        field
-            .schema
-            .get("x-registry-fieldKind")
-            .and_then(Value::as_str)
-            == Some("attachment")
-            && (create_writable_fields.contains(&field.id)
-                || patch_writable_fields.contains(&field.id))
-    }) {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
     let request = parse_request(required(&mut operation, "request")?)?;
     let record_type_label = bounded_text(required(&mut operation, "recordTypeLabel")?)?;
     validate_envelope_identifier(required(&mut operation, "identifier")?)?;
@@ -2655,19 +2736,8 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
     let selectors = parse_selectors(required(&mut operation, "selectors")?)?;
-    let slots = fields
-        .iter()
-        .filter(|field| {
-            field
-                .schema
-                .get("x-registry-fieldKind")
-                .and_then(Value::as_str)
-                == Some("attachment")
-        })
-        .map(|field| field.id.as_str())
-        .collect::<BTreeSet<_>>();
     let mut query_value = required(&mut operation, "query")?;
-    let spatial_is_supported = validate_query(query_value.clone(), &slots)?;
+    let spatial_is_supported = validate_query(query_value.clone())?;
     if !spatial_is_supported {
         query_value
             .as_object_mut()
@@ -2708,21 +2778,11 @@ fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {
     let id = identifier(required(&mut field, "id")?)?;
     let api_name_value = required(&mut field, "apiName")?;
     let schema = required(&mut field, "schema")?;
-    // Slot IDs are verbatim API properties. Keep ordinary scalar API naming strict.
-    let attachment =
-        schema.get("x-registry-fieldKind").and_then(Value::as_str) == Some("attachment");
-    let api_name = if attachment {
-        identifier(api_name_value)?
-    } else {
-        api_name(api_name_value)?
-    };
+    let api_name = api_name(api_name_value)?;
     let required_value = boolean(required(&mut field, "required")?)?;
     let nullable = boolean(required(&mut field, "nullable")?)?;
     let read_only = boolean(required(&mut field, "readOnly")?)?;
     let removable = boolean(required(&mut field, "removable")?)?;
-    if attachment && (api_name != id || required_value || !nullable || !read_only || removable) {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
     let label = bounded_text(required(&mut field, "label")?)?;
     let storage_validation = field
         .remove("storageValidation")
@@ -2930,23 +2990,15 @@ fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BR
     Ok(parsed)
 }
 
-fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<bool, BRegMetadataError> {
+fn validate_query(value: Value) -> Result<bool, BRegMetadataError> {
     if value.is_null() {
         return Ok(true);
     }
     let mut query = object(value)?;
     identifier(required(&mut query, "kind")?)?;
-    validate_field_identities(required(&mut query, "selectableFields")?, None, slots)?;
-    validate_field_identities(
-        required(&mut query, "filterableFields")?,
-        Some("operators"),
-        slots,
-    )?;
-    validate_field_identities(
-        required(&mut query, "sortableFields")?,
-        Some("directions"),
-        slots,
-    )?;
+    validate_field_identities(required(&mut query, "selectableFields")?, None)?;
+    validate_field_identities(required(&mut query, "filterableFields")?, Some("operators"))?;
+    validate_field_identities(required(&mut query, "sortableFields")?, Some("directions"))?;
     boolean(required(&mut query, "allowCount")?)?;
     positive_integer(required(&mut query, "defaultPageSize")?)?;
     positive_integer(required(&mut query, "maximumPageSize")?)?;
@@ -2979,25 +3031,13 @@ fn validate_spatial_queries(value: Value) -> Result<bool, BRegMetadataError> {
 fn validate_field_identities(
     value: Value,
     extra_member: Option<&str>,
-    slots: &BTreeSet<&str>,
 ) -> Result<(), BRegMetadataError> {
     let mut ids = BTreeSet::new();
     let mut api_names = BTreeSet::new();
     for field in array(value)? {
         let mut field = object(field)?;
         let id = identifier(required(&mut field, "id")?)?;
-        // A slot identifier is its own verbatim API property. Every other
-        // queryable field keeps strict scalar API naming.
-        let api_name_value = required(&mut field, "apiName")?;
-        let api = if slots.contains(id.as_str()) {
-            let api = identifier(api_name_value)?;
-            if api != id {
-                return Err(metadata_error(BRegMetadataErrorKind::Shape));
-            }
-            api
-        } else {
-            api_name(api_name_value)?
-        };
+        let api = api_name(required(&mut field, "apiName")?)?;
         if !ids.insert(id) || !api_names.insert(api) {
             return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
         }
@@ -3144,6 +3184,14 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
             None | Some(Value::Null) => None,
             Some(value) => Some(positive_integer(value)?),
         };
+        let attachments = action
+            .remove("attachments")
+            .map(parse_action_attachments)
+            .transpose()?
+            .unwrap_or_default();
+        if mode == BRegActionMode::Immediate && !attachments.is_empty() {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
         let inputs = array(required(&mut action, "inputs")?)?
             .into_iter()
             .map(parse_action_input)
@@ -3251,6 +3299,7 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
             input_mode,
             maximum_input_string_bytes,
             inputs,
+            attachments,
             reference_inputs,
             required_condition_keys,
             result_effects,
@@ -3261,6 +3310,83 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
         });
     }
     Ok(parsed)
+}
+
+fn parse_proposal_actions(
+    value: Value,
+) -> Result<Vec<BRegProposalActionDescriptor>, BRegMetadataError> {
+    let mut identities = BTreeSet::new();
+    array(value)?
+        .into_iter()
+        .map(|value| {
+            let mut entry = object(value)?;
+            let action_id = identifier(required(&mut entry, "actionId")?)?;
+            let access_profile = identifier(required(&mut entry, "accessProfile")?)?;
+            if !identities.insert((action_id.clone(), access_profile.clone())) {
+                return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
+            }
+            let operations = identifier_array(required(&mut entry, "operations")?)?;
+            ensure_unique(operations.iter().map(String::as_str))?;
+            if operations.is_empty() {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            let readable_inputs = identifier_array(required(&mut entry, "readableInputs")?)?;
+            ensure_unique(readable_inputs.iter().map(String::as_str))?;
+            if !readable_inputs.is_empty() && !operations.iter().any(|operation| operation == "get")
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            finish(entry)?;
+            Ok(BRegProposalActionDescriptor {
+                action_id,
+                access_profile,
+                operations,
+                readable_inputs,
+            })
+        })
+        .collect()
+}
+
+fn parse_action_attachments(
+    value: Value,
+) -> Result<Vec<BRegActionAttachmentDescriptor>, BRegMetadataError> {
+    let slots = array(value)?
+        .into_iter()
+        .map(|value| {
+            let mut slot = object(value)?;
+            let id = identifier(required(&mut slot, "id")?)?;
+            let required_slot = boolean(required(&mut slot, "required")?)?;
+            let maximum_bytes = positive_integer(required(&mut slot, "maximumBytes")?)?;
+            if maximum_bytes > crate::MAX_BREG_ATTACHMENT_BYTES {
+                return Err(metadata_error(BRegMetadataErrorKind::Bound));
+            }
+            let content_types = array(required(&mut slot, "contentTypes")?)?
+                .into_iter()
+                .map(bounded_text)
+                .collect::<Result<Vec<_>, _>>()?;
+            ensure_unique(content_types.iter().map(String::as_str))?;
+            if content_types.is_empty()
+                || content_types.len() > crate::MAX_BREG_ATTACHMENT_CONTENT_TYPES
+                || content_types
+                    .iter()
+                    .any(|value| !crate::valid_attachment_content_type(value))
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            finish(slot)?;
+            Ok(BRegActionAttachmentDescriptor {
+                id,
+                required: required_slot,
+                content_types,
+                maximum_bytes,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    ensure_unique(slots.iter().map(|slot| slot.id.as_str()))?;
+    if slots.len() > crate::MAX_BREG_ATTACHMENT_SLOTS {
+        return Err(metadata_error(BRegMetadataErrorKind::Bound));
+    }
+    Ok(slots)
 }
 
 fn parse_action_input(value: Value) -> Result<BRegActionInputDescriptor, BRegMetadataError> {

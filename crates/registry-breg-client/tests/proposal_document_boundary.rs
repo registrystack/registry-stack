@@ -1,32 +1,52 @@
 // SPDX-License-Identifier: Apache-2.0
-use std::sync::{Arc, Mutex};
+use async_trait::async_trait;
+use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 
 use axum::{extract::State, routing::any, Json, Router};
 use registry_breg_client::{
-    BRegIdempotencyKey, BRegMetadata, BRegProposal, BRegProposalQuery, BaseRegistryClient,
-    BaseRegistryClientConfig,
+    BRegIdempotencyKey, BRegMetadata, BRegPreparedProposal, BRegProposal, BRegProposalQuery,
+    BaseRegistryClient, BaseRegistryClientConfig,
 };
 use serde_json::{json, Value};
 
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+#[derive(Debug, Default)]
+struct CountingToken(AtomicUsize);
+#[async_trait]
+impl TokenProvider for CountingToken {
+    async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        BearerToken::new("proposal-boundary-token")
+    }
+}
+
 struct Fixture {
     client: BaseRegistryClient,
     metadata: BRegMetadata,
     response: Arc<Mutex<Value>>,
+    requests: Arc<AtomicUsize>,
+    token: Arc<CountingToken>,
     server: tokio::task::JoinHandle<()>,
 }
 impl Fixture {
     async fn start() -> Self {
-        let response = Arc::new(Mutex::new(json!({"metadataVersion":"1","id":"directory",
+        let response = Arc::new(Mutex::new(json!({"metadataVersion":"2","id":"directory",
             "version":"1","revision":DIGEST,"recordTypes":[],"operations":[],
             "proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":["writer"],
                 "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["writer"]},
                 "actions":[{"actionId":"correct","accessProfile":"writer",
+                    "readableInputs":[],
                     "operations":["get-review-context","get-review-status"]}]}})));
+        let requests = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
-            .fallback(any(|State(value): State<Arc<Mutex<Value>>>| async move {
+            .fallback(any(|State((value, requests)): State<(Arc<Mutex<Value>>, Arc<AtomicUsize>)>| async move {
+                requests.fetch_add(1, Ordering::SeqCst);
                 (
                     [
                         (
@@ -39,13 +59,15 @@ impl Fixture {
                     Json(value.lock().unwrap().clone()),
                 )
             }))
-            .with_state(response.clone());
+            .with_state((response.clone(), requests.clone()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let token = Arc::new(CountingToken::default());
         let client = BaseRegistryClient::new(
             BaseRegistryClientConfig::new(format!("http://{address}/").parse().unwrap())
-                .with_max_mutation_retries(0),
+                .with_max_mutation_retries(0)
+                .with_token_provider(token.clone()),
         )
         .unwrap();
         let metadata = client
@@ -57,6 +79,8 @@ impl Fixture {
             client,
             metadata,
             response,
+            requests,
+            token,
             server,
         }
     }
@@ -234,6 +258,7 @@ async fn review_status_reads_require_complete_terminal_evidence_and_parse_instan
     for (name, result) in cases {
         let mut invalid = review(false);
         invalid["result"] = result;
+        invalid["requestId"] = json!(ID);
         fixture.answer(invalid);
         if fixture
             .client
@@ -267,6 +292,7 @@ async fn review_status_reads_require_complete_terminal_evidence_and_parse_instan
             valid["reviewable"] = json!(reviewable);
             if state != "pending" {
                 valid["result"] = terminal(state);
+                valid["requestId"] = json!(ID);
             }
             fixture.answer(valid);
             assert!(
@@ -284,6 +310,46 @@ async fn review_status_reads_require_complete_terminal_evidence_and_parse_instan
                     .await
                     .is_ok(),
                 "promoted:{state}:{reviewable}"
+            );
+        }
+    }
+    for state in [
+        "approved",
+        "rejected",
+        "changes-requested",
+        "answered",
+        "cancelled",
+        "superseded",
+        "expired",
+    ] {
+        for request_id in [
+            None,
+            Some(json!("")),
+            Some(json!("not-a-request")),
+            Some(json!("00000000-0000-0000-0000-000000000000")),
+            Some(json!("00000000-0000-4000-8000-00000000000A")),
+        ] {
+            let mut invalid = review(false);
+            invalid["result"] = terminal(state);
+            if let Some(request_id) = request_id {
+                invalid["requestId"] = request_id;
+            }
+            fixture.answer(invalid);
+            assert!(
+                fixture
+                    .client
+                    .read_proposal_review_by_id(&binding, ID)
+                    .await
+                    .is_err(),
+                "uuid:{state}"
+            );
+            assert!(
+                fixture
+                    .client
+                    .read_proposal_review_status(&held)
+                    .await
+                    .is_err(),
+                "promoted:{state}"
             );
         }
     }
@@ -356,6 +422,67 @@ async fn review_context_and_status_preserve_their_distinct_result_projections() 
         accepted.is_empty(),
         "accepted invalid result projections: {accepted:?}"
     );
+}
+
+#[tokio::test]
+async fn invalid_transition_states_are_refused_before_credentials_or_http() {
+    let fixture = Fixture::start().await;
+    for state in ["draft", "submitted", "applied", "cancelled"] {
+        for operation in [
+            "edit", "submit", "revise", "rebase", "retry", "cancel", "apply",
+        ] {
+            let legal = match state {
+                "draft" => matches!(operation, "edit" | "submit" | "rebase" | "cancel"),
+                "submitted" => matches!(
+                    operation,
+                    "revise" | "rebase" | "retry" | "cancel" | "apply"
+                ),
+                _ => false,
+            };
+            if legal {
+                continue;
+            }
+            let mut document = proposal(state);
+            // The server may still promote an unavailable receipt-recovery link in a terminal state.
+            document["links"][operation] = json!({"method":"POST","path":format!("/v1/proposals/{ID}/{operation}"),
+                "accessProfile":"writer","operation":operation,"ifMatch":"\"condition\""});
+            let held = fixture.proposal(document).await;
+            let tokens = fixture.token.0.load(Ordering::SeqCst);
+            let requests = fixture.requests.load(Ordering::SeqCst);
+            let body = match operation {
+                "edit" | "rebase" => json!({"input":{}}),
+                "apply" => json!({"submissionVersion":1,"effectDigest":DIGEST}),
+                _ => json!({}),
+            };
+            assert!(
+                fixture
+                    .client
+                    .prepare_proposal(
+                        &held,
+                        operation,
+                        body,
+                        &BRegIdempotencyKey::parse("invalid-state").unwrap()
+                    )
+                    .is_err(),
+                "{state}:{operation}"
+            );
+            assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+            assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+        }
+    }
+    let held = fixture.proposal(proposal("draft")).await;
+    let attempt = fixture
+        .client
+        .prepare_proposal(
+            &held,
+            "submit",
+            json!({}),
+            &BRegIdempotencyKey::parse("saved-state").unwrap(),
+        )
+        .unwrap();
+    let mut saved: Value = serde_json::from_slice(attempt.as_bytes()).unwrap();
+    saved["state"] = json!("submitted");
+    assert!(BRegPreparedProposal::from_slice(&serde_json::to_vec(&saved).unwrap()).is_err());
 }
 
 #[tokio::test]

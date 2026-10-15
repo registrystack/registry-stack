@@ -69,6 +69,7 @@ struct Registry {
     /// The active package revision. A real engine binds every idempotency
     /// key to it, so a key first answered under another revision conflicts.
     package_revision: u64,
+    published_metadata: Option<Value>,
     allowed_operations: Option<BTreeSet<String>>,
     seen: Vec<Seen>,
     next_problem: Option<(Method, String, BRegProblemCode)>,
@@ -173,6 +174,10 @@ impl MockRegistry {
     /// Activate another package revision, as an operator upgrade would.
     pub fn activate_package(&self) {
         self.state.lock().package_revision += 1;
+    }
+
+    pub fn publish_metadata(&self, metadata: Value) {
+        self.state.lock().published_metadata = Some(metadata);
     }
 
     /// Pass the receipt horizon of every key answered so far, as time does.
@@ -400,7 +405,11 @@ async fn metadata(
     if !profile_selected(query.as_deref()) {
         return problem(BRegProblemCode::ResourceNotFound);
     }
-    let mut body: Value = serde_json::from_slice(METADATA).expect("fixture metadata is JSON");
+    let mut body = state
+        .lock()
+        .published_metadata
+        .clone()
+        .unwrap_or_else(|| serde_json::from_slice(METADATA).expect("fixture metadata is JSON"));
     if !grant_allows(&headers, "start", None) {
         body["actions"][0].as_object_mut().unwrap().remove("route");
         body["actions"][0]["routes"] = json!({});

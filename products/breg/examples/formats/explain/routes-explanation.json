@@ -260,7 +260,8 @@
     },
     {
       "accessProfiles": [
-        "facility-correction-author"
+        "facility-correction-author",
+        "proposal-reviewer"
       ],
       "defaultAccessProfile": null,
       "id": "proposals.attachments.supporting-document.get",
