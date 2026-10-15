@@ -65,7 +65,7 @@
     - ['Attempt timeout', 'Compiled ceiling: 5,000 ms. Runtime may lower it to a minimum of 100 ms.']
     - ['Retry delays', '1, 2, 4, then 8 seconds, stopping at the deployed attempt limit.']
     - ['Payload size', 'Event-specific compiled bound, at most 1 MiB.']
-    - ['Payload retention', '`retention.payloadRetentionDays`: default 7, range 1 to 30 days, measured from capture. Replay does not extend expiry.']
+    - ['Payload retention', '`retention.hookPayloadRetentionDays`: default 7, range 1 to 30 days, measured from capture. Replay does not extend expiry.']
     - ['Successful payload', 'Erased when the successful terminal state commits.']
     - ['Ordering', 'No global or per-record ordering guarantee.']
 - id: retry-replay

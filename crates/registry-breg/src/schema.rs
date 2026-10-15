@@ -1141,7 +1141,7 @@ mod tests {
                 Value::from(300_u64),
             ),
             (
-                "/properties/retention/default/payloadRetentionDays",
+                "/properties/retention/default/hookPayloadRetentionDays",
                 Value::from(7_u64),
             ),
             (
@@ -1235,7 +1235,7 @@ mod tests {
             &schema,
             "payload retention above runtime maximum",
             |instance| {
-                instance["retention"] = serde_json::json!({"payloadRetentionDays": 31});
+                instance["retention"] = serde_json::json!({"hookPayloadRetentionDays": 31});
             },
         );
         assert_schema_rejects_parser_refused_runtime(

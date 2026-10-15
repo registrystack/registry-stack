@@ -1187,7 +1187,7 @@
     "RawRetentionConfig": {
       "additionalProperties": false,
       "properties": {
-        "payloadRetentionDays": {
+        "hookPayloadRetentionDays": {
           "default": 7,
           "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
           "format": "uint32",
@@ -1531,7 +1531,7 @@
     "retention": {
       "$ref": "#/$defs/RawRetentionConfig",
       "default": {
-        "payloadRetentionDays": 7,
+        "hookPayloadRetentionDays": 7,
         "receiptRetentionDays": 7
       },
       "description": "Optional retention windows for idempotency receipts and retained\nevent payloads. Defaults to a seven-day receipt horizon and the\nserver's bounded payload retention policy."

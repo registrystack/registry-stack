@@ -1071,7 +1071,7 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for days in [1_u8, 30_u8] {
         let config = parse_runtime_config(&format!(
-            "{base}\nretention:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
         ))
         .expect("bounded deployment retention parses");
         assert_eq!(
@@ -1081,14 +1081,20 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
     }
     for days in [0_u8, 31_u8] {
         let error = parse_runtime_config(&format!(
-            "{base}\nretention:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/retention/payloadRetentionDays")
+            ("config.out-of-range", "/retention/hookPayloadRetentionDays")
         );
     }
+    let error = parse_runtime_config(&format!("{base}\nretention:\n  payloadRetentionDays: 7\n"))
+        .expect_err("the hook payload window has one name");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.unknown-key", "/retention/payloadRetentionDays")
+    );
 }
 
 #[test]
@@ -1132,12 +1138,12 @@ fn retention_windows_outside_the_retention_block_are_refused_naming_the_new_path
         (
             "eventDelivery:\n  payloadRetentionDays: 7\n",
             "/eventDelivery",
-            "retention.payloadRetentionDays",
+            "retention.hookPayloadRetentionDays",
         ),
         (
             "eventDelivery: {}\n",
             "/eventDelivery",
-            "retention.payloadRetentionDays",
+            "retention.hookPayloadRetentionDays",
         ),
         (
             "idempotency:\n  receiptRetentionDays: 7\n",

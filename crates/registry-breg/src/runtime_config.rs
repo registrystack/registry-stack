@@ -165,11 +165,11 @@ const REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "eventDelivery",
-        replacement: "move eventDelivery.payloadRetentionDays to retention.payloadRetentionDays and delete the eventDelivery block; the value stays as it is",
+        replacement: "move eventDelivery.payloadRetentionDays to retention.hookPayloadRetentionDays and delete the eventDelivery block; the value stays as it is",
     },
     RemovedKey {
         path: "eventDelivery.payloadRetentionDays",
-        replacement: "rename eventDelivery.payloadRetentionDays to retention.payloadRetentionDays; the value stays as it is",
+        replacement: "rename eventDelivery.payloadRetentionDays to retention.hookPayloadRetentionDays; the value stays as it is",
     },
     RemovedKey {
         path: "idempotency",
@@ -2338,7 +2338,7 @@ impl RetentionConfig {
         Self {
             receipt_retention_days: raw.receipt_retention_days,
             payload_retention: Duration::from_secs(
-                u64::from(raw.payload_retention_days) * 24 * 60 * 60,
+                u64::from(raw.hook_payload_retention_days) * 24 * 60 * 60,
             ),
         }
     }
@@ -3147,14 +3147,14 @@ struct RawRetentionConfig {
         feature = "schema",
         schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
     )]
-    payload_retention_days: u8,
+    hook_payload_retention_days: u8,
 }
 
 impl Default for RawRetentionConfig {
     fn default() -> Self {
         Self {
             receipt_retention_days: default_receipt_retention_days(),
-            payload_retention_days: default_webhook_payload_retention_days(),
+            hook_payload_retention_days: default_webhook_payload_retention_days(),
         }
     }
 }

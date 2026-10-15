@@ -43,8 +43,8 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   assert.ok(runtime.has('eventDestinations.*.hmacSha256KeyRef'));
   assert.ok(runtime.has('eventDestinations.*.tls.clientIdentityRef'));
   assert.ok(runtime.has('eventDestinations.*.deliveryCeilings.maximumAttempts'));
-  assert.deepEqual(runtime.get('retention.payloadRetentionDays').defaults, ['7']);
-  assert.ok(runtime.get('retention.payloadRetentionDays').constraints.flat().includes('maximum: 30'));
+  assert.deepEqual(runtime.get('retention.hookPayloadRetentionDays').defaults, ['7']);
+  assert.ok(runtime.get('retention.hookPayloadRetentionDays').constraints.flat().includes('maximum: 30'));
 });
 
 test('schema defaults preserve false, null, collections, and referenced defaults', () => {

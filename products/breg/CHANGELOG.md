@@ -6,7 +6,8 @@
   top-level `retention` block, the shape Scheduling and Messaging use.
   `idempotency.receiptRetentionDays` becomes `retention.receiptRetentionDays`
   and `eventDelivery.payloadRetentionDays` becomes
-  `retention.payloadRetentionDays`; defaults and bounds are unchanged, and
+  `retention.hookPayloadRetentionDays`, the name Scheduling uses for the same
+  hook payload window; defaults and bounds are unchanged, and
   `audit.retentionDays` stays where it is. Each old key, and each old
   `idempotency` or `eventDelivery` block, is refused with `config.removed-key`
   naming the new path. Before:
@@ -23,7 +24,7 @@
   ```yaml
   retention:
     receiptRetentionDays: 7
-    payloadRetentionDays: 7
+    hookPayloadRetentionDays: 7
   ```
 
   Migration: move both keys into one `retention` block and delete the old

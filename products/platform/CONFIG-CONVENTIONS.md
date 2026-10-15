@@ -407,7 +407,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 
 Retention windows other than the audit journal's live in a top-level
 `retention` block (`retention.receiptRetentionDays`,
-`retention.payloadRetentionDays`); the audit journal keeps
+`retention.hookPayloadRetentionDays`); the audit journal keeps
 `audit.retentionDays`.
 
 Adding a shared concept adds a row here in the same change.
