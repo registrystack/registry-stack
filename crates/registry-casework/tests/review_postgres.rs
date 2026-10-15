@@ -9858,3 +9858,396 @@ async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_iss
         .expect("inspect the untrusted initiator");
     assert!(stored.get::<_, bool>(0));
 }
+
+#[tokio::test]
+async fn staffing_diagnostic_is_disclosed_and_clears_when_responsibility_resumes() {
+    let fixture = fixture().await;
+    let service = &fixture.service_v2;
+    let mut input = request("record-no-cover", "REF-no-cover");
+    input.context = ReviewContext::CurrentSource {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-no-cover".into(),
+        },
+    };
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            bind_request(service, input.clone()),
+            "create-no-cover",
+        )
+        .await
+        .expect("create current-source staffing review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let absence_id = Uuid::new_v4();
+    // The absent assignee is eligible, but their selected cover is the excluded
+    // initiator. This exercises the real no-cover assignment and recompute paths.
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,
+            starts_at,ends_at,cover_issuer,cover_subject,revision)
+         VALUES($1,$2,$3,$4,$5,$2,'initiator',1)",
+            &[
+                &absence_id,
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+                &(Utc::now() - TimeDelta::hours(1)),
+                &(Utc::now() + TimeDelta::hours(1)),
+            ],
+        )
+        .await
+        .expect("seed active absence with task-ineligible cover");
+    let blocked = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: None,
+            },
+            "assign-no-cover",
+        )
+        .await
+        .expect("assignment remains open without eligible cover");
+    assert_eq!(blocked.state, ReviewTaskState::Open);
+    assert_eq!(
+        blocked.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    assert_eq!(
+        serde_json::to_value(&blocked).unwrap()["staffingDiagnostic"],
+        "no-cover-available"
+    );
+    let read = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("eligible reviewer reads staffing notice");
+    assert_eq!(read.staffing_diagnostic, blocked.staffing_diagnostic);
+    let list = service
+        .review_tasks(
+            &fixture.reviewer_b,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            None,
+            100,
+        )
+        .await
+        .expect("review inbox carries notice");
+    assert_eq!(
+        list.items
+            .iter()
+            .find(|item| item.task_id == task)
+            .unwrap()
+            .staffing_diagnostic,
+        blocked.staffing_diagnostic
+    );
+    let supervision = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .expect("current supervisor reads bounded staffing notice");
+    let row = supervision
+        .items
+        .iter()
+        .find(|item| item.task_id == task)
+        .unwrap();
+    assert_eq!(row.staffing_diagnostic, blocked.staffing_diagnostic);
+    let wire = serde_json::to_value(row).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 6);
+    for private in [
+        "holder",
+        "subject",
+        "owner",
+        "absenceIds",
+        "assignedBy",
+        "requesterReference",
+    ] {
+        assert!(wire.get(private).is_none());
+    }
+    assert!(matches!(
+        service
+            .supervisory_review_tasks(
+                &fixture.reviewer_b,
+                Some("staff"),
+                "human-bearer",
+                Some("review"),
+                None,
+                None,
+                100
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+
+    // A diagnostic adds no authority. Concealed work matches unknown work for
+    // supervision and remains not found on an individual reviewer read.
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let concealed = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    let unknown = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(Uuid::new_v4()),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(concealed, unknown);
+    assert!(concealed.items.is_empty());
+    assert!(matches!(
+        service
+            .claim_review_task(
+                &fixture.reviewer_b,
+                task,
+                Some("staff"),
+                "human-bearer",
+                blocked.revision,
+                "hidden-no-cover-claim"
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    fixture.source_revoked.store(false, Ordering::SeqCst);
+
+    let claimed = service
+        .claim_review_task(
+            &fixture.reviewer_b,
+            task,
+            Some("staff"),
+            "human-bearer",
+            blocked.revision,
+            "claim-no-cover",
+        )
+        .await
+        .expect("eligible reviewer claims open task");
+    assert_eq!(claimed.staffing_diagnostic, None);
+    assert!(serde_json::to_value(&claimed)
+        .unwrap()
+        .get("staffingDiagnostic")
+        .is_none());
+    let released = service
+        .release_review_task(
+            &fixture.reviewer_b,
+            task,
+            claimed.revision,
+            "release-no-cover",
+        )
+        .await
+        .expect("release claimed responsibility");
+    assert_eq!(released.staffing_diagnostic, None);
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence_id],
+        )
+        .await
+        .expect("end absence");
+    let assigned = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            released.revision,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: None,
+            },
+            "assign-available",
+        )
+        .await
+        .expect("assign eligible available reviewer");
+    assert_eq!(assigned.staffing_diagnostic, None);
+
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,
+            starts_at,ends_at,cover_issuer,cover_subject,revision)
+         VALUES($1,$2,$3,$4,$5,$2,'initiator',1)",
+            &[
+                &absence_id,
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+                &(Utc::now() - TimeDelta::hours(1)),
+                &(Utc::now() + TimeDelta::hours(1)),
+            ],
+        )
+        .await
+        .expect("record a later absence");
+    assert_eq!(service.reconcile_review_absences(100).await.unwrap(), 1);
+    let recomputed = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("read absence recompute diagnostic");
+    assert_eq!(
+        recomputed.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    let reassigned = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            recomputed.revision,
+            AssignmentRequest {
+                assignee: fixture.reviewer_b.principal.clone(),
+                reason: None,
+            },
+            "replace-unavailable-assignee",
+        )
+        .await
+        .expect("successful reassignment clears diagnostic");
+    assert_eq!(reassigned.staffing_diagnostic, None);
+    let blocked_again = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            reassigned.revision,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: None,
+            },
+            "assign-unavailable-again",
+        )
+        .await
+        .expect("restore blocked assignment");
+    assert_eq!(
+        blocked_again.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence_id],
+        )
+        .await
+        .expect("end later absence");
+    assert_eq!(service.reconcile_review_absences(100).await.unwrap(), 1);
+    let restored = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("successful absence recompute restores holder");
+    assert!(matches!(restored.state, ReviewTaskState::Held { .. }));
+    assert_eq!(restored.staffing_diagnostic, None);
+    let supervision = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supervision
+            .items
+            .iter()
+            .find(|item| item.task_id == task)
+            .unwrap()
+            .staffing_diagnostic,
+        None
+    );
+    // Losing current membership also leaves no eligible assignment. Once the
+    // producer settles the review, that staffing notice is no longer current.
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert_eq!(service.reconcile_review_absences(100).await.unwrap(), 1);
+    let blocked = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    service
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            ReviewCancelRequest {
+                subject: input.subject,
+                reason: "review withdrawn".into(),
+            },
+            "cancel-no-cover",
+        )
+        .await
+        .expect("settle blocked review");
+    let closed = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("read retained closed task");
+    assert_eq!(closed.state, ReviewTaskState::Decided);
+    assert_eq!(closed.staffing_diagnostic, None);
+    fixture.database.execute(
+        "UPDATE casework_review_tasks SET staffing_diagnostic='no-cover-available' WHERE task_id=$1",
+        &[&task]
+    ).await.expect("represent a terminal notice retained by an older runtime");
+    assert_eq!(
+        service
+            .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+            .await
+            .unwrap()
+            .staffing_diagnostic,
+        None
+    );
+    let supervision = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supervision
+            .items
+            .iter()
+            .find(|item| item.task_id == task)
+            .unwrap()
+            .staffing_diagnostic,
+        None
+    );
+}

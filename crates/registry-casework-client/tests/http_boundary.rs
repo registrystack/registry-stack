@@ -424,6 +424,10 @@ async fn review_task_discovery_forwards_ownership_and_supervision_without_expand
         .expect("supervisory discovery");
     assert_eq!(page.value.items.len(), 1);
     assert_eq!(
+        page.value.items[0].staffing_diagnostic,
+        Some(registry_casework_client::StaffingDiagnostic::NoCoverAvailable)
+    );
+    assert_eq!(
         page.value.items[0].accountability_event_id,
         Some(Uuid::from_u128(11))
     );
@@ -509,7 +513,8 @@ async fn capture_review_task_discovery(
                 "requestId": Uuid::from_u128(9),
                 "queue": "reviews",
                 "revision": 3,
-                "state": "decided",
+                "state": "open",
+                "staffingDiagnostic": "no-cover-available",
                 "accountabilityEventId": Uuid::from_u128(11),
             }],
             "status": "complete",

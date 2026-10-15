@@ -167,6 +167,34 @@ producer results; accountability does not release review context. Directory
 teams, absence cover, membership, and queue service remain current authority.
 An opaque task reference or cursor grants no access.
 
+The list, next-task and holdings reads deliberately complete a bounded scan
+before returning globally ordered results. This includes unfiltered queues:
+`inbox.maximumCandidateScan` defaults to 100, `maximumSourceReads` to 25 and
+`pageDeadlineMilliseconds` to 2000. Exceeding a scan or source-read budget
+refuses the whole read with `review.query-too-broad`; a provider timeout can
+instead report source unavailability. Page size and reference filtering do
+not reduce that scan. Narrow the queue or exact subject, or size the policy
+budgets for the expected candidate set and measured source latency. These
+three reads do not return partial budget-exhausted pages.
+
+Caseload preview deliberately selects all of the source officer's claimed
+tasks, optionally restricted to one queue, with a maximum of 100 tasks. It
+has no subset, limit or continuation parameter. Apply moves that exact
+revision-fenced set atomically. Use individual authorized task assignments
+for a selected subset; those assignments are independent transactions.
+
+Supervisory discovery deliberately omits holder identities and due dates.
+It is an accountability view, not a team holdings board. Use the Directory
+to choose the source officer and an authorized caseload preview to inspect
+the proposed move. Reviewer eligibility is not a substitute for supervisor
+authority.
+
+An authorized ReviewTask read or supervisory row can include
+`staffingDiagnostic: no-cover-available` when assignment or absence recompute
+finds no eligible cover. This notice reveals no holder or source context.
+Successful assignment, claim, caseload transfer, release or task closure clears
+it; a closed task does not display an old staffing notice.
+
 ## Package, activate, and recover
 
 Use a fresh Casework database for this pre-1.0 contract. It does not upgrade a

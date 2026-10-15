@@ -70,3 +70,19 @@ test('staffing responses cannot substitute another subject or reference', async 
   await assert.rejects(() => client.nextReviewTask('staff-token', 'staff', { subjectSource: subject.source, subjectType: subject.type, subjectId: 'another', subjectVersion: subject.version, subjectDigest: subject.digest }), error => error.kind === 'protocol');
   await assert.rejects(() => client.nextReviewTask('staff-token', 'staff', { reference: 'another' }), error => error.kind === 'protocol');
 });
+
+test('review tasks and holder-free supervision preserve the optional staffing diagnostic', async t => {
+  const blocked = { ...task, state: 'open', staffingDiagnostic: 'no-cover-available' };
+  const row = { taskId: id, requestId: previewId, queue: 'review', revision: 3, state: 'open', staffingDiagnostic: 'no-cover-available' };
+  let diagnostic = true;
+  const { client } = await fixture(t, path => {
+    const value = { ...(path.includes('/supervision') ? row : blocked) };
+    if (!diagnostic) delete value.staffingDiagnostic;
+    return { items: [value], status: 'complete' };
+  });
+  assert.deepEqual((await client.reviewTasks('staff-token', 'staff')).value.items, [blocked]);
+  assert.deepEqual((await client.supervisoryReviewTasks('supervisor-token', 'supervisor')).value.items, [row]);
+  diagnostic = false;
+  assert.equal(Object.hasOwn((await client.reviewTasks('staff-token', 'staff')).value.items[0], 'staffingDiagnostic'), false);
+  assert.equal(Object.hasOwn((await client.supervisoryReviewTasks('supervisor-token', 'supervisor')).value.items[0], 'staffingDiagnostic'), false);
+});

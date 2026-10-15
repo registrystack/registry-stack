@@ -3829,6 +3829,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "staffingDiagnostic": {
+            "$ref": "#/components/schemas/StaffingDiagnostic",
+            "description": "Present when an assignment or absence recompute found no eligible cover."
+          },
           "stageId": {
             "type": "string"
           },
@@ -4198,6 +4202,12 @@
         ],
         "type": "object"
       },
+      "StaffingDiagnostic": {
+        "enum": [
+          "no-cover-available"
+        ],
+        "type": "string"
+      },
       "SubjectBinding": {
         "additionalProperties": false,
         "properties": {
@@ -4259,6 +4269,10 @@
           "revision": {
             "format": "int64",
             "type": "integer"
+          },
+          "staffingDiagnostic": {
+            "$ref": "#/components/schemas/StaffingDiagnostic",
+            "description": "Bounded staffing status without holder or absence identities."
           },
           "state": {
             "$ref": "#/components/schemas/SupervisoryReviewTaskState"

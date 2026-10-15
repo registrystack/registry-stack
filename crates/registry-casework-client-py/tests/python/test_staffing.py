@@ -15,6 +15,7 @@ TASK = {"taskId":ID,"requestId":PREVIEW,"subject":SUBJECT,"requesterReference":"
 
 class Handler(BaseHTTPRequestHandler):
     seen = []
+    staffing_notice = False
     def log_message(self,*args): pass
     def do_GET(self): self.answer()
     def do_POST(self): self.answer()
@@ -23,7 +24,10 @@ class Handler(BaseHTTPRequestHandler):
         self.seen.append({"path":self.path,"headers":{k.lower():v for k,v in self.headers.items()},"body":json.loads(raw) if raw else None})
         selected={"taskId":ID,"revision":3}
         clock={**selected,"deadlineAt":TASK["deadlineAt"]}
-        if "/review-tasks/next" in self.path: value=TASK
+        if self.staffing_notice and "/review-tasks" in self.path:
+            value={"taskId":ID,"requestId":PREVIEW,"queue":"review","revision":3,"state":"open","staffingDiagnostic":"no-cover-available"} if "/supervision" in self.path else {**TASK,"state":"open","staffingDiagnostic":"no-cover-available"}
+            value={"items":[value],"status":"complete"}
+        elif "/review-tasks/next" in self.path: value=TASK
         elif "/review-tasks/holdings" in self.path: value={"items":[TASK],"status":"complete"}
         elif "caseload" in self.path: value={"previewId":PREVIEW,"directoryRevision":4,"tasks":[selected],"expiresAt":"2026-10-14T01:00:00Z"} if self.path.endswith("preview") else {"moved":[selected]}
         else: value={"previewId":PREVIEW,"directoryRevision":4,"tasks":[clock],"expiresAt":"2026-10-14T01:00:00Z"} if self.path.endswith("preview") else {"tasks":[clock]}
@@ -31,7 +35,7 @@ class Handler(BaseHTTPRequestHandler):
 
 class StaffingTests(unittest.TestCase):
     def setUp(self):
-        Handler.seen=[];self.server=HTTPServer(("127.0.0.1",0),Handler);self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start();self.client=CaseworkClient(f"http://127.0.0.1:{self.server.server_port}/tenant")
+        Handler.seen=[];Handler.staffing_notice=False;self.server=HTTPServer(("127.0.0.1",0),Handler);self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start();self.client=CaseworkClient(f"http://127.0.0.1:{self.server.server_port}/tenant")
     def tearDown(self): self.server.shutdown();self.thread.join();self.server.server_close()
     def test_next_and_holdings_preserve_exact_selectors(self):
         query={"queue":"review","ownership":"assigned-to-me","subjectSource":SUBJECT["source"],"subjectType":SUBJECT["type"],"subjectId":SUBJECT["id"],"subjectVersion":SUBJECT["version"],"subjectDigest":SUBJECT["digest"],"reference":"REF-7","sort":"reference","limit":25}
@@ -55,3 +59,12 @@ class StaffingTests(unittest.TestCase):
     def test_a_response_cannot_substitute_another_reference(self):
         with self.assertRaises(CaseworkClientError) as raised:self.client.next_review_task("staff-token","staff",{"reference":"another"})
         self.assertEqual(raised.exception.kind,"protocol")
+
+    def test_review_and_supervision_preserve_optional_staffing_notice(self):
+        Handler.staffing_notice=True
+        blocked={**TASK,"state":"open","staffingDiagnostic":"no-cover-available"}
+        row={"taskId":ID,"requestId":PREVIEW,"queue":"review","revision":3,"state":"open","staffingDiagnostic":"no-cover-available"}
+        self.assertEqual(self.client.review_tasks("staff-token","staff")["value"]["items"],[blocked])
+        self.assertEqual(self.client.supervisory_review_tasks("supervisor-token","supervisor")["value"]["items"],[row])
+        Handler.staffing_notice=False
+        self.assertNotIn("staffingDiagnostic",self.client.review_task_holdings("staff-token","staff")["value"]["items"][0])

@@ -1129,7 +1129,13 @@ Read `review_task` to recover the caller's retained `decisionReceipt`, or use
 `own_review_decisions` after a fresh sign-in. Receipts disclose the deciding caller's outcome and
 pinned label without private reason or structured result data. Supervisory discovery returns
 bounded task/accountability references with a holder-free state; it grants no decision or context
-authority. The separate audited accountability read has its own retention.
+authority. It intentionally omits holder identities and due dates and does not provide a team
+holdings board. The separate audited accountability read has its own retention.
+
+Caseload preview selects the source officer's complete claimed set, optionally within one queue,
+up to 100 tasks. It has no subset, limit or continuation parameter. A larger set refuses with
+`review.query-too-broad`. Apply is atomic over the exact previewed set; individual task assignments
+remain available for a selected subset, with independent revisions and outcomes.
 
 {/* Evidence: crates/registry-casework-client/src/client.rs, claim_review_task, decide_review_task,
     own_review_decisions, review_accountability;
@@ -1146,8 +1152,11 @@ camel case in both language bindings. Result reads instead distinguish `availabl
 Pass `nextCursor` unchanged through the same operation with the same caller, profiles, and query.
 Staffing cursors are opaque visibility snapshots valid for at most 15 minutes. Holding,
 membership, or current-source visibility changes can invalidate them. After
-`410 review.result-expired`, restart without the cursor. A broad live-reference query can return
-`422 review.query-too-broad`; narrow the queue or exact subject selectors before retrying.
+`410 review.result-expired`, restart without the cursor. Task list, next-task and holdings reads
+scan the complete candidate set before sorting or paging, including unfiltered reads. Exhausted
+candidate or source-read budgets return `422 review.query-too-broad`, with no partial page;
+narrow the queue or exact subject selectors before retrying. A smaller page size or a visible
+reference filter does not reduce that scan. See the [queue sizing limits](../../operate/casework/#size-the-review-queue-reads).
 An unavailable required provider is a failure, not an empty reviewer inbox.
 
 {/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete, ReviewResultResponse;

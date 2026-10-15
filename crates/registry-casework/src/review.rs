@@ -1579,7 +1579,7 @@ impl PostgresStore {
             .query(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -1665,7 +1665,7 @@ impl PostgresStore {
             .query(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                     t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
              FROM casework_review_decisions d
              JOIN casework_review_tasks t ON t.task_id=d.task_id
              JOIN casework_review_requests r ON r.request_id=t.request_id
@@ -1775,7 +1775,7 @@ impl PostgresStore {
         let client = self.client().await?;
         client
             .query(
-                "SELECT t.task_id,t.request_id,t.queue_id,t.revision,t.state,a.event_id
+                "SELECT t.task_id,t.request_id,t.queue_id,t.revision,t.state,a.event_id,t.staffing_diagnostic
              FROM casework_review_tasks t
              JOIN casework_review_requests r ON r.request_id=t.request_id
              JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -1809,6 +1809,7 @@ impl PostgresStore {
                         "decided" | "closed" => SupervisoryReviewTaskState::Decided,
                         _ => return Err(ReviewRuntimeError::Corrupt),
                     },
+                    staffing_diagnostic: staffing_diagnostic_from_row(&row)?,
                     accountability_event_id: row.get(5),
                 })
             })
@@ -1845,7 +1846,7 @@ impl PostgresStore {
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
                         r.lifecycle,r.result_available_until,r.result_erased_at,
                         d.decision,d.outcome,d.decided_at,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -3099,7 +3100,7 @@ impl PostgresStore {
         }
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -3119,6 +3120,7 @@ impl PostgresStore {
             state: ReviewTaskState::Held {
                 holder: actor.principal.clone(),
             },
+            staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
         };
@@ -3437,7 +3439,7 @@ impl PostgresStore {
         )?;
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -3459,6 +3461,7 @@ impl PostgresStore {
             } else {
                 ReviewTaskState::Open
             },
+            staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
         };
@@ -4100,14 +4103,14 @@ impl PostgresStore {
                  SET state='open',holder_issuer=NULL,holder_subject=NULL,assignment_kind=NULL,
                      assignment_owner_issuer=NULL,assignment_owner_subject=NULL,
                      assigned_by_issuer=NULL,assigned_by_subject=NULL,
-                     assignment_absence_ids='{}',
+                     assignment_absence_ids='{}',staffing_diagnostic=NULL,
                      revision=revision+1,updated_at=$2 WHERE task_id=$1",
                 &[&task_id, &now],
             )
             .await?;
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -4125,6 +4128,7 @@ impl PostgresStore {
             revision: expected_revision + 1,
             eligible_profiles: stage.deciding_profiles.clone(),
             state: ReviewTaskState::Open,
+            staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
         };
@@ -4250,7 +4254,7 @@ impl PostgresStore {
             .await?;
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -4282,6 +4286,7 @@ impl PostgresStore {
                 "decided" | "closed" => ReviewTaskState::Decided,
                 _ => return Err(ReviewRuntimeError::Corrupt),
             },
+            staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
         };
@@ -4334,7 +4339,7 @@ impl PostgresStore {
         transaction
             .execute(
                 "UPDATE casework_review_tasks
-                 SET state='decided',settled_at=$2,revision=revision+1,updated_at=$2
+                 SET state='decided',staffing_diagnostic=NULL,settled_at=$2,revision=revision+1,updated_at=$2
                  WHERE task_id=$1",
                 &[&task_id, &now],
             )
@@ -4387,7 +4392,7 @@ impl PostgresStore {
                 transaction
                     .execute(
                         "UPDATE casework_review_tasks
-                         SET state='closed',settled_at=COALESCE(settled_at,$3),updated_at=$3,
+                         SET state='closed',staffing_diagnostic=NULL,settled_at=COALESCE(settled_at,$3),updated_at=$3,
                              revision=revision+1
                          WHERE request_id=$1 AND stage_index=$2 AND state IN ('open','claimed')",
                         &[&request_id, &i32::from(stage_index), &now],
@@ -5001,7 +5006,7 @@ async fn settle_review(
     transaction
         .execute(
             "UPDATE casework_review_tasks
-             SET state='closed',settled_at=COALESCE(settled_at,$2),updated_at=$2,
+             SET state='closed',staffing_diagnostic=NULL,settled_at=COALESCE(settled_at,$2),updated_at=$2,
                  revision=revision+1
              WHERE request_id=$1 AND state IN ('open','claimed')",
             &[&record.request_id, &now],
@@ -5262,6 +5267,24 @@ fn review_task_state(
     }
 }
 
+fn staffing_diagnostic_from_row(
+    row: &Row,
+) -> Result<Option<StaffingDiagnostic>, ReviewRuntimeError> {
+    // Older runtime versions could retain this notice after task closure.
+    // It describes current unheld work, never a held or terminal task.
+    if row.get::<_, String>("state") != "open" {
+        return Ok(None);
+    }
+    match row
+        .get::<_, Option<String>>("staffing_diagnostic")
+        .as_deref()
+    {
+        None => Ok(None),
+        Some("no-cover-available") => Ok(Some(StaffingDiagnostic::NoCoverAvailable)),
+        Some(_) => Err(ReviewRuntimeError::Corrupt),
+    }
+}
+
 fn reviewer_task_from_row(
     row: &Row,
     policy: &ReviewPolicyClosure,
@@ -5294,6 +5317,7 @@ fn reviewer_task_from_row(
         revision: row.get(8),
         eligible_profiles: stage.deciding_profiles.clone(),
         state,
+        staffing_diagnostic: staffing_diagnostic_from_row(row)?,
         decided_by_caller: None,
         decision_receipt: None,
     })
