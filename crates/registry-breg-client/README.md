@@ -243,14 +243,6 @@ Proposal ID, Action revision, submission version and effect digest before using
 that evidence to continue a dependent workflow. A blocked state does not claim
 that application can never occur.
 
-`registry_contract_observation` and `get_proposal_observation` retain the same
-validated response and error contracts while exposing `BRegRetryAfter` separately
-on `BRegObservation`. `Absent`, bounded `Seconds` and `Unusable` are the only hint
-states; raw header text is discarded, including on errors. These methods perform
-one read and never schedule or mutate work. The caller combines receiver hints
-with its own observation interval, deadline and budget. `BRegObservation` Debug
-omits document contents.
-
 Automatic recovery Apply and Retry require an explicit current grant and a
 verified human caller. An observing service gains no recovery authority.
 The built-in executor uses its own governed system grant.

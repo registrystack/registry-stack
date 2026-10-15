@@ -2,26 +2,6 @@ use registry_platform_httpsec::TraceId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-pub use registry_platform_httputil::client::RetryAfter as BRegRetryAfter;
-
-/// One authenticated read attempt with its receiver's retry scheduling hint.
-/// The hint accompanies both a validated document and a rejected or unavailable
-/// response. It does not establish resource existence or mutation completion.
-pub struct BRegObservation<T> {
-    pub outcome: Result<BRegComplete<T>, crate::BaseRegistryClientError>,
-    pub retry_after: BRegRetryAfter,
-}
-
-impl<T> fmt::Debug for BRegObservation<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegObservation")
-            .field("document_available", &self.outcome.is_ok())
-            .field("retry_after", &self.retry_after)
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BRegProbeStatus {
