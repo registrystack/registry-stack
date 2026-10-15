@@ -76,3 +76,67 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     await assert.rejects(foreign.readProposal(draft), error => error.kind === 'invalid-request');
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+
+test('returned Proposal cursors are usable for explicit bounded continuation', async () => {
+  let value = {items: []};
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push(request.url);
+    response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store',
+      vary: 'authorization, accept', traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
+    response.end(JSON.stringify(request.url.startsWith('/tenant/v1/registry') ? metadata : value));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/tenant/`});
+    const collection = (await client.registryContract('author')).selectProposals('author');
+    for (const cursor of ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x'.repeat(513)]) {
+      value = {items: [], nextCursor: cursor};
+      const count = requests.length;
+      await assert.rejects(client.listProposals(collection, '{}'), error => error.kind === 'invalid-request');
+      assert.equal(requests.length, count + 1, 'refuse the received page without automatically following it');
+    }
+    for (const cursor of [id, 'x'.repeat(512)]) {
+      value = {items: [], nextCursor: cursor};
+      const page = await client.listProposals(collection, '{}');
+      assert.equal(page.nextCursor, cursor);
+      value = {items: []};
+      const finalPage = await client.listProposals(collection, JSON.stringify({cursor: page.nextCursor}));
+      assert.equal(new URL(requests.at(-1), 'http://fixture.invalid').searchParams.get('cursor'), cursor);
+      assert.equal(finalPage.nextCursor, undefined);
+    }
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+
+test('Proposal Start accepts exact Draft replay and refuses otherwise valid terminal or Submitted responses', async () => {
+  let value = structuredClone(proposal);
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk;
+    requests.push({url: request.url, body, key: request.headers['idempotency-key']});
+    response.writeHead(request.method === 'POST' ? 201 : 200, {'content-type': 'application/json', 'cache-control': 'no-store',
+      vary: 'authorization, accept', traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
+    response.end(JSON.stringify(request.url.startsWith('/tenant/v1/registry') ? metadata : value));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/tenant/`});
+    const contract = await client.registryContract('author');
+    const start = contract.selectAction('correct', 'author');
+    const get = contract.selectProposalGet('author');
+    const first = await client.startProposal(start, '{}', 'exact-draft-start');
+    const repeated = await client.startProposal(start, '{}', 'exact-draft-start');
+    assert.equal(first.documentJson, repeated.documentJson);
+    assert.deepEqual(requests.at(-1), requests.at(-2));
+    for (const state of ['submitted', 'applied', 'cancelled']) {
+      value = structuredClone(proposal); value.state = state; value.submissionVersion = 1; value.links = {self: value.links.self};
+      assert.equal(JSON.parse((await client.getProposal(get, id)).documentJson).state, state, 'ordinary reads permit this representation');
+      const count = requests.length;
+      await assert.rejects(client.startProposal(start, '{}', `wrong-start-${state}`), error => error.kind === 'invalid-request');
+      assert.equal(requests.length, count + 1, 'validate one actual Start response');
+      assert.equal(requests.at(-1).url, '/tenant/v1/actions/correct/proposals?accessProfile=author');
+    }
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

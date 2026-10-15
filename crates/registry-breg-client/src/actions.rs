@@ -513,6 +513,7 @@ impl BaseRegistryClient {
         let proposal = crate::BRegProposal::from_slice(raw.value.as_bytes())?;
         if proposal.action_id() != action.action_identifier()
             || proposal.action_revision() != action.definition_revision()
+            || proposal.state() != crate::BRegProposalState::Draft
         {
             return Err(action_recovery_refusal());
         }

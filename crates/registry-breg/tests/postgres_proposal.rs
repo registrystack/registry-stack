@@ -395,6 +395,313 @@ async fn start_action(
 }
 
 #[tokio::test]
+async fn known_proposal_http_authorization_refusals_are_value_free_and_audit_gated() {
+    let mut source = registry_source(false);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+        "id":"review-name","fields":{
+            "currentName":{"type":"record","input":"target","field":"name"},
+            "proposedName":{"type":"input","input":"value"}}});
+    for id in [
+        "reviewer",
+        "missing-record-claim",
+        "rebase-only",
+        "no-bytes",
+        "no-lifecycle",
+    ] {
+        let mut profile = source["accessProfiles"][0].clone();
+        profile["id"] = json!(id);
+        profile["default"] = json!(false);
+        match id {
+            "reviewer" | "missing-record-claim" => {
+                profile["permissions"]["proposals"][0]["operations"] =
+                    json!(["get", "get-review-context", "get-review-status"]);
+                profile["permissions"]["proposals"][0]["readableContextFields"] =
+                    json!(["currentName", "proposedName"]);
+                profile["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+                if id == "missing-record-claim" {
+                    profile["permissions"]["records"][0]["rowBoundaries"][0]["claim"] =
+                        json!("recordZone");
+                }
+            }
+            "rebase-only" => {
+                profile["permissions"]["actions"] = json!([]);
+            }
+            "no-bytes" => {
+                profile["permissions"]["proposals"][0]["readableAttachments"] = json!([]);
+                profile["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+            }
+            "no-lifecycle" => {
+                profile["permissions"]["proposals"] = json!([]);
+            }
+            _ => unreachable!(),
+        }
+        source["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(profile);
+    }
+    let fixture = client_http::ClientFixture::start(
+        compile(source),
+        claims("audit-private-principal-canary", "zone-a"),
+    )
+    .await;
+    let draft = start(
+        &fixture,
+        "audit-private-value-canary",
+        "audit-refusal-start",
+    )
+    .await;
+    let uploaded = fixture
+        .http
+        .client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"audit-private-attachment-canary",
+            &key("audit-refusal-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(&uploaded, "submit", json!({}), &key("audit-refusal-submit"))
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let id = submitted.id().to_owned();
+    let cases = [
+        (
+            "GET",
+            "review-context?accessProfile=clerk",
+            "get-review-context",
+        ),
+        (
+            "GET",
+            "review-status?accessProfile=clerk",
+            "get-review-status",
+        ),
+        (
+            "GET",
+            "review-context?accessProfile=missing-record-claim",
+            "get-review-context",
+        ),
+        ("POST", "rebase?accessProfile=rebase-only", "rebase"),
+        (
+            "GET",
+            "attachments/support?accessProfile=no-lifecycle&submissionVersion=1",
+            "get",
+        ),
+        (
+            "PATCH",
+            "attachments/support?accessProfile=no-lifecycle",
+            "edit",
+        ),
+        (
+            "DELETE",
+            "attachments/support?accessProfile=no-lifecycle",
+            "edit",
+        ),
+        (
+            "GET",
+            "attachments/support?accessProfile=no-bytes&submissionVersion=1",
+            "get",
+        ),
+        (
+            "PATCH",
+            "attachments/support?accessProfile=no-bytes",
+            "edit",
+        ),
+        (
+            "DELETE",
+            "attachments/support?accessProfile=no-bytes",
+            "edit",
+        ),
+    ];
+    let mut unaudited = Vec::new();
+    for (method, suffix, operation) in cases {
+        let before = fixture.audit_capture.entries().len();
+        let response = reqwest::Client::new()
+            .request(
+                method.parse().unwrap(),
+                format!("{}/v1/proposals/{id}/{suffix}", fixture.http.base_url),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "{method} {suffix}"
+        );
+        assert!(response.headers().get("etag").is_none());
+        let public = response.text().await.unwrap();
+        let entries = fixture.audit_capture.entries();
+        let refusals = entries[before..]
+            .iter()
+            .filter(|entry| entry["record"]["phase"] == "refusal")
+            .collect::<Vec<_>>();
+        if refusals.is_empty() {
+            unaudited.push(format!("{method} {suffix}"));
+            continue;
+        }
+        assert_eq!(refusals.len(), 1, "{method} {suffix}");
+        let refusal = refusals[0];
+        assert_eq!(refusal["record"]["actionId"], "correct-name");
+        assert_eq!(
+            refusal["record"]["operationId"],
+            format!("proposals.correct-name.{operation}")
+        );
+        assert_eq!(refusal["record"]["method"], method);
+        for canary in [
+            "audit-private-principal-canary",
+            "audit-private-value-canary",
+            "audit-private-attachment-canary",
+            id.as_str(),
+        ] {
+            assert!(
+                !serde_json::to_string(&entries[before..])
+                    .unwrap()
+                    .contains(canary),
+                "audit disclosed {canary}"
+            );
+            assert!(!public.contains(canary), "refusal disclosed {canary}");
+        }
+    }
+    assert!(
+        unaudited.is_empty(),
+        "known Action refusals missed audit: {unaudited:?}"
+    );
+    for suffix in ["review-context", "review-status"] {
+        let before = fixture.audit_capture.entries().len();
+        let response = reqwest::get(format!(
+            "{}/v1/proposals/{id}/{suffix}?accessProfile=reviewer",
+            fixture.http.base_url
+        ))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK, "{suffix}");
+        let entries = fixture.audit_capture.entries();
+        assert_eq!(
+            entries[before..].len(),
+            2,
+            "permitted {suffix} pairs its audit"
+        );
+        assert_eq!(entries[before]["phase"], "request");
+        assert_eq!(entries[before + 1]["phase"], "response");
+        assert_eq!(
+            entries[before]["correlation"],
+            entries[before + 1]["correlation"]
+        );
+    }
+    for suffix in [
+        "review-context?accessProfile=clerk",
+        "attachments/support?accessProfile=no-bytes&submissionVersion=1",
+    ] {
+        let before = fixture.audit_capture.entries().len();
+        let response = reqwest::get(format!(
+            "{}/v1/proposals/{}/{suffix}",
+            fixture.http.base_url,
+            uuid::Uuid::new_v4()
+        ))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(
+            fixture.audit_capture.entries().len(),
+            before,
+            "unknown Proposal has no known Action attribution"
+        );
+    }
+    fixture.audit_capture.fail_after(0);
+    for (method, suffix, _) in cases {
+        let response = reqwest::Client::new()
+            .request(
+                method.parse().unwrap(),
+                format!("{}/v1/proposals/{id}/{suffix}", fixture.http.base_url),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {suffix} must fail closed on audit loss"
+        );
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn proposal_review_reads_release_no_values_when_either_audit_append_fails() {
+    for (suffix, accepted) in [
+        ("review-context", 0),
+        ("review-context", 1),
+        ("review-status", 0),
+        ("review-status", 1),
+    ] {
+        let mut source = registry_source(false);
+        source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+            "id":"review-name","fields":{"proposedName":{"type":"input","input":"value"}}});
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+            json!(["get", "submit", "get-review-context", "get-review-status"]);
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+            json!(["proposedName"]);
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["writableAttachments"] =
+            json!([]);
+        let fixture =
+            client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+        let draft = start(&fixture, "audit-gate-value-canary", "audit-gate-start").await;
+        let submit = fixture
+            .http
+            .client
+            .prepare_proposal(&draft, "submit", json!({}), &key("audit-gate-submit"))
+            .unwrap();
+        let submitted = fixture
+            .http
+            .client
+            .execute_proposal(&submit)
+            .await
+            .unwrap()
+            .value;
+        let before = fixture.audit_capture.entries().len();
+        fixture.audit_capture.fail_after(accepted);
+        let response = reqwest::get(format!(
+            "{}/v1/proposals/{}/{suffix}?accessProfile=clerk",
+            fixture.http.base_url,
+            submitted.id()
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            "{suffix}, {accepted} accepted appends"
+        );
+        assert!(response.headers().get("etag").is_none());
+        assert!(!response
+            .text()
+            .await
+            .unwrap()
+            .contains("audit-gate-value-canary"));
+        let entries = fixture.audit_capture.entries();
+        assert_eq!(entries.len(), before + accepted);
+        if accepted == 1 {
+            assert_eq!(entries[before]["phase"], "request");
+            assert_eq!(entries[before]["record"]["phase"], "attempt");
+        }
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
 async fn proposal_list_audit_counts_only_each_actions_returned_items() {
     let mut source = registry_source(false);
     for id in ["correct-alternate", "correct-empty"] {
@@ -2837,6 +3144,177 @@ async fn narrowed_attachment_disclosure_refuses_the_old_exact_receipt_without_re
         .unwrap();
     assert_eq!(row.get::<_, i64>(0), 1);
     assert_eq!(row.get::<_, i64>(1), 2);
+    drop(current);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg(feature = "tooling")]
+async fn retained_attachment_download_survives_tighter_current_upload_policy() {
+    let mut source = registry_source(false);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["target", "value"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
+            .await;
+    let draft = start(&fixture, "Retained attachment", "retained-start").await;
+    let bytes = b"historical-text-attachment-canary";
+    let uploaded = fixture
+        .http
+        .client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            bytes,
+            &key("retained-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let target = fixture
+        .http
+        .client
+        .read_proposal(&uploaded)
+        .await
+        .unwrap()
+        .value
+        .input()
+        .unwrap()["target"]
+        .clone();
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(&uploaded, "submit", json!({}), &key("retained-submit"))
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let mut next = source;
+    next["actions"][0]["execution"]["proposal"]["attachments"][0]["maximumBytes"] = json!(8);
+    next["actions"][0]["execution"]["proposal"]["attachments"][0]["contentTypes"] =
+        json!(["application/octet-stream"]);
+    let (registry, identity) = proposal_activation::activate_successor(&fixture, &next).await;
+    let current = successor_client(&fixture, registry, identity).await;
+    let metadata = current
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap();
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let listed = current
+        .client
+        .list_proposals(&collection, &BRegProposalQuery::default())
+        .await
+        .unwrap()
+        .value
+        .items
+        .into_iter()
+        .find(|proposal| proposal.id() == submitted.id())
+        .unwrap();
+    let retained = current.client.read_proposal(&listed).await.unwrap().value;
+    let value = serde_json::to_value(&retained).unwrap();
+    assert_eq!(value["attachments"]["support"]["maximumBytes"], 8);
+    assert_eq!(
+        value["attachments"]["support"]["contentTypes"],
+        json!(["application/octet-stream"])
+    );
+    assert_eq!(
+        value["attachments"]["support"]["value"]["byteSize"],
+        bytes.len()
+    );
+    assert_eq!(
+        value["attachments"]["support"]["value"]["contentType"],
+        "text/plain"
+    );
+    let raw = reqwest::get(format!(
+        "{}/v1/proposals/{}/attachments/support?accessProfile=clerk&submissionVersion=1",
+        current.base_url,
+        retained.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(raw.status(), reqwest::StatusCode::OK);
+    assert_eq!(raw.headers()["content-type"], "text/plain");
+    assert_eq!(raw.bytes().await.unwrap().as_ref(), bytes);
+
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let input = BRegActionInvocationRequest::new(
+        &action,
+        map(json!({"target":target,"value":"Current draft"})),
+        None,
+    )
+    .unwrap();
+    let current_draft = current
+        .client
+        .start_proposal(&action, &input, &key("current-policy-start"))
+        .await
+        .unwrap()
+        .value;
+    for (content_type, upload, expected) in [
+        (
+            "application/octet-stream",
+            bytes.as_slice(),
+            reqwest::StatusCode::BAD_REQUEST,
+        ),
+        (
+            "text/plain",
+            b"ok".as_slice(),
+            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+    ] {
+        assert!(current
+            .client
+            .upload_proposal_attachment(
+                &current_draft,
+                "support",
+                content_type,
+                upload,
+                &key("current-policy-refused")
+            )
+            .await
+            .is_err());
+        let value = serde_json::to_value(&current_draft).unwrap();
+        let response = reqwest::Client::new()
+            .patch(format!(
+                "{}/v1/proposals/{}/attachments/support?accessProfile=clerk",
+                current.base_url,
+                current_draft.id()
+            ))
+            .header("content-type", content_type)
+            .header("idempotency-key", "current-policy-raw-refused")
+            .header(
+                "if-match",
+                value["attachments"]["support"]["links"]["upload"]["ifMatch"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .body(upload.to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    current
+        .client
+        .upload_proposal_attachment(
+            &current_draft,
+            "support",
+            "application/octet-stream",
+            b"ok",
+            &key("current-policy-accepted"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(current.client.download_proposal_attachment(&retained, "support").await
+        .expect("authorized retained content uses its stored size rather than today's upload ceiling").value.as_bytes(), bytes);
     drop(current);
     fixture.finish().await;
 }

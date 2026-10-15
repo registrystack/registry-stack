@@ -71,5 +71,114 @@ class ProposalLookupTests(unittest.TestCase):
             server.server_close()
 
 
+class ProposalPageTests(unittest.TestCase):
+    def test_returned_cursors_are_usable_for_explicit_bounded_continuation(self):
+        value = {'items': []}
+        requests = []
+        metadata = dict(METADATA, proposals=dict(METADATA['proposals'], accessProfiles=['reader']))
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                payload = json.dumps(metadata if self.path.startswith('/tenant/v1/registry') else value).encode()
+                self.send_response(200)
+                for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                 ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'),
+                                 ('vary', 'authorization, accept'), ('content-length', str(len(payload)))]:
+                    self.send_header(key, val)
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
+            collection = client.registry_contract('reader').select_proposals('reader')
+            for cursor in ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x' * 513]:
+                value = {'items': [], 'nextCursor': cursor}
+                count = len(requests)
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    client.list_proposals(collection, {})
+                self.assertEqual(raised.exception.kind, 'invalid-request')
+                self.assertEqual(len(requests), count + 1)
+            for cursor in [ID, 'x' * 512]:
+                value = {'items': [], 'nextCursor': cursor}
+                page = client.list_proposals(collection, {})
+                self.assertEqual(page.next_cursor, cursor)
+                value = {'items': []}
+                final_page = client.list_proposals(collection, {'cursor': page.next_cursor})
+                self.assertIn('cursor=' + cursor, requests[-1])
+                self.assertIsNone(final_page.next_cursor)
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+
+class ProposalStartTests(unittest.TestCase):
+    def test_start_accepts_exact_draft_replay_but_refuses_valid_non_draft_responses(self):
+        value = dict(PROPOSAL, state='draft', submissionVersion=0)
+        requests = []
+        metadata = dict(METADATA, actions=[{
+            'id': 'correct', 'apiName': 'correct', 'revision': REVISION, 'display': {}, 'execution': {'mode': 'proposal'},
+            'route': '/v1/actions/correct/proposals', 'inputMode': 'fixed', 'inputs': [], 'referenceInputs': [],
+            'requiredConditionKeys': [], 'resultEffects': [], 'access': {'selectedProfile': 'reader'},
+            'routes': {'start': {'method': 'POST', 'path': '/v1/actions/correct/proposals', 'operationId': 'actions.correct.start',
+                                 'requiresIdempotencyKey': True, 'inputSchema': 'action-correct-invoke-input', 'responseSchema': 'action-correct-invoke-response'}},
+            'bounds': {'maximumTargets': 16, 'maximumFieldMutations': 128, 'maximumSnapshotBytes': 2097152}}])
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.respond()
+
+            def do_POST(self):
+                self.respond()
+
+            def respond(self):
+                body = self.rfile.read(int(self.headers.get('content-length', '0')))
+                requests.append((self.path, body, self.headers.get('idempotency-key')))
+                payload = json.dumps(metadata if self.path.startswith('/tenant/v1/registry') else value).encode()
+                self.send_response(201 if self.command == 'POST' else 200)
+                for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                 ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'),
+                                 ('vary', 'authorization, accept'), ('content-length', str(len(payload)))]:
+                    self.send_header(key, val)
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
+            contract = client.registry_contract('reader')
+            start = contract.select_action('correct', 'reader')
+            get = contract.select_proposal_get('reader')
+            first = client.start_proposal(start, {}, 'exact-draft-start')
+            repeated = client.start_proposal(start, {}, 'exact-draft-start')
+            self.assertEqual(first.document, repeated.document)
+            self.assertEqual(requests[-1], requests[-2])
+            for state in ['submitted', 'applied', 'cancelled']:
+                value = dict(PROPOSAL, state=state, submissionVersion=1)
+                self.assertEqual(client.get_proposal(get, ID).document['state'], state)
+                count = len(requests)
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    client.start_proposal(start, {}, 'wrong-start-' + state)
+                self.assertEqual(raised.exception.kind, 'invalid-request')
+                self.assertEqual(len(requests), count + 1)
+                self.assertEqual(requests[-1][0], '/tenant/v1/actions/correct/proposals?accessProfile=reader')
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -767,6 +767,7 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
         expiry: u64,
         reached: Arc<AtomicBool>,
         was_current: Arc<AtomicBool>,
+        entries: Arc<std::sync::Mutex<Vec<Value>>>,
     }
     impl Write for DelayedTerminal {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -787,6 +788,11 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
                 let remaining = Duration::from_secs(self.expiry).saturating_sub(now);
                 std::thread::sleep(remaining + Duration::from_millis(30));
             }
+            self.entries.lock().unwrap().extend(
+                bytes
+                    .split(|byte| *byte == b'\n')
+                    .filter_map(|line| serde_json::from_slice::<Value>(line).ok()),
+            );
             Ok(bytes.len())
         }
         fn flush(&mut self) -> io::Result<()> {
@@ -908,12 +914,14 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
         let caller = auth.authenticate(&idp.mint_token(short)).await.unwrap();
         let reached = Arc::new(AtomicBool::new(false));
         let was_current = Arc::new(AtomicBool::new(false));
+        let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
         let audit = RegistryAudit::new(
             AuditProfile::production_from_secret_bytes(vec![0x61; 32].into()).unwrap(),
             AuditWriter::from_line_sink(Box::new(DelayedTerminal {
                 expiry,
                 reached: reached.clone(),
                 was_current: was_current.clone(),
+                entries: entries.clone(),
             })),
         );
         let service = PostgresRecordMutationService::new(
@@ -955,6 +963,37 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
             "attachment-disclosure-canary",
         ] {
             assert!(!body.contains(canary), "expired grant disclosed {canary}");
+        }
+        {
+            let entries = entries.lock().unwrap();
+            let phases = entries
+                .iter()
+                .map(|entry| {
+                    (
+                        entry["phase"].as_str().unwrap(),
+                        entry["record"]["phase"].as_str().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                phases,
+                [
+                    ("request", "attempt"),
+                    ("response", "terminal"),
+                    ("response", "refusal")
+                ],
+                "{path}: assembled outcome is audited before expired authority withholds release"
+            );
+            assert!(entries
+                .iter()
+                .all(|entry| entry["correlation"] == entries[0]["correlation"]));
+            for canary in [
+                "current-name-canary",
+                "proposed-name-canary",
+                "attachment-disclosure-canary",
+            ] {
+                assert!(!serde_json::to_string(&*entries).unwrap().contains(canary));
+            }
         }
         drop(task);
     }

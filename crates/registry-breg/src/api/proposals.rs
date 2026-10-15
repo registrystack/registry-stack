@@ -372,7 +372,7 @@ pub(super) async fn admitted_http_refusal(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn known_action_refusal(
+pub(super) async fn known_action_refusal(
     mutations: &crate::postgres::PostgresRecordMutationService,
     action: &CompiledAction,
     claims: &VerifiedRequestClaims,
@@ -701,7 +701,16 @@ pub(super) async fn transition(
             None,
         ) {
             Some(authority) => Some(authority),
-            None => return concealed(),
+            None => {
+                return admitted_http_refusal(
+                    mutations,
+                    &authority,
+                    HttpMethod::Post,
+                    &correlation,
+                    concealed(),
+                )
+                .await;
+            }
         }
     } else {
         None
@@ -955,80 +964,95 @@ async fn review_read(
         ProposalAuthorityOperation::Lifecycle(operation),
         Some(id),
     ) else {
-        return concealed();
+        return known_action_refusal(
+            mutations,
+            action,
+            &claims,
+            selected.as_deref(),
+            ProposalAuthorityOperation::Lifecycle(operation),
+            HttpMethod::Get,
+            &correlation,
+        )
+        .await;
     };
-    let mut records = BTreeMap::new();
-    if operation == ProposalOperation::GetReviewContext {
-        let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-            return concealed();
-        };
-        let Some(mapping) = &proposal.review_context else {
-            return concealed();
-        };
-        for source in mapping.fields.values() {
-            use crate::contract::ProposalContextValueSource;
-            let target = match source {
-                ProposalContextValueSource::Input { .. } => continue,
-                ProposalContextValueSource::Record { input, .. } => {
-                    let Some(input) = action.inputs.iter().find(|declared| declared.id == *input)
-                    else {
-                        return concealed();
-                    };
-                    let crate::contract::FieldTypeSource::Reference { target, .. } =
-                        &input.field_type
-                    else {
-                        return concealed();
-                    };
-                    target
-                }
-                ProposalContextValueSource::Changes { record_type, .. } => record_type,
+    let records = (|| {
+        let mut records = BTreeMap::new();
+        if operation == ProposalOperation::GetReviewContext {
+            let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+                return None;
             };
-            let Some(entity) = service.registry.entities().get(target) else {
-                return concealed();
+            let Some(mapping) = &proposal.review_context else {
+                return None;
             };
-            let Some(profile) = entity
-                .access_profiles
-                .get(authority.common.access_profile())
-            else {
-                return concealed();
-            };
-            if !profile.operations.contains(&Operation::Get)
-                || authorize_profile_claims(profile, &claims).is_err()
-            {
-                return concealed();
-            }
-            let Ok(task_grant) = task_grant_binding(profile, &claims) else {
-                return concealed();
-            };
-            let Some(row_boundaries) = boundaries(&profile.row_boundaries, &claims) else {
-                return concealed();
-            };
-            let Ok(mut context) = crate::postgres::ClaimContext::for_compiled(
-                &service.registry,
-                target,
-                claims.principal().map(str::to_owned),
-                authority.common.access_profile(),
-                claims.purpose().map(str::to_owned),
-                row_boundaries,
-            )
-            .and_then(|context| context.with_recipients(claims.recipients().clone())) else {
-                return concealed();
-            };
-            if let Some(binding) = task_grant {
-                let Ok(bound) = context.with_task_grant(binding) else {
-                    return concealed();
+            for source in mapping.fields.values() {
+                use crate::contract::ProposalContextValueSource;
+                let target = match source {
+                    ProposalContextValueSource::Input { .. } => continue,
+                    ProposalContextValueSource::Record { input, .. } => {
+                        let input = action
+                            .inputs
+                            .iter()
+                            .find(|declared| declared.id == *input)?;
+                        let crate::contract::FieldTypeSource::Reference { target, .. } =
+                            &input.field_type
+                        else {
+                            return None;
+                        };
+                        target
+                    }
+                    ProposalContextValueSource::Changes { record_type, .. } => record_type,
                 };
-                context = bound;
+                let entity = service.registry.entities().get(target)?;
+                let profile = entity
+                    .access_profiles
+                    .get(authority.common.access_profile())?;
+                if !profile.operations.contains(&Operation::Get)
+                    || authorize_profile_claims(profile, &claims).is_err()
+                {
+                    return None;
+                }
+                let Ok(task_grant) = task_grant_binding(profile, &claims) else {
+                    return None;
+                };
+                let row_boundaries = boundaries(&profile.row_boundaries, &claims)?;
+                let Ok(mut context) = crate::postgres::ClaimContext::for_compiled(
+                    &service.registry,
+                    target,
+                    claims.principal().map(str::to_owned),
+                    authority.common.access_profile(),
+                    claims.purpose().map(str::to_owned),
+                    row_boundaries,
+                )
+                .and_then(|context| context.with_recipients(claims.recipients().clone())) else {
+                    return None;
+                };
+                if let Some(binding) = task_grant {
+                    let Ok(bound) = context.with_task_grant(binding) else {
+                        return None;
+                    };
+                    context = bound;
+                }
+                records.insert(
+                    target.clone(),
+                    ProposalRecordReadAuthority {
+                        fields: profile.readable_fields.iter().cloned().collect(),
+                        context,
+                    },
+                );
             }
-            records.insert(
-                target.clone(),
-                ProposalRecordReadAuthority {
-                    fields: profile.readable_fields.iter().cloned().collect(),
-                    context,
-                },
-            );
         }
-    }
+        Some(records)
+    })();
+    let Some(records) = records else {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Get,
+            &correlation,
+            concealed(),
+        )
+        .await;
+    };
     match mutations
         .proposal_review_read(id, &authority, &records, &correlation)
         .await

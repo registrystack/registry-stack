@@ -855,9 +855,7 @@ impl BaseRegistryClient {
                     .as_deref()
                     .is_some_and(|id| Uuid::parse_str(id).is_err())
             })
-            || is_context
-                && (document.context.contract.is_none() || document.context.fields.is_none())
-            || !is_context && document.context.fields.is_some()
+            || !valid_review_projection(&document.context, is_context)
         {
             return Err(refusal());
         }
@@ -989,8 +987,7 @@ impl BaseRegistryClient {
                     .as_deref()
                     .is_some_and(|id| Uuid::parse_str(id).is_err())
             })
-            || operation == "reviewContext"
-                && (document.context.contract.is_none() || document.context.fields.is_none())
+            || !valid_review_projection(&document.context, operation == "reviewContext")
         {
             return Err(refusal());
         }
@@ -1026,7 +1023,12 @@ impl BaseRegistryClient {
         slot: &str,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let (slot, link) = self.proposal_slot(proposal, slot, "download")?;
-        self.proposal_attachment_exchange(link, None, None, None, slot.maximum_bytes)
+        // Retained bytes may predate a narrower current upload policy.
+        let maximum_bytes = slot
+            .value
+            .as_ref()
+            .map_or(slot.maximum_bytes, |value| value.byte_size);
+        self.proposal_attachment_exchange(link, None, None, None, maximum_bytes)
             .await
     }
     pub async fn upload_proposal_attachment(
@@ -1077,7 +1079,10 @@ impl BaseRegistryClient {
         response: BRegComplete<BRegRawDocument>,
     ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
         let current = BRegProposal::from_slice(response.value.as_bytes())?;
-        if current.id != prior.id || current.action_id != prior.action_id {
+        if current.id != prior.id
+            || current.action_id != prior.action_id
+            || current.action_revision != prior.action_revision
+        {
             return Err(refusal());
         }
         Ok(BRegComplete {
@@ -1101,11 +1106,10 @@ impl BaseRegistryClient {
                 .target
                 .as_ref()
                 .is_some_and(|target| Uuid::parse_str(target).is_err())
-            || query.cursor.as_ref().is_some_and(|cursor| {
-                cursor.len() > 512
-                    || cursor.is_empty()
-                    || cursor.bytes().any(|byte| byte <= 32 || byte >= 127)
-            })
+            || query
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| !valid_cursor(cursor))
         {
             return Err(refusal());
         }
@@ -1145,7 +1149,7 @@ impl BaseRegistryClient {
             || page
                 .next_cursor
                 .as_ref()
-                .is_some_and(|cursor| cursor.len() > 512)
+                .is_some_and(|cursor| !valid_cursor(cursor))
         {
             return Err(refusal());
         }
@@ -1241,7 +1245,11 @@ impl BaseRegistryClient {
             .proposal_exchange(&evidence.link, Some(evidence.body.into_bytes()), Some(&key))
             .await?;
         let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
-        if proposal.id != evidence.proposal_id || proposal.action_id != evidence.action_id {
+        if proposal.id != evidence.proposal_id
+            || proposal.action_id != evidence.action_id
+            || proposal.action_revision != evidence.action_revision
+                && !rebase_successor(&evidence.link, evidence.submission_version, &proposal)
+        {
             return Err(refusal());
         }
         Ok(BRegComplete {
@@ -1287,11 +1295,12 @@ impl BaseRegistryClient {
             && current.state == BRegProposalState::Draft
             && evidence.submission_version.checked_add(1) == Some(current.submission_version)
             && next_revision;
+        let rebased_draft = rebase_successor(&evidence.link, evidence.submission_version, current);
         if current.source.as_deref() != Some(self.source_binding().as_str())
             || evidence.source != self.source_binding()
             || evidence.proposal_id != current.id
             || evidence.action_id != current.action_id
-            || evidence.action_revision != current.action_revision
+            || evidence.action_revision != current.action_revision && !rebased_draft
             || !(same_version || advanced_draft)
             || !current.links.values().any(|link| {
                 link.path == evidence.link.path
@@ -1315,6 +1324,31 @@ impl BaseRegistryClient {
         recovered.executable = true;
         Ok(recovered)
     }
+}
+fn rebase_successor(
+    link: &BRegProposalLink,
+    submission_version: u32,
+    current: &BRegProposal,
+) -> bool {
+    link.operation == "rebase"
+        && current.state == BRegProposalState::Draft
+        && link.availability.as_ref().is_some_and(|availability| {
+            availability.observed_revision.checked_add(1) == Some(current.revision)
+        })
+        && (submission_version == current.submission_version
+            || submission_version.checked_add(1) == Some(current.submission_version))
+}
+fn valid_review_projection(context: &BRegProposalReviewContext, is_context: bool) -> bool {
+    if is_context {
+        context.contract.is_some() && context.fields.is_some()
+    } else {
+        context.fields.is_none()
+    }
+}
+fn valid_cursor(cursor: &str) -> bool {
+    !cursor.is_empty()
+        && cursor.len() <= 512
+        && cursor.bytes().all(|byte| (33..=126).contains(&byte))
 }
 fn identifier(value: &str) -> bool {
     !value.is_empty()
@@ -1410,6 +1444,302 @@ mod tests {
     const REVISION: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID: &str = "00000000-0000-4000-8000-000000000001";
+
+    async fn proposal_response_client(
+        initial: Value,
+    ) -> (
+        BaseRegistryClient,
+        std::sync::Arc<std::sync::Mutex<Value>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use axum::{extract::State, routing::any, Json, Router};
+        use std::sync::{Arc, Mutex};
+        let response = Arc::new(Mutex::new(initial));
+        let app = Router::new()
+            .fallback(any(|State(value): State<Arc<Mutex<Value>>>| async move {
+                (
+                    [
+                        (
+                            "traceparent",
+                            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                        ),
+                        ("cache-control", "no-store"),
+                        ("vary", "authorization, accept"),
+                    ],
+                    Json(value.lock().unwrap().clone()),
+                )
+            }))
+            .with_state(response.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (client(&format!("http://{address}/")), response, server)
+    }
+
+    fn transition_document(operation: &str, state: &str, version: u32, revision: u64) -> Value {
+        let mut value = document();
+        value["state"] = json!(state);
+        value["submissionVersion"] = json!(version);
+        value["revision"] = json!(revision);
+        let mut link = value["links"]["apply"].clone();
+        link["path"] = json!(format!("/v1/proposals/{ID}/{operation}"));
+        link["operation"] = json!(operation);
+        link["availability"]["observedRevision"] = json!(revision);
+        value["links"] = json!({operation:link});
+        value
+    }
+
+    #[tokio::test]
+    async fn transition_responses_refuse_changed_action_revisions_without_rebase() {
+        let (client, response, server) = proposal_response_client(json!({})).await;
+        for (operation, before, after, body) in [
+            ("edit", "draft", "draft", json!({"input":{}})),
+            ("submit", "draft", "submitted", json!({})),
+            ("revise", "submitted", "draft", json!({})),
+            ("cancel", "submitted", "cancelled", json!({})),
+            ("retry", "submitted", "submitted", json!({})),
+            (
+                "apply",
+                "submitted",
+                "applied",
+                json!({"submissionVersion":1,"effectDigest":REVISION}),
+            ),
+        ] {
+            let prior = proposal(&client, transition_document(operation, before, 1, 2));
+            let attempt = client
+                .prepare_proposal(
+                    &prior,
+                    operation,
+                    body,
+                    &BRegIdempotencyKey::parse("transition-binding").unwrap(),
+                )
+                .unwrap();
+            let current = transition_document(
+                operation,
+                after,
+                if operation == "revise" { 2 } else { 1 },
+                3,
+            );
+            *response.lock().unwrap() = current.clone();
+            assert!(
+                client.execute_proposal(&attempt).await.is_ok(),
+                "{operation}"
+            );
+            let mut changed = current;
+            changed["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
+            *response.lock().unwrap() = changed;
+            assert!(
+                client.execute_proposal(&attempt).await.is_err(),
+                "{operation} accepted a changed Action revision"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rebase_receipts_recover_changed_action_revisions_for_draft_and_submitted_work() {
+        let (client, response, server) = proposal_response_client(json!({})).await;
+        for (state, before, after) in [("draft", 0, 0), ("draft", 2, 2), ("submitted", 1, 2)] {
+            let prior = proposal(&client, transition_document("rebase", state, before, 2));
+            let attempt = client
+                .prepare_proposal(
+                    &prior,
+                    "rebase",
+                    json!({"input":{}}),
+                    &BRegIdempotencyKey::parse("rebase-binding").unwrap(),
+                )
+                .unwrap();
+            let mut current = transition_document("rebase", "draft", after, 3);
+            current["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
+            *response.lock().unwrap() = current.clone();
+            let rebased = client.execute_proposal(&attempt).await.unwrap().value;
+            assert_eq!(
+                client
+                    .recover_proposal(&rebased, &attempt)
+                    .unwrap()
+                    .as_bytes(),
+                attempt.as_bytes()
+            );
+            for (field, value) in [
+                ("revision", json!(4)),
+                ("submissionVersion", json!(after + 2)),
+                ("state", json!("submitted")),
+            ] {
+                let mut unrelated = current.clone();
+                unrelated[field] = value;
+                if field == "revision" {
+                    unrelated["links"]["rebase"]["availability"]["observedRevision"] = json!(4);
+                }
+                *response.lock().unwrap() = unrelated.clone();
+                assert!(
+                    client.execute_proposal(&attempt).await.is_err(),
+                    "execute:{state}:{field}"
+                );
+                assert!(
+                    client
+                        .recover_proposal(&proposal(&client, unrelated), &attempt)
+                        .is_err(),
+                    "{state}:{field}"
+                );
+            }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn proposal_start_refuses_later_states_but_accepts_exact_draft_replay() {
+        let fixture: Value =
+            serde_json::from_slice(include_bytes!("../tests/fixtures/attachments.json")).unwrap();
+        let original = fixture["proposal"].clone();
+        let (client, response, server) = proposal_response_client(original.clone()).await;
+        let action =
+            crate::BRegMetadata::from_slice(&serde_json::to_vec(&fixture["metadata"]).unwrap())
+                .unwrap()
+                .bind_source(client.source_binding())
+                .select_action("correct", "writer")
+                .unwrap();
+        let request =
+            crate::BRegActionInvocationRequest::new(&action, serde_json::Map::new(), None).unwrap();
+        let key = BRegIdempotencyKey::parse("exact-start-replay").unwrap();
+        for _ in 0..2 {
+            let started = client
+                .start_proposal(&action, &request, &key)
+                .await
+                .unwrap();
+            assert_eq!(started.value.state(), BRegProposalState::Draft);
+            assert_eq!(serde_json::to_value(started.value).unwrap(), original);
+        }
+        for state in ["submitted", "applied", "cancelled"] {
+            let mut later = original.clone();
+            later["state"] = json!(state);
+            if state == "applied" {
+                later["effectDigest"] = json!(REVISION);
+                later["application"] = json!({"applicationId":ID,
+                    "submissionVersion":2,"effectDigest":REVISION,"resultLinks":[]});
+            }
+            *response.lock().unwrap() = later;
+            assert!(
+                client
+                    .start_proposal(&action, &request, &key)
+                    .await
+                    .is_err(),
+                "Start accepted {state} work"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn attachment_mutation_responses_preserve_the_action_revision() {
+        let fixture: Value =
+            serde_json::from_slice(include_bytes!("../tests/fixtures/attachments.json")).unwrap();
+        let original = fixture["proposal"].clone();
+        let (client, response, server) = proposal_response_client(original.clone()).await;
+        let prior = proposal(&client, original.clone());
+        let key = BRegIdempotencyKey::parse("attachment-binding").unwrap();
+        assert!(client
+            .upload_proposal_attachment(&prior, "supporting-file", "application/pdf", b"%PDF", &key)
+            .await
+            .is_ok());
+        assert!(client
+            .delete_proposal_attachment(&prior, "supporting-file", &key)
+            .await
+            .is_ok());
+        let mut changed = original;
+        changed["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
+        *response.lock().unwrap() = changed;
+        assert!(client
+            .upload_proposal_attachment(&prior, "supporting-file", "application/pdf", b"%PDF", &key)
+            .await
+            .is_err());
+        assert!(client
+            .delete_proposal_attachment(&prior, "supporting-file", &key)
+            .await
+            .is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn proposal_list_refuses_unusable_response_cursors() {
+        let (client, response, server) = proposal_response_client(json!({"items":[]})).await;
+        let collection = BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["author"]}),
+            &client.source_binding(),
+            REVISION,
+            "author",
+        )
+        .unwrap();
+        for cursor in [
+            "".to_owned(),
+            " ".to_owned(),
+            "cursor\nvalue".to_owned(),
+            "cursor\tvalue".to_owned(),
+            "é".to_owned(),
+            "x".repeat(513),
+        ] {
+            *response.lock().unwrap() = json!({"items":[],"nextCursor":cursor});
+            assert!(
+                client
+                    .list_proposals(&collection, &BRegProposalQuery::default())
+                    .await
+                    .is_err(),
+                "accepted unusable cursor"
+            );
+        }
+        for cursor in [ID.to_owned(), "x".repeat(512)] {
+            *response.lock().unwrap() = json!({"items":[],"nextCursor":cursor});
+            let page = client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .unwrap()
+                .value;
+            assert!(client
+                .list_proposals(
+                    &collection,
+                    &BRegProposalQuery {
+                        cursor: page.next_cursor,
+                        ..Default::default()
+                    }
+                )
+                .await
+                .is_ok());
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn promoted_review_status_refuses_display_fields_like_uuid_status_reads() {
+        let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
+            "submissionVersion":1,"revision":2,"effectDigest":REVISION,
+            "subject":{"source":"directory","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},
+            "context":{"reference":"breg:directory:correct-address:proposal:1"},"reviewable":true});
+        let (client, response, server) = proposal_response_client(valid.clone()).await;
+        let mut prior = document();
+        prior["links"]["reviewStatus"] = json!({"method":"GET","path":format!("/v1/proposals/{ID}/review-status"),"accessProfile":"author","operation":"get-review-status"});
+        let prior = proposal(&client, prior);
+        let binding=BRegProposalReviewBinding::from_metadata(
+            &json!([{"actionId":"correct-address","accessProfile":"author","operations":["get-review-status"]}]),
+            &client.source_binding(),"author","correct-address",true).unwrap();
+        assert!(client.read_proposal_review_status(&prior).await.is_ok());
+        assert!(client
+            .read_proposal_review_by_id(&binding, ID)
+            .await
+            .is_ok());
+        for fields in [json!({}), json!({"private":"source value"})] {
+            let mut changed = valid.clone();
+            changed["context"]["fields"] = fields;
+            *response.lock().unwrap() = changed;
+            assert!(client
+                .read_proposal_review_by_id(&binding, ID)
+                .await
+                .is_err());
+            assert!(
+                client.read_proposal_review_status(&prior).await.is_err(),
+                "promoted status accepted display fields"
+            );
+        }
+        server.abort();
+    }
     #[tokio::test]
     async fn review_context_exchange_requires_a_closed_producer_contract_binding() {
         use axum::{extract::State, routing::get, Json, Router};
@@ -1936,6 +2266,11 @@ mod tests {
             } else {
                 json!({"available":true,"observedRevision":3})
             };
+            if operation == "rebase" {
+                current["actionRevision"] = json!(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                );
+            }
             assert_eq!(
                 client
                     .recover_proposal(&proposal(&client, current.clone()), &attempt)
@@ -1947,12 +2282,6 @@ mod tests {
                 ("submissionVersion", json!(3)),
                 ("revision", json!(4)),
                 ("state", json!("submitted")),
-                (
-                    "actionRevision",
-                    json!(
-                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    ),
-                ),
             ] {
                 let mut unrelated = current.clone();
                 unrelated[key] = value;
@@ -1965,6 +2294,14 @@ mod tests {
                         .is_err(),
                     "{operation}:{key}"
                 );
+            }
+            if operation == "revise" {
+                current["actionRevision"] = json!(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                );
+                assert!(client
+                    .recover_proposal(&proposal(&client, current), &attempt)
+                    .is_err());
             }
         }
     }

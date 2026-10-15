@@ -59,6 +59,7 @@ async fn remove(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn authorize(
     service: &HttpService,
     id: Uuid,
@@ -66,49 +67,66 @@ async fn authorize(
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
     operation: ProposalOperation,
-) -> Result<(String, ProposalAuthority), MutationError> {
-    let mutations = service
-        .mutations
-        .as_ref()
-        .ok_or(MutationError::PreconditionFailed)?;
+    method: HttpMethod,
+    correlation: &RequestCorrelation,
+) -> Result<(String, ProposalAuthority), Response> {
+    let mutations = service.mutations.as_ref().ok_or_else(concealed)?;
     let action_id = mutations
         .proposal_action_id(id)
-        .await?
-        .ok_or(MutationError::PreconditionFailed)?;
+        .await
+        .map_err(super::proposals::proposal_problem)?
+        .ok_or_else(concealed)?;
     let action = service
         .registry
         .actions()
         .actions
         .iter()
         .find(|action| action.id == action_id)
-        .ok_or(MutationError::PreconditionFailed)?;
+        .ok_or_else(concealed)?;
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-        return Err(MutationError::PreconditionFailed);
+        return Err(concealed());
     };
-    let authority = super::proposals::authorize(
+    let Some(authority) = super::proposals::authorize(
         &service.registry,
         action,
         claims,
         selected,
         ProposalAuthorityOperation::Lifecycle(operation),
         Some(id),
-    )
-    .ok_or(MutationError::PreconditionFailed)?;
-    let grant = proposal
-        .permissions
-        .iter()
-        .find(|grant| {
-            grant.profile_id == authority.common.access_profile()
-                && grant.operations.contains(&operation)
-        })
-        .ok_or(MutationError::PreconditionFailed)?;
-    let allowed = if operation == ProposalOperation::Get {
-        &grant.readable_attachments
-    } else {
-        &grant.writable_attachments
+    ) else {
+        return Err(super::proposals::known_action_refusal(
+            mutations,
+            action,
+            claims,
+            selected,
+            ProposalAuthorityOperation::Lifecycle(operation),
+            method,
+            correlation,
+        )
+        .await);
     };
-    if !proposal.attachments.contains_key(slot) || !allowed.contains(slot) {
-        return Err(MutationError::PreconditionFailed);
+    let grant = proposal.permissions.iter().find(|grant| {
+        grant.profile_id == authority.common.access_profile()
+            && grant.operations.contains(&operation)
+    });
+    let allowed = grant.map(|grant| {
+        if operation == ProposalOperation::Get {
+            &grant.readable_attachments
+        } else {
+            &grant.writable_attachments
+        }
+    });
+    if !proposal.attachments.contains_key(slot)
+        || !allowed.is_some_and(|allowed| allowed.contains(slot))
+    {
+        return Err(super::proposals::admitted_http_refusal(
+            mutations,
+            &authority,
+            method,
+            correlation,
+            concealed(),
+        )
+        .await);
     }
     Ok((action_id, authority))
 }
@@ -141,12 +159,17 @@ async fn mutate(
         &claims,
         selected.as_deref(),
         ProposalOperation::Edit,
+        if removal {
+            HttpMethod::Delete
+        } else {
+            HttpMethod::Patch
+        },
+        &correlation,
     )
     .await
     {
         Ok(value) => value,
-        Err(MutationError::PreconditionFailed) => return concealed(),
-        Err(error) => return super::proposals::proposal_problem(error),
+        Err(response) => return response,
     };
     let Some(key) =
         single_header(&headers, "idempotency-key").filter(|key| valid_idempotency_key(key))
@@ -312,12 +335,13 @@ async fn download(
         &claims,
         selected.as_deref(),
         ProposalOperation::Get,
+        HttpMethod::Get,
+        &correlation,
     )
     .await
     {
         Ok(value) => value,
-        Err(MutationError::PreconditionFailed) => return concealed(),
-        Err(error) => return super::proposals::proposal_problem(error),
+        Err(response) => return response,
     };
     match mutations
         .proposal_attachment_download(id, version, &slot, &authority, &correlation)

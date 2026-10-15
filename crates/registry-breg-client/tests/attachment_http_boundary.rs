@@ -240,6 +240,12 @@ fn proposal_response() -> MockResponse {
         .with_header("vary", "authorization, accept")
 }
 async fn selected(responses: Vec<MockResponse>) -> (TestClient, BRegProposal) {
+    selected_with_document(proposal_document(), responses).await
+}
+async fn selected_with_document(
+    document: Value,
+    responses: Vec<MockResponse>,
+) -> (TestClient, BRegProposal) {
     let metadata = json!({"id":"attachment-test","version":"1","revision":REVISION,"metadataVersion":"1","recordTypes":[],"operations":[],"actions":[{
         "id":"correct","apiName":"correct","revision":REVISION,"display":{},"execution":{"mode":"proposal"},"route":"/v1/actions/correct/proposals","inputMode":"fixed","inputs":[],"referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],"access":{"selectedProfile":"writer"},
         "routes":{"start":{"method":"POST","path":"/v1/actions/correct/proposals","operationId":"actions.correct.start","requiresIdempotencyKey":true,"inputSchema":"action-correct-invoke-input","responseSchema":"action-correct-invoke-response"}},
@@ -248,7 +254,9 @@ async fn selected(responses: Vec<MockResponse>) -> (TestClient, BRegProposal) {
         MockResponse::json(StatusCode::OK, metadata)
             .with_header("cache-control", "no-store")
             .with_header("vary", "authorization, accept"),
-        proposal_response(),
+        MockResponse::json(StatusCode::OK, document)
+            .with_header("cache-control", "no-store")
+            .with_header("vary", "authorization, accept"),
     ];
     queue.extend(responses);
     let fixture = test_client(queue).await;
@@ -321,6 +329,55 @@ async fn upload_download_and_delete_use_exact_promoted_proposal_routes() {
     assert_eq!(requests[4].idempotency_key.as_deref(), Some("remove"));
     assert!(requests[4].body.is_empty());
 }
+#[tokio::test]
+async fn retained_attachment_download_uses_its_value_bound_and_current_upload_policy() {
+    let mut retained = proposal_document();
+    retained["attachments"][SLOT]["maximumBytes"] = json!(4);
+    retained["attachments"][SLOT]["contentTypes"] = json!(["text/plain"]);
+    retained["attachments"][SLOT]["value"] = json!({
+        "submissionVersion":2,"sha256":"a".repeat(64),"contentType":"application/pdf",
+        "byteSize":PDF.len(),"verificationStatus":"notRequired"
+    });
+    let too_large = [PDF, b"x"].concat();
+    let oversized = MockResponse::bytes(StatusCode::OK, "application/pdf", &too_large)
+        .with_header("content-disposition", "attachment")
+        .with_header("x-content-type-options", "nosniff")
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization");
+    let (fixture, proposal) =
+        selected_with_document(retained.clone(), vec![download_response(), oversized]).await;
+    let downloaded = fixture
+        .client
+        .download_proposal_attachment(&proposal, SLOT)
+        .await
+        .unwrap();
+    assert_eq!(downloaded.value.as_bytes(), PDF);
+    assert_eq!(downloaded.value.media_type(), "application/pdf");
+    assert!(matches!(
+        fixture
+            .client
+            .download_proposal_attachment(&proposal, SLOT)
+            .await,
+        Err(BaseRegistryClientError::Transport {
+            kind: registry_breg_client::TransportKind::ResponseTooLarge
+        })
+    ));
+    for (media, bytes) in [
+        ("application/pdf", PDF),
+        ("text/plain", b"12345".as_slice()),
+    ] {
+        assert!(fixture
+            .client
+            .upload_proposal_attachment(&proposal, SLOT, media, bytes, &key("current-upload"))
+            .await
+            .is_err());
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), 4);
+    retained["attachments"][SLOT]["value"]["byteSize"] =
+        json!(registry_breg_client::MAX_BREG_ATTACHMENT_BYTES + 1);
+    assert!(BRegProposal::from_slice(&serde_json::to_vec(&retained).unwrap()).is_err());
+}
+
 #[tokio::test]
 async fn foreign_sources_missing_slots_and_disallowed_bytes_are_refused_before_io() {
     let (fixture, proposal) = selected(vec![]).await;
