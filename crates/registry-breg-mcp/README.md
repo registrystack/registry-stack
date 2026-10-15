@@ -55,7 +55,7 @@ The halves share no code path and no configuration section:
 | `start_application` | Starts the configured proposal-mode Action with the citizen's own target | metadata, linked list lookup, Action start, Proposal read |
 | `update_application` | Edits a caller-visible draft under its current revision and promoted edit link | metadata, linked list lookup, Proposal read, edit |
 | `prepare_review` | Returns `<reviewBaseUrl>/proposals/<id>` for the citizen to review and submit | metadata, linked list lookup, Proposal read |
-| `get_application_status` | Reports `draft`, `submitted`, `applied`, or `cancelled`, plus a disclosed title and blocked reason | metadata, linked list lookup, Proposal read |
+| `get_application_status` | Reports `draft`, `submitted`, `applied`, `cancelled`, or `rejected`, plus a disclosed title and blocked reason | metadata, linked list lookup, Proposal read |
 | `list_applications` | Resumes one page of the citizen's own applications for the configured Action and target | metadata, linked list lookup, Proposal list |
 
 Proposal listing needs its own explicit grant. The gateway fixes owner, Action,

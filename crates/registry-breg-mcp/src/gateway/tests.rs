@@ -620,7 +620,7 @@ async fn a_retried_start_answers_with_the_drafts_current_state() {
 
 #[tokio::test]
 async fn terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft() {
-    for state in ["applied", "cancelled"] {
+    for state in ["applied", "cancelled", "rejected"] {
         let fixture = Fixture::start().await;
         let caller = fixture.caller(CITIZEN_A);
         let first = started_identifier(
