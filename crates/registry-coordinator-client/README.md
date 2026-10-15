@@ -50,6 +50,10 @@ Presentation titles and descriptions do not change it. Exact package bytes have 
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
 Every returned run identity must be nonnil, and its deadline must follow its admission.
 Historical deadlines remain readable; this check does not compare them to the local clock.
+A finished run requires an outcome. Other states carry no terminal evidence, except
+`attention` with `restoreReviewRequired` after a leased Finish commits during restore review.
+That retained outcome does not complete the operator's recovery review. Output may be null
+for an authored null result or after retention; non-null output always requires an outcome.
 Run and step `failurePath` values preserve valid RFC 6901 pointers, including the empty
 root path. Validation checks their syntax without resolving them against omitted command data.
 Inspection requires `retryAllowed` to be true

@@ -269,6 +269,9 @@ async fn every_run_status_response_preserves_each_closed_effective_state() {
         let before = server.count();
         let mut run = status();
         run["state"] = json!(state);
+        if state == "finished" {
+            run["outcome"] = json!("completed");
+        }
         for (operation, answer) in
             run_status_answers(&server, run, Uuid::parse_str(RUN).unwrap()).await
         {
@@ -399,6 +402,113 @@ async fn every_run_status_response_requires_a_deadline_after_admission() {
         }
         assert_eq!(server.count(), before + 7, "each operation sends once");
     }
+}
+
+#[tokio::test]
+async fn run_status_requires_coherent_terminal_evidence_and_preserves_restore_review() {
+    let server = Server::new(status()).await;
+    let mut cases = vec![
+        ("finished", Some("completed"), Value::Null, false, true),
+        (
+            "finished",
+            Some("completed"),
+            json!({"accepted": true}),
+            false,
+            true,
+        ),
+        ("finished", Some("completed"), json!(false), false, true),
+        ("finished", None, Value::Null, false, false),
+        (
+            "finished",
+            None,
+            json!({"value": "output-canary"}),
+            false,
+            false,
+        ),
+        // A leased pure Finish can commit after the operator sets restore hold.
+        (
+            "attention",
+            Some("completed"),
+            json!({"accepted": true}),
+            true,
+            true,
+        ),
+        ("attention", Some("completed"), Value::Null, true, true),
+        ("attention", None, Value::Null, true, true),
+        (
+            "attention",
+            None,
+            json!({"value": "output-canary"}),
+            true,
+            false,
+        ),
+        ("running", Some("outcome-canary"), Value::Null, true, false),
+    ];
+    for state in [
+        "running",
+        "failed",
+        "cancelled",
+        "cancelled-after-effect",
+        "expired",
+        "attention",
+        "cancel-requested",
+    ] {
+        cases.push((state, None, Value::Null, false, true));
+        cases.push((state, Some("outcome-canary"), Value::Null, false, false));
+        cases.push((state, None, json!({"value": "output-canary"}), false, false));
+    }
+    let mut accepted = Vec::new();
+    for (state, outcome, output, restore, valid) in cases {
+        let before = server.count();
+        let mut run = status();
+        run["state"] = json!(state);
+        run["outcome"] = json!(outcome);
+        run["output"] = output;
+        run["restoreReviewRequired"] = json!(restore);
+        for (operation, answer) in
+            run_status_answers(&server, run, Uuid::parse_str(RUN).unwrap()).await
+        {
+            if valid {
+                assert_eq!(
+                    answer.unwrap_or_else(|_| panic!("{operation} refused {state}")),
+                    state
+                );
+            } else {
+                match answer {
+                    Ok(_) => accepted.push(format!("{operation}:{state}:{outcome:?}:{restore}")),
+                    Err(error) => {
+                        assert!(
+                            matches!(error, CoordinatorClientError::Protocol {
+                            status: 200,
+                            failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                        }),
+                            "{operation}: {error:?}"
+                        );
+                        assert!(error.is_outcome_unknown(), "{operation}");
+                        for canary in ["outcome-canary", "output-canary"] {
+                            assert!(!format!("{error:?}").contains(canary));
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(server.count(), before + 7, "each operation sends once");
+    }
+    // Finished results may have authored null output, or output erased by retention.
+    let mut retained = status();
+    retained["state"] = json!("finished");
+    retained["outcome"] = json!("completed");
+    retained.as_object_mut().unwrap().remove("output");
+    for (operation, answer) in run_status_answers(&server, retained, RUN.parse().unwrap()).await {
+        assert_eq!(
+            answer.unwrap_or_else(|_| panic!("{operation} refused retained outcome")),
+            "finished"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "incoherent terminal evidence accepted by {accepted:?}"
+    );
 }
 
 #[tokio::test]
@@ -664,6 +774,9 @@ async fn list_responses_must_satisfy_the_requested_effective_state_and_attention
                 };
                 let mut run = status();
                 run["state"] = name.clone();
+                if state == RunListState::Finished {
+                    run["outcome"] = json!("completed");
+                }
                 server.answer(200, "application/json", &json!({"runs":[run]}).to_string());
                 let before = server.count();
                 let result = client.list_page(&token(), &query).await;
