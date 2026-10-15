@@ -2921,6 +2921,23 @@ impl TwoFlowFixture {
         secrets
     }
 
+    async fn disconnect_runtime_role(&self) {
+        // Commit the login refusal before enumerating sessions. A connection
+        // admitted between enumeration and an uncommitted NOLOGIN otherwise
+        // survives the intended outage and lets the worker keep polling.
+        self.admin
+            .batch_execute(&format!("ALTER ROLE {} NOLOGIN", self.role))
+            .await
+            .unwrap();
+        self.admin
+            .query(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1",
+                &[&self.role],
+            )
+            .await
+            .unwrap();
+    }
+
     async fn stop(self) {
         self.issuer.stop().await;
         self.admin
@@ -3942,13 +3959,7 @@ async fn the_service_waits_out_an_unreachable_database_and_stops_on_a_moved_acti
         });
 
     // Refuse the runtime role new sessions and end the ones it holds.
-    f.admin
-        .batch_execute(&format!(
-            "ALTER ROLE {0} NOLOGIN; SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename='{0}'",
-            f.role
-        ))
-        .await
-        .unwrap();
+    f.disconnect_runtime_role().await;
     let unreachable = deployment::check(&store, &runtime, workflows.digest())
         .await
         .unwrap_err();
@@ -4527,13 +4538,7 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
     }
 
     // Refuse the runtime role new sessions and end the ones it holds.
-    f.admin
-        .batch_execute(&format!(
-            "ALTER ROLE {0} NOLOGIN; SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename='{0}'",
-            f.role
-        ))
-        .await
-        .unwrap();
+    f.disconnect_runtime_role().await;
     let body = scrape_metrics(&http, &metrics_origin).await;
     assert!(
         !body.contains("coordinator_dispatch_jobs{"),
