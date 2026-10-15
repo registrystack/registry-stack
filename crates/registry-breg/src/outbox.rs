@@ -111,7 +111,7 @@ pub(crate) fn capture_envelope(
 ///
 /// `maximum_payload_bytes` is the compiled per-delivery bound. It measures the
 /// whole envelope, not the `data` object alone; an event with no compiled
-/// delivery carries the store's own 2 MiB bound.
+/// delivery carries the envelope's own 1 MiB signable bound.
 pub(crate) fn envelope_payload(
     envelope: &HookEnvelope,
     maximum_payload_bytes: Option<u32>,

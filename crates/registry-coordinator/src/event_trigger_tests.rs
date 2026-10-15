@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::delivery_signature::sign_v1;
+use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -75,6 +75,9 @@ fn signed(
     }
     sign_headers(&mut headers, &body, target);
     (body, headers)
+}
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
 }
 fn sign_headers(headers: &mut HeaderMap, body: &[u8], target: &str) {
     let signature = sign_v1(
@@ -343,6 +346,52 @@ fn stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused() {
     sign_headers(&mut headers, &changed, TARGET);
     assert!(verify(&changed, &headers).is_err());
     assert!(verify(&vec![b' '; MAXIMUM_EVENT_BYTES + 1], &headers).is_err());
+}
+
+#[test]
+fn the_intake_bound_is_the_signable_bound_and_its_refusal_names_the_limit() {
+    assert_eq!(
+        MAXIMUM_EVENT_BYTES,
+        registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
+    );
+    // A signed event above the former 64 KiB intake bound and within the
+    // structured-value profile is admitted.
+    let mut value = event();
+    for index in 0..6 {
+        value["data"]["values"][format!("field{index}")] = json!("x".repeat(15_000));
+    }
+    let (body, headers) = signed(&value, TARGET, 1, "large-delivery");
+    assert!(body.len() > 65_536);
+    verify(&body, &headers).unwrap();
+    let error = verify(&vec![b' '; MAXIMUM_EVENT_BYTES + 1], &headers)
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "request.body-too-large");
+    assert!(error.message.contains("1048576"), "{}", error.message);
+}
+
+#[test]
+fn delivery_counters_follow_the_shared_receiver_grammar() {
+    let value = event();
+    for (counter, accepted) in [
+        ("1", true),
+        ("4294967296", true),
+        ("9223372036854775807", true),
+        ("01", false),
+        ("0", false),
+        ("9223372036854775808", false),
+    ] {
+        for name in ["x-registry-event-generation", "x-registry-delivery-attempt"] {
+            let (body, mut headers) = signed(&value, TARGET, 1, "delivery");
+            headers.insert(name, HeaderValue::from_static(counter));
+            sign_headers(&mut headers, &body, TARGET);
+            assert_eq!(
+                verify(&body, &headers).is_ok(),
+                accepted,
+                "{name}={counter}"
+            );
+        }
+    }
 }
 
 fn project_text() -> &'static str {
