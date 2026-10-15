@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `messagingctl dev` pulls its pinned PostgreSQL 17.11 image from Docker Hub
+  instead of ECR Public. The tag and digest are unchanged, and Mailpit remains
+  pinned to its existing GHCR image.
+
 - `messagingctl dev PROJECT --issuer-project BREG_OWNER --resource URI`
   borrows a ready BReg development issuer for the clients named by the
   Messaging package. It obtains credentials only through public

@@ -18,9 +18,9 @@ use super::{failed, interrupted, DevResult, DATABASE_NAME, MIGRATION_ROLE, RUNTI
 
 /// The pinned PostgreSQL image, the same one Casework's development
 /// session runs.
-// Pull digest-identical upstream mirrors; public help names the canonical images.
+// Pull the pinned Docker Official Images reference from Docker Hub.
 pub(super) const POSTGRES_IMAGE: &str =
-    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+    "docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 /// The pinned Mailpit image.
 pub(super) const MAILPIT_IMAGE: &str =
     "ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d";

@@ -100,7 +100,13 @@ with the caller's source of record.
 
 ## Running locally
 
-`messagingctl dev` runs a package end to end on one machine. It needs Docker:
+`messagingctl dev` runs a package end to end on one machine. It needs Docker.
+
+The development database pulls
+`docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`.
+Mailpit pulls its pinned image from `ghcr.io/axllent/mailpit`.
+The `messagingctl dev` help names both exact references for an egress allowlist.
+To start a local session:
 
 ```bash
 messagingctl init ./notices
