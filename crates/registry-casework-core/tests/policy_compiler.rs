@@ -317,7 +317,7 @@ fn decision_and_draft_bounds_are_checked_without_a_runtime() {
     };
     assert_eq!(
         invalid.check_input().unwrap_err().reason,
-        ReviewValidationReason::TextInvalid
+        ReviewValidationReason::MaximumBytesExceeded
     );
     let invalid = DecisionKind::Answer {
         outcome: "answered".into(),
@@ -370,7 +370,10 @@ fn decision_and_draft_bounds_are_checked_without_a_runtime() {
     let error = invalid.check_input().unwrap_err();
     assert_eq!(
         (error.path.as_str(), error.reason),
-        ("$.publicReason", ReviewValidationReason::TextInvalid)
+        (
+            "$.publicReason",
+            ReviewValidationReason::MaximumBytesExceeded
+        )
     );
     assert!(ReviewTaskDraftInput {
         body: json!({"note":"private draft"})

@@ -59,9 +59,14 @@
   stays in the accountability record, and the audit journal records only
   `publicReasonGiven`. A missing required reason is refused with
   `public-reason-required`, one an outcome does not accept with
-  `public-reason-not-declared`, and a blank, control-character or oversized
-  one with `text-invalid` at `$.publicReason`, as for the private `reason`;
-  the OpenAPI schema publishes the 2000-byte bound.
+  `public-reason-not-declared`, one over the bound with
+  `maximum-bytes-exceeded` and a blank or control-character one with
+  `text-invalid` at `$.publicReason`; the OpenAPI schema publishes the
+  2000-byte bound.
+- BREAKING: a private `reason` over its 2000-byte bound is refused with
+  `maximum-bytes-exceeded` at `$.reason` instead of `text-invalid`, so the
+  refusal names the bound; a blank or control-character reason still answers
+  `text-invalid`.
 
 ## 0.41.0 - 2026-10-13
 

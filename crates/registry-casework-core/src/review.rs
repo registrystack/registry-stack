@@ -2,10 +2,9 @@ use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 use chrono::{DateTime, Utc};
 use jsonschema::{Draft, JSONSchema};
-#[cfg(feature = "schema")]
-use registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES;
 use registry_review_protocol::{
     check_public_reason, ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding,
+    MAXIMUM_PUBLIC_REASON_BYTES,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
@@ -788,6 +787,14 @@ impl ReviewPolicyClosure {
             .ok_or_else(|| {
                 ReviewValidationError::new("$.outcome", ReviewValidationReason::OutcomeNotDeclared)
             })?;
+        // Length comes first so an oversized reason names the bound.
+        if reason.is_some_and(|reason| reason.len() > MAXIMUM_REVIEW_REASON_BYTES) {
+            return Err(ReviewValidationError::new(
+                "$.reason",
+                ReviewValidationReason::MaximumBytesExceeded,
+            )
+            .into());
+        }
         if reason.is_some_and(|reason| !bounded_text(reason, MAXIMUM_REVIEW_REASON_BYTES)) {
             return Err(ReviewValidationError::new(
                 "$.reason",
@@ -799,6 +806,13 @@ impl ReviewPolicyClosure {
             return Err(ReviewValidationError::new(
                 "$.reason",
                 ReviewValidationReason::ReasonRequired,
+            )
+            .into());
+        }
+        if public_reason.is_some_and(|text| text.len() > MAXIMUM_PUBLIC_REASON_BYTES) {
+            return Err(ReviewValidationError::new(
+                PUBLIC_REASON_PATH,
+                ReviewValidationReason::MaximumBytesExceeded,
             )
             .into());
         }
@@ -1978,6 +1992,16 @@ impl DecisionKind {
                 ReviewValidationReason::TextInvalid,
             ));
         }
+        // Length comes first so an oversized reason names the bound.
+        if reason
+            .as_ref()
+            .is_some_and(|reason| reason.len() > MAXIMUM_REVIEW_REASON_BYTES)
+        {
+            return Err(ReviewValidationError::new(
+                "$.reason",
+                ReviewValidationReason::MaximumBytesExceeded,
+            ));
+        }
         if reason
             .as_ref()
             .is_some_and(|reason| !bounded_text(reason, MAXIMUM_REVIEW_REASON_BYTES))
@@ -1985,6 +2009,15 @@ impl DecisionKind {
             return Err(ReviewValidationError::new(
                 "$.reason",
                 ReviewValidationReason::TextInvalid,
+            ));
+        }
+        if public_reason
+            .as_ref()
+            .is_some_and(|text| text.len() > MAXIMUM_PUBLIC_REASON_BYTES)
+        {
+            return Err(ReviewValidationError::new(
+                PUBLIC_REASON_PATH,
+                ReviewValidationReason::MaximumBytesExceeded,
             ));
         }
         if public_reason
@@ -3801,7 +3834,7 @@ mod tests {
                 ReviewPublicReasonRule::Optional,
                 Some(&"x".repeat(registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES + 1))
             ),
-            refused(ReviewValidationReason::TextInvalid)
+            refused(ReviewValidationReason::MaximumBytesExceeded)
         );
         for (rule, public_reason) in [
             (ReviewPublicReasonRule::Required, Some("Not eligible.")),
@@ -3819,6 +3852,108 @@ mod tests {
                     }
                 })
             );
+        }
+    }
+
+    /// An oversized reason names the byte bound, so the fix is in the
+    /// refusal; blank text and control characters stay invalid text.
+    #[test]
+    fn reasons_over_the_byte_bound_name_the_bound() {
+        let request_id = Uuid::from_u128(100);
+        let decide = |reason: Option<String>, public_reason: Option<String>| {
+            let mut policy = approval_policy(vec![stage("review", 1)]);
+            policy.outcomes[1].public_reason = ReviewPublicReasonRule::Optional;
+            let snapshot = policy
+                .closure_with(crate::ReviewPolicyDependencies::default())
+                .unwrap();
+            let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+            let task = task(request_id, 0, "review", 1, "reviewer");
+            let mut decision = approve(&task, person("reviewer"));
+            decision.decision = DecisionKind::Reject {
+                outcome: "rejected".to_owned(),
+                reason,
+                public_reason,
+                result: None,
+            };
+            record_review_decision(&snapshot, &mut progress, &task, decision)
+        };
+        let refused = |path: &str, reason: ReviewValidationReason| {
+            Err(ReviewDecisionError::Validation(
+                ReviewValidationError::new(path, reason).into(),
+            ))
+        };
+        let public_maximum = MAXIMUM_PUBLIC_REASON_BYTES;
+        for (path, maximum) in [
+            ("$.reason", MAXIMUM_REVIEW_REASON_BYTES),
+            ("$.publicReason", public_maximum),
+        ] {
+            let at = |text: String| {
+                if path == "$.reason" {
+                    decide(Some(text), None)
+                } else {
+                    decide(Some("private reviewer note".to_owned()), Some(text))
+                }
+            };
+            assert_eq!(
+                at("x".repeat(maximum + 1)),
+                refused(path, ReviewValidationReason::MaximumBytesExceeded),
+                "{path}"
+            );
+            assert!(at("x".repeat(maximum)).is_ok(), "{path}");
+            assert_eq!(
+                at("   ".to_owned()),
+                refused(path, ReviewValidationReason::TextInvalid),
+                "{path}"
+            );
+            assert_eq!(
+                at("not\u{7}eligible".to_owned()),
+                refused(path, ReviewValidationReason::TextInvalid),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn input_bounds_name_the_byte_bound_before_the_text_rules() {
+        let check = |reason: Option<String>, public_reason: Option<String>| {
+            DecisionKind::Reject {
+                outcome: "rejected".to_owned(),
+                reason,
+                public_reason,
+                result: None,
+            }
+            .check_input()
+        };
+        for (path, maximum) in [
+            ("$.reason", MAXIMUM_REVIEW_REASON_BYTES),
+            ("$.publicReason", MAXIMUM_PUBLIC_REASON_BYTES),
+        ] {
+            let at = |text: String| {
+                if path == "$.reason" {
+                    check(Some(text), None)
+                } else {
+                    check(None, Some(text))
+                }
+            };
+            assert_eq!(
+                at("x".repeat(maximum + 1)),
+                Err(ReviewValidationError::new(
+                    path,
+                    ReviewValidationReason::MaximumBytesExceeded
+                )),
+                "{path}"
+            );
+            assert_eq!(at("x".repeat(maximum)), Ok(()), "{path}");
+            for text in ["   ", "not\u{7}eligible"] {
+                assert_eq!(
+                    at(text.to_owned()),
+                    Err(ReviewValidationError::new(
+                        path,
+                        ReviewValidationReason::TextInvalid
+                    )),
+                    "{path}"
+                );
+            }
         }
     }
 

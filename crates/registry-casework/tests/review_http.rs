@@ -2088,6 +2088,49 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     .expect("explicit-null result problem JSON");
     assert_eq!(null_result_problem["code"], "request.invalid");
 
+    let oversized_public_reason = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "answer-oversized-public-reason")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "decision": {
+                            "type": "answer",
+                            "outcome": "found",
+                            "publicReason": "x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1),
+                            "result": {}
+                        }
+                    }))
+                    .expect("serialize an oversized public reason"),
+                ))
+                .expect("oversized public reason request"),
+        )
+        .await
+        .expect("oversized public reason response");
+    assert_eq!(oversized_public_reason.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        oversized_public_reason
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("$.publicReason")
+    );
+    assert_eq!(
+        oversized_public_reason
+            .headers()
+            .get(VALIDATION_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("maximum-bytes-exceeded"),
+        "an oversized public reason names the byte bound"
+    );
+
     let decision = ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),

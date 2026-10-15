@@ -708,9 +708,10 @@ policy without an approval outcome. A bare approval is refused with
 outcome declares `publicReason` as `required`, `optional` or `none`, with no
 default. The runtime refuses a missing required public reason
 (`public-reason-required`) and one the outcome does not declare
-(`public-reason-not-declared`); a public reason over 2000 UTF-8 bytes, blank
-or carrying control characters is refused as `text-invalid`, as the private
-reason is, and the OpenAPI document publishes the bound. The ReviewResult
+(`public-reason-not-declared`); a public reason over 2000 UTF-8 bytes is
+refused as `maximum-bytes-exceeded` and a blank one or one carrying control
+characters as `text-invalid`, as the private reason is, and the OpenAPI
+document publishes the bound. The ReviewResult
 carries `outcome` and any `publicReason` on approved, rejected,
 changes-requested and answered results and neither on cancelled or
 superseded ones. The private reason stays in the accountability row and
@@ -723,7 +724,11 @@ and `review_decisions_are_audited_after_the_decision_commits` in
 `crates/registry-casework/tests/review_http.rs`. They refuse a missing
 required public reason, prove the result carries the outcome and public
 reason without the private reason, and prove the audit text carries only the
-flag. These references do not assert that a live database test has executed.
+flag. `reasons_over_the_byte_bound_name_the_bound` and
+`input_bounds_name_the_byte_bound_before_the_text_rules` in
+`crates/registry-casework-core/src/review.rs` prove an oversized reason names
+the bound and a blank or control-character one stays `text-invalid`. These
+references do not assert that a live database test has executed.
 
 Residual: the public reason is reviewer-written free text released to the
 producer; Casework bounds it but cannot judge its content. BReg retains the
