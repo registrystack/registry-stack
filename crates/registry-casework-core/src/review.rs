@@ -1612,6 +1612,25 @@ pub fn record_review_decision(
         result,
         progress.result_constraints.as_ref(),
     )?;
+    // Every approval in a stage names the same outcome, so the approval that
+    // meets the threshold cannot release an outcome another approver did not
+    // choose.
+    if let DecisionKind::Approve { outcome, .. } = &decision.decision {
+        let chosen = progress
+            .decisions
+            .iter()
+            .find_map(|earlier| match &earlier.decision {
+                DecisionKind::Approve { outcome, .. } if earlier.stage_id == stage.id => {
+                    Some(outcome)
+                }
+                _ => None,
+            });
+        if let Some(chosen) = chosen.filter(|chosen| *chosen != outcome) {
+            return Err(ReviewDecisionError::ApprovalOutcomeDiffers {
+                chosen: chosen.clone(),
+            });
+        }
+    }
 
     let (settlement, settles_on_record) = match &decision.decision {
         DecisionKind::Reject {
@@ -1654,7 +1673,8 @@ pub fn record_review_decision(
             true,
         ),
         // The approval that meets the final stage's threshold settles the
-        // request, so its outcome and public reason are the ones released.
+        // request. Its stage's approvals agree on the outcome; its public
+        // reason is the one released.
         DecisionKind::Approve {
             outcome,
             public_reason,
@@ -1792,6 +1812,7 @@ pub enum ReviewValidationReason {
     ConstraintViolated,
     PublicReasonRequired,
     PublicReasonNotDeclared,
+    ApprovalOutcomeDiffers,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1890,6 +1911,8 @@ pub enum ReviewDecisionError {
         settlement: ReviewOutcomeSettlement,
         declared: Vec<String>,
     },
+    #[error("an earlier approval in this stage chose {chosen}, and every approval in a stage names the same outcome; approve with {chosen}, or request changes or reject")]
+    ApprovalOutcomeDiffers { chosen: String },
     #[error("rejection and changes-requested reasons must be bounded non-empty text")]
     ReasonInvalid,
 }
@@ -3959,8 +3982,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_approval_meeting_the_final_threshold_settles_with_its_outcome() {
+    fn two_approval_policy_with_conditions() -> ReviewPolicyClosure {
         let mut policy = approval_policy(vec![stage("review", 2)]);
         policy.outcomes.push(ReviewOutcomePolicy {
             id: "approved-with-conditions".to_owned(),
@@ -3970,9 +3992,23 @@ mod tests {
             public_reason: ReviewPublicReasonRule::Required,
             result_required: false,
         });
-        let snapshot = policy
+        policy
             .closure_with(crate::ReviewPolicyDependencies::default())
-            .unwrap();
+            .unwrap()
+    }
+
+    fn approve_with_conditions(task: &ReviewTask, reviewer: IssuerPrincipal) -> Decision {
+        let mut decision = approve(task, reviewer);
+        decision.decision = DecisionKind::Approve {
+            outcome: "approved-with-conditions".to_owned(),
+            public_reason: Some("Approved; renew the permit within a year.".to_owned()),
+        };
+        decision
+    }
+
+    #[test]
+    fn approvals_in_one_stage_that_agree_settle_with_their_outcome() {
+        let snapshot = two_approval_policy_with_conditions();
         let request_id = Uuid::from_u128(100);
         let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
         let first = task(request_id, 0, "review", 1, "a");
@@ -3980,17 +4016,17 @@ mod tests {
             &snapshot,
             &mut progress,
             &first,
-            approve(&first, person("a")),
+            approve_with_conditions(&first, person("a")),
         )
         .unwrap();
         let second = task(request_id, 0, "review", 2, "b");
-        let mut decision = approve(&second, person("b"));
-        decision.decision = DecisionKind::Approve {
-            outcome: "approved-with-conditions".to_owned(),
-            public_reason: Some("Approved; renew the permit within a year.".to_owned()),
-        };
         assert_eq!(
-            record_review_decision(&snapshot, &mut progress, &second, decision),
+            record_review_decision(
+                &snapshot,
+                &mut progress,
+                &second,
+                approve_with_conditions(&second, person("b"))
+            ),
             Ok(ReviewTransition::Settled {
                 settlement: ReviewSettlement::Approved {
                     outcome: "approved-with-conditions".to_owned(),
@@ -3998,6 +4034,45 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn an_approval_naming_another_outcome_than_its_stage_already_chose_is_refused() {
+        let snapshot = two_approval_policy_with_conditions();
+        let request_id = Uuid::from_u128(100);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let first = task(request_id, 0, "review", 1, "a");
+        record_review_decision(
+            &snapshot,
+            &mut progress,
+            &first,
+            approve_with_conditions(&first, person("a")),
+        )
+        .unwrap();
+        let second = task(request_id, 0, "review", 2, "b");
+        let error = record_review_decision(
+            &snapshot,
+            &mut progress,
+            &second,
+            approve(&second, person("b")),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ReviewDecisionError::ApprovalOutcomeDiffers {
+                chosen: "approved-with-conditions".to_owned(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "an earlier approval in this stage chose approved-with-conditions, and every approval in a stage names the same outcome; approve with approved-with-conditions, or request changes or reject"
+        );
+        assert_eq!(
+            progress.decisions.len(),
+            1,
+            "a refused approval is not recorded"
+        );
+        assert!(progress.settlement.is_none());
     }
 
     #[test]

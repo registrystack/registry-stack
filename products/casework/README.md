@@ -96,7 +96,14 @@ outcomes. Each outcome declares `publicReason: required`, `optional` or
 the ReviewResult, while the private `reason` stays in the accountability
 record and the audit journal records only that a public reason was given.
 Stage thresholds count independent
-eligible reviewers. Decisions and task holdings are revision-fenced; an old
+eligible reviewers. Every approval in one stage names the same outcome: one
+naming another outcome than the stage already chose is refused at
+`$.outcome` with `approval-outcome-differs`, and the
+`Registry-Casework-Validation-Allowed` header names the chosen outcome. The
+final stage settles the request with that outcome and the public reason of
+the approval that meets its threshold; earlier stages' outcomes and reasons,
+and other approvers' public reasons, are kept for accountability and not
+released. Decisions and task holdings are revision-fenced; an old
 response cannot authorize a later state.
 
 The same producer reads `GET /v1/review-requests/{requestId}/result` or its

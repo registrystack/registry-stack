@@ -177,6 +177,10 @@ fn map_review_decision_error(error: ReviewDecisionError) -> ReviewRuntimeError {
             ReviewValidationError::new("$.outcome", ReviewValidationReason::OutcomeNotDeclared)
                 .allowing(declared),
         ),
+        ReviewDecisionError::ApprovalOutcomeDiffers { chosen } => ReviewRuntimeError::Validation(
+            ReviewValidationError::new("$.outcome", ReviewValidationReason::ApprovalOutcomeDiffers)
+                .allowing(vec![chosen]),
+        ),
         _ => ReviewRuntimeError::Invalid,
     }
 }

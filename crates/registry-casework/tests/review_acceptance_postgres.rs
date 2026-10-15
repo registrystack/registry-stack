@@ -689,6 +689,101 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     assert!(!published.contains("human-source-token"));
 }
 #[tokio::test]
+async fn approvals_in_one_stage_must_agree_on_the_outcome_they_release() {
+    let mut value = project_value(false, false);
+    value["reviewPolicies"][0]["stages"][0]["requiredApprovals"] = json!(2);
+    value["reviewPolicies"][0]["outcomes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"approved-with-conditions","label":"Approve with conditions","settlement":"approved","reasonRequired":false,"publicReason":"required"}));
+    let f = Fixture::new(value).await;
+    let accepted = f.create("agreeing").await;
+    let with_conditions = ReviewTaskDecisionRequest {
+        decision: DecisionKind::Approve {
+            outcome: "approved-with-conditions".into(),
+            public_reason: Some("Renew the permit within a year.".into()),
+        },
+    };
+    let first = f.task(accepted.request_id).await;
+    let held = f.claim(first, "a").await;
+    f.service
+        .decide_review_task(
+            &actor("a", CaseworkRole::Staff),
+            first,
+            with_conditions.clone(),
+            None,
+            "",
+            held.revision,
+            "first-approval",
+        )
+        .await
+        .unwrap();
+    let second = f.task(accepted.request_id).await;
+    assert_ne!(first, second);
+    let held = f.claim(second, "b").await;
+    let refused = f
+        .service
+        .decide_review_task(
+            &actor("b", CaseworkRole::Staff),
+            second,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            None,
+            "",
+            held.revision,
+            "differing-approval",
+        )
+        .await;
+    let Err(ReviewRuntimeError::Validation(error)) = refused else {
+        panic!("a differing approval must be refused: {refused:?}");
+    };
+    assert_eq!(error.path, "$.outcome");
+    assert_eq!(error.reason, ReviewValidationReason::ApprovalOutcomeDiffers);
+    assert_eq!(&*error.allowed, ["approved-with-conditions".to_owned()]);
+    assert_eq!(
+        f.db.query_one(
+            "SELECT count(*) FROM casework_review_decisions WHERE request_id=$1",
+            &[&accepted.request_id]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        1
+    );
+    let transition = f
+        .service
+        .decide_review_task(
+            &actor("b", CaseworkRole::Staff),
+            second,
+            with_conditions,
+            None,
+            "",
+            held.revision,
+            "agreeing-approval",
+        )
+        .await
+        .unwrap();
+    let ReviewTransition::Settled {
+        settlement:
+            ReviewSettlement::Approved {
+                outcome,
+                public_reason,
+            },
+    } = transition
+    else {
+        panic!("agreeing approvals settle the request: {transition:?}");
+    };
+    assert_eq!(outcome, "approved-with-conditions");
+    assert_eq!(
+        public_reason.as_deref(),
+        Some("Renew the permit within a year.")
+    );
+}
+#[tokio::test]
 async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation() {
     let f = Fixture::new(project_value(true, false)).await;
     for id in ["z", "a", "hidden"] {

@@ -4201,7 +4201,8 @@
           "constraint-invalid",
           "constraint-violated",
           "public-reason-required",
-          "public-reason-not-declared"
+          "public-reason-not-declared",
+          "approval-outcome-differs"
         ],
         "type": "string"
       },

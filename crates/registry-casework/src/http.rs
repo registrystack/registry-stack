@@ -1666,7 +1666,8 @@ fn problem_response(
                 .parse()
                 .expect("validation reasons are valid header values"),
         );
-        // Only a human decision names allowed outcomes, and those are policy
+        // Only a human decision names allowed outcomes: the declared ones, or
+        // the one an earlier approval in the stage chose. Both are policy
         // identifiers the reviewer already reads from the review policy.
         if !validation.allowed.is_empty() {
             response.headers_mut().insert(
@@ -1700,6 +1701,7 @@ fn review_validation_reason(reason: ReviewValidationReason) -> &'static str {
         ReviewValidationReason::ConstraintViolated => "constraint-violated",
         ReviewValidationReason::PublicReasonRequired => "public-reason-required",
         ReviewValidationReason::PublicReasonNotDeclared => "public-reason-not-declared",
+        ReviewValidationReason::ApprovalOutcomeDiffers => "approval-outcome-differs",
     }
 }
 
@@ -2322,6 +2324,7 @@ mod tests {
             ReviewValidationReason::ConstraintViolated,
             ReviewValidationReason::PublicReasonRequired,
             ReviewValidationReason::PublicReasonNotDeclared,
+            ReviewValidationReason::ApprovalOutcomeDiffers,
         ];
         for reason in reasons {
             let word = review_validation_reason(reason);

@@ -86,6 +86,15 @@
   `maximum-bytes-exceeded` and a blank or control-character one with
   `text-invalid` at `$.publicReason`; the OpenAPI schema publishes the
   2000-byte bound.
+- BREAKING: every approval in one stage names the same outcome. An approval
+  naming another outcome than an earlier approval in its stage is refused
+  with 400 `request.invalid`, validation path `$.outcome`, reason
+  `approval-outcome-differs`, and the `Registry-Casework-Validation-Allowed`
+  header naming the outcome already chosen: approve with that outcome, or
+  request changes or reject. The final stage settles the request with that
+  outcome and the public reason of the approval that meets its threshold;
+  earlier stages' outcomes and reasons, and other approvers' public reasons,
+  are kept for accountability and not released.
 - BREAKING: a private `reason` over its 2000-byte bound is refused with
   `maximum-bytes-exceeded` at `$.reason` instead of `text-invalid`, so the
   refusal names the bound; a blank or control-character reason still answers

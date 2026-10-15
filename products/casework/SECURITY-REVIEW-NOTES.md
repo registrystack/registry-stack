@@ -711,7 +711,15 @@ default. The runtime refuses a missing required public reason
 (`public-reason-not-declared`); a public reason over 2000 UTF-8 bytes is
 refused as `maximum-bytes-exceeded` and a blank one or one carrying control
 characters as `text-invalid`, as the private reason is, and the OpenAPI
-document publishes the bound. The ReviewResult
+document publishes the bound. Every approval in one stage names the same
+outcome, so arrival order cannot pick the outcome released: an approval
+naming another outcome than an earlier approval in its stage is refused at
+`$.outcome`, reason `approval-outcome-differs`, with the chosen outcome in
+the `Registry-Casework-Validation-Allowed` header, and is not recorded. The
+final stage settles the request with that outcome and the public reason of
+the approval that meets its threshold. Earlier stages' outcomes and reasons,
+and the other approvers' public reasons, stay in the accountability record
+and are not released. The ReviewResult
 carries `outcome` and any `publicReason` on approved, rejected,
 changes-requested and answered results and neither on cancelled or
 superseded ones. The private reason stays in the accountability row and
@@ -727,11 +735,18 @@ reason without the private reason, and prove the audit text carries only the
 flag. `reasons_over_the_byte_bound_name_the_bound` and
 `input_bounds_name_the_byte_bound_before_the_text_rules` in
 `crates/registry-casework-core/src/review.rs` prove an oversized reason names
-the bound and a blank or control-character one stays `text-invalid`. These
+the bound and a blank or control-character one stays `text-invalid`.
+`an_approval_naming_another_outcome_than_its_stage_already_chose_is_refused`
+and `approvals_in_one_stage_that_agree_settle_with_their_outcome` in the same
+file, and `approvals_in_one_stage_must_agree_on_the_outcome_they_release` in
+`crates/registry-casework/tests/review_acceptance_postgres.rs`, prove the
+refusal, that it records nothing, and the agreeing settlement. These
 references do not assert that a live database test has executed.
 
 Residual: the public reason is reviewer-written free text released to the
-producer; Casework bounds it but cannot judge its content. BReg retains the
+producer; Casework bounds it but cannot judge its content. Approvers who
+agree on an outcome may still write different public reasons, and only the
+one from the approval meeting the threshold is released. BReg retains the
 full ReviewResult, including any public reason, in its proposal review result
 record until proposal retention erases it.
 

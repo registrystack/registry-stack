@@ -2057,6 +2057,7 @@ fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
         "constraint-violated" => ReviewValidationReason::ConstraintViolated,
         "public-reason-required" => ReviewValidationReason::PublicReasonRequired,
         "public-reason-not-declared" => ReviewValidationReason::PublicReasonNotDeclared,
+        "approval-outcome-differs" => ReviewValidationReason::ApprovalOutcomeDiffers,
         _ => return None,
     })
 }
@@ -2426,6 +2427,10 @@ mod tests {
             (
                 "public-reason-not-declared",
                 ReviewValidationReason::PublicReasonNotDeclared,
+            ),
+            (
+                "approval-outcome-differs",
+                ReviewValidationReason::ApprovalOutcomeDiffers,
             ),
         ];
         for (word, reason) in reasons {

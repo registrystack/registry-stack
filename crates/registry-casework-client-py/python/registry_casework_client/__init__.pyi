@@ -379,6 +379,7 @@ ReviewValidationReason: TypeAlias = Literal[
     "constraint-violated",
     "public-reason-required",
     "public-reason-not-declared",
+    "approval-outcome-differs",
 ]
 
 class ValidationDetail(TypedDict):
