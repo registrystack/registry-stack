@@ -70,23 +70,31 @@ Initialized a registry project. 6 artifacts written.
   runtime.example.yaml
   tests/journeys.yaml
 
-  finding  breg.access.profile-higher-classification  2 paths
-           this field is more sensitive than its entity's classification; verify the
-           profile's scope and purpose before disclosing it
-             entities[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
-             entities[id=person].accessProfiles[id=operator].readableFields[field=marital-status]
-  finding  breg.access.profile-unrestricted-collection  6 paths
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-             entities[id=group-membership].accessProfiles[id=operator].rowBoundaries
-             entities[id=group-membership].accessProfiles[id=reader].rowBoundaries
-             entities[id=household].accessProfiles[id=operator].rowBoundaries
-             entities[id=household].accessProfiles[id=reader].rowBoundaries
-             entities[id=person].accessProfiles[id=operator].rowBoundaries
-             entities[id=person].accessProfiles[id=reader].rowBoundaries
-
-0 errors, 8 findings.
+warning[breg.access.profile-higher-classification] recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
+  this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-higher-classification] recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]
+  this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-collection] recordTypes[id=group-membership].accessProfiles[id=operator].rowBoundaries
+  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-collection] recordTypes[id=group-membership].accessProfiles[id=reader].rowBoundaries
+  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-collection] recordTypes[id=household].accessProfiles[id=operator].rowBoundaries
+  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-collection] recordTypes[id=household].accessProfiles[id=reader].rowBoundaries
+  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-collection] recordTypes[id=person].accessProfiles[id=operator].rowBoundaries
+  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-collection] recordTypes[id=person].accessProfiles[id=reader].rowBoundaries
+  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 8 warnings
 
 Next:
   1. read household-registry/README.md, then run 'bregctl check household-registry'
@@ -102,10 +110,11 @@ Next:
      it back with --selection to derive a fresh project
 ```
 
-Each finding prints a sentence of its own and one path per place it fires. `init` compiled the project before printing its `revision`, the digest of
-the compiled model, and `check` and `dev` repeat that revision and every finding until you change
-something. Unlike the domain-neutral example, a derived project has no `modules/` directory: every
-entity lives in `registry.yaml`. The rest of this tutorial follows the numbered steps in order.
+Each warning names the affected path, explains the finding, and gives a next step. `init` compiled
+the project before printing its `revision`, the digest of the compiled model. `check` and `dev`
+repeat that revision and the warnings until you change something. Unlike the domain-neutral
+example, a derived project has no `modules/` directory: every record type lives in `registry.yaml`.
+The rest of this tutorial follows the numbered steps in order.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::run(), init_from_model::ModelName, and init_from_model::Source::Starter;
     crates/registry-bregctl/src/init_from_model/{mod,selection}.rs;
@@ -159,7 +168,7 @@ Run `bregctl check` the way the first next step says:
 bregctl check household-registry
 ```
 
-The report repeats the same revision and the same eight findings, without the artifact list and the
+The report repeats the same revision and the same eight warnings, without the artifact list and the
 next steps that only `init` writes. Both codes are expected: the household starter has no tenancy
 field to bind a row restriction to, so every `operator` and `reader` profile can list a whole
 collection, and the `operator` profile reads the two fields PublicSchema marks sensitive. The
@@ -247,14 +256,14 @@ Derive a second project from the edited file, into a new directory:
 bregctl init household-registry-2 --from publicschema --selection household-registry/model/selection.yaml
 ```
 
-The report has a new revision, the same six `breg.access.profile-unrestricted-collection` findings, and
-one `breg.access.profile-higher-classification` finding left, for `group-membership.person`; removing
+The report has a new revision, the same six `breg.access.profile-unrestricted-collection` warnings, and
+one `breg.access.profile-higher-classification` warning left, for `group-membership.person`; removing
 `marital_status` removed the other one:
 
 ```text test-excerpt
-finding  breg.access.profile-higher-classification  entities[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
-         this field is more sensitive than its entity's classification; verify the
-         profile's scope and purpose before disclosing it
+warning[breg.access.profile-higher-classification] recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
+  this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
+  next: Review the finding, and change the source if the behavior it describes is not intended.
 ```
 
 The `person` field table in `household-registry-2/README.md`
