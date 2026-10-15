@@ -396,7 +396,7 @@ impl BRegProposal {
                 || application.result_links.len() > 16
                 || application.result_links.iter().any(|reference| {
                     !identifier(&reference.record_type)
-                        || Uuid::parse_str(&reference.record_id).is_err()
+                        || crate::client::validate_record_uuid(&reference.record_id).is_err()
                         || reference.revision == 0
                 })
         }) {

@@ -121,8 +121,12 @@ pub(crate) fn check_result_page(page: &ReviewResultFeedPage) -> Result<(), &'sta
     // A nil event identifier cannot anchor a resumable position or correlate
     // a completion; a nil final entry would be checkpointed as a cursor no
     // conforming authority can resolve, replaying the same page forever.
-    if page.items.iter().any(|entry| entry.event_id.is_nil()) {
-        return Err("the result page contains a nil event identifier");
+    // Request and result identifiers must also be usable before a caller
+    // checkpoints the event and loses its opportunity to correlate it.
+    if page.items.iter().any(|entry| {
+        entry.event_id.is_nil() || entry.request_id.is_nil() || entry.result_id.is_nil()
+    }) {
+        return Err("the result page contains a nil correlation identifier");
     }
     // A continuation names the position of the final returned entry, so a
     // page whose cursor points anywhere else would let a consumer durably

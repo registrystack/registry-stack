@@ -2383,7 +2383,7 @@ pub(crate) fn valid_breg_identifier(value: &str) -> bool {
         })
 }
 
-fn validate_record_uuid(value: &str) -> Result<(), BaseRegistryClientError> {
+pub(crate) fn validate_record_uuid(value: &str) -> Result<(), BaseRegistryClientError> {
     if !canonical_uuid(value) {
         return Err(BaseRegistryClientError::invalid_request(
             "the Base Registry Engine record identifier must be a canonical lowercase UUID",

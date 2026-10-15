@@ -27,12 +27,14 @@ POLICY_DIGEST = (
 
 class _Handler(BaseHTTPRequestHandler):
     observations: list[dict[str, str]] = []
+    review_feed_responses: list[dict] = []
 
     def do_GET(self) -> None:  # noqa: N802
         self.observations.append({
             "path": self.path,
             "authorization": self.headers.get("authorization", ""),
             "profile": self.headers.get("registry-casework-profile", ""),
+            "review_profile": self.headers.get("registry-review-profile", ""),
             "source_profile": self.headers.get("registry-source-profile", ""),
         })
         if f"cursor={EXPIRED_CURSOR}" in self.path:
@@ -41,6 +43,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "Cursor expired",
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
             )
+            return
+        if self.path.startswith("/tenant/v1/review-results?"):
+            self.respond(self.review_feed_responses.pop(0))
             return
         if self.path == f"/tenant/v1/review-requests/{ITEM_ID}/result":
             self.respond({
@@ -327,6 +332,7 @@ class _Handler(BaseHTTPRequestHandler):
 class NativeRequestTests(unittest.TestCase):
     def setUp(self) -> None:
         _Handler.observations = []
+        _Handler.review_feed_responses = []
         self.server = HTTPServer(("127.0.0.1", 0), _Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -337,6 +343,44 @@ class NativeRequestTests(unittest.TestCase):
         self.server.shutdown()
         self.thread.join()
         self.server.server_close()
+
+    def test_review_result_feed_preserves_distinct_ids_and_refuses_nil_correlations(self) -> None:
+        entry = {
+            "eventId": CLOCK_OCCURRENCE_ID,
+            "requestId": ITEM_ID,
+            "resultId": OTHER_ITEM_ID,
+            "completedAt": "2026-09-19T00:00:00Z",
+        }
+        _Handler.review_feed_responses = [
+            {"items": [entry], "nextCursor": CLOCK_OCCURRENCE_ID},
+            *({
+                "items": [{**entry, field: "00000000-0000-0000-0000-000000000000"}],
+                "nextCursor": CLOCK_OCCURRENCE_ID,
+            } for field in ("requestId", "resultId")),
+        ]
+        query = {"cursor": CLOCK_OCCURRENCE_ID, "limit": 1}
+
+        page = self.client.review_results("requester-token", "requester", query)
+        self.assertEqual(page["value"]["items"], [entry])
+        self.assertEqual(page["value"]["nextCursor"], CLOCK_OCCURRENCE_ID)
+        for field in ("requestId", "resultId"):
+            with self.subTest(field=field):
+                with self.assertRaises(CaseworkClientError) as raised:
+                    self.client.review_results("requester-token", "requester", query)
+                self.assertEqual(raised.exception.kind, "protocol")
+                self.assertEqual(raised.exception.protocol_failure, "body")
+                self.assertEqual(raised.exception.status, 200)
+                self.assertEqual(raised.exception.trace_id, TRACE_ID)
+                self.assertNotIn("requester-token", str(raised.exception))
+                self.assertNotIn("00000000-", str(raised.exception))
+        self.assertEqual(len(_Handler.observations), 3)
+        self.assertEqual(_Handler.review_feed_responses, [])
+        for observation in _Handler.observations:
+            self.assertEqual(
+                observation["path"],
+                f"/tenant/v1/review-results?cursor={CLOCK_OCCURRENCE_ID}&limit=1",
+            )
+            self.assertEqual(observation["review_profile"], "requester")
 
 
     def test_review_task_context_uses_exact_route_and_source_profile(self) -> None:
