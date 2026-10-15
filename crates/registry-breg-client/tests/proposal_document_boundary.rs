@@ -787,3 +787,132 @@ async fn readable_attachment_metadata_requires_a_valid_upload_instant() {
         "accepted malformed upload instants: {accepted:?}"
     );
 }
+
+// The preflight bounds the smallest possible canonical stored input object,
+// independent of public aliases, saved-envelope escaping and response limits.
+const PROPOSAL_INPUT_BYTES: usize = 3 * 1024 * 1024;
+
+fn proposal_input_with_canonical_size(size: usize, number: f64) -> Value {
+    let mut input = if number == 1e20 {
+        let values = vec![json!(number); 35_746];
+        json!({"a":values, "b":values, "c":values, "d":values})
+    } else {
+        json!({"a":"", "b":number})
+    };
+    let overhead = registry_platform_canonical_json::canonicalize_json(&input)
+        .unwrap()
+        .len();
+    if number == 1e20 {
+        input["d"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("x".repeat(size - overhead - 3)));
+    } else {
+        input["a"] = json!("x".repeat(size - overhead));
+    }
+    assert_eq!(
+        registry_platform_canonical_json::canonicalize_json(&input)
+            .unwrap()
+            .len(),
+        size
+    );
+    input
+}
+
+#[tokio::test]
+async fn proposal_input_snapshot_bound_is_checked_before_protected_io() {
+    let fixture = Fixture::start().await;
+    let key = BRegIdempotencyKey::parse("bounded-proposal-input").unwrap();
+    for (operation, state) in [
+        ("edit", "draft"),
+        ("revise", "submitted"),
+        ("rebase", "draft"),
+        ("rebase", "submitted"),
+    ] {
+        let mut original = proposal(state);
+        original["links"][operation] = json!({"method":"POST",
+            "path":format!("/v1/proposals/{ID}/{operation}"), "accessProfile":"writer",
+            "operation":operation, "ifMatch":"\"condition\""});
+        let held = fixture.proposal(original.clone()).await;
+        let tokens = fixture.token.0.load(Ordering::SeqCst);
+        let requests = fixture.requests.load(Ordering::SeqCst);
+
+        // JCS expands this exponent-form number, so serialized input alone
+        // remains below the limit even when its canonical snapshot is too large.
+        let oversized = proposal_input_with_canonical_size(PROPOSAL_INPUT_BYTES + 1, 1e20);
+        assert!(
+            serde_json::to_vec(&json!({"input":oversized.clone()}))
+                .unwrap()
+                .len()
+                < 2 * 1024 * 1024
+        );
+        assert!(
+            fixture
+                .client
+                .prepare_proposal(&held, operation, json!({"input":oversized.clone()}), &key)
+                .is_err(),
+            "{operation}:{state}:oversized canonical input"
+        );
+
+        assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+        assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+        for number in [1e20, 1.0] {
+            let tokens = fixture.token.0.load(Ordering::SeqCst);
+            let requests = fixture.requests.load(Ordering::SeqCst);
+            let exact = proposal_input_with_canonical_size(PROPOSAL_INPUT_BYTES, number);
+            if number == 1.0 {
+                // JCS removes the fractional suffix. This client preflight
+                // boundary is distinct from the runtime's smaller wire limit.
+                assert!(serde_json::to_vec(&exact).unwrap().len() > PROPOSAL_INPUT_BYTES);
+            }
+            let attempt = fixture
+                .client
+                .prepare_proposal(&held, operation, json!({"input":exact}), &key)
+                .expect("exact canonical boundary is permitted");
+            let mut aliased = proposal_input_with_canonical_size(PROPOSAL_INPUT_BYTES, number);
+            let aliased_object = aliased.as_object_mut().unwrap();
+            let value = aliased_object.remove("a").unwrap();
+            aliased_object.insert("a".repeat(64), value);
+            assert!(
+                registry_platform_canonical_json::canonicalize_json(&aliased)
+                    .unwrap()
+                    .len()
+                    > PROPOSAL_INPUT_BYTES
+            );
+            fixture
+                .client
+                .prepare_proposal(&held, operation, json!({"input":aliased}), &key)
+                .expect("public aliases do not inflate the stored-input lower bound");
+            let restored = BRegPreparedProposal::from_slice(attempt.as_bytes()).unwrap();
+            let recovered = fixture.client.recover_proposal(&held, &restored).unwrap();
+            assert_eq!(recovered.as_bytes(), attempt.as_bytes());
+
+            let mut saved: Value = serde_json::from_slice(attempt.as_bytes()).unwrap();
+            saved["body"] = json!(json!({"input":oversized}).to_string());
+            let saved = serde_json::to_vec(&saved).unwrap();
+            assert!(saved.len() < registry_breg_client::DEFAULT_MAX_RESPONSE_BYTES as usize);
+            assert!(
+                BRegPreparedProposal::from_slice(&saved).is_err(),
+                "{operation}:{state}:oversized restored input"
+            );
+            assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+            assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+
+            let mut successor = original.clone();
+            successor["revision"] = json!(3);
+            successor["state"] = json!("draft");
+            successor.as_object_mut().unwrap().remove("effectDigest");
+            if state == "submitted" {
+                successor["submissionVersion"] = json!(2);
+            }
+            fixture.answer(successor);
+            fixture
+                .client
+                .execute_proposal(&recovered)
+                .await
+                .expect("exact-boundary attempt is sent once");
+            assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens + 1);
+            assert_eq!(fixture.requests.load(Ordering::SeqCst), requests + 1);
+        }
+    }
+}

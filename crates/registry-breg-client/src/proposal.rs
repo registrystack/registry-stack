@@ -11,6 +11,10 @@ use zeroize::Zeroizing;
 
 mod review_document;
 
+// Mirrors MAX_PROPOSAL_SNAPSHOT_BYTES in registry-breg::proposal_store.
+// The client does not depend on the runtime.
+const MAXIMUM_PROPOSAL_INPUT_BYTES: usize = 3 * 1024 * 1024;
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -1530,11 +1534,26 @@ fn validate_body(operation: &str, body: &Value) -> Result<(), BaseRegistryClient
         }
         _ => false,
     };
-    if valid {
-        Ok(())
-    } else {
-        Err(refusal())
+    if !valid {
+        return Err(refusal());
     }
+    if let Some(input) = object.get("input").and_then(Value::as_object) {
+        // The server maps public API names to internal input identifiers before
+        // measuring its snapshot. This promoted link carries no such mapping.
+        // Refuse only when canonical values plus the shortest nonempty internal
+        // names already exceed the bound; public aliases cannot cause a refusal.
+        let mut minimum_bytes = 2usize; // Object braces.
+        for (index, value) in input.values().enumerate() {
+            let canonical = registry_platform_canonical_json::canonicalize_json(value)
+                .map_err(|_| refusal())?;
+            minimum_bytes = minimum_bytes
+                .checked_add(canonical.len())
+                .and_then(|bytes| bytes.checked_add(4 + usize::from(index > 0)))
+                .filter(|bytes| *bytes <= MAXIMUM_PROPOSAL_INPUT_BYTES)
+                .ok_or_else(refusal)?;
+        }
+    }
+    Ok(())
 }
 fn validate_link(link: &BRegProposalLink) -> Result<(), BaseRegistryClientError> {
     if !matches!(link.method.as_str(), "GET" | "POST")
