@@ -177,6 +177,17 @@ fn map_review_decision_error(error: ReviewDecisionError) -> ReviewRuntimeError {
     }
 }
 
+/// A stored clock the shared calendar refuses is corrupt state. The operator
+/// log keeps the calendar's reason and the clock field it concerns.
+fn clock_evaluation_error(clock: &ClockPolicy, error: ClockPolicyError) -> ReviewRuntimeError {
+    tracing::error!(
+        clock = clock.id(),
+        reason = %error,
+        "the active Casework policy has a clock the calendar cannot evaluate; correct the clock or its calendar and activate the policy again"
+    );
+    ReviewRuntimeError::Corrupt
+}
+
 #[derive(Clone)]
 struct ProducerAdmission {
     producer: registry_casework_core::ReviewProducerPolicy,
@@ -4826,7 +4837,7 @@ async fn insert_review_activity_clock(
                     &holiday,
                     now,
                 )
-                .map_err(|_| ReviewRuntimeError::Corrupt)?;
+                .map_err(|error| clock_evaluation_error(&definition.clock, error))?;
                 let next_action_at = next_review_clock_action(
                     &evaluated.reminders,
                     &evaluated.steps,
