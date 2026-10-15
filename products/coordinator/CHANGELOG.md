@@ -19,10 +19,13 @@ First release of Registry Coordinator.
   review, application, and a later notice remain separate authorized stages. Only exact application
   evidence can release an application wait. Immediate Actions can route declared no-effect refusals
   explicitly; Proposal plan refusals stop generic Submit without an Action-specific typed edge.
+- Workflows can provide Review outcomes through automatic assessment or independently authorized
+  Casework review. Signed product events can start typed workflows through explicit source bindings.
+  Receiving products retain effect authority and recheck their conditions before committing.
 - Inspection reports accepted or unknown effects and bounded wait state without protected inputs,
   raw product responses, prepared requests, or correlation values. Encrypted PostgreSQL custody,
   durable audit, retention tombstones, and explicit fenced restore recovery protect work.
-- Protected state schema version 3 directly replaces earlier pilot layouts. Incompatible state is
+- Protected state schema version 4 directly replaces earlier pilot layouts. Incompatible state is
   refused; there is no in-place conversion or legacy authoring syntax.
 - Maintained examples cover independent Proposal follow-up, standalone Casework review, and
   external job completion. Native service checks compose exact BReg submission, Casework review,
