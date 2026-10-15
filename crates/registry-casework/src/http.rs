@@ -1664,6 +1664,18 @@ fn problem_response(
                 .parse()
                 .expect("validation reasons are valid header values"),
         );
+        // Only a human decision names allowed outcomes, and those are policy
+        // identifiers the reviewer already reads from the review policy.
+        if !validation.allowed.is_empty() {
+            response.headers_mut().insert(
+                VALIDATION_ALLOWED_HEADER,
+                validation
+                    .allowed
+                    .join(",")
+                    .parse()
+                    .expect("declared identifiers are valid header values"),
+            );
+        }
     }
     response
 }
@@ -1684,6 +1696,8 @@ fn review_validation_reason(reason: ReviewValidationReason) -> &'static str {
         ReviewValidationReason::FieldNotDeclared => "field-not-declared",
         ReviewValidationReason::ConstraintInvalid => "constraint-invalid",
         ReviewValidationReason::ConstraintViolated => "constraint-violated",
+        ReviewValidationReason::PublicReasonRequired => "public-reason-required",
+        ReviewValidationReason::PublicReasonNotDeclared => "public-reason-not-declared",
     }
 }
 
@@ -1802,10 +1816,10 @@ mod tests {
             Router::new().route("/json/{id}", post(json_route)).route(
                 "/validation",
                 post(|| async {
-                    Err::<StatusCode, _>(HttpError::Validation(ReviewValidationError {
-                        path: "$.policy".to_owned(),
-                        reason: ReviewValidationReason::PolicyNotAllowed,
-                    }))
+                    Err::<StatusCode, _>(HttpError::Validation(ReviewValidationError::new(
+                        "$.policy",
+                        ReviewValidationReason::PolicyNotAllowed,
+                    )))
                 }),
             ),
             HttpContract::Review,
@@ -2260,6 +2274,31 @@ mod tests {
         }
     }
 
+    /// An outcome refusal lists the declared outcomes the reviewer may send,
+    /// so the fix is in the response.
+    #[test]
+    fn an_outcome_refusal_lists_the_declared_outcomes() {
+        let response = HttpError::Validation(
+            ReviewValidationError::new("$.outcome", ReviewValidationReason::OutcomeNotDeclared)
+                .allowing(vec!["approved".to_owned(), "approved-with-note".to_owned()]),
+        )
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let headers = response.headers();
+        assert_eq!(headers[VALIDATION_PATH_HEADER], "$.outcome");
+        assert_eq!(headers[VALIDATION_REASON_HEADER], "outcome-not-declared");
+        assert_eq!(
+            headers[VALIDATION_ALLOWED_HEADER],
+            "approved,approved-with-note"
+        );
+        let other = HttpError::Validation(ReviewValidationError::new(
+            "$.reason",
+            ReviewValidationReason::ReasonRequired,
+        ))
+        .into_response();
+        assert!(other.headers().get(VALIDATION_ALLOWED_HEADER).is_none());
+    }
+
     /// The validation reason header carries the word the SDK type
     /// serializes to, so a reader of either sees one spelling.
     #[test]
@@ -2279,6 +2318,8 @@ mod tests {
             ReviewValidationReason::FieldNotDeclared,
             ReviewValidationReason::ConstraintInvalid,
             ReviewValidationReason::ConstraintViolated,
+            ReviewValidationReason::PublicReasonRequired,
+            ReviewValidationReason::PublicReasonNotDeclared,
         ];
         for reason in reasons {
             let word = review_validation_reason(reason);

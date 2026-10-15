@@ -72,9 +72,15 @@ test('the documented review policy and producer use the owning schema grammar', 
   }
   assert.deepEqual(
     new Set(kind.outcomes.flatMap((outcome) => Object.keys(outcome))),
-    new Set(['id', 'label', 'settlement', 'reasonRequired', 'resultRequired']),
+    new Set(['id', 'label', 'settlement', 'reasonRequired', 'publicReason', 'resultRequired']),
     'outcome keys stay within the policy grammar',
   );
+  for (const outcome of kind.outcomes) {
+    assert.ok(
+      ['required', 'optional', 'none'].includes(outcome.publicReason),
+      `outcome ${outcome.id} states whether a public reason is given`,
+    );
+  }
   const confirmed = kind.outcomes.find((outcome) => outcome.id === 'confirmed');
   assert.equal(confirmed.resultRequired, true);
   assert.equal(confirmed.settlement, 'answered');

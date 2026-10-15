@@ -653,8 +653,8 @@ its decision-time label through `decisionReceipt`. The decision transaction
 stores the outcome code in the existing accountability row. The label and
 policy identity come only from the request's retained immutable policy
 snapshot, so a policy replacement cannot reinterpret an earlier selection.
-No submitted context or structured result is read to resolve it. Approval has
-no selected outcome. Fresh installation creates the outcome column directly;
+No submitted context or structured result is read to resolve it. Approval
+selects an outcome like every other decision. Fresh installation creates the outcome column directly;
 no earlier selection is reconstructed during installation.
 
 This remains the explicit audited Supervisor read, with current Supervisor
@@ -692,6 +692,48 @@ absence, author versus prior holder, current scope, source concealment, bounded
 continuation and minimal disclosure. Client regressions cover response scope,
 order, receipt interpretation and native query validation. These references do
 not assert that a live database or listener test has executed.
+
+## Decided outcomes and public reasons
+
+Threat: a producer reads a reviewer's private reasoning from the result it
+receives, or settles on an approval whose meaning the policy never declared.
+The private reason is accountability material; only the producer-facing
+`publicReason` is meant to leave Casework.
+
+Enforcement: every decision names a declared outcome of the pinned policy,
+approval included, and `caseworkctl check` refuses a `purpose: approval`
+policy without an approval outcome. A bare approval is refused with
+`400 request.invalid` at `$.outcome`, reason `outcome-not-declared`, and the
+`Registry-Casework-Validation-Allowed` header lists the declared IDs. Each
+outcome declares `publicReason` as `required`, `optional` or `none`, with no
+default. The runtime refuses a missing required public reason
+(`public-reason-required`) and one the outcome does not declare
+(`public-reason-not-declared`); a public reason over 2000 UTF-8 bytes is
+refused as `maximum-bytes-exceeded` and a blank one or one carrying control
+characters as `text-invalid`, as the private reason is, and the OpenAPI
+document publishes the bound. The ReviewResult
+carries `outcome` and any `publicReason` on approved, rejected,
+changes-requested and answered results and neither on cancelled or
+superseded ones. The private reason stays in the accountability row and
+never enters the result. The audit journal records only `publicReasonGiven`;
+the published audit allow-list carries that flag and no reason text.
+
+Verification: `rejected_cancelled_and_superseded_results_commit_atomically`
+and `review_decisions_are_audited_after_the_decision_commits` in
+`crates/registry-casework/tests/review_postgres.rs`, and the canary checks in
+`crates/registry-casework/tests/review_http.rs`. They refuse a missing
+required public reason, prove the result carries the outcome and public
+reason without the private reason, and prove the audit text carries only the
+flag. `reasons_over_the_byte_bound_name_the_bound` and
+`input_bounds_name_the_byte_bound_before_the_text_rules` in
+`crates/registry-casework-core/src/review.rs` prove an oversized reason names
+the bound and a blank or control-character one stays `text-invalid`. These
+references do not assert that a live database test has executed.
+
+Residual: the public reason is reviewer-written free text released to the
+producer; Casework bounds it but cannot judge its content. BReg retains the
+full ReviewResult, including any public reason, in its proposal review result
+record until proposal retention erases it.
 
 ## Fresh schema and retained decisions
 

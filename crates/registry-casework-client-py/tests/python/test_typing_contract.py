@@ -331,7 +331,7 @@ class TypingContractTests(unittest.TestCase):
 
         self.assertEqual(
             {node.target.id for node in optional.body if isinstance(node, ast.AnnAssign)},
-            {"outcome", "result"},
+            {"outcome", "publicReason", "result"},
         )
         self.assertTrue(
             any(

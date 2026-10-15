@@ -55,6 +55,7 @@ cases:
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         resultId: 00000000-0000-4000-8000-000000000002
         status: approved
+        outcome: approved
         completedAt: '2026-10-14T00:01:00Z'
         availableUntil: '2026-11-14T00:00:00Z'
   expect:
@@ -81,6 +82,7 @@ cases:
       submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       resultId: 00000000-0000-4000-8000-000000000002
       status: approved
+      outcome: approved
       completedAt: '2026-10-14T00:01:00Z'
       availableUntil: '2026-11-14T00:00:00Z'
 - id: rejected-exact-result
@@ -385,6 +387,7 @@ cases:
           submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           resultId: 00000000-0000-4000-8000-000000000002
           status: approved
+          outcome: approved
           completedAt: '2026-10-14T00:01:00Z'
           availableUntil: '2026-11-14T00:00:00Z'
   waits:
@@ -417,6 +420,7 @@ cases:
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         resultId: 00000000-0000-4000-8000-000000000002
         status: approved
+        outcome: approved
         completedAt: '2026-10-14T00:01:00Z'
         availableUntil: '2026-11-14T00:00:00Z'
 - id: cancel-cancelled
@@ -559,6 +563,7 @@ cases:
           submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           resultId: 00000000-0000-4000-8000-000000000002
           status: approved
+          outcome: approved
           completedAt: '2026-10-14T00:01:00Z'
           availableUntil: '2026-11-14T00:00:00Z'
   waits:
@@ -591,6 +596,7 @@ cases:
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         resultId: 00000000-0000-4000-8000-000000000002
         status: approved
+        outcome: approved
         completedAt: '2026-10-14T00:01:00Z'
         availableUntil: '2026-11-14T00:00:00Z'
 - id: submit-authority-refused

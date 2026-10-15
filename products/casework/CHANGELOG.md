@@ -51,6 +51,33 @@
   `staffingDiagnostic: no-cover-available` after an assignment or absence
   recompute finds no eligible cover. Responsibility changes and task closure
   clear the notice. Remove the unused `AssignmentContext` client export.
+- BREAKING: every decided ReviewResult names the policy outcome it settled
+  on. `outcome` is required on approved, rejected, changes-requested and
+  answered results and absent on cancelled and superseded ones, and approval
+  decision receipts carry the selected outcome.
+- BREAKING: clients sending an approve without an outcome
+  (`{"type":"approve"}`) are refused with 400 `request.invalid`, validation
+  path `$.outcome`, reason `outcome-not-declared`, and the
+  `Registry-Casework-Validation-Allowed` header listing the policy's approval
+  outcomes. Send one of those identifiers, for example
+  `{"type":"approve","outcome":"approved"}`. Policies with
+  `purpose: approval` must declare their approval outcomes (`settlement:
+  approved`); `caseworkctl check` refuses one that declares none.
+- BREAKING: every review policy outcome declares `publicReason: required`,
+  `optional` or `none`, with no default. A decision may carry a bounded
+  `publicReason` (at most 2000 UTF-8 bytes), which the producer receives on
+  the ReviewResult for release to the subject's owner. The private `reason`
+  stays in the accountability record, and the audit journal records only
+  `publicReasonGiven`. A missing required reason is refused with
+  `public-reason-required`, one an outcome does not accept with
+  `public-reason-not-declared`, one over the bound with
+  `maximum-bytes-exceeded` and a blank or control-character one with
+  `text-invalid` at `$.publicReason`; the OpenAPI schema publishes the
+  2000-byte bound.
+- BREAKING: a private `reason` over its 2000-byte bound is refused with
+  `maximum-bytes-exceeded` at `$.reason` instead of `text-invalid`, so the
+  refusal names the bound; a blank or control-character reason still answers
+  `text-invalid`.
 
 ## 0.41.0 - 2026-10-13
 

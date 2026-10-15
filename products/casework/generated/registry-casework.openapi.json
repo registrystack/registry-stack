@@ -434,17 +434,33 @@
         "type": "object"
       },
       "DecisionKind": {
+        "description": "A reviewer's decision. Every decision names a declared outcome. A missing\n`outcome` reads as empty so the policy check refuses it with the outcomes\nthe policy declares for that decision, rather than as an unreadable body;\nthe published schema still requires the field.",
         "oneOf": [
           {
             "additionalProperties": false,
+            "description": "Approval names an approved outcome. It carries no private reason or\nresult, which approved outcomes cannot require.",
             "properties": {
+              "outcome": {
+                "default": "",
+                "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
+              },
               "type": {
                 "const": "approve",
                 "type": "string"
               }
             },
             "required": [
-              "type"
+              "type",
+              "outcome"
             ],
             "type": "object"
           },
@@ -452,7 +468,17 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
+                "default": "",
                 "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
               },
               "reason": {
                 "type": [
@@ -480,7 +506,17 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
+                "default": "",
                 "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
               },
               "reason": {
                 "type": [
@@ -508,7 +544,17 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
+                "default": "",
                 "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
               },
               "reason": {
                 "type": [
@@ -882,17 +928,33 @@
         "type": "string"
       },
       "InputDecisionKind": {
+        "description": "A reviewer's decision. Every decision names a declared outcome. A missing\n`outcome` reads as empty so the policy check refuses it with the outcomes\nthe policy declares for that decision, rather than as an unreadable body;\nthe published schema still requires the field.",
         "oneOf": [
           {
             "additionalProperties": false,
+            "description": "Approval names an approved outcome. It carries no private reason or\nresult, which approved outcomes cannot require.",
             "properties": {
+              "outcome": {
+                "default": "",
+                "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
+              },
               "type": {
                 "const": "approve",
                 "type": "string"
               }
             },
             "required": [
-              "type"
+              "type",
+              "outcome"
             ],
             "type": "object"
           },
@@ -900,7 +962,17 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
+                "default": "",
                 "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
               },
               "reason": {
                 "type": [
@@ -928,7 +1000,17 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
+                "default": "",
                 "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
               },
               "reason": {
                 "type": [
@@ -956,7 +1038,17 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
+                "default": "",
                 "type": "string"
+              },
+              "publicReason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-maximum-utf8-bytes": 2000
               },
               "reason": {
                 "type": [
@@ -3080,6 +3172,10 @@
           "label": {
             "type": "string"
           },
+          "publicReason": {
+            "$ref": "#/components/schemas/ReviewPublicReasonRule",
+            "description": "Whether a decision with this outcome gives text for release to the\nsubject's owner. There is no default: the policy author decides what\nan applicant is told."
+          },
           "reasonRequired": {
             "type": "boolean"
           },
@@ -3094,7 +3190,8 @@
           "id",
           "label",
           "settlement",
-          "reasonRequired"
+          "reasonRequired",
+          "publicReason"
         ],
         "type": "object"
       },
@@ -3387,6 +3484,15 @@
         ],
         "type": "object"
       },
+      "ReviewPublicReasonRule": {
+        "description": "Whether a decision gives a public reason with an outcome.",
+        "enum": [
+          "required",
+          "optional",
+          "none"
+        ],
+        "type": "string"
+      },
       "ReviewPurpose": {
         "enum": [
           "approval",
@@ -3499,6 +3605,16 @@
           },
           "policy": {
             "$ref": "#/components/schemas/PolicyBinding"
+          },
+          "publicReason": {
+            "description": "Text the decision gives for release to the subject's owner. It is\ndistinct from the reviewer's private reason, which never leaves\nCasework.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-maximum-utf8-bytes": 2000
           },
           "requestId": {
             "format": "uuid",
@@ -4083,7 +4199,9 @@
           "result-required",
           "field-not-declared",
           "constraint-invalid",
-          "constraint-violated"
+          "constraint-violated",
+          "public-reason-required",
+          "public-reason-not-declared"
         ],
         "type": "string"
       },
@@ -17125,6 +17243,14 @@
             },
             "description": "Problem: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
+              "Registry-Casework-Validation-Allowed": {
+                "description": "Comma-separated outcome identifiers the review policy declares for the requested settlement; present only with the outcome-not-declared reason.",
+                "schema": {
+                  "maxLength": 1039,
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}(,[a-z][a-z0-9_-]{0,63}){0,15}$",
+                  "type": "string"
+                }
+              },
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path; present together with the validation reason.",
                 "schema": {

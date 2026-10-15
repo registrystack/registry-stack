@@ -46,7 +46,7 @@ workflow:
         inputs: {request: {type: input}}
   review:
     outcomes:
-      <|review-use|>handled: {status: approved}
+      <|review-use|>handled: {status: approved, outcome: handled}
   start: <|start-use|>read
   steps:
     <|step|>read:

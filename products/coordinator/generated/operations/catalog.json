@@ -497,6 +497,16 @@
             "policy": {
               "$ref": "#/$defs/PolicyBinding"
             },
+            "publicReason": {
+              "description": "Text the decision gives for release to the subject's owner. It is\ndistinct from the reviewer's private reason, which never leaves\nCasework.",
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-maximum-utf8-bytes": 2000
+            },
             "requestId": {
               "format": "uuid",
               "type": "string"

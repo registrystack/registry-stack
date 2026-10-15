@@ -184,7 +184,9 @@ export class CaseworkClientError extends Error {
   readonly traceId?: string
   readonly validation?: {
     readonly path: string
-    readonly reason: 'policy-not-allowed' | 'reference-invalid' | 'object-required' | 'maximum-bytes-exceeded' | 'maximum-depth-exceeded' | 'schema-mismatch' | 'outcome-not-declared' | 'reason-required' | 'text-invalid' | 'result-not-declared' | 'result-required' | 'field-not-declared' | 'constraint-invalid' | 'constraint-violated'
+    readonly reason: 'policy-not-allowed' | 'reference-invalid' | 'object-required' | 'maximum-bytes-exceeded' | 'maximum-depth-exceeded' | 'schema-mismatch' | 'outcome-not-declared' | 'reason-required' | 'text-invalid' | 'result-not-declared' | 'result-required' | 'field-not-declared' | 'constraint-invalid' | 'constraint-violated' | 'public-reason-required' | 'public-reason-not-declared'
+    /** Outcome identifiers the review policy declares for the requested settlement when an outcome is refused; empty otherwise. */
+    readonly allowed: ReadonlyArray<string>
   }
   readonly transportKind?: string
   readonly protocolFailure?: CaseworkProtocolFailure
@@ -238,6 +240,7 @@ export interface ReviewResult extends ReviewRequestAccepted {
   resultId: Uuid
   status: ReviewResultStatus
   outcome?: string
+  publicReason?: string
   result?: JsonObject
   completedAt: string
   availableUntil: string
@@ -342,8 +345,8 @@ export interface ReviewClockOccurrence {
 export interface ReviewTaskDraftInput { body: JsonValue }
 export interface ReviewTaskDraft { taskId: Uuid; author: IssuerPrincipal; body: JsonValue; revision: SafeInteger; updatedAt: string }
 export type DecisionKind =
-  | { type: 'approve' }
-  | { type: 'reject' | 'changes-requested' | 'answer'; outcome: string; reason?: string | null; result?: JsonObject | null }
+  | { type: 'approve'; outcome: string; publicReason?: string | null }
+  | { type: 'reject' | 'changes-requested' | 'answer'; outcome: string; reason?: string | null; publicReason?: string | null; result?: JsonObject | null }
 export interface Decision { taskId: Uuid; requestId: Uuid; stageId: string; reviewer: IssuerPrincipal; profileId: string; decision: DecisionKind }
 export interface ReviewTaskDecisionRequest { decision: DecisionKind }
 export type ReviewHistoryAudience = 'reviewers' | 'requester'
@@ -362,7 +365,7 @@ export interface ReviewContextContract { id: string; revision: ContentDigest; sc
 export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }
 export type ReviewContextCapability = 'human-display' | 'service-status' | 'task-grant-context' | 'routing-context'
 export interface ReviewContextProviderPolicy { id: string; capabilities: ReadonlyArray<ReviewContextCapability>; sourceNamespace: string; deploymentRef: string; serviceProfiles?: Partial<Record<ReviewContextCapability, string>> }
-export interface ReviewPolicy { id: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; resultRequired?: boolean }> }
+export interface ReviewPolicy { id: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
 export interface ReviewPolicyClosure {
   identity: PolicyBinding
   purpose: 'approval' | 'answer'
@@ -374,7 +377,7 @@ export interface ReviewPolicyClosure {
   retention: ReviewRetentionPolicy
   displaySchema: JsonValue
   resultSchema?: JsonValue
-  outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; resultRequired?: boolean }>
+  outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }>
 }
 
 /** Compute the canonical producer submission digest locally, without I/O. */

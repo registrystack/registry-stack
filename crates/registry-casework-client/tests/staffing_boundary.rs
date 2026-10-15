@@ -354,6 +354,7 @@ async fn decision_and_private_draft_bounds_fail_before_io() {
         let input = ReviewTaskDecisionRequest {
             decision: DecisionKind::Answer {
                 outcome: "answered".into(),
+                public_reason: None,
                 reason: None,
                 result,
             },

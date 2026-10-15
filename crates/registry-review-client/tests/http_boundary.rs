@@ -90,6 +90,7 @@ fn result_json(request_id: Uuid) -> serde_json::Value {
         "policy": {"id": "registry-correction", "version": "1", "digest": DIGEST},
         "submissionDigest": DIGEST,
         "status": "approved",
+        "outcome": "approved",
         "completedAt": "2026-09-19T00:00:00Z",
         "availableUntil": "2026-10-19T00:00:00Z"
     })

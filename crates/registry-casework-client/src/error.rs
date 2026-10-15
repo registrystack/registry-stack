@@ -580,6 +580,7 @@ impl CaseworkClientError {
                         Some(ReviewValidationError {
                             path: validation.path,
                             reason,
+                            allowed: Box::default(),
                         })
                     }
                 };

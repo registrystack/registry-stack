@@ -327,10 +327,19 @@ fn project(version: &str) -> CaseworkProject {
             })),
             outcomes: vec![
                 ReviewOutcomePolicy {
+                    id: "approved".to_owned(),
+                    label: "Approved".to_owned(),
+                    settlement: ReviewOutcomeSettlement::Approved,
+                    reason_required: false,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+                    result_required: false,
+                },
+                ReviewOutcomePolicy {
                     id: "incorrect".to_owned(),
                     label: "Incorrect".to_owned(),
                     settlement: ReviewOutcomeSettlement::Rejected,
                     reason_required: true,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Required,
                     result_required: true,
                 },
                 ReviewOutcomePolicy {
@@ -338,6 +347,7 @@ fn project(version: &str) -> CaseworkProject {
                     label: "Needs correction".to_owned(),
                     settlement: ReviewOutcomeSettlement::ChangesRequested,
                     reason_required: true,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Required,
                     result_required: true,
                 },
             ],
@@ -382,6 +392,7 @@ fn answer_project(completion: bool) -> CaseworkProject {
         label: "Found".to_owned(),
         settlement: ReviewOutcomeSettlement::Answered,
         reason_required: false,
+        public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
         result_required: true,
     }];
     project.trusted_producers[0].review_policies = vec!["registry-answer".to_owned()];
@@ -760,7 +771,10 @@ async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid 
             &fixture.reviewer_a,
             primary,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -788,7 +802,10 @@ async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid 
             &fixture.reviewer_b,
             secondary,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -1077,7 +1094,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
                 &fixture.reviewer_a,
                 primary,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -1099,7 +1119,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
                 &fixture.reviewer_a,
                 primary,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -1123,7 +1146,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         receipt.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert!(receipt.outcome.is_none());
+    assert_eq!(receipt.outcome.as_deref(), Some("approved"));
     assert_eq!(readback.decided_by_caller, Some(true));
 
     let secondary = task_id(&fixture, first.accepted.request_id, 1).await;
@@ -1146,7 +1169,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
                 &fixture.reviewer_b,
                 secondary,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -1756,7 +1782,10 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
                 reviewer,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None,
+                    },
                 },
                 None,
                 "",
@@ -1907,7 +1936,10 @@ async fn active_review_keeps_early_accountability_readable_past_provisional_expi
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -2049,7 +2081,10 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             &fixture.reviewer_b,
             primary,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -2079,6 +2114,7 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Reject {
                     outcome: "incorrect".to_owned(),
+                    public_reason: Some("The record could not be matched.".to_owned()),
                     reason: Some("private retained reason".to_owned()),
                     result: Some(json!({"correction": "bounded correction"})),
                 },
@@ -2560,12 +2596,14 @@ async fn settle_clock_retention_round(
     let decision = if outcome == "needs-correction" {
         DecisionKind::ChangesRequested {
             outcome: outcome.to_owned(),
+            public_reason: Some("Correct the submitted record.".to_owned()),
             reason: Some("private clock retention reason".to_owned()),
             result: Some(json!({"correction": "bounded correction"})),
         }
     } else {
         DecisionKind::Reject {
             outcome: outcome.to_owned(),
+            public_reason: Some("The record could not be matched.".to_owned()),
             reason: Some("private clock retention reason".to_owned()),
             result: Some(json!({"correction": "bounded correction"})),
         }
@@ -3249,6 +3287,7 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: Some("private accountability reason".to_owned()),
                     result: Some(json!({"correction": "accountable answer"})),
                 },
@@ -3361,6 +3400,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
                 label: label.to_owned(),
                 settlement: ReviewOutcomeSettlement::Answered,
                 reason_required: true,
+                public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
                 result_required: false,
             })
             .collect();
@@ -3397,6 +3437,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
                 ReviewTaskDecisionRequest {
                     decision: DecisionKind::Answer {
                         outcome: code.to_owned(),
+                        public_reason: None,
                         reason: Some("PRIVATE_REASON_CANARY".to_owned()),
                         result: None,
                     },
@@ -3614,7 +3655,10 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
                 author,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None,
+                    },
                 },
                 profile,
                 "human-bearer",
@@ -4069,6 +4113,7 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: Some("public decision reason".to_owned()),
                     reason: Some("private decision reason".to_owned()),
                     result: Some(json!({"correction": "accountable answer"})),
                 },
@@ -4120,6 +4165,10 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     let audit_text = serde_json::to_string(&audit.entries()).expect("audit entries");
     assert!(!audit_text.contains("private decision reason"));
     assert!(!audit_text.contains("accountable answer"));
+    // The public reason is released with the ReviewResult only; the journal
+    // records that one was given.
+    assert_eq!(decision_audit["publicReasonGiven"], true);
+    assert!(!audit_text.contains("public decision reason"));
     assert!(!audit_text.contains(&task.to_string()));
 
     let mut second_request = request("decision-audit-2", "decision-audit-2-ref");
@@ -4147,6 +4196,7 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     let second_decision = || ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: None,
             result: Some(json!({"correction": "second answer"})),
         },
@@ -4523,6 +4573,7 @@ async fn review_reads_check_access_before_disclosing_retention_expiry() {
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: Some("private settled reason".to_owned()),
                     result: Some(json!({"correction": "settled answer"})),
                 },
@@ -4659,6 +4710,7 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: None,
                     result: Some(json!({"correction": "settled answer"})),
                 },
@@ -4794,6 +4846,7 @@ async fn standalone_structured_answers_support_polling_and_completion_modes() {
                 ReviewTaskDecisionRequest {
                     decision: DecisionKind::Answer {
                         outcome: "found".to_owned(),
+                        public_reason: None,
                         reason: None,
                         result: Some(json!({"correction":format!("answer for {subject}")})),
                     },
@@ -4845,18 +4898,39 @@ async fn rejected_cancelled_and_superseded_results_commit_atomically() {
         )
         .await
         .expect("claim rejected review");
+    let reject = |public_reason: Option<&str>| ReviewTaskDecisionRequest {
+        decision: DecisionKind::Reject {
+            outcome: "incorrect".to_owned(),
+            public_reason: public_reason.map(str::to_owned),
+            reason: Some("Incorrect record".to_owned()),
+            result: Some(json!({"correction":"Replace the record"})),
+        },
+    };
+    // The policy requires a public reason on this outcome, so a rejection
+    // that tells the applicant nothing is refused before anything settles.
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_a,
+                rejected_task,
+                reject(None),
+                None,
+                "",
+                2,
+                "reject-terminal-without-public-reason",
+            )
+            .await,
+        Err(ReviewRuntimeError::Validation(error))
+            if error.path == "$.publicReason"
+                && error.reason == ReviewValidationReason::PublicReasonRequired
+    ));
     fixture
         .service_v1
         .decide_review_task(
             &fixture.reviewer_a,
             rejected_task,
-            ReviewTaskDecisionRequest {
-                decision: DecisionKind::Reject {
-                    outcome: "incorrect".to_owned(),
-                    reason: Some("Incorrect record".to_owned()),
-                    result: Some(json!({"correction":"Replace the record"})),
-                },
-            },
+            reject(Some("The record could not be matched.")),
             None,
             "",
             2,
@@ -4865,6 +4939,21 @@ async fn rejected_cancelled_and_superseded_results_commit_atomically() {
         .await
         .expect("settle rejected review");
     assert_terminal_atomic(&fixture, rejected.accepted.request_id, 1).await;
+    let ReviewResultRead::Available(rejected_result) = fixture
+        .service_v1
+        .review_result(&fixture.producer, rejected.accepted.request_id)
+        .await
+        .expect("read rejected result")
+    else {
+        panic!("rejected result is available");
+    };
+    assert_eq!(rejected_result.outcome.as_deref(), Some("incorrect"));
+    assert_eq!(
+        rejected_result.public_reason.as_deref(),
+        Some("The record could not be matched.")
+    );
+    let released = serde_json::to_string(&rejected_result).expect("rejected result");
+    assert!(!released.contains("Incorrect record"));
 
     let cancelled_request = request("terminal-cancelled", "terminal-cancelled");
     let cancelled = fixture
@@ -5005,6 +5094,7 @@ async fn concurrent_round_creation_and_duplicate_vote_leave_one_current_state() 
     let decision = || ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: None,
             result: Some(json!({"correction":"single terminal answer"})),
         },
@@ -5112,6 +5202,7 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: None,
                     result: Some(json!({"correction":"atomic winner"})),
                 },
@@ -5189,7 +5280,10 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
             &fixture.reviewer_a,
             primary,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -5254,6 +5348,7 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
                 ReviewTaskDecisionRequest {
                     decision: DecisionKind::Reject {
                         outcome: "incorrect".to_owned(),
+                        public_reason: Some("The record needs a correction.".to_owned()),
                         reason: Some("The record needs a correction".to_owned()),
                         result: None,
                     },
@@ -5496,7 +5591,10 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
                 &fixture.reviewer_b,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -6156,6 +6254,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
     let decision = || ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: Some("private replay reason".to_owned()),
             result: Some(json!({"correction": "protected replay result"})),
         },
@@ -6248,6 +6347,7 @@ async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_acce
     let decision = || ReviewTaskDecisionRequest {
         decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: Some("private withheld replay reason".to_owned()),
             result: Some(json!({"correction": "protected withheld replay result"})),
         },
@@ -6351,7 +6451,10 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
                 &fixture.reviewer_a,
                 first_stage_task,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -6438,6 +6541,7 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
                 ReviewTaskDecisionRequest {
                     decision: DecisionKind::Answer {
                         outcome: "found".to_owned(),
+                        public_reason: None,
                         reason: None,
                         result: Some(json!({"correction": "terminal delegated answer"})),
                     },
@@ -8240,6 +8344,7 @@ async fn request_clock_completes_for_changes_requested_and_later_request_gets_fr
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::ChangesRequested {
                     outcome: "needs-correction".to_owned(),
+                    public_reason: Some("Correct the submitted record.".to_owned()),
                     reason: Some("Please correct the record".to_owned()),
                     result: Some(json!({"correction":"Update the legal name"})),
                 },
@@ -8356,7 +8461,10 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8384,7 +8492,10 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
             &fixture.reviewer_b,
             follow_on,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8504,7 +8615,10 @@ async fn subject_clock_restarts_for_a_new_round_after_a_terminal_settlement() {
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8532,7 +8646,10 @@ async fn subject_clock_restarts_for_a_new_round_after_a_terminal_settlement() {
             &fixture.reviewer_b,
             follow_on,
             ReviewTaskDecisionRequest {
-                decision: DecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -9391,7 +9508,10 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
                 &fixture.reviewer_a,
                 first_task,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -9802,7 +9922,10 @@ async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_iss
                 &fixture.reviewer_a,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: DecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",

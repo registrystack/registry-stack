@@ -19,7 +19,7 @@ fn project_value() -> Value {
             "id":"notice-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
             "stages":[{"id":"review","queue":"reviews","decidingProfiles":["reviewer"],"requiredApprovals":2,"excludeInitiator":true}],
             "clocks":["decision-due"],"retention":{"terminalDays":30,"accountabilityDays":90},
-            "outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false},{"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true}],
+            "outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},{"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}],
             "displaySchema":{"type":"object","additionalProperties":false,"required":["title"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}
         }],
         "trustedProducers":[{"id":"notice-service","profile":"producer","issuer":"https://issuer.example","subject":"notice-service","trustedInitiatorIssuer":"https://people.example","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"recoveryDays":7}]
@@ -240,6 +240,9 @@ fn retired_authoring_shapes_and_invalid_approval_outcomes_are_refused() {
     value["reviewPolicies"][0]["outcomes"][0]["reasonRequired"] = json!(true);
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
+    value["reviewPolicies"][0]["outcomes"][0]["settlement"] = json!("rejected");
+    assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    let mut value = project_value();
     value["clocks"][0]["pauseWhile"] = json!(["awaiting-applicant"]);
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
 }
@@ -309,15 +312,17 @@ fn decision_and_draft_bounds_are_checked_without_a_runtime() {
     let invalid = DecisionKind::Reject {
         outcome: "rejected".into(),
         reason: Some("x".repeat(MAXIMUM_REVIEW_REASON_BYTES + 1)),
+        public_reason: None,
         result: None,
     };
     assert_eq!(
         invalid.check_input().unwrap_err().reason,
-        ReviewValidationReason::TextInvalid
+        ReviewValidationReason::MaximumBytesExceeded
     );
     let invalid = DecisionKind::Answer {
         outcome: "answered".into(),
         reason: None,
+        public_reason: None,
         result: Some(json!(null)),
     };
     assert_eq!(
@@ -327,6 +332,7 @@ fn decision_and_draft_bounds_are_checked_without_a_runtime() {
     let invalid = DecisionKind::Answer {
         outcome: "answered".into(),
         reason: None,
+        public_reason: None,
         result: Some(json!({"value":MAXIMUM_PORTABLE_JSON_INTEGER+1})),
     };
     assert_eq!(
@@ -351,7 +357,24 @@ fn decision_and_draft_bounds_are_checked_without_a_runtime() {
             .reason,
         ReviewValidationReason::MaximumDepthExceeded
     );
-    assert!(DecisionKind::Approve.check_input().is_ok());
+    assert!(DecisionKind::Approve {
+        outcome: "approved".into(),
+        public_reason: None,
+    }
+    .check_input()
+    .is_ok());
+    let invalid = DecisionKind::Approve {
+        outcome: "approved".into(),
+        public_reason: Some("x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1)),
+    };
+    let error = invalid.check_input().unwrap_err();
+    assert_eq!(
+        (error.path.as_str(), error.reason),
+        (
+            "$.publicReason",
+            ReviewValidationReason::MaximumBytesExceeded
+        )
+    );
     assert!(ReviewTaskDraftInput {
         body: json!({"note":"private draft"})
     }
@@ -456,5 +479,58 @@ fn clock_step_explanation_is_presentation_and_effect_is_behavior() {
             .compile_policy("notice-review")
             .unwrap()
             .binding()
+    );
+}
+
+#[test]
+fn every_outcome_states_whether_a_public_reason_is_given() {
+    let mut value = project_value();
+    value["reviewPolicies"][0]["outcomes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("publicReason");
+    assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    let mut value = project_value();
+    value["reviewPolicies"][0]["outcomes"][0]["publicReason"] = json!("sometimes");
+    assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    for rule in ["required", "optional", "none"] {
+        let mut value = project_value();
+        value["reviewPolicies"][0]["outcomes"][0]["publicReason"] = json!(rule);
+        decode(value).compile_policy("notice-review").unwrap();
+    }
+}
+
+#[test]
+fn approval_decisions_name_an_approved_outcome_on_the_wire() {
+    // A decision without `outcome` reaches the policy check, which refuses it
+    // with the declared outcomes; the input check lets it through.
+    let missing: ReviewTaskDecisionRequest =
+        serde_json::from_value(json!({"decision":{"type":"approve"}})).unwrap();
+    assert_eq!(
+        missing.decision,
+        DecisionKind::Approve {
+            outcome: String::new(),
+            public_reason: None,
+        }
+    );
+    assert_eq!(missing.decision.check_input(), Ok(()));
+    assert!(serde_json::from_value::<ReviewTaskDecisionRequest>(
+        json!({"decision":{"type":"approve","outcome":"approved","reason":"private"}})
+    )
+    .is_err());
+    let decoded: ReviewTaskDecisionRequest = serde_json::from_value(json!({
+        "decision":{"type":"approve","outcome":"approved","publicReason":"Your registration is approved."}
+    }))
+    .unwrap();
+    assert_eq!(
+        decoded.decision,
+        DecisionKind::Approve {
+            outcome: "approved".into(),
+            public_reason: Some("Your registration is approved.".into()),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&decoded).unwrap(),
+        json!({"decision":{"type":"approve","outcome":"approved","publicReason":"Your registration is approved."}})
     );
 }

@@ -504,6 +504,10 @@
         "label": {
           "type": "string"
         },
+        "publicReason": {
+          "$ref": "#/$defs/ReviewPublicReasonRule",
+          "description": "Whether a decision with this outcome gives text for release to the\nsubject's owner. There is no default: the policy author decides what\nan applicant is told."
+        },
         "reasonRequired": {
           "type": "boolean"
         },
@@ -518,7 +522,8 @@
         "id",
         "label",
         "settlement",
-        "reasonRequired"
+        "reasonRequired",
+        "publicReason"
       ],
       "type": "object"
     },
@@ -645,6 +650,15 @@
         "recoveryDays"
       ],
       "type": "object"
+    },
+    "ReviewPublicReasonRule": {
+      "description": "Whether a decision gives a public reason with an outcome.",
+      "enum": [
+        "required",
+        "optional",
+        "none"
+      ],
+      "type": "string"
     },
     "ReviewPurpose": {
       "enum": [

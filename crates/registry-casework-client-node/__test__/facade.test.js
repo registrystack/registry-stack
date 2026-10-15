@@ -138,6 +138,7 @@ test('review task context uses the exact route and forwards the optional source 
           stages: [{ id: 'review', queue: 'review', decidingProfiles: ['staff'], requiredApprovals: 1, excludeInitiator: false, excludePreviousStageReviewers: false }],
           retention: { terminalDays: 30, accountabilityDays: 30 },
           displaySchema: { type: 'object', additionalProperties: false, properties: {} },
+          outcomes: [{ id: 'approved', label: 'Approve', settlement: 'approved', reasonRequired: false, publicReason: 'optional' }],
         },
         context: {
           strategy: 'source', reference: 'correction-42', bindingStatus: 'current',
@@ -378,7 +379,7 @@ test('decision forwards the selected source profile with mutation headers', asyn
   const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
   await assert.rejects(client.decideReviewTask(
     'one-call-secret', 'staff', '00000000-0000-0000-0000-000000000009',
-    9, 'attempt-9', { decision: { type: 'approve' } }, 'reviewer',
+    9, 'attempt-9', { decision: { type: 'approve', outcome: 'approved' } }, 'reviewer',
   ), (error) => error.kind === 'protocol');
 
   assert.equal(observed.authorization, 'Bearer one-call-secret');
@@ -386,6 +387,47 @@ test('decision forwards the selected source profile with mutation headers', asyn
   assert.equal(observed['registry-source-profile'], 'reviewer');
   assert.equal(observed['if-match'], '"9"');
   assert.equal(observed['idempotency-key'], 'attempt-9');
+});
+
+test('an undeclared outcome refusal names the outcomes the review policy declares', async (context) => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(400, {
+        'content-type': 'application/problem+json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+        'registry-casework-validation-path': '$.outcome',
+        'registry-casework-validation-reason': 'outcome-not-declared',
+        'registry-casework-validation-allowed': 'approved,approved-with-note',
+      });
+      response.end(JSON.stringify({
+        type: 'https://id.registrystack.org/problems/registry-casework/request/invalid',
+        title: 'Invalid request',
+        status: 400,
+        detail: 'The Casework request is invalid.',
+        code: 'request.invalid',
+        traceId: '0123456789abcdef0123456789abcdef',
+      }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  await assert.rejects(client.decideReviewTask(
+    'one-call-secret', 'staff', '00000000-0000-0000-0000-000000000009',
+    9, 'attempt-9', { decision: { type: 'approve', outcome: 'accepted' } },
+  ), (error) => {
+    assert.equal(error.code, 'request.invalid');
+    assert.deepEqual(error.validation, {
+      path: '$.outcome',
+      reason: 'outcome-not-declared',
+      allowed: ['approved', 'approved-with-note'],
+    });
+    return true;
+  });
 });
 
 test('directory target discovery preserves its exact purpose context without source authority', async (context) => {
@@ -635,10 +677,13 @@ function fixtureStringify(document) {
         ? { mode: 'current-source', provider: 'registry', contract: { id: 'registry-context', revision: POLICY_DIGEST, schemaDigest: POLICY_DIGEST } }
         : { mode: 'submitted' },
       stages: closure.stages, retention: closure.retention, displaySchema: closure.displaySchema,
+      ...(closure.outcomes ? { outcomes: closure.outcomes } : {}),
     };
     const dependencies = { accessProfiles: [], queues: [], teams: [], clocks: [], calendars: [], contextProvider: null, taskTemplates: [], trustedProducers: [], inbox: { defaultPageSize: 25, maximumCandidateScan: 100, maximumSourceReads: 25, maximumConcurrentSourceReads: 4, pageDeadlineMilliseconds: 2000 } };
     const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-    const digest = 'sha256:' + require('node:crypto').createHash('sha256').update(JSON.stringify(canonical({ schema: 'registry-casework-review-policy/v1', policy, dependencies }))).digest('hex');
+    // Outcome labels are presentation and stay out of the behavioral digest.
+    const digested = policy.outcomes ? { ...policy, outcomes: policy.outcomes.map(outcome => ({ ...outcome, label: '' })) } : policy;
+    const digest = 'sha256:' + require('node:crypto').createHash('sha256').update(JSON.stringify(canonical({ schema: 'registry-casework-review-policy/v1', policy: digested, dependencies }))).digest('hex');
     const { id, version, ...fields } = policy;
     document.policy = { id, version, digest };
     document.policyClosure = { identity: document.policy, ...fields, dependencies };

@@ -146,7 +146,7 @@ fn project(root: &std::path::Path, idp: &MockIdp, context: &BregContextExport) -
             "context":{"mode":"current-source","provider":"facility","contract":context.contract},
             "stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
             "retention":{"terminalDays":30,"accountabilityDays":90},
-            "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":[]}],
+            "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}]}],
         "trustedProducers":[{"id":"facility-registry","profile":"requester","issuer":idp.issuer(),
             "subject":"facility-review-producer","trustedInitiatorIssuer":idp.issuer(),
             "sourceNamespaces":[SOURCE],"reviewPolicies":["facility-address-review"],"recoveryDays":7}]
@@ -716,7 +716,7 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
             format!("\"{}\"", claimed["revision"].as_i64().unwrap()),
         )
         .header("idempotency-key", "native-approve")
-        .json(&json!({"decision":{"type":"approve"}}))
+        .json(&json!({"decision":{"type":"approve","outcome":"approved"}}))
         .send()
         .await
         .unwrap();

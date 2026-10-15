@@ -202,7 +202,7 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
             "ReviewDecisionReceipt",
             typed_examples::<ReviewDecisionReceipt>(vec![
                 receipt.clone(),
-                json!({"policy":policy,"decision":"approve","decidedAt":"2026-09-20T01:00:00Z"}),
+                json!({"policy":policy,"decision":"approve","outcome":"approved","outcomeLabel":"Approve","decidedAt":"2026-09-20T01:00:00Z"}),
             ])?,
         ),
         (
@@ -215,7 +215,7 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
         (
             "ReviewTaskDecisionRequest",
             typed_examples::<ReviewTaskDecisionRequest>(vec![
-                json!({"decision":{"type":"approve"}}),
+                json!({"decision":{"type":"approve","outcome":"approved","publicReason":"Your notice is approved."}}),
                 json!({"decision":{"type":"reject","outcome":"not-supported","reason":"reason","result":{"field":"value"}}}),
                 json!({"decision":{"type":"changes-requested","outcome":"needs-change"}}),
                 json!({"decision":{"type":"answer","outcome":"answered","result":{"answer":true}}}),

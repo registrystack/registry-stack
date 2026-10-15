@@ -599,6 +599,7 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         "actorRef",
         "accountabilityEventId",
         "outcome",
+        "publicReasonGiven",
         "activationId",
         "packageDigest",
         "predecessorPackageDigest",

@@ -17,6 +17,9 @@ pub const MAXIMUM_IDENTIFIER_BYTES: usize = 128;
 pub const MAXIMUM_REFERENCE_BYTES: usize = 256;
 pub const MAXIMUM_CONTEXT_BYTES: usize = 64 * 1024;
 pub const MAXIMUM_RESULT_BYTES: usize = 16 * 1024;
+/// Upper bound for the reason a decision gives the subject's owner, matching
+/// the bound Casework keeps on the private reason a reviewer records.
+pub const MAXIMUM_PUBLIC_REASON_BYTES: usize = 2_000;
 pub const MAXIMUM_JSON_DEPTH: usize = 32;
 pub const MAXIMUM_JSON_NODES: usize = 4096;
 pub const MAXIMUM_PORTABLE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
@@ -436,6 +439,12 @@ pub struct ReviewResult {
     pub status: ReviewResultStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// Text the decision gives for release to the subject's owner. It is
+    /// distinct from the reviewer's private reason, which never leaves
+    /// Casework.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+    pub public_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_RESULT_BYTES)))]
     pub result: Option<Value>,
@@ -458,6 +467,9 @@ impl ReviewResult {
         if let Some(outcome) = &self.outcome {
             check_bounded_text(outcome, MAXIMUM_IDENTIFIER_BYTES)?;
         }
+        if let Some(public_reason) = &self.public_reason {
+            check_public_reason(public_reason)?;
+        }
         if let Some(result) = &self.result {
             if !result.is_object() {
                 return Err(ProtocolError::ResultShape);
@@ -466,15 +478,21 @@ impl ReviewResult {
                 return Err(ProtocolError::ResultTooLarge);
             }
         }
+        // Every decided status names the policy outcome that settled it; a
+        // closed request was never decided, so it carries no decision text.
         match self.status {
-            ReviewResultStatus::Approved
-            | ReviewResultStatus::Cancelled
-            | ReviewResultStatus::Superseded
-                if self.outcome.is_some() || self.result.is_some() =>
+            ReviewResultStatus::Cancelled | ReviewResultStatus::Superseded
+                if self.outcome.is_some()
+                    || self.public_reason.is_some()
+                    || self.result.is_some() =>
             {
                 Err(ProtocolError::TerminalPayload)
             }
-            ReviewResultStatus::Rejected
+            ReviewResultStatus::Approved if self.result.is_some() => {
+                Err(ProtocolError::TerminalPayload)
+            }
+            ReviewResultStatus::Approved
+            | ReviewResultStatus::Rejected
             | ReviewResultStatus::ChangesRequested
             | ReviewResultStatus::Answered
                 if self.outcome.is_none() =>
@@ -614,6 +632,11 @@ fn check_json_complexity(value: &Value) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// Checks the text a decision gives for release to the subject's owner.
+pub fn check_public_reason(value: &str) -> Result<(), ProtocolError> {
+    check_bounded_text(value, MAXIMUM_PUBLIC_REASON_BYTES).map_err(|_| ProtocolError::PublicReason)
+}
+
 fn check_bounded_text(value: &str, maximum: usize) -> Result<(), ProtocolError> {
     if value.trim().is_empty() || value.len() > maximum || value.chars().any(char::is_control) {
         Err(ProtocolError::Text)
@@ -648,6 +671,10 @@ pub enum ProtocolError {
     JsonIntegerRange,
     #[error("the terminal status does not permit the supplied outcome or result")]
     TerminalPayload,
+    #[error(
+        "publicReason must be non-blank text of at most 2000 UTF-8 bytes without control characters"
+    )]
+    PublicReason,
     #[error("result availability must end after completion")]
     Availability,
     #[error("a correlation identifier cannot be the nil UUID")]
@@ -871,10 +898,9 @@ mod tests {
         assert_eq!(omitted.result_constraints, None);
     }
 
-    #[test]
-    fn approved_result_cannot_carry_a_custom_outcome_or_payload() {
+    fn decided_result(status: ReviewResultStatus, outcome: Option<&str>) -> ReviewResult {
         let completed_at = Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap();
-        let result = ReviewResult {
+        ReviewResult {
             result_id: Uuid::from_u128(0x1),
             request_id: Uuid::nil(),
             subject: request().subject,
@@ -884,13 +910,84 @@ mod tests {
                 digest: ContentDigest::for_bytes(b"policy"),
             },
             submission_digest: ContentDigest::for_bytes(b"submission"),
-            status: ReviewResultStatus::Approved,
-            outcome: Some("approved".to_owned()),
-            result: Some(json!({"approved": true})),
+            status,
+            outcome: outcome.map(str::to_owned),
+            public_reason: None,
+            result: None,
             completed_at,
             available_until: completed_at + chrono::Duration::days(30),
-        };
+        }
+    }
+
+    #[test]
+    fn approved_result_names_its_outcome_but_carries_no_payload() {
+        let mut result = decided_result(ReviewResultStatus::Approved, Some("approved"));
+        assert!(result.check().is_ok());
+        result.result = Some(json!({"approved": true}));
         assert_eq!(result.check(), Err(ProtocolError::TerminalPayload));
+    }
+
+    #[test]
+    fn every_decided_result_requires_an_outcome() {
+        for status in [
+            ReviewResultStatus::Approved,
+            ReviewResultStatus::Rejected,
+            ReviewResultStatus::ChangesRequested,
+            ReviewResultStatus::Answered,
+        ] {
+            assert_eq!(
+                decided_result(status, None).check(),
+                Err(ProtocolError::TerminalPayload),
+                "{status:?}"
+            );
+            assert!(decided_result(status, Some("outcome")).check().is_ok());
+        }
+    }
+
+    #[test]
+    fn closed_results_carry_no_outcome_or_public_reason() {
+        for status in [
+            ReviewResultStatus::Cancelled,
+            ReviewResultStatus::Superseded,
+        ] {
+            assert!(decided_result(status, None).check().is_ok());
+            assert_eq!(
+                decided_result(status, Some("approved")).check(),
+                Err(ProtocolError::TerminalPayload)
+            );
+            let mut result = decided_result(status, None);
+            result.public_reason = Some("Closed by the producer.".to_owned());
+            assert_eq!(result.check(), Err(ProtocolError::TerminalPayload));
+        }
+    }
+
+    #[test]
+    fn decided_results_carry_a_bounded_public_reason() {
+        let mut result = decided_result(ReviewResultStatus::Rejected, Some("rejected"));
+        result.public_reason = Some("The submitted address could not be verified.".to_owned());
+        assert!(result.check().is_ok());
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["publicReason"],
+            json!("The submitted address could not be verified.")
+        );
+        result.public_reason = Some("x".repeat(MAXIMUM_PUBLIC_REASON_BYTES));
+        assert!(result.check().is_ok());
+        for refused in [
+            "x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1),
+            "   ".to_owned(),
+            "line\u{0}break".to_owned(),
+        ] {
+            result.public_reason = Some(refused);
+            assert_eq!(result.check(), Err(ProtocolError::PublicReason));
+        }
+        assert!(ProtocolError::PublicReason
+            .to_string()
+            .contains(&MAXIMUM_PUBLIC_REASON_BYTES.to_string()));
+        result.public_reason = None;
+        assert!(serde_json::to_value(&result)
+            .unwrap()
+            .get("publicReason")
+            .is_none());
     }
 
     #[test]
@@ -908,6 +1005,7 @@ mod tests {
             submission_digest: ContentDigest::for_bytes(b"submission"),
             status: ReviewResultStatus::ChangesRequested,
             outcome: None,
+            public_reason: None,
             result: None,
             completed_at,
             available_until: completed_at + chrono::Duration::days(30),
@@ -929,7 +1027,8 @@ mod tests {
             },
             submission_digest: ContentDigest::for_bytes(b"submission"),
             status: ReviewResultStatus::Approved,
-            outcome: None,
+            outcome: Some("approved".to_owned()),
+            public_reason: None,
             result: None,
             completed_at,
             available_until: completed_at + chrono::Duration::days(30),
@@ -955,6 +1054,7 @@ mod tests {
                 submission_digest: ContentDigest::for_bytes(b"submission"),
                 status: ReviewResultStatus::ChangesRequested,
                 outcome: Some("needs-correction".to_owned()),
+                public_reason: None,
                 result: Some(payload),
                 completed_at,
                 available_until: completed_at + chrono::Duration::days(30),
@@ -1012,6 +1112,7 @@ mod tests {
             submission_digest: submission_digest("producer", "registry", &request()).unwrap(),
             status: ReviewResultStatus::Cancelled,
             outcome: None,
+            public_reason: None,
             result: None,
             completed_at: Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap(),
             available_until: Utc.with_ymd_and_hms(2026, 9, 20, 0, 0, 0).unwrap(),

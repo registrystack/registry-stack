@@ -93,6 +93,11 @@ class GeneratedContractTests(unittest.TestCase):
         self.assertNotIn("Registry-Casework-Validation-Path",headers)
         staff=self.operation("/v1/review-tasks/{task_id}/decisions","post")["responses"]["400"]["headers"]
         self.assertIn("Registry-Casework-Validation-Path",staff)
+        self.assertNotIn("Registry-Casework-Validation-Allowed",headers)
+        allowed=staff["Registry-Casework-Validation-Allowed"]["schema"]["pattern"]
+        self.assertRegex("approved,approved-with-note",allowed)
+        self.assertNotRegex("approved, rejected",allowed)
+        self.assertIn("public-reason-required",self.schemas["ReviewValidationReason"]["enum"])
         self.assertIn("policy-not-allowed",self.schemas["ReviewValidationReason"]["enum"])
         self.assertNotIn("kind-not-allowed",self.schemas["ReviewValidationReason"]["enum"])
 

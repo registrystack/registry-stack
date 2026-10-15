@@ -85,6 +85,7 @@ cases:
           digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: approved
+        outcome: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:
@@ -360,6 +361,7 @@ cases:
           digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: approved
+        outcome: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:
@@ -450,6 +452,7 @@ cases:
           digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: approved
+        outcome: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:
@@ -681,6 +684,7 @@ cases:
             digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           status: approved
+          outcome: approved
           completedAt: '2026-10-26T08:59:45Z'
           availableUntil: '2026-11-25T08:59:45Z'
   waits:
@@ -780,6 +784,7 @@ cases:
           digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: approved
+        outcome: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:

@@ -298,7 +298,9 @@ fn result(
         policy: accepted.policy.clone(),
         submission_digest: accepted.submission_digest.clone(),
         status,
-        outcome: None,
+        // A decided result names its outcome; a closed one carries none.
+        outcome: matches!(status, ReviewResultStatus::Approved).then(|| "approved".to_owned()),
+        public_reason: None,
         result: None,
         completed_at: now - chrono::Duration::seconds(1),
         available_until: now + chrono::Duration::hours(1),

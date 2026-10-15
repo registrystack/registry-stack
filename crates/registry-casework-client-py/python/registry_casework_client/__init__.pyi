@@ -377,11 +377,16 @@ ReviewValidationReason: TypeAlias = Literal[
     "field-not-declared",
     "constraint-invalid",
     "constraint-violated",
+    "public-reason-required",
+    "public-reason-not-declared",
 ]
 
 class ValidationDetail(TypedDict):
     path: str
     reason: ReviewValidationReason
+    # The outcome identifiers the review policy declares for the requested
+    # settlement when an outcome is refused; empty otherwise.
+    allowed: list[str]
 
 class CaseworkClientError(Exception):
     kind: CaseworkErrorKind
@@ -460,6 +465,7 @@ class ReviewRequestView(ReviewRequestAccepted, _ReviewRequestViewOptional):
     updatedAt: str
 class _ReviewResultOptional(TypedDict, total=False):
     outcome: str
+    publicReason: str
     result: JsonObject
 
 class ReviewResult(ReviewRequestAccepted, _ReviewResultOptional):
@@ -644,8 +650,11 @@ class ReviewTaskDraft(TypedDict):
     updatedAt: str
 class ReviewApproveDecision(TypedDict):
     type: Literal["approve"]
+    outcome: str
+    publicReason: NotRequired[str | None]
 class _ReviewOutcomeDecisionOptional(TypedDict, total=False):
     reason: str | None
+    publicReason: str | None
     result: JsonObject | None
 class ReviewRejectDecision(_ReviewOutcomeDecisionOptional):
     type: Literal["reject"]
@@ -727,8 +736,9 @@ class ReviewRetentionPolicy(TypedDict):
 class ReviewOutcomePolicy(TypedDict):
     id: str
     label: str
-    settlement: Literal["rejected", "changes-requested", "answered"]
+    settlement: Literal["approved", "rejected", "changes-requested", "answered"]
     reasonRequired: bool
+    publicReason: Literal["required", "optional", "none"]
     resultRequired: NotRequired[bool]
 class _ReviewPolicyOptional(TypedDict, total=False):
     routing: list[RoutingRule]

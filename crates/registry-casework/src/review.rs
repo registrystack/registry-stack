@@ -173,6 +173,10 @@ fn map_review_decision_error(error: ReviewDecisionError) -> ReviewRuntimeError {
         | ReviewDecisionError::ProfileNotEligible => ReviewRuntimeError::Forbidden,
         ReviewDecisionError::Validation(error) => review_validation_error(error),
         ReviewDecisionError::Policy(_) => ReviewRuntimeError::Corrupt,
+        ReviewDecisionError::OutcomeNotAllowed { declared, .. } => ReviewRuntimeError::Validation(
+            ReviewValidationError::new("$.outcome", ReviewValidationReason::OutcomeNotDeclared)
+                .allowing(declared),
+        ),
         _ => ReviewRuntimeError::Invalid,
     }
 }
@@ -2574,6 +2578,7 @@ impl PostgresStore {
                 ReviewResultStatus::Superseded,
                 None,
                 None,
+                None,
                 now,
             )
             .await?;
@@ -2923,6 +2928,7 @@ impl PostgresStore {
             &transaction,
             &record,
             ReviewResultStatus::Cancelled,
+            None,
             None,
             None,
             now,
@@ -4322,14 +4328,15 @@ impl PostgresStore {
         let transition =
             record_review_decision(&record.policy, &mut progress, &task, decision.clone())
                 .map_err(map_review_decision_error)?;
-        let (decision_name, outcome, result, reason) = decision_columns(&decision.decision);
+        let (decision_name, outcome, result, reason, public_reason) =
+            decision_columns(&decision.decision);
         let decision_id = Uuid::new_v4();
         transaction
             .execute(
                 "INSERT INTO casework_review_decisions(
                     decision_id,request_id,task_id,stage_index,actor_issuer,actor_subject,
-                    profile_id,decision,outcome,result,private_reason,decided_at)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                    profile_id,decision,outcome,result,private_reason,public_reason,decided_at)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
                 &[
                     &decision_id,
                     &request_id,
@@ -4342,6 +4349,7 @@ impl PostgresStore {
                     &outcome,
                     &result,
                     &reason,
+                    &public_reason,
                     &now,
                 ],
             )
@@ -4462,8 +4470,17 @@ impl PostgresStore {
                     .await?;
             }
             ReviewTransition::Settled { settlement } => {
-                let (status, outcome, result) = settlement_columns(settlement);
-                settle_review(&transaction, &record, status, outcome, result, now).await?;
+                let (status, outcome, public_reason, result) = settlement_columns(settlement);
+                settle_review(
+                    &transaction,
+                    &record,
+                    status,
+                    outcome,
+                    public_reason,
+                    result,
+                    now,
+                )
+                .await?;
             }
         }
         let decision_event_id = Uuid::new_v4();
@@ -4489,7 +4506,9 @@ impl PostgresStore {
         // emits, so it is audited like every other mutation once the
         // transaction commits. The record stays minimal: the
         // private reason and the structured result never leave the
-        // protected accountability row.
+        // protected accountability row. The public reason is released only
+        // with the producer's ReviewResult, so the journal records that one
+        // was given and never its text.
         audit.record(
             decision_event_id,
             json!({
@@ -4505,6 +4524,7 @@ impl PostgresStore {
                 "decision": decision_name,
                 "transition": transition_kind(&transition),
                 "accountabilityEventId": accountability_event_id,
+                "publicReasonGiven": public_reason.is_some(),
             }),
         )?;
         insert_review_idempotency(
@@ -4909,6 +4929,7 @@ async fn settle_review(
     record: &ReviewRequestRecord,
     status: ReviewResultStatus,
     outcome: Option<String>,
+    public_reason: Option<String>,
     result: Option<Value>,
     now: DateTime<Utc>,
 ) -> Result<ReviewResult, ReviewRuntimeError> {
@@ -4942,13 +4963,14 @@ async fn settle_review(
     transaction
         .execute(
             "INSERT INTO casework_review_results(
-                result_id,request_id,status,outcome,result,completed_at,available_until)
-             VALUES($1,$2,$3,$4,$5,$6,$7)",
+                result_id,request_id,status,outcome,public_reason,result,completed_at,available_until)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
             &[
                 &result_id,
                 &record.request_id,
                 &status_name,
                 &outcome,
+                &public_reason,
                 &result,
                 &now,
                 &available_until,
@@ -5057,6 +5079,7 @@ async fn settle_review(
         submission_digest: record.submission_digest.clone(),
         status,
         outcome,
+        public_reason,
         result,
         completed_at: now,
         available_until,
@@ -5340,7 +5363,7 @@ async fn load_result(
 ) -> Result<ReviewResult, ReviewRuntimeError> {
     let row = transaction
         .query_opt(
-            "SELECT result_id,status,outcome,result,completed_at,available_until
+            "SELECT result_id,status,outcome,result,completed_at,available_until,public_reason
              FROM casework_review_results WHERE request_id=$1",
             &[&record.request_id],
         )
@@ -5361,6 +5384,7 @@ fn result_from_row(
         submission_digest: record.submission_digest.clone(),
         status: parse_result_status(&row.get::<_, String>(1))?,
         outcome: row.get(2),
+        public_reason: row.get(6),
         result: row.get(3),
         completed_at: row.get(4),
         available_until: row.get(5),
@@ -5376,7 +5400,7 @@ async fn load_decisions(
     transaction
         .query(
             "SELECT d.task_id,t.stage_id,d.actor_issuer,d.actor_subject,d.profile_id,d.decision,
-                    d.outcome,d.result,d.private_reason
+                    d.outcome,d.result,d.private_reason,d.public_reason
              FROM casework_review_decisions d
              JOIN casework_review_tasks t ON t.task_id=d.task_id
              WHERE d.request_id=$1 ORDER BY d.decided_at,d.decision_id",
@@ -5386,12 +5410,18 @@ async fn load_decisions(
         .into_iter()
         .map(|row| {
             let decision = match row.get::<_, String>(5).as_str() {
-                "approve" => DecisionKind::Approve,
+                "approve" => DecisionKind::Approve {
+                    outcome: row
+                        .get::<_, Option<String>>(6)
+                        .ok_or(ReviewRuntimeError::Corrupt)?,
+                    public_reason: row.get(9),
+                },
                 "reject" => DecisionKind::Reject {
                     outcome: row
                         .get::<_, Option<String>>(6)
                         .ok_or(ReviewRuntimeError::Corrupt)?,
                     reason: row.get::<_, Option<String>>(8),
+                    public_reason: row.get(9),
                     result: row.get(7),
                 },
                 "changes-requested" => DecisionKind::ChangesRequested {
@@ -5399,6 +5429,7 @@ async fn load_decisions(
                         .get::<_, Option<String>>(6)
                         .ok_or(ReviewRuntimeError::Corrupt)?,
                     reason: row.get::<_, Option<String>>(8),
+                    public_reason: row.get(9),
                     result: row.get(7),
                 },
                 "answer" => DecisionKind::Answer {
@@ -5406,6 +5437,7 @@ async fn load_decisions(
                         .get::<_, Option<String>>(6)
                         .ok_or(ReviewRuntimeError::Corrupt)?,
                     reason: row.get(8),
+                    public_reason: row.get(9),
                     result: row.get(7),
                 },
                 _ => return Err(ReviewRuntimeError::Corrupt),
@@ -5588,7 +5620,7 @@ fn review_decision_receipt(
     decided_at: DateTime<Utc>,
 ) -> Result<ReviewDecisionReceipt, ReviewRuntimeError> {
     let decision = match decision {
-        "approve" if outcome.is_none() => ReviewDecisionType::Approve,
+        "approve" if outcome.is_some() => ReviewDecisionType::Approve,
         "reject" if outcome.is_some() => ReviewDecisionType::Reject,
         "changes-requested" if outcome.is_some() => ReviewDecisionType::ChangesRequested,
         "answer" if outcome.is_some() => ReviewDecisionType::Answer,
@@ -5723,62 +5755,113 @@ fn result_status_name(value: ReviewResultStatus) -> &'static str {
     }
 }
 
-fn decision_columns(
-    decision: &DecisionKind,
-) -> (&'static str, Option<String>, Option<Value>, Option<String>) {
+/// The stored columns of a decision: its name, outcome, structured result,
+/// private reason, and public reason.
+type DecisionColumns = (
+    &'static str,
+    Option<String>,
+    Option<Value>,
+    Option<String>,
+    Option<String>,
+);
+
+fn decision_columns(decision: &DecisionKind) -> DecisionColumns {
     match decision {
-        DecisionKind::Approve => ("approve", None, None, None),
+        DecisionKind::Approve {
+            outcome,
+            public_reason,
+        } => (
+            "approve",
+            Some(outcome.clone()),
+            None,
+            None,
+            public_reason.clone(),
+        ),
         DecisionKind::Reject {
             outcome,
             reason,
+            public_reason,
             result,
         } => (
             "reject",
             Some(outcome.clone()),
             result.clone(),
             reason.clone(),
+            public_reason.clone(),
         ),
         DecisionKind::ChangesRequested {
             outcome,
             reason,
+            public_reason,
             result,
         } => (
             "changes-requested",
             Some(outcome.clone()),
             result.clone(),
             reason.clone(),
+            public_reason.clone(),
         ),
         DecisionKind::Answer {
             outcome,
             reason,
+            public_reason,
             result,
         } => (
             "answer",
             Some(outcome.clone()),
             result.clone(),
             reason.clone(),
+            public_reason.clone(),
         ),
     }
 }
 
 fn settlement_columns(
     settlement: &ReviewSettlement,
-) -> (ReviewResultStatus, Option<String>, Option<Value>) {
+) -> (
+    ReviewResultStatus,
+    Option<String>,
+    Option<String>,
+    Option<Value>,
+) {
     match settlement {
-        ReviewSettlement::Approved => (ReviewResultStatus::Approved, None, None),
-        ReviewSettlement::Rejected { outcome, result } => (
+        ReviewSettlement::Approved {
+            outcome,
+            public_reason,
+        } => (
+            ReviewResultStatus::Approved,
+            Some(outcome.clone()),
+            public_reason.clone(),
+            None,
+        ),
+        ReviewSettlement::Rejected {
+            outcome,
+            public_reason,
+            result,
+        } => (
             ReviewResultStatus::Rejected,
             Some(outcome.clone()),
+            public_reason.clone(),
             result.clone(),
         ),
-        ReviewSettlement::ChangesRequested { outcome, result } => (
+        ReviewSettlement::ChangesRequested {
+            outcome,
+            public_reason,
+            result,
+        } => (
             ReviewResultStatus::ChangesRequested,
             Some(outcome.clone()),
+            public_reason.clone(),
             result.clone(),
         ),
-        ReviewSettlement::Answered { outcome, result } => (
+        ReviewSettlement::Answered {
+            outcome,
+            public_reason,
+            result,
+        } => (
             ReviewResultStatus::Answered,
             Some(outcome.clone()),
+            public_reason.clone(),
             result.clone(),
         ),
     }
@@ -5789,7 +5872,7 @@ fn transition_kind(transition: &ReviewTransition) -> &'static str {
         ReviewTransition::Recorded { .. } => "recorded",
         ReviewTransition::StageAdvanced { .. } => "stage-advanced",
         ReviewTransition::Settled { settlement } => match settlement {
-            ReviewSettlement::Approved => "approved",
+            ReviewSettlement::Approved { .. } => "approved",
             ReviewSettlement::Rejected { .. } => "rejected",
             ReviewSettlement::ChangesRequested { .. } => "changes-requested",
             ReviewSettlement::Answered { .. } => "answered",

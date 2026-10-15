@@ -87,15 +87,24 @@ Human reviewers read `GET /v1/review-tasks`, then claim, assign, delegate,
 release, draft privately, or decide a task under its current revision. Send
 `If-Match` and `Idempotency-Key` on the documented mutations. The decision
 vocabulary belongs to the policy: `approve`, `reject`, `changes-requested`,
-or `answer`, with a configured outcome and reason or structured result when
-the selected outcome requires them. Stage thresholds count independent
+or `answer`, each naming one of the policy's declared outcomes, with a reason
+or structured result when the selected outcome requires them. An approval
+names an outcome too; one without it is refused at `$.outcome`, and the
+`Registry-Casework-Validation-Allowed` header lists the policy's approval
+outcomes. Each outcome declares `publicReason: required`, `optional` or
+`none`: a public reason of at most 2000 UTF-8 bytes reaches the producer on
+the ReviewResult, while the private `reason` stays in the accountability
+record and the audit journal records only that a public reason was given.
+Stage thresholds count independent
 eligible reviewers. Decisions and task holdings are revision-fenced; an old
 response cannot authorize a later state.
 
 The same producer reads `GET /v1/review-requests/{requestId}/result` or its
 resumable result feed. A `ReviewResult` repeats the subject, policy, and
 submission digest and carries a terminal status such as `approved`,
-`rejected`, `answered`, `cancelled`, or `superseded`. A completion destination,
+`rejected`, `answered`, `cancelled`, or `superseded`. A decided result names
+its `outcome` and any `publicReason`; a cancelled or superseded one carries
+neither. A completion destination,
 when configured, receives an authenticated payload-free wake; the producer
 fetches the result and authorizes any later mutation independently. A wake
 does not start a Coordinator run or carry a decision payload.

@@ -228,7 +228,7 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         "reviewPolicies":[{"id":"external-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
             "stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1}],
             "retention":{"terminalDays":30,"accountabilityDays":90},
-            "displaySchema":{"type":"object","additionalProperties":false,"required":["tenant"],"properties":{"tenant":{"type":"string","maxLength":128}}},"outcomes":[]}],
+            "displaySchema":{"type":"object","additionalProperties":false,"required":["tenant"],"properties":{"tenant":{"type":"string","maxLength":128}}},"outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}]}],
         "trustedProducers":[{"id":"requester","profile":"requester","issuer":session.issuer(),"subject":requester["subject"],"sourceNamespaces":["standalone"],"reviewPolicies":["external-review"],"recoveryDays":7}],
         "taskTemplates":[{"id":"draft","version":"1","label":"Prepare correction","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"standalone","reviewPolicies":["external-review"],"agent":{"issuer":session.issuer(),"subject":agent["subject"]},"client":"task-agent","resource":AUDIENCE,"scopes":["records:get"],"purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":["create","get","patch","submit-request"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900}]
     });
