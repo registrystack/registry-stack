@@ -340,7 +340,7 @@ revisions with refusal tombstones; it does not forget that the key was spent.
     crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and resolve_binding();
     crates/registry-breg/src/proposal_retention.rs, idempotency_results;
     crates/registry-breg/src/idempotency_retention.rs, erase_expired;
-    crates/registry-breg/src/runtime_config.rs, IdempotencyConfig;
+    crates/registry-breg/src/runtime_config.rs, RetentionConfig;
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
     crates/registry-breg/tests/postgres_mutation.rs,
     real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent and
