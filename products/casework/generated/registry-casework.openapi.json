@@ -441,7 +441,6 @@
             "description": "Approval names an approved outcome. It carries no private reason or\nresult, which approved outcomes cannot require.",
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -468,7 +467,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -506,7 +504,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -544,7 +541,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -935,7 +931,6 @@
             "description": "Approval names an approved outcome. It carries no private reason or\nresult, which approved outcomes cannot require.",
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -962,7 +957,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -1000,7 +994,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -1038,7 +1031,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {

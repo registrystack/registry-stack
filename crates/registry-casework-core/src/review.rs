@@ -1299,7 +1299,8 @@ pub enum DecisionKind {
 }
 
 /// Lists `outcome` as required in every decision variant of the published
-/// schema, which `#[serde(default)]` would otherwise mark optional.
+/// schema, which `#[serde(default)]` would otherwise mark optional, and drops
+/// the empty default that attribute would otherwise publish.
 #[cfg(feature = "schema")]
 fn require_decision_outcome(schema: &mut schemars::Schema) {
     let Some(variants) = schema
@@ -1312,6 +1313,13 @@ fn require_decision_outcome(schema: &mut schemars::Schema) {
         let Some(variant) = variant.as_object_mut() else {
             continue;
         };
+        if let Some(outcome) = variant
+            .get_mut("properties")
+            .and_then(|properties| properties.get_mut("outcome"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            outcome.remove("default");
+        }
         let required = variant
             .entry("required")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()));
@@ -2668,6 +2676,27 @@ fn is_false(value: &bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn every_decision_variant_requires_an_outcome_with_no_default() {
+        let schema = serde_json::to_value(schemars::schema_for!(DecisionKind)).unwrap();
+        let variants = schema["oneOf"].as_array().unwrap();
+        assert_eq!(variants.len(), 4);
+        for variant in variants {
+            assert!(
+                variant["required"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|name| name == "outcome"),
+                "{variant}"
+            );
+            let outcome = &variant["properties"]["outcome"];
+            assert!(outcome.is_object(), "{variant}");
+            assert!(outcome.get("default").is_none(), "{variant}");
+        }
+    }
 
     #[test]
     fn cfg_id_1_an_identifier_follows_the_local_identifier_grammar() {
