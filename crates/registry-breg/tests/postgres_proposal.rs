@@ -2284,12 +2284,10 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
     }
 }
 
-/// A rejection ends the Proposal: it reaches `rejected`, records its own
-/// event, and refuses Revise. A request for changes keeps it submitted and
-/// revisable and records `review-returned`.
 /// Posts every Proposal command through the link a rejected Proposal serves,
 /// as a client holding the inert link would, and checks each answers 409
-/// `proposal.rejected` with the detail naming how to try again.
+/// `proposal.rejected` with the detail naming how to try again. Attachment
+/// upload and removal are Edit writes, so they answer the same.
 async fn post_every_command_to_a_rejected_proposal(
     base_url: &str,
     document: &Value,
@@ -2346,8 +2344,48 @@ async fn post_every_command_to_a_rejected_proposal(
             "{label}: {command}: {problem}"
         );
     }
+    // A rejected Proposal serves no attachment write link, so a client sends
+    // the attachment write with the current Edit precondition.
+    let edit = &document["links"]["edit"];
+    let attachment = format!(
+        "{}/v1/proposals/{}/attachments/support",
+        base_url.trim_end_matches('/'),
+        document["id"].as_str().unwrap()
+    );
+    for (operation, request) in [
+        (
+            "upload",
+            reqwest::Client::new()
+                .patch(&attachment)
+                .header("content-type", "text/plain")
+                .body("synthetic-rejected"),
+        ),
+        ("remove", reqwest::Client::new().delete(&attachment)),
+    ] {
+        let response = request
+            .query(&[("accessProfile", edit["accessProfile"].as_str().unwrap())])
+            .header("if-match", edit["ifMatch"].as_str().unwrap())
+            .header("idempotency-key", format!("{label}-attachment-{operation}"))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(
+            status,
+            reqwest::StatusCode::CONFLICT,
+            "{label}: {operation}: {problem}"
+        );
+        assert_eq!(
+            problem["code"], "proposal.rejected",
+            "{label}: {operation}: {problem}"
+        );
+    }
 }
 
+/// A rejection ends the Proposal: it reaches `rejected`, records its own
+/// event, and refuses Revise. A request for changes keeps it submitted and
+/// revisable and records `review-returned`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party() {
     for (outcome, state, transition, turn) in [

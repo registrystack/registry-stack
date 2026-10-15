@@ -277,6 +277,11 @@ impl MutationTransaction {
             .proposal_document_binding(tx, registry, input, Some(&document))
             .await?;
         if lock_and_load(tx, &binding).await?.is_none() {
+            // A rejection is final, so an upload answers it before any
+            // precondition, as the stored-in-database path does.
+            if document.header.state == "rejected" {
+                return Err(MutationError::ProposalRejected);
+            }
             if document.header.state != "draft"
                 || document.blocked_reason.is_some()
                 || document.header.current_proposal_erased

@@ -343,36 +343,44 @@ fn proposal_commands_declare_the_rejected_conflict_and_documents_require_turn() 
     )
     .unwrap();
     let mut commands = 0;
+    let mut attachment_writes = 0;
     for (path, item) in openapi["paths"].as_object().unwrap() {
-        let Some(operation) = item.get("post") else {
-            continue;
-        };
-        let Some(command) = operation["operationId"]
-            .as_str()
-            .and_then(|id| id.strip_prefix("proposals."))
-        else {
-            continue;
-        };
-        if command == "start" {
-            continue;
+        for (method, operation) in item.as_object().unwrap() {
+            if method == "get" {
+                continue;
+            }
+            let Some(command) = operation["operationId"]
+                .as_str()
+                .and_then(|id| id.strip_prefix("proposals."))
+            else {
+                continue;
+            };
+            assert!(
+                operation["responses"]["409"]["description"].is_string(),
+                "{path} {method} {command} declares 409"
+            );
+            if command.starts_with("attachments.") {
+                attachment_writes += 1;
+                continue;
+            }
+            commands += 1;
+            let required = operation["responses"]["200"]["content"]["application/json"]["schema"]
+                ["required"]
+                .as_array()
+                .unwrap();
+            assert!(
+                required.iter().any(|name| name == "turn"),
+                "{path} {command} requires turn"
+            );
         }
-        commands += 1;
-        assert!(
-            operation["responses"]["409"]["description"].is_string(),
-            "{path} {command} declares 409"
-        );
-        let required = operation["responses"]["200"]["content"]["application/json"]["schema"]
-            ["required"]
-            .as_array()
-            .unwrap();
-        assert!(
-            required.iter().any(|name| name == "turn"),
-            "{path} {command} requires turn"
-        );
     }
     assert!(
         commands >= 7,
         "every Proposal command is checked: {commands}"
+    );
+    assert_eq!(
+        attachment_writes, 2,
+        "attachment upload and removal are checked"
     );
     let list = &openapi["paths"]["/v1/proposals"]["get"];
     let limit = list["parameters"]
