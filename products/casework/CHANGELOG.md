@@ -66,7 +66,10 @@
 - BREAKING: every decided ReviewResult names the policy outcome it settled
   on. `outcome` is required on approved, rejected, changes-requested and
   answered results and absent on cancelled and superseded ones, and approval
-  decision receipts carry the selected outcome.
+  decision receipts carry the selected outcome. Upgrade Casework and every
+  review producer, including BReg, in the same release: a 0.41 producer
+  refuses approved results that name an outcome, and a current producer
+  refuses a 0.41 approved result that names none.
 - BREAKING: clients sending an approve without an outcome
   (`{"type":"approve"}`) are refused with 400 `request.invalid`, validation
   path `$.outcome`, reason `outcome-not-declared`, and the
