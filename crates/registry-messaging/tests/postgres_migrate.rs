@@ -125,6 +125,35 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
 }
 
 #[tokio::test]
+async fn a_fresh_schema_uses_only_the_shared_package_activation_ledger() {
+    let isolated = isolated_schema().await;
+    let store = PostgresStore::connect_migration(&database(&isolated.reference), &secrets())
+        .expect("a migration store");
+    store.migrate().await.expect("the fresh schema migrations");
+
+    let ledgers = isolated
+        .admin
+        .query_one(
+            &format!(
+                "SELECT to_regclass('{schema}.legacy_messaging_package_ledger') IS NULL, \
+                        to_regclass('{schema}.messaging_activations') IS NOT NULL",
+                schema = isolated.schema,
+            ),
+            &[],
+        )
+        .await
+        .expect("the fresh schema's package activation relations");
+    assert!(
+        ledgers.get::<_, bool>(0),
+        "the unused legacy ledger is absent"
+    );
+    assert!(
+        ledgers.get::<_, bool>(1),
+        "the shared activation ledger exists"
+    );
+}
+
+#[tokio::test]
 async fn a_store_nobody_migrated_is_not_ready() {
     let isolated = isolated_schema().await;
     let runtime = PostgresStore::connect_runtime(&database(&isolated.reference), &secrets())
