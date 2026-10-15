@@ -42,7 +42,7 @@ pub fn generate(definition: &Definition, language: Language) -> Result<String> {
     Ok(match language {
         Language::Typescript => format!(
             r#"// Generated from the compiled Coordinator workflow. Regenerate with coordinatorctl types.
-import type {{ coordinator }} from '@registrystack/client';
+import type * as coordinator from '@registrystack/coordinator-client-native';
 export const workflow = {workflow} as const;
 export const workflowRevision = {revision} as const;
 {declarations}
@@ -83,7 +83,7 @@ export class WorkflowClient {{
 from __future__ import annotations
 from typing import Any, Literal, Never, NotRequired, Required, TYPE_CHECKING, TypedDict, TypeAlias, cast
 if TYPE_CHECKING:
-    from registry_client.coordinator import CoordinatorClient, RunStatus, StartRunRequest
+    from registry_coordinator_client import CoordinatorClient, RunStatus, StartRunRequest
 WORKFLOW = {workflow}
 WORKFLOW_REVISION = {revision}
 {declarations}

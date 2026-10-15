@@ -6569,7 +6569,6 @@ dependencies = [
  "chrono",
  "registry-breg-client",
  "registry-casework-client",
- "registry-coordinator-client",
  "registry-discovery-client",
  "registry-evidence-client",
  "registry-messaging-client",
