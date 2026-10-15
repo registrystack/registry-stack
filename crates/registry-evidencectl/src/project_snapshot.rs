@@ -11,7 +11,7 @@ use std::{
     fs::{self, File},
     io::{self, Read as _},
     os::unix::{
-        ffi::{OsStrExt as _, OsStringExt as _},
+        ffi::OsStrExt as _,
         fs::{symlink, DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
     },
     path::{Path, PathBuf},
@@ -235,18 +235,26 @@ fn capture_directory_contents(
     bound: Bound,
     selection: Selection,
 ) -> Result<()> {
-    use rustix::fs::{AtFlags, FileType};
-
-    for name in directory_entries(directory)? {
-        let entry_relative = relative.join(&name);
-        let metadata = match rustix::fs::statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(metadata) => metadata,
-            Err(rustix::io::Errno::NOENT) => continue,
-            Err(error) => {
-                return Err(io::Error::from(error)).context("inspecting project snapshot input")
+    let names = directory_entries(
+        directory,
+        relative,
+        MAX_SNAPSHOT_ENTRIES.saturating_sub(capture.entries) + 1,
+        |name| {
+            if matches!(selection, Selection::All) {
+                return Ok(true);
             }
+            Ok(
+                snapshot_entry_type(directory, name)?.is_some_and(|file_type| {
+                    file_type.is_dir() || file_type.is_symlink() || is_yaml_name(name)
+                }),
+            )
+        },
+    )?;
+    for name in names {
+        let entry_relative = relative.join(&name);
+        let Some(file_type) = snapshot_entry_type(directory, &name)? else {
+            continue;
         };
-        let file_type = FileType::from_raw_mode(metadata.st_mode);
         if file_type.is_dir() {
             capture_directory_at(directory, capture, &name, &entry_relative, bound, selection)?;
             continue;
@@ -260,19 +268,42 @@ fn capture_directory_contents(
     Ok(())
 }
 
-/// The names `directory` holds, sorted, without `.` and `..`.
-fn directory_entries(directory: &rustix::fd::OwnedFd) -> Result<Vec<OsString>> {
-    let mut entries = rustix::fs::Dir::read_from(directory)
-        .map_err(io::Error::from)?
-        .map(|entry| {
-            entry
-                .map(|entry| OsString::from_vec(entry.file_name().to_bytes().to_vec()))
-                .map_err(io::Error::from)
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    entries.retain(|name| name != "." && name != "..");
+/// Relevant names, sorted, without `.` and `..`. The caller allows one name
+/// beyond its remaining capture budget so the exact-limit refusal stays at the
+/// entry. Larger listings are refused here without retaining ignored names.
+fn directory_entries(
+    directory: &rustix::fd::OwnedFd,
+    relative: &Path,
+    maximum: usize,
+    mut include: impl FnMut(&OsStr) -> Result<bool>,
+) -> Result<Vec<OsString>> {
+    let mut entries = Vec::new();
+    for entry in rustix::fs::Dir::read_from(directory).map_err(io::Error::from)? {
+        let entry = entry.map_err(io::Error::from)?;
+        let name = OsStr::from_bytes(entry.file_name().to_bytes());
+        if name == "." || name == ".." || !include(name)? {
+            continue;
+        }
+        if entries.len() >= maximum {
+            return Err(InspectionDiagnostic::at(relative, Inspection::TreeTooLarge).into());
+        }
+        entries.push(name.to_owned());
+    }
     entries.sort();
     Ok(entries)
+}
+
+fn snapshot_entry_type(
+    directory: &rustix::fd::OwnedFd,
+    name: &OsStr,
+) -> Result<Option<rustix::fs::FileType>> {
+    use rustix::fs::{AtFlags, FileType};
+
+    match rustix::fs::statat(directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(metadata) => Ok(Some(FileType::from_raw_mode(metadata.st_mode))),
+        Err(rustix::io::Errno::NOENT) => Ok(None),
+        Err(error) => Err(io::Error::from(error)).context("inspecting project snapshot input"),
+    }
 }
 
 /// Whether a file name is a YAML file's, by its extension.
@@ -286,23 +317,25 @@ fn is_yaml_name(name: &OsStr) -> bool {
 /// Capture the YAML files at the project root other than the marker and the
 /// OpenAPI description, so the check can identify each by its envelope.
 fn capture_root_yaml(project: &rustix::fd::OwnedFd, capture: &mut Capture) -> Result<()> {
-    use rustix::fs::{AtFlags, FileType};
-
-    for entry in directory_entries(project)? {
-        if entry == registry_evidence_authoring::project::PROJECT_FILE
-            || entry == OPENAPI_FILE
-            || !is_yaml_name(&entry)
-        {
-            continue;
-        }
-        let metadata = match rustix::fs::statat(project, &entry, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(metadata) => metadata,
-            Err(rustix::io::Errno::NOENT) => continue,
-            Err(error) => {
-                return Err(io::Error::from(error)).context("inspecting project snapshot input")
+    let entries = directory_entries(
+        project,
+        Path::new(""),
+        MAX_SNAPSHOT_ENTRIES.saturating_sub(capture.entries) + 1,
+        |name| {
+            if name == registry_evidence_authoring::project::PROJECT_FILE
+                || name == OPENAPI_FILE
+                || !is_yaml_name(name)
+            {
+                return Ok(false);
             }
+            Ok(snapshot_entry_type(project, name)?.is_some_and(|file_type| !file_type.is_dir()))
+        },
+    )?;
+    for entry in entries {
+        let Some(file_type) = snapshot_entry_type(project, &entry)? else {
+            continue;
         };
-        if FileType::from_raw_mode(metadata.st_mode).is_dir() {
+        if file_type.is_dir() {
             continue;
         }
         capture_snapshot_entry_at(
@@ -601,6 +634,88 @@ mod tests {
             assert!(!nested.join("public.pem").exists());
             assert_eq!(
                 fs::read_link(nested.join("linked.pem")).unwrap(),
+                Path::new("missing")
+            );
+        }
+    }
+
+    #[test]
+    fn project_snapshot_listing_is_sorted_and_refuses_before_retaining_excess_names() {
+        use rustix::fs::{Mode, OFlags};
+
+        let temporary = temporary();
+        for name in ["c.yaml", "a.yaml", "b.yaml", "ignored.body"] {
+            fs::write(temporary.path().join(name), "fixture").unwrap();
+        }
+        let directory = rustix::fs::open(
+            temporary.path(),
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+            Mode::empty(),
+        )
+        .unwrap();
+        let names = directory_entries(&directory, Path::new("targets"), 3, |name| {
+            Ok(is_yaml_name(name))
+        })
+        .unwrap();
+        assert_eq!(names, ["a.yaml", "b.yaml", "c.yaml"].map(OsString::from));
+
+        fs::write(temporary.path().join("d.yaml"), "fixture").unwrap();
+        fs::write(temporary.path().join("e.yaml"), "fixture").unwrap();
+        let mut relevant_names = 0;
+        let error = directory_entries(&directory, Path::new("targets"), 3, |name| {
+            if is_yaml_name(name) {
+                relevant_names += 1;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+        .unwrap_err();
+        // Three retained names and one excess name trigger refusal immediately,
+        // without collecting the remainder or returning a truncated success.
+        assert_eq!(relevant_names, 4);
+        let refusal = error.downcast_ref::<InspectionDiagnostic>().unwrap();
+        assert!(matches!(refusal.condition, Inspection::TreeTooLarge));
+        assert_eq!(refusal.path, "targets");
+    }
+
+    #[test]
+    fn project_snapshot_many_ignored_files_do_not_consume_the_capture_budget() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join(TARGETS_DIRECTORY)).unwrap();
+        fs::create_dir(project.join(MOCKS_DIRECTORY)).unwrap();
+        put_marker(&project);
+        for directory in ["", TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+            for index in 0..MAX_SNAPSHOT_ENTRIES + 5 {
+                fs::write(
+                    project.join(directory).join(format!("{index:04}.body")),
+                    "ignored",
+                )
+                .unwrap();
+            }
+            fs::write(
+                project.join(directory).join("document.yaml"),
+                "kind: Example\n",
+            )
+            .unwrap();
+        }
+        // Root directories with YAML names are also outside the root document
+        // selection; target/mock links remain selected despite their extension.
+        fs::create_dir(project.join("ignored.yaml")).unwrap();
+        symlink("missing", project.join("targets/linked.pem")).unwrap();
+        symlink("missing", project.join("mocks/linked.body")).unwrap();
+
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        for directory in ["", TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+            let captured = snapshot.root().join(directory);
+            assert!(captured.join("document.yaml").exists());
+            assert!(!captured.join("0000.body").exists());
+        }
+        assert!(!snapshot.root().join("ignored.yaml").exists());
+        for link in ["targets/linked.pem", "mocks/linked.body"] {
+            assert_eq!(
+                fs::read_link(snapshot.root().join(link)).unwrap(),
                 Path::new("missing")
             );
         }
