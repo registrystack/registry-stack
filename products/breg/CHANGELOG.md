@@ -69,6 +69,11 @@
   Proposal's resource path, `/v1/proposals/{id}`, instead of a hashed
   reference. Record events keep their hashed reference. A receiver that
   matched Proposal events by the hashed value matches the path instead.
+- BREAKING: `applicationStatus.recovery` is `retry` or `correct-input`.
+  The never-emitted `refresh` and `receipt-only` values are removed from the
+  schema and from the Rust `BRegApplicationRecoveryHint` and Node.js types;
+  a document carrying either is refused as malformed. Apply, Retry and Revise
+  link availability keeps both values.
 - BREAKING: under required Review, `applicationStatus.state` reads
   `awaiting-review` until an approved result exists, in both application
   modes. `application-refused` now means only that an executor refused the

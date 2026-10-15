@@ -1162,7 +1162,7 @@ fn proposal_application_status_schema() -> Value {
         "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled"]},
         "mode":{"enum":["automatic","manual"]},
         "reason":{"enum":["contract-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
-        "recovery":{"enum":["refresh","retry","correct-input","receipt-only"]},
+        "recovery":{"enum":["retry","correct-input"]},
         "automaticRetry":{"type":"object","additionalProperties":false,
             "required":["scheduled","attempts","maximumAttempts"],"properties":{
                 "scheduled":{"type":"boolean"},"attempts":{"type":"integer","minimum":0,"maximum":1000},

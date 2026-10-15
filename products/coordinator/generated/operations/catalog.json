@@ -42,10 +42,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -503,10 +501,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -1003,10 +999,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -1464,10 +1458,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -2478,10 +2470,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -2939,10 +2929,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -3458,10 +3446,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },
@@ -3919,10 +3905,8 @@
         "BRegApplicationRecoveryHint": {
           "description": "What a caller does about application progress. Review outcomes are\nreported by Apply availability, never here.",
           "enum": [
-            "refresh",
             "retry",
-            "correct-input",
-            "receipt-only"
+            "correct-input"
           ],
           "type": "string"
         },

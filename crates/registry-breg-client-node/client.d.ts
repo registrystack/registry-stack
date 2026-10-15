@@ -954,7 +954,7 @@ export interface BRegProposalApplicationStatus {
   readonly state: 'awaiting-review' | 'pending' | 'applying' | 'blocked' | 'applied' | 'cancelled'
   readonly mode: 'automatic' | 'manual'
   readonly reason?: 'contract-changed' | 'dependency-outage' | 'lease-expired' | 'application-refused' | 'attempts-exhausted'
-  readonly recovery?: 'refresh' | 'retry' | 'correct-input' | 'receipt-only'
+  readonly recovery?: 'retry' | 'correct-input'
   readonly automaticRetry?: {readonly scheduled: boolean; readonly attempts: number; readonly maximumAttempts: number}
 }
 export interface BRegProposalReviewDocument {

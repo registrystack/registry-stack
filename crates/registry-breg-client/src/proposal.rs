@@ -95,10 +95,8 @@ pub enum BRegProposalApplicationReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegApplicationRecoveryHint {
-    Refresh,
     Retry,
     CorrectInput,
-    ReceiptOnly,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2545,7 +2543,7 @@ mod tests {
         // blocked job remains inspectable, but may not claim another attempt.
         let mut exhausted = application_status_document("blocked", "automatic");
         exhausted["applicationStatus"]["reason"] = json!("attempts-exhausted");
-        exhausted["applicationStatus"]["recovery"] = json!("refresh");
+        exhausted["applicationStatus"]["recovery"] = json!("correct-input");
         exhausted["applicationStatus"]["automaticRetry"]["attempts"] = json!(3);
         assert!(BRegProposal::from_slice(&serde_json::to_vec(&exhausted).unwrap()).is_ok());
         for state in ["applied", "cancelled"] {
@@ -2706,6 +2704,14 @@ mod tests {
             ("application status has no revise recovery", |v| {
                 *v = application_status_document("blocked", "automatic");
                 v["applicationStatus"]["recovery"] = json!("revise");
+            }),
+            ("application status has no refresh recovery", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]["recovery"] = json!("refresh");
+            }),
+            ("application status has no receipt-only recovery", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]["recovery"] = json!("receipt-only");
             }),
         ];
         for (label, mutate) in cases {
