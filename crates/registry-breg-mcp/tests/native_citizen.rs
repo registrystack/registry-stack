@@ -55,6 +55,8 @@ struct Grants {
     key: PrivateJwk,
     issuer: String,
     bindings: Arc<Mutex<BTreeMap<String, Value>>>,
+    // Reissue an immutable task grant for the same principal and bounds.
+    grant_ids: Arc<Mutex<BTreeMap<String, (String, Value)>>>,
     // An explicit source-owned task inventory, independent of MCP arguments.
     proposals: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
     delegated: Arc<Mutex<BTreeMap<String, String>>>,
@@ -94,12 +96,19 @@ async fn exchange(
             {
                 permissions.push(json!({"collection":format!("proposal:{id}"),"operations":["get","list","edit"]}));
             }
-            let grant_id = uuid::Uuid::new_v4().to_string();
+            let grant_key = format!("{principal}:{permissions:?}");
+            let (grant_id, grant_exp) = grants
+                .grant_ids
+                .lock()
+                .unwrap()
+                .entry(grant_key)
+                .or_insert_with(|| (uuid::Uuid::new_v4().to_string(), claims["exp"].clone()))
+                .clone();
             claims["registry_grant_id"] = json!(grant_id);
             claims["registry_grant_source_issuer"] = json!("https://tasks.example.test");
             claims["registry_grant_client"] = claims["azp"].clone();
             claims["registry_grant_resource"] = claims["aud"].clone();
-            claims["registry_grant_exp"] = claims["exp"].clone();
+            claims["registry_grant_exp"] = grant_exp;
             claims["registry_purpose"] = json!("address-correction");
             claims["registry_actor_kind"] = json!("agent");
             claims["registry_approver"] = json!("h:synthetic-task-owner");
@@ -111,7 +120,7 @@ async fn exchange(
                 "grantId":grant_id,"sourceIssuer":claims["registry_grant_source_issuer"],
                 "principal":claims["sub"],"client":claims["azp"],"resource":claims["aud"],
                 "purpose":claims["registry_purpose"],"bounds":claims["registry_grant_bounds"],
-                "subjects":claims["identity"],"expiresAt":claims["exp"]}),
+                "subjects":claims["identity"],"expiresAt":claims["registry_grant_exp"]}),
             );
             let token = sign_compact_jwt_with_key(
                 &grants.key,
@@ -219,7 +228,8 @@ async fn address() -> std::net::SocketAddr {
         .unwrap()
 }
 fn correction() -> Value {
-    json!({"newAddressLine":"2 Quay","newLocality":"Port Selene","newPostalCode":"PS-200"})
+    json!({"startAttemptId":"53e14a1a-6e19-4b2e-af6e-b9c39a9a3250",
+        "newAddressLine":"2 Quay","newLocality":"Port Selene","newPostalCode":"PS-200"})
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -273,6 +283,7 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
         key: signing_key,
         issuer: issuer.issuer(),
         bindings: Arc::default(),
+        grant_ids: Arc::default(),
         proposals: Arc::default(),
         delegated: Arc::default(),
     };
@@ -383,6 +394,12 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
         .as_str()
         .unwrap()
         .to_owned();
+    let mut changed_same_attempt = correction();
+    changed_same_attempt["newLocality"] = json!("Old Town");
+    assert_eq!(
+        gateway::error_code(&call(&a, "start_application", changed_same_attempt).await),
+        "idempotency-conflict"
+    );
     grants
         .proposals
         .lock()
@@ -494,6 +511,65 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
         .unwrap();
     assert_eq!(persisted["state"], "submitted");
     assert_eq!(persisted["input"]["address"], targets[A]);
+    let cancelled = http
+        .post(format!(
+            "{}/v1/proposals/{proposal}/cancel?accessProfile=citizen-review",
+            service.base_url
+        ))
+        .bearer_auth(&human_token)
+        .header(
+            "if-match",
+            persisted["links"]["cancel"]["ifMatch"].as_str().unwrap(),
+        )
+        .header("idempotency-key", "cancel-first-citizen-application")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let terminal: Value = http
+        .get(format!(
+            "{}/v1/proposals/{proposal}?accessProfile=citizen-review",
+            service.base_url
+        ))
+        .bearer_auth(&human_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(terminal["state"], "cancelled");
+    let changed_grant_retry = call(&a, "start_application", correction()).await;
+    assert_eq!(
+        gateway::error_code(&changed_grant_retry),
+        "idempotency-conflict"
+    );
+    let before_replay: Value = http
+        .get(format!(
+            "{}/v1/proposals?accessProfile=citizen-review",
+            service.base_url
+        ))
+        .bearer_auth(&human_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(before_replay["items"].as_array().unwrap().len(), 1);
+    // The original Start task grant remains valid for replay. The later
+    // instance grant is separate and does not change that grant's binding.
+    grants.proposals.lock().unwrap().insert(A.into(), vec![]);
+    let retried = call(&a, "start_application", correction()).await;
+    assert_eq!(retried.is_error, Some(false), "{retried:?}");
+    assert_eq!(
+        structured(&retried)["application"]["applicationId"],
+        proposal
+    );
+    // A Start-only grant can identify the committed Proposal but cannot read
+    // its newer terminal state. The human read above owns that assertion.
+    assert_eq!(structured(&retried)["application"]["status"], "draft");
     let b_signin = sign_in_to(&human, &review_origin, B, &proposal).await;
     let b_cookie = cookie_pair(&b_signin.set_cookie("breg-review-session").unwrap());
     let hidden = page(
@@ -525,7 +601,7 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
     // A new Start task has no instance grants for its not-yet-created Proposal.
     grants.proposals.lock().unwrap().insert(A.into(), vec![]);
     let mut second_input = correction();
-    second_input["newLocality"] = json!("Old Town");
+    second_input["startAttemptId"] = json!("a6878495-b52f-420f-9dc5-220c944de359");
     let second = call(&a, "start_application", second_input).await;
     assert_eq!(second.is_error, Some(false), "{second:?}");
     let second = structured(&second)["application"]["applicationId"]

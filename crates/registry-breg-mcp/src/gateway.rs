@@ -11,8 +11,9 @@
 //! never as text a chat host could read as an instruction.
 
 use registry_breg_client::{
-    BRegActionInvocationRequest, BRegIdempotencyKey, BRegListRequest, BRegMetadata, BRegProposal,
-    BRegProposalQuery, BRegProposalState, BRegRecordOptions, BaseRegistryClient, RegistryRecord,
+    BRegActionInvocationRequest, BRegIdempotencyKey, BRegListRequest, BRegMetadata,
+    BRegProblemCode, BRegProposal, BRegProposalQuery, BRegProposalState, BRegRecordOptions,
+    BaseRegistryClient, RegistryRecord,
 };
 use registry_platform_audit::AuditKeyHasher;
 use rmcp::model::CallToolResult;
@@ -250,7 +251,10 @@ impl Gateway {
             .registry_contract(Some(&self.spec.access_profile))
             .await?
             .value;
-        let contract = Contract::derive(&metadata, &self.spec)?;
+        let contract = Contract::derive(&metadata, &self.spec).map_err(|error| {
+            tracing::error!(reason = %error, "registry contract refused");
+            ToolError::from(error)
+        })?;
         Ok(Session {
             client,
             metadata,
@@ -330,7 +334,8 @@ impl Gateway {
         arguments: Option<&Map<String, Value>>,
     ) -> Result<Value, ToolError> {
         let session = self.session(caller).await?;
-        let mut input = parse_start(arguments, &session.contract)?;
+        let parsed = parse_start(arguments, &session.contract)?;
+        let mut input = parsed.input;
         let own = self.resolve_own(&session).await?;
         input.insert(
             session.contract.target_api_name.clone(),
@@ -344,7 +349,7 @@ impl Gateway {
             &self.keys,
             caller.citizen_pseudonym(),
             START_APPLICATION,
-            &json!({"input":input,"action":action.action_identifier()}),
+            &json!({"attemptId":parsed.attempt_id}),
         )?;
         let proposal = session
             .client
@@ -354,7 +359,8 @@ impl Gateway {
             .value;
         // A standing Start grant need not grant Get. Return only the initial
         // resource summary until the source issues explicit instance authority.
-        let current = if proposal.link("self").is_some() {
+        let linked_get = proposal.link("self").is_some();
+        let current = if linked_get {
             session.client.read_proposal(&proposal).await
         } else if let Ok(get) = session
             .metadata
@@ -363,15 +369,26 @@ impl Gateway {
             session.client.get_proposal(&get, proposal.id()).await
         } else {
             return Ok(json!({"application":application_summary(&proposal)}));
-        }
-        .map_err(|error| {
-            ToolError {
-                code: ToolErrorCode::RegistryUnavailable,
-                ..ToolError::from(error)
+        };
+        let current = match current {
+            Ok(current) => current.value,
+            // A profile can advertise Get for earlier instances while this
+            // fresh Start has no instance grant yet. Its receipt still gives
+            // the caller the initial summary, as a Start-only grant does.
+            Err(error)
+                if !linked_get
+                    && error.problem_code() == Some(BRegProblemCode::ResourceNotFound) =>
+            {
+                return Ok(json!({"application":application_summary(&proposal)}));
             }
-            .after_mutation()
-        })?
-        .value;
+            Err(error) => {
+                return Err(ToolError {
+                    code: ToolErrorCode::RegistryUnavailable,
+                    ..ToolError::from(error)
+                }
+                .after_mutation())
+            }
+        };
         require_action_revision(&session.contract, &current)
             .map_err(|_| ToolError::new(ToolErrorCode::UnexpectedResponse).after_mutation())?;
         if current

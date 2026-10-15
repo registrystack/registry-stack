@@ -78,10 +78,19 @@ Registry text is returned as labelled structured data with a notice that it is
 data, never instructions.
 
 Writes carry an idempotency key derived with a keyed hash over the citizen's
-pseudonym, the tool and the canonical arguments. A start retries the same key,
-then reads the current Proposal instead of presenting a retained old draft as
-current. An expired receipt or conflicting binding refuses without opening
-another Proposal. A stale edit refuses rather than silently rebasing inputs.
+pseudonym, the tool and its operation identity. For `start_application`, the
+chat host generates a non-nil `startAttemptId` UUID once for each intended new
+application and reuses it on retries. The gateway excludes it from Action input.
+The same attempt ID selects the same registry key even if other arguments
+change, so the registry refuses a changed request. A fresh attempt ID permits
+a new application with identical inputs after an earlier one closes. A retry
+reads the current Proposal when the caller has Get authority for that instance;
+otherwise it returns the initial Start summary. An expired receipt or conflicting
+binding refuses without opening another Proposal under that attempt ID. A stale
+edit refuses rather than silently rebasing inputs.
+Retrying a Start also requires the original immutable task grant context; a
+new or expanded grant cannot replay the earlier authorized request merely by
+reusing its attempt ID.
 The registry enforces current TaskGrant, owner and target scope on every call.
 The gateway offers only start and edit; submit and other lifecycle operations
 remain outside its tools, even if the delegated token carries more authority.

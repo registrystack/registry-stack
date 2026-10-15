@@ -30,6 +30,8 @@ const CITIZEN_B: &str = "synthetic-citizen-b";
 const ADDRESS_A: &str = "c7110c06-8938-4294-bd68-7390de8e752e";
 const ADDRESS_B: &str = "5b0a3c1e-2d4f-4a6b-8c9d-0e1f2a3b4c5d";
 const CANARY: &str = "canary-field-value-7f3a";
+const START_ATTEMPT_A: &str = "53e14a1a-6e19-4b2e-af6e-b9c39a9a3250";
+const START_ATTEMPT_B: &str = "a6878495-b52f-420f-9dc5-220c944de359";
 
 struct Fixture {
     server: TestAuthorizationServer,
@@ -152,7 +154,8 @@ fn error_code(value: &Value) -> &str {
 }
 
 fn start_arguments() -> Value {
-    json!({"newAddressLine": "2 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-200"})
+    json!({"startAttemptId":START_ATTEMPT_A,"newAddressLine": "2 Quay",
+        "newLocality": "Port Selene", "newPostalCode": "PS-200"})
 }
 
 fn claims(authorization: &str) -> Value {
@@ -291,6 +294,7 @@ async fn start_uses_the_callers_own_target_and_source_owned_principal() {
     let body = writes[0].body.as_ref().expect("create body");
     assert_eq!(body["input"]["address"], ADDRESS_A);
     assert!(body["input"].get("owner").is_none());
+    assert!(body["input"].get("startAttemptId").is_none());
     assert_eq!(
         fixture
             .registry
@@ -615,6 +619,79 @@ async fn a_retried_start_answers_with_the_drafts_current_state() {
 }
 
 #[tokio::test]
+async fn terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft() {
+    for state in ["applied", "cancelled"] {
+        let fixture = Fixture::start().await;
+        let caller = fixture.caller(CITIZEN_A);
+        let first = started_identifier(
+            &fixture
+                .call(&caller, START_APPLICATION, start_arguments())
+                .await,
+        );
+        let mut closed = json!({"state":state});
+        if state == "applied" {
+            closed["effectDigest"] = json!(format!("sha256:{}", "a".repeat(64)));
+        }
+        fixture.registry.set_request(first, closed);
+        let retry = fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await;
+        assert_eq!(started_identifier(&retry), first, "{state}");
+        assert_eq!(retry["application"]["status"], state);
+        assert_eq!(fixture.registry.applications().len(), 1);
+
+        let mut fresh = start_arguments();
+        fresh["startAttemptId"] = json!(START_ATTEMPT_B);
+        let second = fixture
+            .call(&caller, START_APPLICATION, fresh.clone())
+            .await;
+        let second_id = started_identifier(&second);
+        assert_ne!(second_id, first, "{state}");
+        assert_eq!(second["application"]["status"], "draft");
+        assert_eq!(
+            started_identifier(&fixture.call(&caller, START_APPLICATION, fresh).await),
+            second_id
+        );
+        assert_eq!(fixture.registry.applications().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn a_changed_request_cannot_reuse_a_start_attempt() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let first = started_identifier(
+        &fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await,
+    );
+    let mut changed = start_arguments();
+    changed["newLocality"] = json!("Old Town");
+    let refused = fixture.call(&caller, START_APPLICATION, changed).await;
+    assert_eq!(error_code(&refused), "idempotency-conflict");
+    assert_eq!(fixture.registry.applications().len(), 1);
+    assert!(fixture.registry.applications().contains_key(&first));
+    let keys: Vec<_> = fixture
+        .writes()
+        .into_iter()
+        .map(|seen| seen.idempotency_key)
+        .collect();
+    assert_eq!(keys[0], keys[1]);
+}
+
+#[tokio::test]
+async fn concurrent_retries_of_one_start_attempt_create_one_proposal() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let (first, retry) = tokio::join!(
+        fixture.call(&caller, START_APPLICATION, start_arguments()),
+        fixture.call(&caller, START_APPLICATION, start_arguments()),
+    );
+    assert_eq!(started_identifier(&first), started_identifier(&retry));
+    assert_eq!(fixture.registry.applications().len(), 1);
+}
+
+#[tokio::test]
 async fn prepare_review_links_the_citizens_own_application() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
@@ -766,7 +843,6 @@ fn response_record(capture: &AuditCapture) -> Value {
 #[tokio::test]
 async fn a_failed_readback_after_a_committed_start_is_unfinished() {
     for code in [
-        BRegProblemCode::ResourceNotFound,
         BRegProblemCode::AuthenticationRefused,
         BRegProblemCode::ServiceUnavailable,
     ] {
@@ -797,6 +873,48 @@ async fn a_failed_readback_after_a_committed_start_is_unfinished() {
         assert_eq!(retried["isError"], false, "{retried}");
         assert_eq!(fixture.registry.applications().len(), 1, "{code:?}");
     }
+}
+
+#[tokio::test]
+async fn an_unlinked_start_receipt_survives_concealed_get_for_a_new_instance() {
+    let fixture = Fixture::start().await;
+    fixture.registry.add_application(
+        json!({"address":ADDRESS_A,"owner":CITIZEN_A,
+            "newAddressLine":"Old address","newLocality":"Town","newPostalCode":"PS-100"}),
+        draft_request(),
+    );
+    let caller = fixture.caller(CITIZEN_A);
+    let result = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(result["application"]["status"], "draft");
+    let id = started_identifier(&result);
+    assert!(fixture.registry.seen().iter().any(|seen| {
+        seen.method == http::Method::GET && seen.path == format!("/v1/proposals/{id}")
+    }));
+    assert_eq!(fixture.registry.applications().len(), 2);
+}
+
+#[tokio::test]
+async fn a_linked_start_receipt_does_not_hide_a_failed_get() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let first = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(first["isError"], false, "{first}");
+    fixture.registry.promote_created_self_link();
+    fixture.registry.fail_next_at(
+        http::Method::GET,
+        "/v1/proposals/",
+        BRegProblemCode::ResourceNotFound,
+    );
+    let retry = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(error_code(&retry), "registry-unavailable");
+    assert_eq!(fixture.registry.applications().len(), 1);
 }
 
 #[tokio::test]
@@ -938,6 +1056,12 @@ async fn expired_start_receipts_refuse_without_creating_another_proposal() {
         .map(|seen| seen.idempotency_key)
         .collect();
     assert_eq!(keys[0], keys[1]);
+
+    let mut fresh = start_arguments();
+    fresh["startAttemptId"] = json!(START_ATTEMPT_B);
+    let next = fixture.call(&caller, START_APPLICATION, fresh).await;
+    assert_ne!(started_identifier(&next), started_identifier(&first));
+    assert_eq!(fixture.registry.applications().len(), 2);
 }
 
 #[tokio::test]
@@ -982,6 +1106,21 @@ async fn a_start_only_grant_returns_the_initial_proposal_and_cannot_get_or_list_
     assert_eq!(started["isError"], false, "{started}");
     assert_eq!(started["application"]["status"], "draft");
     assert!(started.get("registryData").is_none());
+    let retry = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(
+        retry["application"]["applicationId"],
+        started["application"]["applicationId"]
+    );
+    let mut fresh = start_arguments();
+    fresh["startAttemptId"] = json!(START_ATTEMPT_B);
+    let next = fixture.call(&caller, START_APPLICATION, fresh).await;
+    assert_ne!(
+        next["application"]["applicationId"],
+        started["application"]["applicationId"]
+    );
+    assert_eq!(fixture.registry.applications().len(), 2);
     let id = started["application"]["applicationId"].clone();
     for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW] {
         let refused = fixture

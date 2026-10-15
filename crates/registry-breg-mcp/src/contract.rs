@@ -6,6 +6,8 @@ use registry_breg_client::{BRegActionMode, BRegMetadata, BRegOperationKind};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+use crate::tools::START_ATTEMPT_ID;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ContractSpec {
     pub(crate) access_profile: String,
@@ -44,6 +46,8 @@ pub(crate) enum ContractError {
     TargetInputInvalid,
     #[error("the Action offers no editable input")]
     NothingEditable,
+    #[error("rename the Action input with API name startAttemptId; it is reserved for the MCP start attempt")]
+    ReservedStartAttemptInput,
 }
 impl Contract {
     pub(crate) fn derive(
@@ -88,6 +92,13 @@ impl Contract {
                     && action.mode() == BRegActionMode::Proposal
             })
             .ok_or(ContractError::ActionMissing)?;
+        if action
+            .inputs()
+            .iter()
+            .any(|input| input.api_name() == START_ATTEMPT_ID)
+        {
+            return Err(ContractError::ReservedStartAttemptInput);
+        }
         let target = action
             .inputs()
             .iter()
@@ -183,6 +194,16 @@ pub(crate) mod tests {
         assert!(!contract.patch_editable.contains("address"));
         assert!(!contract.patch_editable.contains("owner"));
         assert_eq!(contract.editable.len(), 3);
+    }
+    #[test]
+    fn start_attempt_name_cannot_be_an_action_input() {
+        let mut value: Value = serde_json::from_slice(FIXTURE).unwrap();
+        value["actions"][0]["inputs"][1]["apiName"] = json!(START_ATTEMPT_ID);
+        let metadata = BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            Contract::derive(&metadata, &spec()),
+            Err(ContractError::ReservedStartAttemptInput)
+        );
     }
     #[test]
     fn target_uses_identifier_and_exact_record_type() {

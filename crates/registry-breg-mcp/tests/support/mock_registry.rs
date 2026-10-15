@@ -60,8 +60,8 @@ struct Registry {
     applications: BTreeMap<Uuid, Application>,
     /// Each idempotency key the stand-in has answered, with the package
     /// revision it was bound under, the application it created, and the
-    /// creation record it replays.
-    created: BTreeMap<String, (u64, Uuid, Value)>,
+    /// creation record it replays, and the exact request it was bound to.
+    created: BTreeMap<String, (u64, Uuid, Value, Value)>,
     /// The consumed keys whose held response has passed the receipt
     /// horizon. A real engine keeps such a key spent and refuses to replay
     /// it.
@@ -169,6 +169,18 @@ impl MockRegistry {
             .get_mut(&identifier)
             .expect("application exists")
             .request = request;
+    }
+
+    /// Simulate a Start receipt that advertises Get before that read is revoked.
+    pub fn promote_created_self_link(&self) {
+        for (_, identifier, created, _) in self.state.lock().created.values_mut() {
+            created["links"]["self"] = json!({
+                "method":"GET",
+                "path":format!("/v1/proposals/{identifier}"),
+                "operation":"get",
+                "accessProfile":PROFILE
+            });
+        }
     }
 
     /// Activate another package revision, as an operator upgrade would.
@@ -384,6 +396,10 @@ fn application_record(identifier: Uuid, application: &Application, headers: &Hea
     if state != "draft" {
         if let Some(digest) = application.request.get("effectDigest") {
             value["effectDigest"] = digest.clone();
+            if state == "applied" {
+                value["application"] = json!({"applicationId":identifier,
+                    "submissionVersion":1,"effectDigest":digest,"resultLinks":[]});
+            }
         }
     }
     value
@@ -488,15 +504,14 @@ async fn create_application(
     // answered, whatever state the application has reached since, but only
     // under the package revision it was bound to and within its receipt
     // horizon.
-    let (package_revision, consumed, expired) = {
-        let registry = state.lock();
-        (
-            registry.package_revision,
-            registry.created.get(&key).cloned(),
-            registry.expired.contains(&key),
-        )
-    };
-    if let Some((bound_revision, identifier, created)) = consumed {
+    let mut registry = state.lock();
+    let package_revision = registry.package_revision;
+    let consumed = registry.created.get(&key).cloned();
+    let expired = registry.expired.contains(&key);
+    if let Some((bound_revision, identifier, created, bound_request)) = consumed {
+        if body != bound_request {
+            return problem(BRegProblemCode::IdempotencyConflict);
+        }
         if bound_revision != package_revision {
             return problem(BRegProblemCode::IdempotencyConflict);
         }
@@ -513,11 +528,10 @@ async fn create_application(
         request: draft_request(),
     };
     let created = application_record(identifier, &application, &headers);
-    let mut registry = state.lock();
     registry.applications.insert(identifier, application);
     registry
         .created
-        .insert(key, (package_revision, identifier, created.clone()));
+        .insert(key, (package_revision, identifier, created.clone(), body));
     drop(registry);
     created_response(identifier, &created)
 }
