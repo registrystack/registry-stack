@@ -688,17 +688,17 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
                 .header("authorization", format!("Bearer {token}"))
                 .header(CASEWORK_PROFILE_HEADER, "producer")
                 .body(Body::empty())
-                .expect("review kind request"),
+                .expect("review policy request"),
         )
         .await
-        .expect("review kind response");
+        .expect("review policy response");
     assert_eq!(kinds.status(), StatusCode::OK);
     let kinds: Vec<registry_casework_core::ReviewPolicyClosure> = serde_json::from_slice(
         &to_bytes(kinds.into_body(), 128 * 1024)
             .await
-            .expect("bounded review kind response"),
+            .expect("bounded review policy response"),
     )
-    .expect("review kind JSON");
+    .expect("review policy JSON");
     assert_eq!(kinds.len(), 2);
     assert!(kinds
         .iter()

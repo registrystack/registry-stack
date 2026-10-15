@@ -8735,7 +8735,7 @@ async fn subject_clocks_are_independent_across_concurrent_review_policies() {
     assert_eq!(answer_clocks.len(), 1);
     assert_ne!(
         correction_clocks[0].clock_occurrence_id, answer_clocks[0].clock_occurrence_id,
-        "different review kinds must not rebind one subject occurrence"
+        "different review policies must not rebind one subject occurrence"
     );
     assert_eq!(
         correction_clocks[0].request_id,

@@ -9,6 +9,11 @@
   evaluation branch are removed, and `ElapsedBudget.dueAt` is always present.
   Use a fresh Casework database: the clock occurrence table drops `paused_at`
   and `paused_seconds`.
+- BREAKING: the trusted producer's review policy list findings read
+  `casework.review-producer.no-policies`, `too-many-policies`,
+  `invalid-policy` and `duplicate-policy` instead of `no-kinds`,
+  `too-many-kinds`, `invalid-kind` and `duplicate-kind`, and the refusal of
+  a missing initiator reads "the review policy excludes its initiator".
 - An activity clock whose due time falls inside a daylight-saving gap on a
   given date is due at the first instant after the gap, and one inside a
   fold at the earlier instant, so a due time that passes `check` evaluates on

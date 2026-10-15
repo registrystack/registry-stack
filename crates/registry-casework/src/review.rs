@@ -117,7 +117,7 @@ pub enum ReviewRuntimeError {
     TaskNotHeld,
     #[error("the caller initiated this review and its stage excludes them")]
     InitiatorExcluded,
-    #[error("the review kind excludes its initiator, so the request must name one")]
+    #[error("the review policy excludes its initiator, so the request must name one")]
     InitiatorRequired,
     #[error("the review resource revision changed")]
     RevisionConflict,
@@ -301,24 +301,24 @@ impl CaseworkService {
                 .project
                 .review_policies
                 .iter()
-                .filter(|kind| {
-                    kind.stages
+                .filter(|policy| {
+                    policy.stages
                         .iter()
                         .any(|stage| stage.deciding_profiles.contains(&actor.profile_id))
                 })
-                .map(|kind| kind.id.clone())
+                .map(|policy| policy.id.clone())
                 .collect(),
             CaseworkRole::Administrator => self
                 .project
                 .review_policies
                 .iter()
-                .map(|kind| kind.id.clone())
+                .map(|policy| policy.id.clone())
                 .collect(),
         };
         self.project
             .review_policies
             .iter()
-            .filter(|kind| allowed.contains(&kind.id))
+            .filter(|policy| allowed.contains(&policy.id))
             .map(|policy| {
                 self.project
                     .compile_policy(&policy.id)
@@ -330,11 +330,11 @@ impl CaseworkService {
     pub fn review_policy_description(
         &self,
         actor: &ActorContext,
-        kind_id: &str,
+        policy_id: &str,
     ) -> Result<ReviewPolicyClosure, ReviewRuntimeError> {
         self.review_policy_descriptions(actor)?
             .into_iter()
-            .find(|kind| kind.identity.id == kind_id)
+            .find(|policy| policy.identity.id == policy_id)
             .ok_or(ReviewRuntimeError::NotFound)
     }
 
@@ -2451,7 +2451,7 @@ impl PostgresStore {
             return Err(ReviewRuntimeError::PolicyMismatch);
         }
         let requires_initiator = snapshot.stages.iter().any(|stage| stage.exclude_initiator);
-        // A producer with no trusted initiator issuer submits only kinds that
+        // A producer with no trusted initiator issuer submits only policies that
         // exclude nobody, so an initiator it names is not recorded: storing it
         // would let that unverified person read the request's history.
         let initiator = match (

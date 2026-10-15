@@ -903,15 +903,15 @@ impl CaseworkProject {
             self.review_policies
                 .iter()
                 .enumerate()
-                .map(|(index, kind)| (format!("/reviewPolicies/{index}/id"), kind.id.as_str())),
+                .map(|(index, policy)| (format!("/reviewPolicies/{index}/id"), policy.id.as_str())),
             "casework.review-policy.duplicate-id",
             "this review policy id is already declared",
             "Give every review policy a unique id.",
         );
-        for (kind_index, kind) in self.review_policies.iter().enumerate() {
-            let at = format!("/reviewPolicies/{kind_index}");
-            findings.extend_under(&at, kind.findings());
-            for (clock_index, clock_id) in kind.clocks.iter().enumerate() {
+        for (policy_index, policy) in self.review_policies.iter().enumerate() {
+            let at = format!("/reviewPolicies/{policy_index}");
+            findings.extend_under(&at, policy.findings());
+            for (clock_index, clock_id) in policy.clocks.iter().enumerate() {
                 if !self.clocks.iter().any(|clock| clock.id() == clock_id) {
                     findings.push(
                         "casework.review-policy.unknown-clock",
@@ -921,7 +921,7 @@ impl CaseworkProject {
                     );
                 }
             }
-            for (stage_index, stage) in kind.stages.iter().enumerate() {
+            for (stage_index, stage) in policy.stages.iter().enumerate() {
                 let stage_at = format!("{at}/stages/{stage_index}");
                 if !queues.contains(&stage.queue) {
                     findings.push(
@@ -1054,22 +1054,22 @@ impl CaseworkProject {
                 }
             }
             let mut exclusion_reported = producer.trusted_initiator_issuer.is_some();
-            for (kind_index, kind_id) in producer.review_policies.iter().enumerate() {
-                let Some((declared_index, kind)) = self
+            for (policy_index, policy_id) in producer.review_policies.iter().enumerate() {
+                let Some((declared_index, policy)) = self
                     .review_policies
                     .iter()
                     .enumerate()
-                    .find(|(_, kind)| kind.id == *kind_id)
+                    .find(|(_, policy)| policy.id == *policy_id)
                 else {
                     findings.push(
                         "casework.review-producer.unknown-review-policy",
-                        format!("{at}/reviewPolicies/{kind_index}"),
+                        format!("{at}/reviewPolicies/{policy_index}"),
                         "no review policy in reviewPolicies has this id",
                         "Name a review policy declared under reviewPolicies.",
                     );
                     continue;
                 };
-                if kind.retention.terminal_days < producer.recovery_days {
+                if policy.retention.terminal_days < producer.recovery_days {
                     findings.add(
                         ConfigFinding::new(
                             "casework.review-producer.recovery-exceeds-retention",
@@ -1085,7 +1085,7 @@ impl CaseworkProject {
                 }
                 if !exclusion_reported {
                     if let Some(stage_index) =
-                        kind.stages.iter().position(|stage| stage.exclude_initiator)
+                        policy.stages.iter().position(|stage| stage.exclude_initiator)
                     {
                         exclusion_reported = true;
                         findings.add(
@@ -1293,10 +1293,10 @@ impl ReviewProducerPolicy {
             &self.review_policies,
             crate::MAXIMUM_REVIEW_POLICIES,
             [
-                "casework.review-producer.no-kinds",
-                "casework.review-producer.too-many-kinds",
-                "casework.review-producer.invalid-kind",
-                "casework.review-producer.duplicate-kind",
+                "casework.review-producer.no-policies",
+                "casework.review-producer.too-many-policies",
+                "casework.review-producer.invalid-policy",
+                "casework.review-producer.duplicate-policy",
             ],
         );
         if let Some(completion) = &self.completion {

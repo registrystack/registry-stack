@@ -474,12 +474,12 @@ async fn review_policy_descriptions(
 async fn review_policy_description(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Path(kind_id): Path<String>,
+    Path(policy_id): Path<String>,
 ) -> Result<Json<ReviewPolicyClosure>, HttpError> {
     reject_source_profile(&headers)?;
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(
-        state.service.review_policy_description(&actor, &kind_id)?,
+        state.service.review_policy_description(&actor, &policy_id)?,
     ))
 }
 

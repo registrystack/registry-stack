@@ -534,3 +534,26 @@ fn approval_decisions_name_an_approved_outcome_on_the_wire() {
         json!({"decision":{"type":"approve","outcome":"approved","publicReason":"Your registration is approved."}})
     );
 }
+
+#[test]
+fn a_producer_names_its_review_policies_in_its_findings() {
+    let refused = |value: Value| {
+        let Err(ConfigLoadError::Refused(report)) =
+            CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+        else {
+            panic!("the project must be refused");
+        };
+        report
+    };
+    let mut value = project_value();
+    value["trustedProducers"][0]["reviewPolicies"] = json!([]);
+    assert!(refused(value).diagnostics().iter().any(|item| item.code
+        == "casework.review-producer.no-policies"
+        && item.path == "/trustedProducers/0/reviewPolicies"));
+    let mut value = project_value();
+    value["trustedProducers"][0]["reviewPolicies"] = json!(["notice-review", "notice-review"]);
+    assert!(refused(value)
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "casework.review-producer.duplicate-policy"));
+}
