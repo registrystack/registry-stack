@@ -953,7 +953,7 @@ class IdentifierTests(ConventionsTestCase):
     def union(self, branches: list, keyword: str = "oneOf") -> None:
         self.repo.project["$defs"]["Queue"]["properties"]["source"] = {keyword: branches}
 
-    def variant(self, tag: str, value: str, extra: str) -> dict:
+    def variant(self, tag: str, value: str | bool, extra: str) -> dict:
         return {
             "type": "object",
             "additionalProperties": False,
