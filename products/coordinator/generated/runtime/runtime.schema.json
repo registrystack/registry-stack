@@ -69,9 +69,6 @@
     },
     "Action": {
       "enum": [
-        "review-create",
-        "review-read",
-        "review-cancel",
         "start",
         "status",
         "inspect",
@@ -184,9 +181,6 @@
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
-        },
-        "reviewProducer": {
-          "$ref": "#/$defs/ReviewProducer"
         },
         "workflows": {
           "description": "The workflows this policy's run actions reach: start, status, inspect,\nretry-same, cancel and reconcile. Required when the policy lists a run\naction and refused when it lists none.",
@@ -840,41 +834,6 @@
       "required": [
         "recipientBinding",
         "bearerTokenRef"
-      ],
-      "type": "object"
-    },
-    "ReviewProducer": {
-      "additionalProperties": false,
-      "description": "Only a verified client policy supplies producer identity and digest namespace.",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "Logical producer identity bound to the verified client and included in\nthe shared request submission digest."
-        },
-        "profile": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "Exact Registry-Review-Profile header value this verified client must\nselect when creating, reading or cancelling its Review requests."
-        },
-        "sourceNamespace": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "Exact producer namespace used to compute the submission digest. This\nnamespace is independent of the permitted subject source identifiers."
-        },
-        "sources": {
-          "description": "Subject source identifiers this producer may submit and continue to\naccess. Removing a source conceals its retained requests and results.",
-          "items": {
-            "$ref": "#/$defs/ExternalId"
-          },
-          "maxItems": 64,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "required": [
-        "id",
-        "sourceNamespace",
-        "profile",
-        "sources"
       ],
       "type": "object"
     },

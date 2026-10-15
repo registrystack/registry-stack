@@ -86,8 +86,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 |---|---|
 | `crates/registry-coordinator` | Optional Coordinator runtime and operator CLI, durable workflow state and client adapters |
 | `crates/registry-coordinator-client` | Bounded Rust Coordinator client over the runtime's HTTP contract |
-| `crates/registry-coordinator-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
-| `crates/registry-coordinator-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-coordinator-client-node` | Internal napi-rs binding for the Coordinator client, built from source and not part of the unified Node.js client |
+| `crates/registry-coordinator-client-py` | Internal PyO3 binding for the Coordinator client, built from source and not part of the unified Python client |
 | `products/coordinator` | Coordinator product contract, deployment runbook, example projects, generated schemas, OpenAPI and operation contracts, and contributor check and test scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
@@ -270,7 +270,7 @@ authorization from a caller or a product, and never writes to another
 product's database. The runtime may depend on product clients, product cores,
 `registry-record`, and `registry-platform-*`, and never on a product runtime,
 adopter tooling, a supporting service, or a binding; its client reaches
-`registry-platform-*` and the runtime-free `registry-review-protocol` wire types.
+`registry-platform-*` only.
 No product crate depends on a Coordinator crate: only
 `registry-stack-client`, on the client, and `registry-cli-docs`, on the
 runtime for the CLI reference, may. The Coordinator dependency-direction gate

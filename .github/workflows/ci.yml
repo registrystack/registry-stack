@@ -1918,7 +1918,7 @@ jobs:
           # The tutorial installs the maintained client package, so the replay
           # imports that same package, assembled from this commit. maturin gets
           # the pinned release build environment. The CI profile exercises the
-          # same seven-binding assembly and installed facade without release LTO.
+          # same six-binding assembly and installed facade without release LTO.
           # Production optimization remains covered by release recipe checks.
           python3 -m venv "${RUNNER_TEMP}/maturin"
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
@@ -1930,7 +1930,6 @@ jobs:
             --include-casework \
             --include-messaging \
             --include-scheduling \
-            --include-coordinator \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \

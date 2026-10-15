@@ -78,7 +78,6 @@ pub const RESTORE_LEASE_INCOMPATIBLE_PROBLEM: &str = "restore.lease-incompatible
 pub const RESTORE_REVIEW_REQUIRED_PROBLEM: &str = "restore.review-required";
 pub const RESTORE_UNRESOLVED_PROBLEM: &str = "restore.unresolved";
 pub const RETRY_REFUSED_PROBLEM: &str = "retry.refused";
-pub const REVIEW_RESULT_EXPIRED_PROBLEM: &str = "review.result-expired";
 pub const RUN_DEFINITION_INCOMPATIBLE_PROBLEM: &str = "run.definition-incompatible";
 pub const RUN_NOT_VISIBLE_PROBLEM: &str = "run.not-visible";
 pub const RUN_PAYLOAD_ERASED_PROBLEM: &str = "run.payload-erased";
@@ -124,7 +123,6 @@ pub enum ProblemCode {
     RestoreReviewRequired,
     RestoreUnresolved,
     RetryRefused,
-    ReviewResultExpired,
     RunDefinitionIncompatible,
     RunNotVisible,
     RunPayloadErased,
@@ -173,7 +171,6 @@ impl ProblemCode {
         Self::RestoreReviewRequired,
         Self::RestoreUnresolved,
         Self::RetryRefused,
-        Self::ReviewResultExpired,
         Self::RunDefinitionIncompatible,
         Self::RunNotVisible,
         Self::RunPayloadErased,
@@ -224,7 +221,6 @@ impl ProblemCode {
             Self::RestoreReviewRequired => RESTORE_REVIEW_REQUIRED_PROBLEM,
             Self::RestoreUnresolved => RESTORE_UNRESOLVED_PROBLEM,
             Self::RetryRefused => RETRY_REFUSED_PROBLEM,
-            Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
             Self::RunDefinitionIncompatible => RUN_DEFINITION_INCOMPATIBLE_PROBLEM,
             Self::RunNotVisible => RUN_NOT_VISIBLE_PROBLEM,
             Self::RunPayloadErased => RUN_PAYLOAD_ERASED_PROBLEM,
@@ -281,7 +277,6 @@ impl ProblemCode {
             | Self::RetryRefused
             | Self::RunDefinitionIncompatible
             | Self::RunPayloadErased => 409,
-            Self::ReviewResultExpired => 410,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
             Self::RequestUnprocessable => 422,
@@ -335,7 +330,6 @@ impl ProblemCode {
             Self::RestoreReviewRequired => "Recovery review incomplete",
             Self::RestoreUnresolved => "Held work unresolved",
             Self::RetryRefused => "Retry refused",
-            Self::ReviewResultExpired => "Review result expired",
             Self::RunDefinitionIncompatible => "Run definition unsupported",
             Self::RunNotVisible => "Run not visible",
             Self::RunPayloadErased => "Run payloads erased",
@@ -440,7 +434,6 @@ impl ProblemCode {
             Self::RetryRefused => {
                 "Retry-same applies only to held work before its original deadline."
             }
-            Self::ReviewResultExpired => "The pinned Review result retention or pending policy deadline has passed. Cancellation cannot renew it.",
             Self::RunDefinitionIncompatible => {
                 "This service's Coordinator version cannot interpret the run's pinned definition."
             }
@@ -499,7 +492,6 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "restore-review-required" => ProblemCode::RestoreReviewRequired,
         "restore-unresolved" => ProblemCode::RestoreUnresolved,
         "retry-refused" => ProblemCode::RetryRefused,
-        "review-result-expired" => ProblemCode::ReviewResultExpired,
         "definition-incompatible" => ProblemCode::RunDefinitionIncompatible,
         "receipt-expired" => ProblemCode::ReceiptExpired,
         "evaluation-uncertain" => ProblemCode::EvaluationUncertain,
@@ -544,6 +536,7 @@ mod tests {
         "coordinator.external-http.configuration",
         "coordinator.event.configuration",
         "coordinator.operation.contract-invalid",
+        "coordinator.operation.proposal-action",
         "database-identity-invalid",
         "database-invalid",
         "database-tls-required",
@@ -707,7 +700,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 44);
+        assert_eq!(ProblemCode::ALL.len(), 43);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -725,11 +718,6 @@ mod tests {
                 "event-source-unavailable",
                 ProblemCode::EventSourceUnavailable,
                 503,
-            ),
-            (
-                "review-result-expired",
-                ProblemCode::ReviewResultExpired,
-                410,
             ),
         ] {
             assert_eq!(for_error(internal), Some(public));

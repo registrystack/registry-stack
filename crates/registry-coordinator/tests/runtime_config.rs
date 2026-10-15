@@ -826,13 +826,12 @@ fn appointment_workflow_refuses_ordinary_authority_before_admission_or_activatio
 }
 
 #[test]
-fn proposal_lifecycle_refuses_task_grant_only_bindings_before_admission() {
-    use registry_coordinator::{definition::Step, protocol::Operation};
+fn breg_actions_refuse_task_grant_only_bindings_before_admission() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/coordinator/examples/proposal-follow-up");
+        .join("../../products/coordinator/examples/governed-action-follow-up");
     let definition = Definition::load(&root).unwrap();
     let mut config = load(include_str!(
-        "../../../products/coordinator/examples/proposal-follow-up/runtime.yaml"
+        "../../../products/coordinator/examples/governed-action-follow-up/runtime.yaml"
     ))
     .unwrap();
     let task_config = load(SCHEDULING_RUNTIME).unwrap();
@@ -841,44 +840,21 @@ fn proposal_lifecycle_refuses_task_grant_only_bindings_before_admission() {
         .unwrap()
         .task_authority
         .clone();
-    for operation in [
-        Operation::InvokeBregAction,
-        Operation::SubmitBregProposal,
-        Operation::ApplyBregProposal,
-        Operation::RetryBregProposal,
-        Operation::CancelBregProposal,
-    ] {
-        let mut workflow = definition.workflow.clone();
-        for step in workflow.steps.values_mut() {
-            if let Step::Call { call, .. } = step {
-                if call.connection == "facilities" {
-                    call.operation = operation;
-                }
-            }
-        }
-        config
-            .connections
-            .get_mut("facilities")
-            .unwrap()
-            .authorization_mut()
-            .unwrap()
-            .task_authority = None;
-        config.validate_workflow(&workflow).unwrap();
-        config
-            .connections
-            .get_mut("facilities")
-            .unwrap()
-            .authorization_mut()
-            .unwrap()
-            .task_authority = authority.clone();
-        let error = config.validate_workflow(&workflow).unwrap_err();
-        assert_eq!(error.code, "workflow-binding");
-        assert_eq!(
-            error.field.as_deref(),
-            Some("/workflow/steps/start-draft/operation")
-        );
-        assert!(config.binding_digest_for(&workflow).is_err());
-    }
+    config.validate_workflow(&definition.workflow).unwrap();
+    config
+        .connections
+        .get_mut("applications")
+        .unwrap()
+        .authorization_mut()
+        .unwrap()
+        .task_authority = authority;
+    let error = config.validate_workflow(&definition.workflow).unwrap_err();
+    assert_eq!(error.code, "workflow-binding");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/workflow/steps/request-information/operation")
+    );
+    assert!(config.binding_digest_for(&definition.workflow).is_err());
 }
 
 #[test]

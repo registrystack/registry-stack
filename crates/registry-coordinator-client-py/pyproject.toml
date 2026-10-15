@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "registry-coordinator-client-native"
 version = "0.42.0"
-description = "Internal Coordinator binding used by registry-stack-client."
+description = "Internal Coordinator binding, built from source."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"

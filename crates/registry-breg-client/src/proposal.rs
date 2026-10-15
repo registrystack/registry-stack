@@ -853,48 +853,28 @@ impl BaseRegistryClient {
         binding: &BRegProposalGetBinding,
         id: &str,
     ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
-        self.get_proposal_observation(binding, id).await.outcome
+        if binding.source != self.source_binding() || !canonical_proposal_id(id) {
+            return Err(refusal());
+        }
+        let link = BRegProposalLink {
+            method: "GET".to_owned(),
+            path: binding.path.replace("{proposal_id}", id),
+            access_profile: binding.profile.clone(),
+            operation: "get".to_owned(),
+            if_match: None,
+            availability: None,
+        };
+        let response = self.proposal_exchange(&link, None, None).await?;
+        let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
+        if proposal.id != id {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
+            metadata: response.metadata,
+        })
     }
 
-    /// Observe one authorized Proposal, preserving the receiver's scheduling
-    /// hint even when its response cannot supply a usable representation.
-    /// No retry or mutation is performed by this method.
-    pub async fn get_proposal_observation(
-        &self,
-        binding: &BRegProposalGetBinding,
-        id: &str,
-    ) -> BRegObservation<BRegProposal> {
-        let mut retry_after = BRegRetryAfter::Absent;
-        let outcome = async {
-            if binding.source != self.source_binding() || !canonical_proposal_id(id) {
-                return Err(refusal());
-            }
-            let link = BRegProposalLink {
-                method: "GET".to_owned(),
-                path: binding.path.replace("{proposal_id}", id),
-                access_profile: binding.profile.clone(),
-                operation: "get".to_owned(),
-                if_match: None,
-                availability: None,
-            };
-            let observation = self.proposal_observation_exchange(&link).await;
-            retry_after = observation.retry_after;
-            let response = observation.outcome?;
-            let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
-            if proposal.id != id {
-                return Err(refusal());
-            }
-            Ok(BRegComplete {
-                value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
-                metadata: response.metadata,
-            })
-        }
-        .await;
-        BRegObservation {
-            outcome,
-            retry_after,
-        }
-    }
     pub async fn read_proposal_review_status(
         &self,
         proposal: &BRegProposal,

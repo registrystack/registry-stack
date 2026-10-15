@@ -2,8 +2,8 @@
 
 This crate owns the runtime-free wire types exchanged between an admitted
 producer and an independently authorized review provider. Registry Casework
-provides human review; Registry Coordinator may provide a workflow-bound
-decision or hand off to Casework under its own producer identity.
+provides human review; Registry Coordinator may hand a workflow item to Casework
+under its own admitted producer identity.
 Business sources such as BReg use the types to bind submissions and verify
 results without depending on the Casework runtime, task model, policy engine,
 or database.

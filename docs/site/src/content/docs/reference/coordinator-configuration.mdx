@@ -97,33 +97,26 @@ operations:
     connection: applications
 ```
 
-The host catalog covers Base Registry Engine (BReg) record reads, exact Actions and Proposal submit/apply/retry/cancel;
+The host catalog covers Base Registry Engine (BReg) record reads and exact immediate Actions;
 Casework review submit/cancel; Scheduling reads and appointment creation; Messaging submission;
 bounded external GET; and typed evaluation. The generated operation schemas own each input,
 output, effect classification, preparation, and recovery contract.
 There is no arbitrary HTTP method, SQL step, or dynamic call destination.
 
 For `breg.invoke-action/v1`, `action.contract` and `action.id` select an exact Action from an
-imported BReg-generated contract. Compilation pins its revision, mode, review policy,
-application policy, input, output, and declared refusals. Immediate Actions return their exact
-result. Proposal Actions return a draft under `proposal`. `breg.submit-proposal/v1` is a separate
-mutation that evaluates the plan, freezes the submission, and exposes `application` completion.
-Draft creation has no declared-refusal route. A known no-effect plan refusal stops generic Submit,
-which exposes no Action-specific typed refusal edge, before observation or a notice.
-
-Only exact authoritative evidence for the Proposal, Action revision, submission version, and
-effect digest can settle application. Approval alone is insufficient. Blocked or uncertain
-application state stays held. Apply, retry, cancel, and any later Messaging notice each need the
-receiving product's own current authority. On an immediate Action, `onDeclaredRefusal` routes only
+imported BReg-generated contract. Compilation pins its revision, mode, input, output, and
+declared refusals, and the call returns the Action's exact result. Compilation refuses a Proposal
+Action with `coordinator.operation.proposal-action`, and preparation refuses one with
+`action-unavailable`. The applicant drives a Proposal in BReg; a workflow follows it through a
+committed BReg product event or a later `breg.read-record/v1` read. Any later Messaging notice
+needs Messaging's own current authority. `onDeclaredRefusal` routes only
 a validated declared no-effect refusal as `{refusalCode}`. Operational failures and previous uncertain effects cannot
 enter that branch.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;
     crates/registry-coordinator/src/breg_action.rs;
-    crates/registry-coordinator/src/breg_proposal.rs;
-    crates/registry-coordinator/src/contracts.rs;
-    products/coordinator/examples/proposal-follow-up/workflow.yaml;
-    crates/registry-coordinator/tests/breg_proposal_adapter.rs. */}
+    crates/registry-coordinator/src/contracts.rs, resolve_operation;
+    crates/registry-coordinator/tests/breg_action_adapter.rs. */}
 
 ## Durable waits and observation budgets
 

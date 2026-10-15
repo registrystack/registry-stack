@@ -480,9 +480,3 @@ exceptions:
   class: protocol-constant
   reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
-- rule: CFG-ID-1
-  format: coordinator/runtime
-  location: products/coordinator/generated/runtime/runtime.schema.json#/$defs/ReviewProducer/properties/id
-  class: exchange-model
-  reason: "Review producer identity is issued by the trusted producer and participates unchanged in the shared protocol submission digest. It is an ExternalId, not a Coordinator-local identifier."
-  resolution: "Permanent for the shared Review producer identity contract; current caller binding and Review digest tests cover its use."

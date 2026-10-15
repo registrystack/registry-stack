@@ -51,6 +51,15 @@ fn exported_clients_pin_the_compiled_revision_and_use_maintained_clients() {
         assert!(!source.contains("fetch("));
         assert!(!source.contains("httpx"));
     }
+    // The Coordinator client is source-only and outside the unified facades,
+    // so the wrappers import the Coordinator bindings directly.
+    assert!(typescript
+        .contains("import type * as coordinator from '@registrystack/coordinator-client-native';"));
+    assert!(!typescript.contains("@registrystack/client'"));
+    assert!(python.contains(
+        "from registry_coordinator_client import CoordinatorClient, RunStatus, StartRunRequest"
+    ));
+    assert!(!python.contains("registry_client.coordinator"));
     assert!(typescript.contains("\"name\": string"));
     assert!(typescript.contains("\"channel\"?: \"email\" | \"sms\""));
     assert!(typescript.contains("client.start(token, idempotencyKey"));

@@ -16,7 +16,6 @@ chrono = { workspace = true, features = ["serde"] }
 registry-platform-canonical-json.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
-registry-review-protocol.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

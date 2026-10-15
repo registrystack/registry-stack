@@ -1,12 +1,12 @@
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project:
-  id: coordinator-actions
+  id: applications
   version: "1"
-  canonicalBaseIri: https://synthetic.example.invalid/coordinator-actions
+  canonicalBaseIri: https://synthetic.example.invalid/applications
   defaultLanguage: en
 package:
-  sourceRevision: coordinator-actions-v1
+  sourceRevision: applications-v1
 datasets:
   - {id: applications}
 recordTypes:
@@ -42,11 +42,11 @@ actions:
           operation: patch
           fields: [information-requested, reason]
 accessProfiles:
-  - id: coordinator
+  - id: workflow-actions
     principalClaim: sub
-    requiredScopes: [applications:manage]
+    requiredScopes: [applications:act]
     actorKind: service
-    requesterClients: [coordinator-client]
+    requesterClients: [application-agent]
     permissions:
       records:
         - recordType: application

@@ -369,23 +369,18 @@ pub fn resolve_operation(
     }
     bound_numbers(&mut input);
     bound_numbers(&mut output);
-    let output = if mode == registry_breg_client::BRegActionMode::Proposal {
-        let definitions = output
-            .as_object_mut()
-            .and_then(|schema| schema.remove("$defs"));
-        let mut wrapper = serde_json::json!({"type":"object","additionalProperties":false,"required":["proposal"],"properties":{"proposal":output}});
-        if let Some(definitions) = definitions {
-            wrapper["$defs"] = definitions;
-        }
-        wrapper
-    } else {
-        // Preparation obtains current target conditions using the maintained
-        // client. An author may provide expected conditions, but cannot mint them.
-        if let Some(required) = input.get_mut("required").and_then(Value::as_array_mut) {
-            required.retain(|field| field != "preconditions");
-        }
-        output
-    };
+    if mode == registry_breg_client::BRegActionMode::Proposal {
+        return Err(crate::CoordinatorError::new(
+            "coordinator.operation.proposal-action",
+            format!("Action {id} is a Proposal Action; breg.invoke-action/v1 invokes only immediate Actions"),
+        )
+        .suggest("Select an immediate Action. The applicant starts and submits a Proposal in the Base Registry Engine; follow it from an event trigger or a read."));
+    }
+    // Preparation obtains current target conditions using the maintained
+    // client. An author may provide expected conditions, but cannot mint them.
+    if let Some(required) = input.get_mut("required").and_then(Value::as_array_mut) {
+        required.retain(|field| field != "preconditions");
+    }
     OperationContract::new(
         input,
         output,
@@ -396,23 +391,6 @@ pub fn resolve_operation(
             mode,
         }),
     )
-}
-
-pub fn breg_application_schema() -> &'static Value {
-    static SCHEMA: OnceLock<Value> = OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        let proposal = contract(Operation::SubmitBregProposal).output.clone();
-        // Keep local references local after embedding the owner schema.
-        let mut schema = serde_json::json!({
-            "type":"object", "additionalProperties":false,
-            "required":["outcome","proposal"],
-            "properties": {"outcome":{"type":"string","enum":["applied","closed"]}, "proposal":proposal}
-        });
-        if let Some(defs) = schema["properties"]["proposal"].as_object_mut().and_then(|value| value.remove("$defs")) {
-            schema["$defs"] = defs;
-        }
-        schema
-    })
 }
 
 pub(crate) fn first_violation(validator: &JSONSchema, value: &Value) -> Result<(), Violation> {
@@ -701,7 +679,7 @@ mod derived {
         external_http::{ExternalResponse, GetRequest},
         review::CancelReviewInput,
     };
-    use registry_breg_client::{BRegActionReceipt, BRegProposal, RegistryRecordSingleResponse};
+    use registry_breg_client::{BRegActionReceipt, RegistryRecordSingleResponse};
     use registry_casework_client::{
         ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
     };
@@ -713,17 +691,8 @@ mod derived {
     use serde_json::{json, Value};
 
     pub(super) fn admission_schemas() -> Value {
-        use registry_review_protocol::*;
         let mut schemas = json!({
-            "PolicyBinding": output::<PolicyBinding>(),
-            "ReviewCreateRequest": input::<ReviewCreateRequest>(),
-            "ReviewRequestAccepted": output::<ReviewRequestAccepted>(),
-            "ReviewRequestView": output::<ReviewRequestView>(),
-            "ReviewResult": output::<ReviewResult>(),
-            "ReviewCancelRequest": input::<ReviewCancelRequest>(),
-            "ReviewCancelResponse": output::<ReviewCancelResponse>(),
-            "ReviewResultFeedPage": output::<ReviewResultFeedPage>(),
-            "ReviewCompletion": input::<ReviewCompletion>(),
+            "ReviewCompletion": input::<registry_review_protocol::ReviewCompletion>(),
             "HookEnvelope": input::<registry_platform_hooks::HookEnvelope>()
         });
         for (name, schema) in schemas.as_object_mut().expect("wire schema map") {
@@ -736,13 +705,6 @@ mod derived {
         (
             input::<ReadRequest>(),
             output::<RegistryRecordSingleResponse>(),
-        )
-    }
-
-    pub(super) fn read_breg_review_context() -> (Value, Value) {
-        (
-            input::<crate::breg_review_context::ReadReviewContext>(),
-            output::<crate::breg_review_context::ReviewContextObservation>(),
         )
     }
 
@@ -792,10 +754,6 @@ mod derived {
             input::<CancelReviewInput>(),
             output::<ReviewCancelResponse>(),
         )
-    }
-
-    pub(super) fn breg_proposal() -> (Value, Value) {
-        (input::<BRegProposal>(), output::<BRegProposal>())
     }
 
     /// What the adapter accepts: the deserialization contract of its input type.
@@ -1348,6 +1306,35 @@ mod tests {
                 path: "/status".into(),
                 expected: "a number no greater than 65535".into(),
             })
+        );
+    }
+
+    #[test]
+    fn a_proposal_mode_action_is_refused_with_the_applicant_path() {
+        let mut export: Value = serde_json::from_str(include_str!(
+            "../../../products/coordinator/examples/governed-action-follow-up/generated/applications.contract.json"
+        ))
+        .unwrap();
+        let reference = json!({"contract":"applications","id":"request-information"});
+        let imported = BTreeMap::from([("applications".to_owned(), export.clone())]);
+        assert!(
+            resolve_operation(Operation::InvokeBregAction, Some(&reference), &imported).is_ok()
+        );
+        export["actions"][0]["mode"] = json!("proposal");
+        let imported = BTreeMap::from([("applications".to_owned(), export)]);
+        let Err(error) =
+            resolve_operation(Operation::InvokeBregAction, Some(&reference), &imported)
+        else {
+            panic!("a Proposal-mode Action resolved");
+        };
+        assert_eq!(error.code, "coordinator.operation.proposal-action");
+        assert!(error.message.contains("immediate"), "{}", error.message);
+        assert!(
+            error
+                .suggested_action
+                .as_deref()
+                .is_some_and(|fix| fix.contains("applicant")),
+            "{error:?}"
         );
     }
 

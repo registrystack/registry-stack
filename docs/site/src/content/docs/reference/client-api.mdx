@@ -17,8 +17,7 @@ One package carries every maintained Registry Stack client API: `@registrystack/
 Discovery, `evidence` for Evidence Gateway, `breg` for Base Registry
 Engine (BReg), `casework` for Registry
 Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
-Registry Scheduling.<DocsetProduct product="registry-coordinator"> `coordinator` is the namespace for Registry
-Coordinator.</DocsetProduct> Each namespace keeps its own routes,
+Registry Scheduling. Each namespace keeps its own routes,
 authentication, errors, and verification rules, because those contracts differ.
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
@@ -36,8 +35,7 @@ carry no Base Registry Engine client package and no unified package; they distri
 package per product instead. The `casework` namespace is present in those same unified packages
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
 beginning with Registry Stack v0.38.0</DocsetProduct>; the `scheduling` namespace is present
-beginning with Registry Stack v0.40.0.<DocsetProduct product="registry-coordinator"> The `coordinator`
-namespace is present only in packages built from main source, and no release carries it yet.</DocsetProduct>
+beginning with Registry Stack v0.40.0.
 Python requires version 3.11 or later and the wheels use the
 Python 3.11 stable ABI (`abi3-py311`), so a later Python imports the same file. Node requires version 24.11
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
@@ -84,8 +82,7 @@ The package does not declare that dependency itself, because a JavaScript consum
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
 the facade that re-exports the product clients under `breg`, `casework`, `discovery`,
-`evidence`<DocsetProduct product="registry-messaging">, `messaging`</DocsetProduct>, and `scheduling` modules<DocsetProduct product="registry-coordinator">
-and the `coordinator` module</DocsetProduct>; a single-product application can depend on that product's crate
+`evidence`<DocsetProduct product="registry-messaging">, `messaging`</DocsetProduct>, and `scheduling` modules; a single-product application can depend on that product's crate
 directly instead.
 
 ```toml
@@ -133,10 +130,10 @@ use registry_stack_client::{breg, casework, discovery, evidence, scheduling};
 
 <DocsetProduct product="registry-coordinator">
 
-The `coordinator` namespace imports the same way: `from registry_client import coordinator`,
-`const { coordinator } = require('@registrystack/client')`, or
-`use registry_stack_client::coordinator`. The [Registry Coordinator API](../apis/registry-coordinator/)
-reference describes the routes it reaches.
+The unified packages carry no Registry Coordinator namespace. Its client is the
+`registry-coordinator-client` Rust crate, with Node.js and Python bindings built from source in the
+same repository. The [Registry Coordinator API](../apis/registry-coordinator/) reference describes
+the routes it reaches.
 
 </DocsetProduct>
 

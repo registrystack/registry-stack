@@ -24,8 +24,6 @@ export interface CoordinatorClientConfig {
 }
 
 export interface StartRunRequest { workflow: string; workflowRevision: string; input: JsonValue }
-/** Exact shared Review policy identity, version and SHA-256 digest. */
-export interface PolicyBinding { id: string; version: string; digest: string }
 
 /** The active compiled contract under current start authority. */
 export interface WorkflowContract {
@@ -33,7 +31,6 @@ export interface WorkflowContract {
   workflowRevision: string
   input: JsonValue
   outcomes: { readonly [name: string]: JsonValue }
-  reviewPolicy: PolicyBinding | null
 }
 
 export interface RunStatus {

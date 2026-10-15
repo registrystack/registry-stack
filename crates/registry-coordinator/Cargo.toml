@@ -83,11 +83,6 @@ name = "review_wait_postgres"
 path = "tests/review_wait_postgres.rs"
 required-features = ["postgres-test"]
 
-[[test]]
-name = "review_provider_postgres"
-path = "tests/review_provider_postgres.rs"
-required-features = ["postgres-test"]
-
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true

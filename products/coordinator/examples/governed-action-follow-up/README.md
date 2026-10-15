@@ -81,6 +81,17 @@ for installation and apply.
 
 The `contracts` import uses the owning BReg-generated Action export. The Operation alias selects
 its exact Action ID and pins its revision, mode, policy, input, output, and declared refusals.
-Regenerate the owner export and review a changed contract before packaging a new workflow version.
+The committed `generated/applications.contract.json` is generated from the synthetic BReg project in
+[`../applications-registry`](../applications-registry/registry.yaml), which declares only what that
+export needs, not a complete deployment. From the repository root,
+regenerate it into a new directory and copy the export over the committed file:
+
+```sh
+bregctl generate actions products/coordinator/examples/applications-registry --output /tmp/applications-actions
+cp /tmp/applications-actions/generated/action-contracts.json \
+  products/coordinator/examples/governed-action-follow-up/generated/applications.contract.json
+```
+
+Review a changed contract before packaging a new workflow version.
 Functions declare named input schemas and take one object of those inputs; they do not select
 transport credentials or replace the imported Action contract.

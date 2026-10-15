@@ -68,8 +68,6 @@ pub struct Workflow {
     pub start: String,
     pub steps: BTreeMap<String, Step>,
     pub outcomes: BTreeMap<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review: Option<crate::review_provider::ReviewPolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub event_triggers: BTreeMap<String, crate::event_trigger::EventTrigger>,
 }
@@ -266,7 +264,6 @@ pub struct CompletionDefinition {
 )]
 pub enum CompletionKind {
     CaseworkResult {},
-    BregApplication {},
     BoundedPoll {
         interpret: String,
         interval_seconds: u32,
@@ -384,6 +381,23 @@ struct Snapshot {
     interpreter_abi: String,
     schema_abi: String,
     operation_identities: Vec<OperationIdentity>,
+}
+
+/// The first operation a snapshot names that the catalog no longer registers,
+/// so a removed operation is refused by name instead of as a shapeless snapshot.
+fn unregistered_operation(snapshot: &serde_json::Value) -> Option<&str> {
+    let uses = snapshot["workflow"]["operations"]
+        .as_object()
+        .into_iter()
+        .flat_map(|operations| operations.values())
+        .filter_map(|operation| operation["uses"].as_str());
+    let identities = snapshot["operationIdentities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|identity| identity["id"].as_str());
+    uses.chain(identities)
+        .find(|identifier| crate::protocol::Operation::parse(identifier).is_none())
 }
 
 fn operation_identities(workflow: &Workflow) -> Vec<OperationIdentity> {
@@ -521,6 +535,13 @@ impl Definition {
         }
         let value = registry_platform_canonical_json::parse_json_strict(snapshot.as_bytes())
             .map_err(|_| fail("definition.snapshot"))?;
+        if let Some(removed) = unregistered_operation(&value) {
+            return Err(CoordinatorError::new(
+                "definition.operation_removed",
+                format!("the sealed workflow snapshot uses operation `{removed}`, which this Coordinator does not provide"),
+            )
+            .suggest(format!("Remove `{removed}` from the workflow project, rerun check, reseal it with coordinatorctl package, and apply the new package.")));
+        }
         let frozen = serde_json::from_value(value).map_err(|_| fail("definition.snapshot"))?;
         Self::restore(frozen)
     }
@@ -1189,10 +1210,6 @@ fn semantic_revision(snapshot: &Snapshot) -> Result<String> {
         semantic["eventTriggers"] =
             serde_json::to_value(&flow.event_triggers).map_err(|_| fail("definition.canonical"))?;
     }
-    if let Some(review) = &flow.review {
-        semantic["review"] =
-            serde_json::to_value(review).map_err(|_| fail("definition.canonical"))?;
-    }
     let bytes = registry_platform_canonical_json::canonicalize_json(&semantic)
         .map_err(|_| fail("definition.canonical"))?;
     Ok(sha256_uri(&bytes))
@@ -1299,11 +1316,6 @@ pub(crate) fn offered(product: &str) -> String {
 /// step, since reachability and cycles mean nothing across a broken edge.
 fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
     let mut findings = crate::event_trigger::workflow_findings(flow);
-    if let Some(review) = &flow.review {
-        if let Err(error) = review.check(flow) {
-            findings.push(error);
-        }
-    }
     for (field, size, minimum, maximum) in [
         ("steps", flow.steps.len(), 1, 64),
         ("connections", flow.connections.len(), 0, 16),
@@ -1362,10 +1374,6 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                 CompletionKind::CaseworkResult {} => {
                     operation.uses == Operation::SubmitReviewRequest
                         && completion.output == *crate::contracts::casework_completion_schema()
-                }
-                CompletionKind::BregApplication {} => {
-                    operation.uses == Operation::SubmitBregProposal
-                        && completion.output == *crate::contracts::breg_application_schema()
                 }
                 CompletionKind::BoundedPoll {
                     interpret,

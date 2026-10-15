@@ -15,7 +15,7 @@ PLATFORM_TRIPLES = {
     "linux-arm64-gnu": "aarch64-unknown-linux-gnu",
     "linux-x64-gnu": "x86_64-unknown-linux-gnu",
 }
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
 
 
 def load_module():

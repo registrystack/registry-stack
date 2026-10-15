@@ -359,9 +359,11 @@ fn declared_contract_and_code_directories_are_checked_without_hiding_other_compa
     let root = temporary.path().canonicalize().unwrap();
     fs::create_dir(root.join("generated")).unwrap();
     fs::create_dir(root.join("code")).unwrap();
-    fs::write(root.join("generated/facilities.json"),
-        include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json"))
-        .unwrap();
+    fs::write(
+        root.join("generated/facilities.json"),
+        include_str!("fixtures/breg-contracts/facilities.contract.json"),
+    )
+    .unwrap();
     fs::write(root.join("code/functions.rhai"), FUNCTIONS).unwrap();
     fs::write(
         root.join("workflow.yaml"),

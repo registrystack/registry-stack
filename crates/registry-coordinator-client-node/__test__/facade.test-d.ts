@@ -8,7 +8,6 @@ import {
   type RunStatus,
   type StepStatus,
   type WorkflowContract,
-  type PolicyBinding,
 } from '../client'
 
 const client = new CoordinatorClient({
@@ -71,8 +70,8 @@ new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMuta
 
 const workflow: Promise<CoordinatorOutcome<WorkflowContract>> = client.workflow('token', 'decision-follow-up')
 declare const contract: WorkflowContract
-const reviewPolicy: PolicyBinding | null = contract.reviewPolicy
-void reviewPolicy
+// @ts-expect-error a workflow contract carries no review policy
+void contract.reviewPolicy
 // @ts-expect-error a new admission always pins the computed workflow revision
 client.start('token', 'key', { workflow: 'decision-follow-up', input: {} })
 void workflow

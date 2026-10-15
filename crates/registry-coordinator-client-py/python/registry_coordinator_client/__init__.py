@@ -1,4 +1,4 @@
-"""Internal Registry Coordinator binding bundled by registry-stack-client."""
+"""Internal Registry Coordinator binding, built from source."""
 
 from .registry_coordinator_client import *  # noqa: F401,F403
 from .registry_coordinator_client import __version__ as __version__

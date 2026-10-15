@@ -27,8 +27,8 @@ receives the call, which decides it under its own authorization.
   workflow: a run of a workflow the caller's policy does not list reads as
   `run.not-visible`, and `list` leaves it out.
 - A `wait-for` observes a named completion exposed by an accepted Operation, using
-  `completion: {step, name}`. Casework results, exact BReg Proposal application,
-  and bounded external reads share that contract. Wake-ups only advance an eligible
+  `completion: {step, name}`. Casework results and bounded external reads share
+  that contract. Wake-ups only advance an eligible
   authoritative read and start no run. Keep the durable observation floor, budget,
   correlation, and original deadline intact across recovery.
 - Keep the canonical authoring separation: contracts, types, named pure Functions,
@@ -36,18 +36,17 @@ receives the call, which decides it under its own authorization.
   object of named inputs and gain no I/O capability. Runtime uses one tagged
   connections map. Caller policies are keyed by exact verified client identity and
   scope run actions through workflows. Start requires the expected workflowRevision.
-- A BReg Proposal draft, frozen submission, review, application, and optional notice
-  are separate owner-authorized stages. Only exact application evidence can release
-  an application completion. Blocked or uncertain evidence stays held.
+- The applicant drives a BReg Proposal in BReg. Coordinator invokes only immediate
+  BReg Actions, follows a Proposal by product event or record read, and is not a
+  Review provider.
 - No product crate depends on a Coordinator crate. The only allowed dependents
   are `registry-stack-client`, on `registry-coordinator-client`, and
   `registry-cli-docs`, on `registry-coordinator` for the published CLI
   reference. Adding a dependent, or a Coordinator crate, means naming its rule
   in the gate in the same change. The Casework, Scheduling, and Messaging
   gates also refuse the Coordinator from their side.
-- `registry-coordinator-client` reaches `registry-platform-*` and the explicitly
-  allowed runtime-free `registry-review-protocol` for shared PolicyBinding DTOs,
-  never the runtime, Review client or a provider's core. Its Node.js and Python bindings add no Coordinator semantics;
+- `registry-coordinator-client` reaches `registry-platform-*`, never the runtime,
+  a Review client or a product core. Its Node.js and Python bindings add no Coordinator semantics;
   follow `crates/CLIENTS.md` when changing the client surface.
 - `scripts/check_dependency_direction.py` enforces both directions on the
   whole forward closure with every feature enabled. A package's own

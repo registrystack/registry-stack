@@ -6,5 +6,4 @@ module.exports = {
   casework: require('./casework-client.linux-arm64-gnu.node'),
   messaging: require('./messaging-client.linux-arm64-gnu.node'),
   scheduling: require('./scheduling-client.linux-arm64-gnu.node'),
-  coordinator: require('./coordinator-client.linux-arm64-gnu.node'),
 };

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP admissions reuse the wire schemas owned by Review and platform hooks.
-use super::{problem_responses, ProblemCode as P, AUTHENTICATED_PROBLEMS, BODY_PROBLEMS};
-use registry_review_protocol::REVIEW_PROFILE_HEADER;
+use super::{problem_responses, ProblemCode as P};
 use serde_json::{json, Map, Value};
 
 pub(super) fn extend(paths: &mut Map<String, Value>, schemas: &mut Value) {
@@ -13,15 +12,6 @@ pub(super) fn extend(paths: &mut Map<String, Value>, schemas: &mut Value) {
         embed_refs(&mut schema, name);
         schemas[name] = schema;
     }
-    schemas["WorkflowContract"]["required"]
-        .as_array_mut()
-        .expect("workflow contract fields")
-        .push(json!("reviewPolicy"));
-    schemas["WorkflowContract"]["properties"]["reviewPolicy"] = json!({
-        "description":"Exact Review policy binding when this workflow exposes the Review protocol; otherwise null.",
-        "anyOf":[{"$ref":"#/components/schemas/PolicyBinding"},{"type":"null"}]
-    });
-    review_paths(paths);
     event_path(paths);
 }
 
@@ -41,137 +31,6 @@ fn embed_refs(value: &mut Value, name: &str) {
         }
         Value::Array(values) => values.iter_mut().for_each(|value| embed_refs(value, name)),
         _ => {}
-    }
-}
-
-fn response(schema: &str, description: &str) -> Value {
-    json!({"description":description,"content":{"application/json":{
-        "schema":{"$ref":format!("#/components/schemas/{schema}")}
-    }}})
-}
-
-fn review_paths(paths: &mut Map<String, Value>) {
-    let admission = [
-        P::WorkflowNotServed,
-        P::WorkflowRevisionMismatch,
-        P::AdmissionRecoveryOnly,
-        P::AdmissionHeld,
-        P::ExecutionHeld,
-        P::DeploymentRefused,
-        P::DeploymentActivationChanged,
-        P::DefinitionRefused,
-        P::BindingConflict,
-        P::BindingLiveConflict,
-        P::IdempotencyKeyInvalid,
-        P::IdempotencyKeyReused,
-        P::InputInvalid,
-    ];
-    let operations = [
-        (
-            "/v1/review-requests",
-            "post",
-            "createReviewRequest",
-            "Submit an exact Review request to a workflow",
-            Some("ReviewCreateRequest"),
-            "ReviewRequestAccepted",
-            "201",
-            admission.to_vec(),
-        ),
-        (
-            "/v1/review-requests/{request}",
-            "get",
-            "reviewRequest",
-            "Read the current state of an owned Review request",
-            None,
-            "ReviewRequestView",
-            "200",
-            vec![
-                P::RequestInvalid,
-                P::RunNotVisible,
-                P::RunPayloadErased,
-                P::ExecutionHeld,
-            ],
-        ),
-        (
-            "/v1/review-requests/{request}/result",
-            "get",
-            "reviewResult",
-            "Read an immutable Review result within its availability window",
-            None,
-            "ReviewResult",
-            "200",
-            vec![P::RequestInvalid, P::RunNotVisible, P::ExecutionHeld],
-        ),
-        (
-            "/v1/review-requests/{request}/cancel",
-            "post",
-            "cancelReviewRequest",
-            "Cancel an owned Review request under its original deadline",
-            Some("ReviewCancelRequest"),
-            "ReviewCancelResponse",
-            "200",
-            vec![
-                P::RequestInvalid,
-                P::RunNotVisible,
-                P::ExecutionHeld,
-                P::IdempotencyKeyInvalid,
-                P::IdempotencyKeyReused,
-                P::ReviewResultExpired,
-                P::InputInvalid,
-            ],
-        ),
-        (
-            "/v1/review-results",
-            "get",
-            "reviewResults",
-            "Read a page of currently authorized Review results",
-            None,
-            "ReviewResultFeedPage",
-            "200",
-            vec![
-                P::RequestInvalid,
-                P::RequestLimitOutOfRange,
-                P::ExecutionHeld,
-            ],
-        ),
-    ];
-    for (path, method, id, summary, request, reply, status, problems) in operations {
-        let mut problems = [&AUTHENTICATED_PROBLEMS[..], &problems].concat();
-        if request.is_some() {
-            problems.extend(BODY_PROBLEMS);
-        }
-        let mut responses = problem_responses(&problems);
-        responses.insert(status.into(), response(reply, "Authorized Review result"));
-        if id == "reviewResult" {
-            responses.insert("202".into(), json!({"description":"The Review result is pending; no body.","headers":{"Retry-After":{"schema":{"type":"integer","const":30}}}}));
-            responses.insert(
-                "404".into(),
-                json!({"description":"No currently authorized request is visible; no body."}),
-            );
-            responses.insert("410".into(), json!({"description":"The original result window or pending policy deadline expired; no body."}));
-        }
-        let mut parameters = vec![
-            json!({"name":REVIEW_PROFILE_HEADER,"in":"header","required":true,
-            "description":"The Review producer profile registered for this authenticated client.",
-            "schema":{"type":"string","minLength":1}}),
-        ];
-        if path.contains("{request}") {
-            parameters.push(json!({"name":"request","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
-        }
-        if request.is_some() {
-            parameters.push(json!({"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":256}}));
-        }
-        if id == "reviewResults" {
-            parameters.extend([
-                json!({"name":"cursor","in":"query","description":"The previous page's nextCursor; current source authorization is checked again.","schema":{"type":"string","format":"uuid"}}),
-                json!({"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}}),
-            ]);
-        }
-        let mut operation = json!({"operationId":id,"summary":summary,"security":[{"bearer":[]}],"parameters":parameters,"responses":responses});
-        if let Some(request) = request {
-            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{request}")}}}});
-        }
-        paths.entry(path).or_insert_with(|| json!({}))[method] = operation;
     }
 }
 

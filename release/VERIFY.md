@@ -290,8 +290,8 @@ From `v0.38.0`, the checksum-covered Linux amd64 binary payload also includes `d
 and the standalone Scheduling runtime, alongside their existing runtime and operator artifacts.
 The Coordinator runtime `coordinator` and operator tool `coordinatorctl` join the
 verified binary payload only when `COORDINATOR_FIRST_RELEASE` enables publication.
-Until then, build them from the release source. Coordinator clients join the
-unified client packages from `v0.42.0`.
+Until then, build them from the release source. The unified client packages carry no
+Coordinator client; build the `registry-coordinator-client` crate and its bindings from source.
 
 ## Verify client registries
 

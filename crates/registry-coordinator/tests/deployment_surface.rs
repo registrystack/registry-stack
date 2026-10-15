@@ -104,7 +104,6 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
     .with_scope_claim("scope")
     .with_allowed_clients(vec!["producer".into()]);
     let policy = ClientPolicy {
-        review_producer: None,
         required_scopes: vec!["coordinator:start".into()],
         workflows: vec!["follow-up".into()],
         actions: Vec::from([Action::Start, Action::Status]),

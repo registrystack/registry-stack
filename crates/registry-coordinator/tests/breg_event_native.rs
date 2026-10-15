@@ -9,16 +9,10 @@ use axum::{
     body::Bytes, extract::State, http::HeaderMap, response::IntoResponse, routing::post, Router,
 };
 use registry_breg_client::{
-    BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegRecordFormat, BRegRecordOptions,
+    BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
+    BRegRecordFormat, BRegRecordOptions,
 };
-use registry_coordinator::{
-    adapters::HttpAdapters,
-    breg_action,
-    breg_proposal::{self, Transition},
-    deployment,
-    protocol::{CallOutcome, CallRequest, Operation},
-    runtime::RuntimeConfig,
-};
+use registry_coordinator::{deployment, runtime::RuntimeConfig};
 use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use serde_json::{json, Value};
 use std::{
@@ -313,41 +307,36 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         .value
         .select_action("manual-item", "writer")
         .unwrap();
-    let request = CallRequest {
-        connection: "applications".into(),
-        operation: Operation::InvokeBregAction,
-        input: json!({"input":{"targetId":record,"label":"After"}}),
-        idempotency_key: Some("native-event-start".into()),
-        operation_contract: Some(breg_action::ActionContract {
-            action_id: "manual-item".into(),
-            action_revision: action.definition_revision().into(),
-            mode: action.mode(),
-        }),
-    };
-    let prepared = breg_action::prepare(&client, "writer", &request)
+    // The applicant starts and submits the Proposal in BReg; Coordinator
+    // only follows the resulting product event.
+    let invocation = BRegActionInvocationRequest::new(
+        &action,
+        json!({"targetId":record,"label":"After"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        None,
+    )
+    .unwrap();
+    let draft = client
+        .start_proposal(
+            &action,
+            &invocation,
+            &BRegIdempotencyKey::parse("native-event-start").unwrap(),
+        )
         .await
-        .unwrap_or_else(|_| panic!("native draft preparation"));
-    let draft = match breg_action::execute(&client, "writer", &request, &prepared).await {
-        CallOutcome::Success(value) => value["proposal"].clone(),
-        _ => panic!("native draft"),
-    };
-    let submit = CallRequest {
-        connection: "applications".into(),
-        operation: Operation::SubmitBregProposal,
-        input: draft,
-        idempotency_key: Some("native-event-submit".into()),
-        operation_contract: None,
-    };
-    let prepared = breg_proposal::prepare(&client, "writer", &submit, Transition::Submit)
-        .await
-        .unwrap_or_else(|_| panic!("native Submit preparation"));
+        .unwrap()
+        .value;
+    let prepared = client
+        .prepare_proposal(
+            &draft,
+            "submit",
+            json!({}),
+            &BRegIdempotencyKey::parse("native-event-submit").unwrap(),
+        )
+        .unwrap();
     let submitted =
-        match breg_proposal::execute(&client, "writer", &submit, &prepared, Transition::Submit)
-            .await
-        {
-            CallOutcome::Success(value) => value,
-            _ => panic!("native Submit"),
-        };
+        serde_json::to_value(client.execute_proposal(&prepared).await.unwrap().value).unwrap();
     let proposal = submitted["id"].as_str().unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -455,19 +444,6 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     // The producer's event authentication and its Run do not confer BReg Apply.
-    let mut reader = support::config(
-        root.as_path(),
-        &issuer,
-        &breg.base_url,
-        "http://127.0.0.1:1",
-    );
-    if let registry_coordinator::runtime::ConnectionConfig::Breg(connection) =
-        reader.connections.get_mut("applications").unwrap()
-    {
-        connection.profile = "reader".into();
-    }
-    let adapters = HttpAdapters::new(&reader).unwrap();
-    use registry_coordinator::protocol::AdapterSet as _;
     let bearer = issuer.issue_access_token(
         "application-reader",
         "coordinator-reader",
@@ -485,17 +461,6 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         404,
         "BReg independently refuses Apply under the reader profile"
     );
-    let apply = CallRequest {
-        connection: "applications".into(),
-        operation: Operation::ApplyBregProposal,
-        input: submitted,
-        idempotency_key: Some("event-is-not-apply-authority".into()),
-        operation_contract: None,
-    };
-    assert!(matches!(
-        adapters.call(&apply).await,
-        CallOutcome::Refused { .. }
-    ));
     let unchanged = client
         .get_record(
             "items",
@@ -508,7 +473,6 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         .unwrap();
     assert_eq!(unchanged.value.data.domain_data["label"], "Before");
     assert_eq!(unchanged.value.data.revision_identifier, "1");
-    drop(adapters);
     drop(process);
     drop(client);
     breg.finish();

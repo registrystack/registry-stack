@@ -1,9 +1,8 @@
 # Registry Coordinator Python binding
 
-This internal PyO3 binding is not published separately. Its namespace and
-native extension are assembled into the `coordinator` namespace of the public
-`registry-stack-client` wheel. The public facade is imported as `registry_client.coordinator`. Built on its own, the internal
-binding can be used like this, assuming an authorized `permit-notice` Workflow with the shown
+This internal PyO3 binding is not published separately, and Registry
+Coordinator is not yet part of the released `registry-stack-client` wheel.
+Built from source, the internal binding can be used like this, assuming an authorized `permit-notice` Workflow with the shown
 input contract:
 
 ```python
@@ -38,13 +37,8 @@ revisions, deadlines, next observations, persistent floors, and count/limit. Ori
 raw product responses, prepared requests, and protected correlation values remain absent.
 The reviewed Workflow declares any terminal output projection.
 
-Workflow metadata includes `reviewPolicy: PolicyBinding | None`. A provider's
-exact policy ID matches the workflow and its digest matches `workflowRevision`;
-the canonical Rust client validates the shared pin before this thin binding
-returns it. The pin grants no review or source authority.
-
 `coordinatorctl types --project DIRECTORY --language typescript --output FILE` and the equivalent
-`--language python` export typed Workflow wrappers over the maintained public generic clients.
+`--language python` export typed Workflow wrappers over these source-built client bindings.
 Their `start`, `get`, and `cancel` methods pin the compiled revision and check returned workflow
 identity and declared outcome names. They add no transport or authorization semantics; runtime
 schema checks remain with Coordinator. Regenerate the wrapper when the execution contract changes.

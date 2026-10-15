@@ -893,10 +893,10 @@ mod tests {
     #[test]
     fn operator_codes_preserve_reviewed_categories_and_scrub_runtime_text() {
         for code in [
-            "proposal-blocked",
-            "proposal-not-visible",
-            "submission-stale",
-            "proposal-dependency-outage",
+            "review-result-expired",
+            "action-contract-changed",
+            "target-conditions-mismatch",
+            "external-rate-limited",
         ] {
             assert_eq!(safe_code(code, "completion-unavailable"), code);
         }

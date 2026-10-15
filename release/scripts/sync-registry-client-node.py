@@ -18,7 +18,6 @@ PRODUCTS = {
     "casework": ROOT / "crates" / "registry-casework-client-node",
     "messaging": ROOT / "crates" / "registry-messaging-client-node",
     "scheduling": ROOT / "crates" / "registry-scheduling-client-node",
-    "coordinator": ROOT / "crates" / "registry-coordinator-client-node",
 }
 # napi-rs platform package name to the Rust target triple it carries, following the
 # convention swc, rolldown, and oxc use for their own platform package READMEs.

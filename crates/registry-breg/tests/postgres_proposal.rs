@@ -4592,7 +4592,7 @@ fn automatic_recovery_grants_refuse_known_service_and_agent_profiles() {
 async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
     let mut source = registry_source(true);
     let mut service = source["accessProfiles"][0].clone();
-    service["id"] = json!("coordinator");
+    service["id"] = json!("status-service");
     service["default"] = json!(false);
     service["permissions"]["proposals"][0]["operations"] = json!(["get"]);
     service["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
@@ -4653,10 +4653,13 @@ async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
     let service = fixture.client_for(service_claims).await;
     let metadata = service
         .client
-        .registry_contract(Some("coordinator"))
+        .registry_contract(Some("status-service"))
         .await
         .unwrap();
-    let get = metadata.value.select_proposal_get("coordinator").unwrap();
+    let get = metadata
+        .value
+        .select_proposal_get("status-service")
+        .unwrap();
     let ordinary = service
         .client
         .get_proposal(&get, blocked.id())

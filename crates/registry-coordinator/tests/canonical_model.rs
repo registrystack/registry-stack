@@ -340,10 +340,13 @@ fn function_source_assets_cannot_escape_the_project() {
 #[test]
 fn generated_owner_action_schemas_specialize_inputs_outputs_and_revision_closure() {
     let root = tempfile::tempdir().unwrap();
-    let artifact: Value = serde_json::from_str(include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json")).unwrap();
+    let artifact: Value = serde_json::from_str(include_str!(
+        "fixtures/breg-contracts/facilities.contract.json"
+    ))
+    .unwrap();
     let project = json!({"apiVersion":authoring::API_VERSION,"kind":authoring::KIND,"project":{"id":"owner-contract","version":"1"},
         "contracts":{"facilities":{"type":"breg","source":"facilities.json"}},
-        "operations":{"correction":{"uses":"breg.invoke-action/v1","connection":"facilities","action":{"contract":"facilities","id":"correct-address"}}},
+        "operations":{"correction":{"uses":"breg.invoke-action/v1","connection":"facilities","action":{"contract":"facilities","id":"register-facility"}}},
         "workflow":{"input":{"operationInput":"correction"},"deadlineSeconds":60,"start":"correct","steps":{
             "correct":{"type":"call","operation":"correction","input":{"type":"input"},"next":"done"},
             "done":{"type":"finish","outcome":"accepted","output":{"type":"step","step":"correct"}}},
@@ -352,22 +355,22 @@ fn generated_owner_action_schemas_specialize_inputs_outputs_and_revision_closure
     fs::write(root.path().join("facilities.json"), artifact.to_string()).unwrap();
     let initial = Definition::load(root.path()).unwrap();
     assert_eq!(
-        initial.workflow.input["properties"]["input"]["properties"]["facilityId"]["format"],
+        initial.workflow.input["properties"]["input"]["properties"]["operatorId"]["format"],
         "uuid"
     );
     assert_eq!(
-        initial.workflow.outcomes["accepted"]["properties"]["proposal"]["properties"]
-            ["submissionVersion"]["type"],
+        initial.workflow.outcomes["accepted"]["properties"]["results"]["properties"]["facility"]
+            ["properties"]["revision"]["type"],
         "integer"
     );
     let action = initial.workflow.operations["correction"]
         .action
         .as_ref()
         .unwrap();
-    assert_eq!(action.action_id, "correct-address");
+    assert_eq!(action.action_id, "register-facility");
     assert!(action.action_revision.starts_with("sha256:"));
     let mut unrelated = artifact;
-    unrelated["actions"][1]["display"]["label"] = json!("A renamed unrelated Action");
+    unrelated["actions"][0]["display"]["label"] = json!("A renamed unrelated Action");
     fs::write(root.path().join("facilities.json"), unrelated.to_string()).unwrap();
     let edited = Definition::load(root.path()).unwrap();
     assert_eq!(initial.digest, edited.digest);
@@ -377,11 +380,11 @@ fn generated_owner_action_schemas_specialize_inputs_outputs_and_revision_closure
 #[test]
 fn imported_action_reference_errors_point_to_the_authored_selection() {
     let root = tempfile::tempdir().unwrap();
-    let artifact = include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json");
+    let artifact = include_str!("fixtures/breg-contracts/facilities.contract.json");
     fs::write(root.path().join("facilities.json"), artifact).unwrap();
     let original = json!({"apiVersion":authoring::API_VERSION,"kind":authoring::KIND,"project":{"id":"owner-reference","version":"1"},
         "contracts":{"facilities":{"type":"breg","source":"facilities.json"}},
-        "operations":{"correction":{"uses":"breg.invoke-action/v1","connection":"facilities","action":{"contract":"facilities","id":"correct-address"}}},
+        "operations":{"correction":{"uses":"breg.invoke-action/v1","connection":"facilities","action":{"contract":"facilities","id":"register-facility"}}},
         "workflow":{"input":{"operationInput":"correction"},"deadlineSeconds":60,"start":"correct","steps":{
             "correct":{"type":"call","operation":"correction","input":{"type":"input"},"next":"done"},
             "done":{"type":"finish","outcome":"accepted","output":{"type":"step","step":"correct"}}},

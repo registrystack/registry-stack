@@ -33,7 +33,9 @@ operator CLI already ship; only the client facades join, in v0.40.0.
 
 ``COORDINATOR_CLIENT_FIRST_RELEASE`` is the single place that decides which
 release first adds the Registry Coordinator namespace and native bindings to the
-unified Node and Python client packages; the client facades first join in v0.42.0.
+unified Node and Python client packages. The facades carry no Coordinator
+namespace yet, so the client stays held until its process-instance client
+returns.
 
 ``COORDINATOR_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Coordinator binaries, ``coordinator`` and
@@ -64,7 +66,7 @@ SCHEDULING_BINARY_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 SCHEDULING_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 40, 0)
 
-COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 42, 0)
+COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
 

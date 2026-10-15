@@ -17,7 +17,7 @@ that every checkout or release ships it.
 | `registry-{breg,casework,coordinator,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
 | BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
-| `registry-stack-client` | Curated Rust facade for BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
+| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
 | `registry-record` | Neutral Registry Record DTOs and strict envelope decoding, without product authorization semantics |
@@ -89,12 +89,6 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   inspection documents come from the Rust client unchanged. A run is owned by
   the caller that started it; the client grants no access to the product
   records a workflow touches.
-  Its optional workflow `reviewPolicy` reuses the runtime-free
-  `registry-review-protocol::PolicyBinding`, validates its ID against the
-  returned workflow and its digest against `workflowRevision`, and grants no
-  review or source authority. This is the Coordinator client's sole named
-  shared-protocol dependency exception; it reaches no Review client or provider
-  runtime/core. Thin bindings preserve the exact nullable pin.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains
@@ -167,12 +161,12 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Coordinator, Discovery, Evidence,
-Messaging, and Scheduling bindings. Published packages include Messaging from
-v0.38.0, Scheduling from v0.40.0, and Coordinator from v0.42.0; earlier
-release assembly preserves its version-selected inventory. Source CI uses the
-explicit local `--include-messaging`, `--include-scheduling`, and
-`--include-coordinator` overrides when assembling the current seven bindings.
+are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
+Scheduling bindings. Published packages include Messaging from v0.38.0 and
+Scheduling from v0.40.0; earlier release assembly preserves its
+version-selected inventory. The Coordinator binding is not part of the unified
+packages. Source CI uses the explicit local `--include-messaging` and
+`--include-scheduling` overrides when assembling the current six bindings.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
