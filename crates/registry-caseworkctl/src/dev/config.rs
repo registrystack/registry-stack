@@ -723,12 +723,12 @@ pub(super) fn bind<'a>(
             }
         }
     }
-    for (index, queue) in project.queues.iter().enumerate() {
+    for queue in &project.queues {
         if !clients.directory.iter().any(|team| team.queue == queue.id) {
             found.push(ConfigFinding::new(
                 "casework.dev-clients.unserved-queue",
                 "/directory",
-                format!("no team serves the queue casework.yaml declares at /queues/{index}, so caseworkctl doctor would not report ready"),
+                format!("no team serves the queue casework.yaml declares at /queues/{}, so caseworkctl doctor would not report ready", queue.id),
                 "Add a directory team serving that queue.",
             ));
         }

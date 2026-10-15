@@ -1061,6 +1061,30 @@ class QuantityTests(ConventionsTestCase):
             self.repo.run(), "CFG-QTY-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/targetElapsed")
         )
 
+    def test_cfg_qty_1_reports_an_elapsed_member_written_as_text(self) -> None:
+        self.queue()["after"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["elapsed"],
+            "properties": {"elapsed": {"type": "string"}},
+        }
+        self.assertFinding(
+            self.repo.run(), "CFG-QTY-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/after/properties/elapsed")
+        )
+
+    def test_cfg_qty_1_reports_a_member_whose_values_are_iso_8601_durations(self) -> None:
+        self.queue()["wait"] = {"type": "string", "examples": ["PT48H"]}
+        self.queue()["grace"] = {"type": "string", "default": "P2D"}
+        self.queue()["step"] = {"type": "string", "enum": ["PT15M", "PT1H"]}
+        report = self.repo.run()
+        for key in ("wait", "grace", "step"):
+            self.assertFinding(report, "CFG-QTY-1", P, at(PROJECT_SCHEMA, f"/$defs/Queue/properties/{key}"))
+
+    def test_cfg_qty_1_accepts_text_that_only_resembles_a_duration(self) -> None:
+        self.queue()["code"] = {"type": "string", "examples": ["PTO", "P", "PT"]}
+        self.queue()["mode"] = {"type": "string", "enum": ["P", "approved"]}
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-1")
+
     def test_cfg_qty_2_reports_the_minority_unit_of_a_stem(self) -> None:
         self.queue()["pollSeconds"] = {"type": "integer", "minimum": 1, "maximum": 10}
         self.repo.project["properties"]["pollSeconds"] = {"type": "integer", "minimum": 1, "maximum": 10}

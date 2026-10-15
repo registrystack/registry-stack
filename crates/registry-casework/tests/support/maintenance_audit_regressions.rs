@@ -3,8 +3,8 @@ use super::*;
 
 pub(super) fn clock_project(source: bool) -> Value {
     let mut value = project_value(source, false);
-    value["calendars"] = json!([{"id":"office","timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"holidaySet":"office-holidays"}]);
-    value["clocks"] = json!([{"id":"deadline","type":"activity","anchor":"stage-entered-at","calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":[{"id":"due-soon","workingDaysBefore":1}],"steps":[{"id":"overdue","because":"Move overdue reviews","at":"due","action":{"reassign":{"queue":"north"}}}]}]);
+    value["calendars"] = json!({"office":{"timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"holidaySet":"office-holidays"}});
+    value["clocks"] = json!({"deadline":{"type":"stage","anchor":{"type":"stage-entered"},"calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":{"due-soon":{"before":{"workingDays":1}}},"steps":[{"id":"overdue","because":"Move overdue reviews","at":"due","action":{"reassign":{"queue":"north"}}}]}});
     value
 }
 pub(super) async fn due_clock(f: &Fixture, id: &str) -> (Uuid, Uuid) {

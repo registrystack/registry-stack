@@ -6,23 +6,23 @@ fn project_value() -> Value {
     json!({
         "apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,
         "project":{"id":"review-project","version":"1"},
-        "accessProfiles":[
-            {"id":"reviewer","role":"staff","principalClaim":"principal","requiredScopes":["casework:review"]},
-            {"id":"supervisor","role":"supervisor","principalClaim":"principal","requiredScopes":["casework:supervise"]},
-            {"id":"administrator","role":"administrator","principalClaim":"principal","requiredScopes":["casework:admin"]},
-            {"id":"producer","role":"requester","principalClaim":"principal","requiredScopes":["casework:request"]}
-        ],
-        "queues":[{"id":"reviews","label":"Reviews"},{"id":"north","label":"North reviews"}],
-        "teams":[{"id":"review-team","label":"Review team","serves":["reviews","north"],"memberProfiles":["reviewer"],"supervisorProfiles":["supervisor"]}],
-        "clocks":[{"id":"decision-due","type":"subject","anchor":"request-accepted-at","completeOn":"result-terminal","after":{"elapsed":"PT48H"}}],
+        "accessProfiles":{
+            "reviewer":{"role":"staff","principalClaim":"principal","requiredScopes":["casework:review"]},
+            "supervisor":{"role":"supervisor","principalClaim":"principal","requiredScopes":["casework:supervise"]},
+            "administrator":{"role":"administrator","principalClaim":"principal","requiredScopes":["casework:admin"]},
+            "producer":{"role":"requester","principalClaim":"principal","requiredScopes":["casework:request"]}
+        },
+        "queues":{"reviews":{"label":"Reviews"},"north":{"label":"North reviews"}},
+        "teams":{"review-team":{"label":"Review team","serves":["reviews","north"],"memberProfiles":["reviewer"],"supervisorProfiles":["supervisor"]}},
+        "clocks":{"decision-due":{"type":"subject","anchor":{"type":"request-accepted"},"after":{"hours":48}}},
         "reviewPolicies":[{
             "id":"notice-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
             "stages":[{"id":"review","queue":"reviews","decidingProfiles":["reviewer"],"requiredApprovals":2,"excludeInitiator":true}],
-            "clocks":["decision-due"],"retention":{"terminalDays":30,"accountabilityDays":90},
-            "outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},{"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}],
+            "clocks":["decision-due"],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
+            "outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},"rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}},
             "displaySchema":{"type":"object","additionalProperties":false,"required":["title"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}
         }],
-        "trustedProducers":[{"id":"notice-service","profile":"producer","issuer":"https://issuer.example","subject":"notice-service","trustedInitiatorIssuer":"https://people.example","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"recoveryDays":7}]
+        "trustedProducers":{"notice-service":{"profile":"producer","issuer":"https://issuer.example","subject":"notice-service","trustedInitiatorIssuer":"https://people.example","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"retention":{"receiptRetentionDays":7}}}
     })
 }
 fn decode(value: Value) -> CaseworkProject {
@@ -98,7 +98,7 @@ fn submitted_context_compiles_without_a_provider_and_pins_clocks_and_authority()
     let ClockPolicy::Subject { after, .. } = &mut active.clocks[0] else {
         panic!("elapsed clock")
     };
-    after.elapsed = "PT24H".into();
+    *after = ElapsedDuration::Hours(24);
     assert_ne!(
         active
             .compile_policy("notice-review")
@@ -237,13 +237,13 @@ fn retired_authoring_shapes_and_invalid_approval_outcomes_are_refused() {
         assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"][0]["reasonRequired"] = json!(true);
+    value["reviewPolicies"][0]["outcomes"]["approved"]["reasonRequired"] = json!(true);
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"][0]["settlement"] = json!("rejected");
+    value["reviewPolicies"][0]["outcomes"]["approved"]["settlement"] = json!("rejected");
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
-    value["clocks"][0]["pauseWhile"] = json!(["awaiting-applicant"]);
+    value["clocks"]["decision-due"]["pauseWhile"] = json!(["awaiting-applicant"]);
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
 }
 
@@ -405,9 +405,9 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
         .compile_policy("notice-review")
         .unwrap();
     let mut renamed = original.clone();
-    renamed["queues"][0]["label"] = json!("Decision queue");
-    renamed["teams"][0]["label"] = json!("Decision team");
-    renamed["reviewPolicies"][0]["outcomes"][0]["label"] = json!("Accept");
+    renamed["queues"]["reviews"]["label"] = json!("Decision queue");
+    renamed["teams"]["review-team"]["label"] = json!("Decision team");
+    renamed["reviewPolicies"][0]["outcomes"]["approved"]["label"] = json!("Accept");
     renamed["contextProviders"][0]["description"] = json!("context-providers/relocated.json");
     let after = decode(renamed.clone())
         .compile_policy("notice-review")
@@ -461,18 +461,19 @@ fn routing_explanation_and_grant_label_are_presentation_only() {
 #[test]
 fn clock_step_explanation_is_presentation_and_effect_is_behavior() {
     let mut value = project_value();
-    value["calendars"] = json!([{"id":"office","timezone":"UTC","workingWeekdays":["monday"],"holidaySet":"office-holidays"}]);
-    value["clocks"] = json!([{"id":"decision-due","type":"activity","anchor":"stage-entered-at","calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":[],"steps":[{"id":"overdue","because":"Escalate an overdue review","at":"due","action":{"reassign":{"queue":"north"}}}]}]);
+    value["calendars"] = json!({"office":{"timezone":"UTC","workingWeekdays":["monday"],"holidaySet":"office-holidays"}});
+    value["clocks"] = json!({"decision-due":{"type":"stage","anchor":{"type":"stage-entered"},"calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":{},"steps":[{"id":"overdue","because":"Escalate an overdue review","at":"due","action":{"reassign":{"queue":"north"}}}]}});
     let before = decode(value.clone())
         .compile_policy("notice-review")
         .unwrap();
-    value["clocks"][0]["steps"][0]["because"] = json!("Move overdue reviews to the north queue");
+    value["clocks"]["decision-due"]["steps"][0]["because"] =
+        json!("Move overdue reviews to the north queue");
     let after = decode(value.clone())
         .compile_policy("notice-review")
         .unwrap();
     assert_eq!(before.binding(), after.binding());
     assert_ne!(before.dependencies.clocks, after.dependencies.clocks);
-    value["clocks"][0]["steps"][0]["action"]["reassign"]["queue"] = json!("reviews");
+    value["clocks"]["decision-due"]["steps"][0]["action"]["reassign"]["queue"] = json!("reviews");
     assert_ne!(
         before.binding(),
         decode(value)
@@ -485,17 +486,17 @@ fn clock_step_explanation_is_presentation_and_effect_is_behavior() {
 #[test]
 fn every_outcome_states_whether_a_public_reason_is_given() {
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"][0]
+    value["reviewPolicies"][0]["outcomes"]["approved"]
         .as_object_mut()
         .unwrap()
         .remove("publicReason");
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"][0]["publicReason"] = json!("sometimes");
+    value["reviewPolicies"][0]["outcomes"]["approved"]["publicReason"] = json!("sometimes");
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     for rule in ["required", "optional", "none"] {
         let mut value = project_value();
-        value["reviewPolicies"][0]["outcomes"][0]["publicReason"] = json!(rule);
+        value["reviewPolicies"][0]["outcomes"]["approved"]["publicReason"] = json!(rule);
         decode(value).compile_policy("notice-review").unwrap();
     }
 }
@@ -533,4 +534,30 @@ fn approval_decisions_name_an_approved_outcome_on_the_wire() {
         serde_json::to_value(&decoded).unwrap(),
         json!({"decision":{"type":"approve","outcome":"approved","publicReason":"Your registration is approved."}})
     );
+}
+
+#[test]
+fn a_producer_names_its_review_policies_in_its_findings() {
+    let refused = |value: Value| {
+        let Err(ConfigLoadError::Refused(report)) =
+            CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+        else {
+            panic!("the project must be refused");
+        };
+        report
+    };
+    let mut value = project_value();
+    value["trustedProducers"]["notice-service"]["reviewPolicies"] = json!([]);
+    assert!(refused(value)
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "casework.review-producer.no-policies"
+            && item.path == "/trustedProducers/notice-service/reviewPolicies"));
+    let mut value = project_value();
+    value["trustedProducers"]["notice-service"]["reviewPolicies"] =
+        json!(["notice-review", "notice-review"]);
+    assert!(refused(value)
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "casework.review-producer.duplicate-policy"));
 }

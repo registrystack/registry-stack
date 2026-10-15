@@ -185,12 +185,34 @@ class DependencyDirectionTests(unittest.TestCase):
                 "ctl": ["runtime"],
                 "breg": [],
                 "breg-client": [],
-                "coordinator": ["client", "core", "breg-client"],
+                "coordinator": ["client", "breg-client"],
                 "coordinator-client": ["serde"],
                 "serde": [],
             }
         )
         self.assertEqual(MODULE.violations(graph), [])
+
+    def test_the_coordinator_reaching_casework_core_other_than_through_the_client_is_rejected(self):
+        for coordinator, name in (
+            ("coordinator", "registry-coordinator"),
+            ("coordinator-client", "registry-coordinator-client"),
+        ):
+            for edges in ({coordinator: ["client", "core"]}, {coordinator: ["review-client"], "review-client": ["core"]}):
+                with self.subTest(coordinator=coordinator, edges=edges):
+                    graph = metadata(
+                        {
+                            "core": ["serde"],
+                            "client": ["core"],
+                            "review-client": [],
+                            "serde": [],
+                            **edges,
+                        }
+                    )
+                    self.assertIn(
+                        f"{name} transitively depends on Casework package(s) other than "
+                        "its client: registry-casework-core",
+                        "\n".join(MODULE.violations(graph)),
+                    )
 
     def test_tooling_dependencies_never_reach_the_coordinator_client(self):
         for kinds in (["dev"], [None], ["build"], ["dev", None]):
@@ -253,7 +275,7 @@ class DependencyDirectionTests(unittest.TestCase):
                     failures = "\n".join(MODULE.violations(graph))
                     self.assertIn(
                         f"{name} transitively depends on Casework package(s) other than "
-                        f"its client and core: {reached}",
+                        f"its client: {reached}",
                         failures,
                     )
 

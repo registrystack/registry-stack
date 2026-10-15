@@ -16,9 +16,6 @@ pub(crate) const DIRECTORY_IDENTIFIER_MESSAGE: &str =
     "expected 1 to 128 ASCII letters, digits, '-', '_', or '.'";
 pub(crate) const DIRECTORY_IDENTIFIER_ACTION: &str =
     "Write an identifier of letters, digits, '-', '_', or '.', such as case-review.";
-pub(crate) const ELAPSED_MESSAGE: &str =
-    "expected PT followed by a positive whole number and H, M, or S";
-pub(crate) const ELAPSED_ACTION: &str = "Write the duration as PT48H, PT30M, or PT90S.";
 
 /// One problem a semantic check found. The message and the action name keys,
 /// pointers, accepted values, and bounds, and never repeat a value read from

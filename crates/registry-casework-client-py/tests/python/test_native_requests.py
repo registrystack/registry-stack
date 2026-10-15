@@ -144,7 +144,7 @@ class _Handler(BaseHTTPRequestHandler):
                         "excludeInitiator": False,
                         "excludePreviousStageReviewers": False,
                     }],
-                    "retention": {"terminalDays": 30, "accountabilityDays": 30},
+                    "retention": {"terminalRetentionDays": 30, "accountabilityRetentionDays": 30},
                     "displaySchema": {
                         "type": "object",
                         "additionalProperties": False,

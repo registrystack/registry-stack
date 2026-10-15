@@ -13,7 +13,7 @@ use support::{
 
 const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
 const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
-const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: [{id: <|definition|>triage, label: Triage}]\naccessProfiles: [{id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}]\nreviewPolicies:\n  - id: decision\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalDays: 30, accountabilityDays: 90}\n    displaySchema: {type: object}\n";
+const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], role: staff}}\nreviewPolicies:\n  - id: decision\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
 const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
@@ -418,20 +418,12 @@ fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
 #[test]
 fn casework_current_policy_directory_and_fixture_relationships_resolve() {
     let casework = fixture("products/casework/examples/standalone-decision/casework.yaml")
-        .replacen("  - id: staff", "  - id: <|profile|>staff", 1)
-        .replacen("  - id: decisions", "  - id: <|queue|>decisions", 1)
+        .replacen("  staff:\n", "  <|profile|>staff:\n", 1)
+        .replacen("  decisions:\n", "  <|queue|>decisions:\n", 1)
         .replacen("  - id: decision", "  - id: <|policy|>decision", 1)
         .replacen("      - id: answer", "      - id: <|stage|>answer", 1)
-        .replacen(
-            "  - id: requester",
-            "  - id: <|requester-profile|>requester",
-            1,
-        )
-        .replacen(
-            "      - id: confirmed",
-            "      - id: <|outcome|>confirmed",
-            1,
-        )
+        .replacen("  requester:\n", "  <|requester-profile|>requester:\n", 1)
+        .replacen("      confirmed:\n", "      <|outcome|>confirmed:\n", 1)
         .replacen(
             "    profile: requester",
             "    profile: <|producer-profile|>requester",
@@ -612,15 +604,15 @@ fn casework_read_only_context_provider_and_schema_files_resolve() {
 #[test]
 fn casework_routing_teams_clocks_and_holiday_sets_resolve() {
     let casework = fixture("products/casework/examples/multi-stage-routing-clocks/casework.yaml")
-        .replacen("{id: staff,", "{id: <|profile|>staff,", 1)
-        .replacen("{id: triage,", "{id: <|triage|>triage,", 1)
+        .replacen("  staff: {", "  <|profile|>staff: {", 1)
+        .replacen("  triage: {", "  <|triage|>triage: {", 1)
         .replacen(
-            "{id: northern-review,",
-            "{id: <|northern|>northern-review,",
+            "  northern-review: {",
+            "  <|northern|>northern-review: {",
             1,
         )
-        .replacen("{id: overdue-review,", "{id: <|overdue|>overdue-review,", 1)
-        .replacen("  - id: regional-team", "  - id: <|team|>regional-team", 1)
+        .replacen("  overdue-review: {", "  <|overdue|>overdue-review: {", 1)
+        .replacen("  regional-team:", "  <|team|>regional-team:", 1)
         .replacen("    serves: [triage,", "    serves: [<|serves|>triage,", 1)
         .replacen(
             "    memberProfiles: [staff]",
@@ -663,27 +655,19 @@ fn casework_routing_teams_clocks_and_holiday_sets_resolve() {
             "    clocks: [<|clock-use|>review-deadline, response-budget]",
             1,
         )
-        .replacen(
-            "      - {id: approved,",
-            "      - {id: <|outcome|>approved,",
-            1,
-        )
+        .replacen("      approved: {", "      <|outcome|>approved: {", 1)
         .replacen(
             "        region: {type: string,",
             "        <|field|>region: {type: string,",
             1,
         )
-        .replacen("  - id: office", "  - id: <|calendar|>office", 1)
+        .replacen("  office:\n", "  <|calendar|>office:\n", 1)
         .replacen(
             "    holidaySet: office-holidays",
             "    holidaySet: <|holiday-use|>office-holidays",
             1,
         )
-        .replacen(
-            "  - id: review-deadline",
-            "  - id: <|clock|>review-deadline",
-            1,
-        )
+        .replacen("  review-deadline:", "  <|clock|>review-deadline:", 1)
         .replacen(
             "    calendar: office",
             "    calendar: <|calendar-use|>office",
@@ -797,9 +781,9 @@ fn casework_policy_scopes_and_task_template_references_stay_local() {
         file(
             "casework.yaml",
             "kind: CaseworkProject\n\
-             queues: [{id: queue}]\n\
-             accessProfiles: [{id: <|profile|>staff}]\n\
-             teams: [{id: <|team|>reviewers}]\n\
+             queues: {queue: {}}\n\
+             accessProfiles: {<|profile|>staff: {}}\n\
+             teams: {<|team|>reviewers: {}}\n\
              contextProviders:\n  \
                - id: provider\n    \
                  sourceNamespace: <|provider-namespace|>opaque-source\n    \
@@ -808,14 +792,14 @@ fn casework_policy_scopes_and_task_template_references_stay_local() {
                - id: alpha\n    \
                  context: {mode: submitted}\n    \
                  stages: [{id: <|alpha-stage|>review, queue: queue, decidingProfiles: [staff]}]\n    \
-                 outcomes: [{id: <|alpha-outcome|>approved}]\n  \
+                 outcomes: {<|alpha-outcome|>approved: {}}\n  \
                - id: <|beta-policy|>beta\n    \
                  context: {mode: submitted}\n    \
                  routing: [{id: route, when: {stage: <|stage-use|>review}, queue: queue}]\n    \
                  stages: [{id: <|beta-stage|>review, queue: queue, decidingProfiles: [staff]}]\n    \
-                 outcomes: [{id: <|beta-outcome|>approved}]\n\
+                 outcomes: {<|beta-outcome|>approved: {}}\n\
              trustedProducers:\n  \
-               - id: producer\n    \
+               producer:\n    \
                  sourceNamespaces: [<|producer-namespace|>opaque-source]\n    \
                  reviewPolicies: [beta]\n\
              taskTemplates:\n  \
@@ -871,10 +855,10 @@ fn casework_current_bad_references_are_reported_at_the_written_values() {
         file(
             "casework.yaml",
             "kind: CaseworkProject\n\
-             queues: [{id: queue}]\n\
-             accessProfiles: [{id: staff}]\n\
+             queues: {queue: {}}\n\
+             accessProfiles: {staff: {}}\n\
              teams:\n  \
-               - id: team\n    \
+               team:\n    \
                  serves: [<|team-queue|>missing-queue]\n    \
                  memberProfiles: [<|team-profile|>missing-profile]\n\
              contextProviders:\n  \
@@ -887,16 +871,16 @@ fn casework_current_bad_references_are_reported_at_the_written_values() {
                  routing: [{id: route, when: {stage: <|stage|>missing-stage}, queue: <|route-queue|>missing-queue}]\n    \
                  stages: [{id: review, queue: <|stage-queue|>missing-queue, decidingProfiles: [<|stage-profile|>missing-profile]}]\n    \
                  clocks: [<|policy-clock|>missing-clock]\n    \
-                 outcomes: [{id: outcome}]\n\
+                 outcomes: {outcome: {}}\n\
              trustedProducers:\n  \
-               - id: producer\n    \
+               producer:\n    \
                  profile: <|producer-profile|>missing-profile\n    \
                  sourceNamespaces: [<|opaque-producer|>remote-source]\n    \
                  reviewPolicies: [<|producer-policy|>missing-policy]\n\
-             calendars: [{id: calendar, holidaySet: <|holiday|>missing-holiday}]\n\
+             calendars: {calendar: {holidaySet: <|holiday|>missing-holiday}}\n\
              clocks:\n  \
-               - id: clock\n    \
-                 type: activity\n    \
+               clock:\n    \
+                 type: stage\n    \
                  calendar: <|calendar|>missing-calendar\n    \
                  steps: [{action: {reassign: {queue: <|clock-queue|>missing-queue}}}]\n\
              taskTemplates:\n  \

@@ -39,9 +39,8 @@ receives the call, which decides it under its own authorization.
 - The applicant drives a BReg Proposal in BReg. Coordinator invokes only immediate
   BReg Actions, follows a Proposal by product event or record read, and is not a
   Review provider.
-- No product crate depends on a Coordinator crate. The only allowed dependents
-  are `registry-stack-client`, on `registry-coordinator-client`, and
-  `registry-cli-docs`, on `registry-coordinator` for the published CLI
+- No product crate depends on a Coordinator crate. The only allowed dependent
+  is `registry-cli-docs`, on `registry-coordinator` for the published CLI
   reference. Adding a dependent, or a Coordinator crate, means naming its rule
   in the gate in the same change. The Casework, Scheduling, and Messaging
   gates also refuse the Coordinator from their side.

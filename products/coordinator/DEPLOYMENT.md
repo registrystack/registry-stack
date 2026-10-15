@@ -443,13 +443,13 @@ binding:
 
 ```yaml
 trustedProducers:
-  - id: coordinator
+  coordinator:
     profile: coordinator-producer
     issuer: https://issuer.example.org
     subject: coordinator-review-producer
     sourceNamespaces: [applications]
     reviewPolicies: [application-review]
-    recoveryDays: 7
+    retention: {receiptRetentionDays: 7}
     completion:
       destinationId: coordinator
       recipientBinding: coordinator-v1

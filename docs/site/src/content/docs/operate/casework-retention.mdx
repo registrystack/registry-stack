@@ -17,16 +17,16 @@ If you operate Registry Casework, choose review retention with the policy author
 
 ## What Casework retains
 
-Each `ReviewPolicy` declares `terminalDays` and `accountabilityDays`. The terminal period is at least one day; accountability is at least as long and at most 3,650 days. Both periods run from the request's terminal settlement. A request still under review has no terminal expiry yet; an overdue clock does not itself erase or cancel it.
+Each `ReviewPolicy` declares `terminalRetentionDays` and `accountabilityRetentionDays`. The terminal period is at least one day; accountability is at least as long and at most 3,650 days. Both periods run from the request's terminal settlement. A request still under review has no terminal expiry yet; an overdue clock does not itself erase or cancel it.
 
 | State | Retention boundary |
 | --- | --- |
-| Submitted context, result, constraints, notes, drafts, decisions, tasks, history, and clock occurrences | Request terminal time plus `terminalDays` |
+| Submitted context, result, constraints, notes, drafts, decisions, tasks, history, and clock occurrences | Request terminal time plus `terminalRetentionDays` |
 | Producer result-feed event and completion wake | The same terminal result availability period |
-| Protected deciding identity, private reason, configured outcome, and structured-result digest | Request terminal time plus `accountabilityDays` |
+| Protected deciding identity, private reason, configured outcome, and structured-result digest | Request terminal time plus `accountabilityRetentionDays` |
 | Producer and initiator identities | Raw until payload expiry, then request-bound identity tombstones until accountability expiry |
 | Mutation replay response | Payload erased at terminal expiry; replay metadata persists until accountability expiry |
-| Submission recovery reservation | A fixed recovery deadline from admission; accepted reservation retention follows terminal accountability expiry |
+| Submission recovery reservation | A fixed recovery deadline: admission time plus the producer's `retention.receiptRetentionDays`; accepted reservation retention follows terminal accountability expiry |
 | Review/staffing cursors and preview snapshots | Their own bounded expiry, separate from review result retention |
 | Audit journal | File rotation/retention settings and your external archive policy |
 

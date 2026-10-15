@@ -703,9 +703,9 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
         &fs::read(&policy_path).expect("the initialized policy is readable"),
     )
     .expect("the initialized policy is valid YAML");
-    policy["trustedProducers"][0]["issuer"] =
+    policy["trustedProducers"]["requester"]["issuer"] =
         format!("http://127.0.0.1:{}", session.ports[1]).into();
-    policy["trustedProducers"][0]["subject"] =
+    policy["trustedProducers"]["requester"]["subject"] =
         registry_thunderid_tooling::local::agent_id("casework-local", "requester").into();
     fs::write(
         &policy_path,

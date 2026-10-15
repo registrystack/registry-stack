@@ -474,12 +474,14 @@ async fn review_policy_descriptions(
 async fn review_policy_description(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Path(kind_id): Path<String>,
+    Path(policy_id): Path<String>,
 ) -> Result<Json<ReviewPolicyClosure>, HttpError> {
     reject_source_profile(&headers)?;
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(
-        state.service.review_policy_description(&actor, &kind_id)?,
+        state
+            .service
+            .review_policy_description(&actor, &policy_id)?,
     ))
 }
 
@@ -1664,7 +1666,8 @@ fn problem_response(
                 .parse()
                 .expect("validation reasons are valid header values"),
         );
-        // Only a human decision names allowed outcomes, and those are policy
+        // Only a human decision names allowed outcomes: the declared ones, or
+        // the one an earlier approval in the stage chose. Both are policy
         // identifiers the reviewer already reads from the review policy.
         if !validation.allowed.is_empty() {
             response.headers_mut().insert(
@@ -1698,6 +1701,7 @@ fn review_validation_reason(reason: ReviewValidationReason) -> &'static str {
         ReviewValidationReason::ConstraintViolated => "constraint-violated",
         ReviewValidationReason::PublicReasonRequired => "public-reason-required",
         ReviewValidationReason::PublicReasonNotDeclared => "public-reason-not-declared",
+        ReviewValidationReason::ApprovalOutcomeDiffers => "approval-outcome-differs",
     }
 }
 
@@ -2320,6 +2324,7 @@ mod tests {
             ReviewValidationReason::ConstraintViolated,
             ReviewValidationReason::PublicReasonRequired,
             ReviewValidationReason::PublicReasonNotDeclared,
+            ReviewValidationReason::ApprovalOutcomeDiffers,
         ];
         for reason in reasons {
             let word = review_validation_reason(reason);

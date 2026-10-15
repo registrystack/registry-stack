@@ -24,9 +24,9 @@ contains task/request ids, current queue, the retained producer
 returns. Current deciding profile, team, queue, source and result retention
 checks apply; prior holding is not authorship.
 
-Receipts include the optional `outcome_label` from the decision's pinned policy,
-so later policy edits cannot relabel a selection. Approval has no outcome or
-label. The separately audited Supervisor `review_accountability` read also
+Every receipt names the `outcome` its decision selected and includes the
+optional `outcome_label` from the decision's pinned policy, so later policy
+edits cannot relabel a selection. The separately audited Supervisor `review_accountability` read also
 exposes that receipt through accountability retention, after result erasure.
 No context or structured result is added to either read.
 

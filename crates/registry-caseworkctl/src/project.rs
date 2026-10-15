@@ -22,24 +22,24 @@ project:
   id: standalone-decision
   version: "1"
 accessProfiles:
-  - id: staff
+  staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
     role: staff
-  - id: supervisor
+  supervisor:
     principalClaim: sub
     requiredScopes: [casework:supervisor]
     role: supervisor
-  - id: administrator
+  administrator:
     principalClaim: sub
     requiredScopes: [casework:admin]
     role: administrator
-  - id: requester
+  requester:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
 queues:
-  - id: decisions
+  decisions:
     label: Decisions awaiting review
 reviewPolicies:
   - id: decision
@@ -52,8 +52,8 @@ reviewPolicies:
         decidingProfiles: [staff]
         requiredApprovals: 1
     retention:
-      terminalDays: 90
-      accountabilityDays: 365
+      terminalRetentionDays: 90
+      accountabilityRetentionDays: 365
     displaySchema:
       type: object
       additionalProperties: false
@@ -62,24 +62,24 @@ reviewPolicies:
         summary: {type: string, maxLength: 160}
         reference: {type: string, maxLength: 120}
     outcomes:
-      - id: confirmed
+      confirmed:
         label: Confirm
         settlement: answered
         reasonRequired: false
         publicReason: optional
-      - id: rejected
+      rejected:
         label: Return for correction
         settlement: answered
         reasonRequired: true
         publicReason: required
 trustedProducers:
-  - id: requester
+  requester:
     profile: requester
     issuer: http://127.0.0.1:8093
     subject: b75315b2-5854-70f3-8867-511dd771a6da
     sourceNamespaces: [standalone]
     reviewPolicies: [decision]
-    recoveryDays: 30
+    retention: {receiptRetentionDays: 30}
 "#;
 
 const STANDALONE_FIXTURE: &str = r#"# yaml-language-server: $schema=../.casework/schemas/fixture.schema.json

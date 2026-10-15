@@ -217,19 +217,19 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     let policy = json!({
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1",
         "kind":"CaseworkProject", "project":{"id":"local-review","version":"1"},
-        "accessProfiles":[
-            {"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
-            {"id":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
-            {"id":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
-            {"id":"requester","principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
-        ],
-        "queues":[{"id":"review","label":"Review"}],
-        "teams":[{"id":"team","label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}],
+        "accessProfiles":{
+            "staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
+            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
+            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
+            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
+        },
+        "queues":{"review":{"label":"Review"}},
+        "teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
         "reviewPolicies":[{"id":"external-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
             "stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1}],
-            "retention":{"terminalDays":30,"accountabilityDays":90},
-            "displaySchema":{"type":"object","additionalProperties":false,"required":["tenant"],"properties":{"tenant":{"type":"string","maxLength":128}}},"outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}]}],
-        "trustedProducers":[{"id":"requester","profile":"requester","issuer":session.issuer(),"subject":requester["subject"],"sourceNamespaces":["standalone"],"reviewPolicies":["external-review"],"recoveryDays":7}],
+            "retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
+            "displaySchema":{"type":"object","additionalProperties":false,"required":["tenant"],"properties":{"tenant":{"type":"string","maxLength":128}}},"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}],
+        "trustedProducers":{"requester":{"profile":"requester","issuer":session.issuer(),"subject":requester["subject"],"sourceNamespaces":["standalone"],"reviewPolicies":["external-review"],"retention":{"receiptRetentionDays":7}}},
         "taskTemplates":[{"id":"draft","version":"1","label":"Prepare correction","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"standalone","reviewPolicies":["external-review"],"agent":{"issuer":session.issuer(),"subject":agent["subject"]},"client":"task-agent","resource":AUDIENCE,"scopes":["records:get"],"purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":["create","get","patch","submit-request"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900}]
     });
     fs::write(

@@ -147,12 +147,6 @@
         ],
         "type": "object"
       },
-      "ActivityClockAnchor": {
-        "enum": [
-          "stage-entered-at"
-        ],
-        "type": "string"
-      },
       "AssignmentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -250,9 +244,6 @@
               "anchor": {
                 "$ref": "#/components/schemas/SubjectClockAnchor"
               },
-              "completeOn": {
-                "$ref": "#/components/schemas/SubjectClockCompletion"
-              },
               "id": {
                 "$ref": "#/components/schemas/LocalId"
               },
@@ -265,7 +256,6 @@
               "type",
               "id",
               "anchor",
-              "completeOn",
               "after"
             ],
             "type": "object"
@@ -274,10 +264,10 @@
             "additionalProperties": false,
             "properties": {
               "after": {
-                "$ref": "#/components/schemas/WorkingDaysAfter"
+                "$ref": "#/components/schemas/WorkingDays"
               },
               "anchor": {
-                "$ref": "#/components/schemas/ActivityClockAnchor"
+                "$ref": "#/components/schemas/StageClockAnchor"
               },
               "atRisk": {
                 "$ref": "#/components/schemas/WorkingDaysBefore"
@@ -304,7 +294,7 @@
                 "type": "array"
               },
               "type": {
-                "const": "activity",
+                "const": "stage",
                 "type": "string"
               }
             },
@@ -334,20 +324,18 @@
       },
       "ClockReminder": {
         "additionalProperties": false,
+        "description": "A named reminder, written `reminders: {ID: {before: {workingDays: N}}}`.",
         "properties": {
+          "before": {
+            "$ref": "#/components/schemas/WorkingDays"
+          },
           "id": {
             "$ref": "#/components/schemas/LocalId"
-          },
-          "workingDaysBefore": {
-            "format": "uint32",
-            "maximum": 3650,
-            "minimum": 1,
-            "type": "integer"
           }
         },
         "required": [
           "id",
-          "workingDaysBefore"
+          "before"
         ],
         "type": "object"
       },
@@ -441,7 +429,6 @@
             "description": "Approval names an approved outcome. It carries no private reason or\nresult, which approved outcomes cannot require.",
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -468,7 +455,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -506,7 +492,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -544,7 +529,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -798,16 +782,54 @@
         "type": "object"
       },
       "ElapsedDuration": {
-        "additionalProperties": false,
-        "properties": {
-          "elapsed": {
-            "type": "string"
+        "description": "An elapsed budget in exactly one unit; a day is 24 elapsed hours.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "minutes": {
+                "format": "uint32",
+                "maximum": 5256000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "minutes"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "hours": {
+                "format": "uint32",
+                "maximum": 87600,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "hours"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "days": {
+                "format": "uint32",
+                "maximum": 3650,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "days"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "elapsed"
-        ],
-        "type": "object"
+        ]
       },
       "EvidenceRequesterContext": {
         "additionalProperties": false,
@@ -935,7 +957,6 @@
             "description": "Approval names an approved outcome. It carries no private reason or\nresult, which approved outcomes cannot require.",
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -962,7 +983,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -1000,7 +1020,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -1038,7 +1057,6 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "default": "",
                 "type": "string"
               },
               "publicReason": {
@@ -2329,6 +2347,23 @@
           }
         ]
       },
+      "ProducerRetention": {
+        "additionalProperties": false,
+        "description": "How long Casework keeps what a producer needs to recover a submission.",
+        "properties": {
+          "receiptRetentionDays": {
+            "description": "Days a submission receipt stays readable for recovery, at most 365.",
+            "format": "uint32",
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receiptRetentionDays"
+        ],
+        "type": "object"
+      },
       "QueuePolicy": {
         "additionalProperties": false,
         "properties": {
@@ -2593,6 +2628,7 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "description": "A subject clock covers one request. The correlation names the subject\nthe request reviews; the budget is the request's own, and a\nresubmission starts a new one.",
             "properties": {
               "id": {
                 "type": "string"
@@ -2809,7 +2845,6 @@
       "ReviewClockState": {
         "enum": [
           "running",
-          "paused",
           "completed",
           "cancelled",
           "source-facts-missing"
@@ -3049,10 +3084,8 @@
             "$ref": "#/components/schemas/ReviewDecisionType"
           },
           "outcome": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "The policy outcome the decision selected; every decision names one.",
+            "type": "string"
           },
           "outcomeLabel": {
             "description": "The configured label from the decision's immutable pinned policy.",
@@ -3068,6 +3101,7 @@
         "required": [
           "policy",
           "decision",
+          "outcome",
           "decidedAt"
         ],
         "type": "object"
@@ -3223,6 +3257,7 @@
             "$ref": "#/components/schemas/LocalId"
           },
           "outcomes": {
+            "description": "Written in configuration as a mapping from each outcome id; served\nas a list by id.",
             "items": {
               "$ref": "#/components/schemas/ReviewOutcomePolicy"
             },
@@ -3448,11 +3483,8 @@
           "profile": {
             "type": "string"
           },
-          "recoveryDays": {
-            "format": "uint32",
-            "maximum": 3650,
-            "minimum": 1,
-            "type": "integer"
+          "retention": {
+            "$ref": "#/components/schemas/ProducerRetention"
           },
           "reviewPolicies": {
             "items": {
@@ -3480,7 +3512,7 @@
           "subject",
           "sourceNamespaces",
           "reviewPolicies",
-          "recoveryDays"
+          "retention"
         ],
         "type": "object"
       },
@@ -3715,13 +3747,13 @@
       "ReviewRetentionPolicy": {
         "additionalProperties": false,
         "properties": {
-          "accountabilityDays": {
+          "accountabilityRetentionDays": {
             "format": "uint32",
             "maximum": 3650,
             "minimum": 1,
             "type": "integer"
           },
-          "terminalDays": {
+          "terminalRetentionDays": {
             "format": "uint32",
             "maximum": 3650,
             "minimum": 1,
@@ -3729,8 +3761,8 @@
           }
         },
         "required": [
-          "terminalDays",
-          "accountabilityDays"
+          "terminalRetentionDays",
+          "accountabilityRetentionDays"
         ],
         "type": "object"
       },
@@ -4201,29 +4233,14 @@
           "constraint-invalid",
           "constraint-violated",
           "public-reason-required",
-          "public-reason-not-declared"
-        ],
-        "type": "string"
-      },
-      "RoutingActivity": {
-        "enum": [
-          "review"
+          "public-reason-not-declared",
+          "approval-outcome-differs"
         ],
         "type": "string"
       },
       "RoutingCondition": {
         "additionalProperties": false,
         "properties": {
-          "activity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RoutingActivity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "fields": {
             "additionalProperties": false,
             "patternProperties": {
@@ -4326,6 +4343,25 @@
         ],
         "type": "string"
       },
+      "StageClockAnchor": {
+        "additionalProperties": false,
+        "description": "The instant a stage clock counts from: `anchor: {type: stage-entered}`.",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/StageClockAnchorType"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "StageClockAnchorType": {
+        "enum": [
+          "stage-entered"
+        ],
+        "type": "string"
+      },
       "SubjectBinding": {
         "additionalProperties": false,
         "properties": {
@@ -4355,14 +4391,21 @@
         "type": "object"
       },
       "SubjectClockAnchor": {
-        "enum": [
-          "request-accepted-at"
+        "additionalProperties": false,
+        "description": "The instant a subject clock counts from: `anchor: {type: request-accepted}`.",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/SubjectClockAnchorType"
+          }
+        },
+        "required": [
+          "type"
         ],
-        "type": "string"
+        "type": "object"
       },
-      "SubjectClockCompletion": {
+      "SubjectClockAnchorType": {
         "enum": [
-          "result-terminal"
+          "request-accepted"
         ],
         "type": "string"
       },
@@ -5114,8 +5157,9 @@
         "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
         "type": "string"
       },
-      "WorkingDaysAfter": {
+      "WorkingDays": {
         "additionalProperties": false,
+        "description": "A number of working days: `after: {workingDays: N}`, and the lead time\ninside `before`.",
         "properties": {
           "workingDays": {
             "format": "uint32",
@@ -5131,16 +5175,14 @@
       },
       "WorkingDaysBefore": {
         "additionalProperties": false,
+        "description": "A lead time before a stage clock is due: `{before: {workingDays: N}}`.",
         "properties": {
-          "workingDaysBefore": {
-            "format": "uint32",
-            "maximum": 3650,
-            "minimum": 1,
-            "type": "integer"
+          "before": {
+            "$ref": "#/components/schemas/WorkingDays"
           }
         },
         "required": [
-          "workingDaysBefore"
+          "before"
         ],
         "type": "object"
       },

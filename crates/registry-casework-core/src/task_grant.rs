@@ -473,9 +473,9 @@ impl TaskTemplate {
                 );
             }
         }
-        for (index, kind) in self.review_policies.iter().enumerate() {
+        for (index, policy_id) in self.review_policies.iter().enumerate() {
             let decidable = project.review_policies.iter().any(|candidate| {
-                candidate.id == *kind
+                candidate.id == *policy_id
                     && candidate.stages.iter().any(|stage| {
                         stage
                             .deciding_profiles

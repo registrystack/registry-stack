@@ -116,10 +116,9 @@ fn local_clients(breg: &mut Value, casework: &mut Value, authority: &str) -> Res
 
 fn bind_producer(project: &mut Value, identity: &Value) -> Result<()> {
     let trust = project["trustedProducers"]
-        .as_array_mut()
+        .as_object_mut()
         .context("canonical project has no trusted producers")?
-        .iter_mut()
-        .find(|trust| trust["id"] == "facility-registry")
+        .get_mut("facility-registry")
         .context("canonical project has no facility review producer")?;
     trust["issuer"] = identity["issuer"].clone();
     trust["subject"] = identity["subject"].clone();
@@ -618,8 +617,8 @@ mod tests {
             original_project["contextProviders"]
         );
         assert_eq!(
-            project["trustedProducers"][0],
-            original_project["trustedProducers"][0]
+            project["trustedProducers"]["requester"],
+            original_project["trustedProducers"]["requester"]
         );
         assert_eq!(fs::read_dir(directory).unwrap().count(), fixtures.len());
     }
@@ -686,11 +685,11 @@ mod tests {
             .unwrap()
             .unwrap()
             .to_json_value();
-        let unrelated = project["trustedProducers"][0].clone();
+        let unrelated = project["trustedProducers"]["requester"].clone();
         let identity = json!({"issuer":"http://127.0.0.1:28093", "subject":"owner-requester"});
         bind_producer(&mut project, &identity).unwrap();
-        assert_eq!(project["trustedProducers"][0], unrelated);
-        let producer = &project["trustedProducers"][1];
+        assert_eq!(project["trustedProducers"]["requester"], unrelated);
+        let producer = &project["trustedProducers"]["facility-registry"];
         assert_eq!(producer["issuer"], identity["issuer"]);
         assert_eq!(producer["subject"], identity["subject"]);
         assert_eq!(producer["trustedInitiatorIssuer"], identity["issuer"]);

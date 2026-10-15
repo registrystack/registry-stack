@@ -6,15 +6,15 @@ use super::*;
 async fn applied_escalation_losing_service_does_not_block_the_next_served_step() {
     let mut project = clock_project(false);
     project["queues"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({"id":"south","label":"South reviews"}));
-    project["teams"][0]["serves"]
+        .insert("south".into(), json!({"label":"South reviews"}));
+    project["teams"]["review-team"]["serves"]
         .as_array_mut()
         .unwrap()
         .push(json!("south"));
-    project["clocks"][0]["reminders"] = json!([]);
-    project["clocks"][0]["steps"] = json!([
+    project["clocks"]["deadline"]["reminders"] = json!({});
+    project["clocks"]["deadline"]["steps"] = json!([
         {"id":"first","because":"First escalation","at":"due","action":{"reassign":{"queue":"north"}}},
         {"id":"second","because":"Second escalation","at":"due","action":{"reassign":{"queue":"south"}}}
     ]);
@@ -82,8 +82,8 @@ async fn applied_escalation_losing_service_does_not_block_the_next_served_step()
 #[tokio::test]
 async fn holiday_publication_refreshes_deadlines_and_due_ordered_next() {
     let mut project = clock_project(false);
-    project["clocks"][0]["reminders"] = json!([]);
-    project["clocks"][0]["steps"] = json!([]);
+    project["clocks"]["deadline"]["reminders"] = json!({});
+    project["clocks"]["deadline"]["steps"] = json!([]);
     let f = Fixture::new(project).await;
     let later = f.create("created-first-due-later").await;
     let later_task = f.task(later.request_id).await;

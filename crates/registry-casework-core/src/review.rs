@@ -16,6 +16,8 @@ use crate::{ClockPolicy, IssuerPrincipal};
 
 pub const MAXIMUM_REVIEW_POLICIES: usize = 64;
 pub const MAXIMUM_REVIEW_RETENTION_DAYS: u32 = 3_650;
+/// The longest a producer's submission receipt is kept for its recovery.
+pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u32 = 365;
 pub const MAXIMUM_REVIEW_STAGES: usize = 32;
 pub const MAXIMUM_REVIEW_PROFILES_PER_STAGE: usize = 32;
 pub const MAXIMUM_REVIEW_APPROVALS_PER_STAGE: u16 = 32;
@@ -54,13 +56,13 @@ pub struct ReviewRetentionPolicy {
         feature = "schema",
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
     )]
-    pub terminal_days: u32,
+    pub terminal_retention_days: u32,
     #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
     #[cfg_attr(
         feature = "schema",
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
     )]
-    pub accountability_days: u32,
+    pub accountability_retention_days: u32,
 }
 
 impl ReviewRetentionPolicy {
@@ -69,30 +71,35 @@ impl ReviewRetentionPolicy {
     fn findings(&self, findings: &mut Findings) {
         let message =
             format!("expected a whole number of days from 1 to {MAXIMUM_REVIEW_RETENTION_DAYS}");
-        if self.terminal_days == 0 || self.terminal_days > MAXIMUM_REVIEW_RETENTION_DAYS {
+        if self.terminal_retention_days == 0
+            || self.terminal_retention_days > MAXIMUM_REVIEW_RETENTION_DAYS
+        {
             findings.push(
                 "casework.review-policy.retention-out-of-range",
-                "/retention/terminalDays",
+                "/retention/terminalRetentionDays",
                 message.as_str(),
                 "Write a number of days within the bound.",
             );
         }
-        if self.accountability_days > MAXIMUM_REVIEW_RETENTION_DAYS {
+        if self.accountability_retention_days > MAXIMUM_REVIEW_RETENTION_DAYS {
             findings.push(
                 "casework.review-policy.retention-out-of-range",
-                "/retention/accountabilityDays",
+                "/retention/accountabilityRetentionDays",
                 message.as_str(),
                 "Write a number of days within the bound.",
             );
-        } else if self.accountability_days < self.terminal_days {
+        } else if self.accountability_retention_days < self.terminal_retention_days {
             findings.add(
                 ConfigFinding::new(
                     "casework.review-policy.accountability-before-terminal",
-                    "/retention/accountabilityDays",
-                    "accountabilityDays is shorter than terminalDays",
-                    "Make accountabilityDays at least as long as terminalDays.",
+                    "/retention/accountabilityRetentionDays",
+                    "accountabilityRetentionDays is shorter than terminalRetentionDays",
+                    "Make accountabilityRetentionDays at least as long as terminalRetentionDays.",
                 )
-                .with_related("/retention/terminalDays", "terminalDays is written here"),
+                .with_related(
+                    "/retention/terminalRetentionDays",
+                    "terminalRetentionDays is written here",
+                ),
             );
         }
     }
@@ -107,6 +114,9 @@ impl ReviewRetentionPolicy {
     deny_unknown_fields
 )]
 pub enum ReviewClockCorrelation {
+    /// A subject clock covers one request. The correlation names the subject
+    /// the request reviews; the budget is the request's own, and a
+    /// resubmission starts a new one.
     Subject {
         source: String,
         subject_type: String,
@@ -132,7 +142,7 @@ impl ReviewClockCorrelation {
                 subject_type: subject.subject_type.clone(),
                 id: subject.id.clone(),
             },
-            ClockPolicy::Activity { .. } => Self::Activity {
+            ClockPolicy::Stage { .. } => Self::Activity {
                 task_id,
                 stage_id: stage_id.to_owned(),
             },
@@ -324,8 +334,32 @@ pub struct ReviewPolicy {
         schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
     )]
     pub result_schema: Option<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Written in configuration as a mapping from each outcome id; served
+    /// as a list by id.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::id_keyed_or_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_or_list_schema::<ReviewOutcomePolicy>")
+    )]
     pub outcomes: Vec<ReviewOutcomePolicy>,
+}
+
+impl registry_platform_yaml::Identified for ReviewOutcomePolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// The pointer to an outcome, which configuration keys by its id.
+fn outcome_pointer(outcome: &ReviewOutcomePolicy) -> String {
+    format!(
+        "/outcomes/{}",
+        registry_platform_yaml::escape_pointer_segment(&outcome.id)
+    )
 }
 
 impl ReviewPolicy {
@@ -448,11 +482,11 @@ impl ReviewPolicy {
         match self.purpose {
             ReviewPurpose::Approval => {
                 let mut payload = Findings::default();
-                for (index, outcome) in self.outcomes.iter().enumerate() {
+                for outcome in &self.outcomes {
                     if outcome.settlement == ReviewOutcomeSettlement::Answered {
                         payload.push(
                             "casework.review-policy.answered-outcome-in-approval",
-                            format!("/outcomes/{index}/settlement"),
+                            format!("{}/settlement", outcome_pointer(outcome)),
                             "an approval review policy cannot settle with answered",
                             "Write settlement: rejected or changes-requested, or make the review policy's purpose answer.",
                         );
@@ -503,11 +537,11 @@ impl ReviewPolicy {
                         "Declare an outcome with settlement: answered.",
                     );
                 }
-                for (index, outcome) in self.outcomes.iter().enumerate() {
+                for outcome in &self.outcomes {
                     if outcome.settlement != ReviewOutcomeSettlement::Answered {
                         answer_outcomes.push(
                             "casework.review-policy.unanswered-outcome-in-answer",
-                            format!("/outcomes/{index}/settlement"),
+                            format!("{}/settlement", outcome_pointer(outcome)),
                             "an answer review policy settles only with answered",
                             "Write settlement: answered.",
                         );
@@ -556,19 +590,19 @@ impl ReviewPolicy {
         outcomes.repeated(
             self.outcomes
                 .iter()
-                .enumerate()
-                .map(|(index, outcome)| (format!("/outcomes/{index}/id"), outcome.id.as_str())),
+                .map(|outcome| (outcome_pointer(outcome), outcome.id.as_str())),
             "casework.review-policy.duplicate-outcome-id",
             "this outcome id is already declared",
             "Give every outcome of the review policy a unique id.",
         );
-        for (index, outcome) in self.outcomes.iter().enumerate() {
+        for outcome in &self.outcomes {
+            let at = outcome_pointer(outcome);
             if outcome.settlement == ReviewOutcomeSettlement::Approved
                 && (outcome.reason_required || outcome.result_required)
             {
                 outcomes.push(
                     "casework.review-policy.approval-payload",
-                    format!("/outcomes/{index}"),
+                    at.clone(),
                     "approval outcomes cannot require a reason or result payload",
                     "Use a reason-free and payload-free approval outcome.",
                 );
@@ -576,7 +610,7 @@ impl ReviewPolicy {
             if !valid_identifier(&outcome.id) {
                 outcomes.push(
                     "casework.review-policy.invalid-outcome-id",
-                    format!("/outcomes/{index}/id"),
+                    at.clone(),
                     IDENTIFIER_MESSAGE,
                     IDENTIFIER_ACTION,
                 );
@@ -584,7 +618,7 @@ impl ReviewPolicy {
             if !outcome.label_is_valid() {
                 outcomes.push(
                     "casework.review-policy.invalid-outcome-label",
-                    format!("/outcomes/{index}/label"),
+                    format!("{at}/label"),
                     "expected a label of 1 to 120 bytes that is not only spaces and has no control characters",
                     "Write a short label for the outcome.",
                 );
@@ -592,7 +626,7 @@ impl ReviewPolicy {
             if self.result_schema.is_none() && outcome.result_required {
                 outcomes.push(
                     "casework.review-policy.result-required-without-result-schema",
-                    format!("/outcomes/{index}/resultRequired"),
+                    format!("{at}/resultRequired"),
                     "resultRequired needs a resultSchema on the review policy",
                     "Declare resultSchema on the review policy, or remove resultRequired.",
                 );
@@ -627,7 +661,7 @@ impl ReviewPolicy {
             template.label.clear();
         }
         for clock in &mut dependencies.clocks {
-            if let ClockPolicy::Activity { steps, .. } = clock {
+            if let ClockPolicy::Stage { steps, .. } = clock {
                 for step in steps {
                     step.because.clear();
                 }
@@ -921,8 +955,8 @@ pub enum ReviewDecisionType {
 pub struct ReviewDecisionReceipt {
     pub policy: crate::PolicyBinding,
     pub decision: ReviewDecisionType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<String>,
+    /// The policy outcome the decision selected; every decision names one.
+    pub outcome: String,
     /// The configured label from the decision's immutable pinned policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome_label: Option<String>,
@@ -1187,7 +1221,6 @@ pub struct ReviewAccountabilityRecord {
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewClockState {
     Running,
-    Paused,
     Completed,
     Cancelled,
     SourceFactsMissing,
@@ -1297,7 +1330,8 @@ pub enum DecisionKind {
 }
 
 /// Lists `outcome` as required in every decision variant of the published
-/// schema, which `#[serde(default)]` would otherwise mark optional.
+/// schema, which `#[serde(default)]` would otherwise mark optional, and drops
+/// the empty default that attribute would otherwise publish.
 #[cfg(feature = "schema")]
 fn require_decision_outcome(schema: &mut schemars::Schema) {
     let Some(variants) = schema
@@ -1310,6 +1344,13 @@ fn require_decision_outcome(schema: &mut schemars::Schema) {
         let Some(variant) = variant.as_object_mut() else {
             continue;
         };
+        if let Some(outcome) = variant
+            .get_mut("properties")
+            .and_then(|properties| properties.get_mut("outcome"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            outcome.remove("default");
+        }
         let required = variant
             .entry("required")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()));
@@ -1610,6 +1651,25 @@ pub fn record_review_decision(
         result,
         progress.result_constraints.as_ref(),
     )?;
+    // Every approval in a stage names the same outcome, so the approval that
+    // meets the threshold cannot release an outcome another approver did not
+    // choose.
+    if let DecisionKind::Approve { outcome, .. } = &decision.decision {
+        let chosen = progress
+            .decisions
+            .iter()
+            .find_map(|earlier| match &earlier.decision {
+                DecisionKind::Approve { outcome, .. } if earlier.stage_id == stage.id => {
+                    Some(outcome)
+                }
+                _ => None,
+            });
+        if let Some(chosen) = chosen.filter(|chosen| *chosen != outcome) {
+            return Err(ReviewDecisionError::ApprovalOutcomeDiffers {
+                chosen: chosen.clone(),
+            });
+        }
+    }
 
     let (settlement, settles_on_record) = match &decision.decision {
         DecisionKind::Reject {
@@ -1652,7 +1712,8 @@ pub fn record_review_decision(
             true,
         ),
         // The approval that meets the final stage's threshold settles the
-        // request, so its outcome and public reason are the ones released.
+        // request. Its stage's approvals agree on the outcome; its public
+        // reason is the one released.
         DecisionKind::Approve {
             outcome,
             public_reason,
@@ -1790,6 +1851,7 @@ pub enum ReviewValidationReason {
     ConstraintViolated,
     PublicReasonRequired,
     PublicReasonNotDeclared,
+    ApprovalOutcomeDiffers,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1888,6 +1950,8 @@ pub enum ReviewDecisionError {
         settlement: ReviewOutcomeSettlement,
         declared: Vec<String>,
     },
+    #[error("an earlier approval in this stage chose {chosen}, and every approval in a stage names the same outcome; approve with {chosen}, or request changes or reject")]
+    ApprovalOutcomeDiffers { chosen: String },
     #[error("rejection and changes-requested reasons must be bounded non-empty text")]
     ReasonInvalid,
 }
@@ -2644,6 +2708,42 @@ fn is_false(value: &bool) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "schema")]
+    #[test]
+    fn every_decision_variant_requires_an_outcome_with_no_default() {
+        let schema = serde_json::to_value(schemars::schema_for!(DecisionKind)).unwrap();
+        let variants = schema["oneOf"].as_array().unwrap();
+        assert_eq!(variants.len(), 4);
+        for variant in variants {
+            assert!(
+                variant["required"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|name| name == "outcome"),
+                "{variant}"
+            );
+            let outcome = &variant["properties"]["outcome"];
+            assert!(outcome.is_object(), "{variant}");
+            assert!(outcome.get("default").is_none(), "{variant}");
+        }
+    }
+
+    #[test]
+    fn a_decision_receipt_names_the_outcome_its_decision_selected() {
+        let policy = serde_json::json!({"id":"review","version":"1","digest":crate::ContentDigest::for_bytes(b"review")});
+        let receipt = serde_json::json!({"policy":policy,"decision":"approve","outcome":"approved","outcomeLabel":"Approve","decidedAt":"2026-09-20T01:00:00Z"});
+        let read: ReviewDecisionReceipt = serde_json::from_value(receipt.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&read).unwrap(), receipt);
+        let mut without = receipt;
+        without.as_object_mut().unwrap().remove("outcome");
+        let refused = serde_json::from_value::<ReviewDecisionReceipt>(without).unwrap_err();
+        assert!(
+            refused.to_string().contains("missing field `outcome`"),
+            "{refused}"
+        );
+    }
+
     #[test]
     fn cfg_id_1_an_identifier_follows_the_local_identifier_grammar() {
         assert!(valid_identifier("first_review-2"));
@@ -2682,8 +2782,8 @@ mod tests {
             stages,
             clocks: Vec::new(),
             retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+                terminal_retention_days: 90,
+                accountability_retention_days: 365,
             },
             display_schema: json!({
                 "type": "object",
@@ -2731,8 +2831,8 @@ mod tests {
             stages: vec![stage("answer", 1)],
             clocks: Vec::new(),
             retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+                terminal_retention_days: 90,
+                accountability_retention_days: 365,
             },
             display_schema: json!({
                 "type": "object",
@@ -3026,8 +3126,8 @@ mod tests {
         policy.context = crate::ReviewContextPolicy::Submitted;
         policy.clocks = (0..32).map(|index| identifier('c', index)).collect();
         policy.retention = ReviewRetentionPolicy {
-            terminal_days: MAXIMUM_REVIEW_RETENTION_DAYS,
-            accountability_days: MAXIMUM_REVIEW_RETENTION_DAYS,
+            terminal_retention_days: MAXIMUM_REVIEW_RETENTION_DAYS,
+            accountability_retention_days: MAXIMUM_REVIEW_RETENTION_DAYS,
         };
         policy.display_schema = schema.clone();
         policy.result_schema = Some(schema.clone());
@@ -3065,14 +3165,13 @@ mod tests {
     }
 
     #[test]
-    fn subject_clock_correlation_survives_new_review_rounds_but_activity_does_not() {
+    fn subject_clock_correlation_names_the_subject_of_each_request_and_activity_names_the_task() {
         let clock = ClockPolicy::Subject {
             id: "response-budget".to_owned(),
-            anchor: crate::SubjectClockAnchor::RequestAcceptedAt,
-            complete_on: crate::SubjectClockCompletion::ResultTerminal,
-            after: crate::ElapsedDuration {
-                elapsed: "PT1H".to_owned(),
+            anchor: crate::SubjectClockAnchor {
+                kind: crate::SubjectClockAnchorType::RequestAccepted,
             },
+            after: crate::ElapsedDuration::Hours(1),
         };
         let first = SubjectBinding {
             source: "registry".to_owned(),
@@ -3524,7 +3623,8 @@ mod tests {
     #[test]
     fn review_retention_and_outcome_vocabulary_are_bounded() {
         let mut policy = answer_policy();
-        policy.retention.accountability_days = policy.retention.terminal_days - 1;
+        policy.retention.accountability_retention_days =
+            policy.retention.terminal_retention_days - 1;
         assert_eq!(policy.check(), Err(ReviewPolicyError::Retention));
 
         let mut policy = answer_policy();
@@ -3957,8 +4057,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_approval_meeting_the_final_threshold_settles_with_its_outcome() {
+    fn two_approval_policy_with_conditions() -> ReviewPolicyClosure {
         let mut policy = approval_policy(vec![stage("review", 2)]);
         policy.outcomes.push(ReviewOutcomePolicy {
             id: "approved-with-conditions".to_owned(),
@@ -3968,9 +4067,23 @@ mod tests {
             public_reason: ReviewPublicReasonRule::Required,
             result_required: false,
         });
-        let snapshot = policy
+        policy
             .closure_with(crate::ReviewPolicyDependencies::default())
-            .unwrap();
+            .unwrap()
+    }
+
+    fn approve_with_conditions(task: &ReviewTask, reviewer: IssuerPrincipal) -> Decision {
+        let mut decision = approve(task, reviewer);
+        decision.decision = DecisionKind::Approve {
+            outcome: "approved-with-conditions".to_owned(),
+            public_reason: Some("Approved; renew the permit within a year.".to_owned()),
+        };
+        decision
+    }
+
+    #[test]
+    fn approvals_in_one_stage_that_agree_settle_with_their_outcome() {
+        let snapshot = two_approval_policy_with_conditions();
         let request_id = Uuid::from_u128(100);
         let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
         let first = task(request_id, 0, "review", 1, "a");
@@ -3978,17 +4091,17 @@ mod tests {
             &snapshot,
             &mut progress,
             &first,
-            approve(&first, person("a")),
+            approve_with_conditions(&first, person("a")),
         )
         .unwrap();
         let second = task(request_id, 0, "review", 2, "b");
-        let mut decision = approve(&second, person("b"));
-        decision.decision = DecisionKind::Approve {
-            outcome: "approved-with-conditions".to_owned(),
-            public_reason: Some("Approved; renew the permit within a year.".to_owned()),
-        };
         assert_eq!(
-            record_review_decision(&snapshot, &mut progress, &second, decision),
+            record_review_decision(
+                &snapshot,
+                &mut progress,
+                &second,
+                approve_with_conditions(&second, person("b"))
+            ),
             Ok(ReviewTransition::Settled {
                 settlement: ReviewSettlement::Approved {
                     outcome: "approved-with-conditions".to_owned(),
@@ -3996,6 +4109,45 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn an_approval_naming_another_outcome_than_its_stage_already_chose_is_refused() {
+        let snapshot = two_approval_policy_with_conditions();
+        let request_id = Uuid::from_u128(100);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let first = task(request_id, 0, "review", 1, "a");
+        record_review_decision(
+            &snapshot,
+            &mut progress,
+            &first,
+            approve_with_conditions(&first, person("a")),
+        )
+        .unwrap();
+        let second = task(request_id, 0, "review", 2, "b");
+        let error = record_review_decision(
+            &snapshot,
+            &mut progress,
+            &second,
+            approve(&second, person("b")),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ReviewDecisionError::ApprovalOutcomeDiffers {
+                chosen: "approved-with-conditions".to_owned(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "an earlier approval in this stage chose approved-with-conditions, and every approval in a stage names the same outcome; approve with approved-with-conditions, or request changes or reject"
+        );
+        assert_eq!(
+            progress.decisions.len(),
+            1,
+            "a refused approval is not recorded"
+        );
+        assert!(progress.settlement.is_none());
     }
 
     #[test]

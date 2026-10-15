@@ -324,15 +324,15 @@ def write_casework(root, urls, resource, agent_subject, context_schema):
     _write(root / "casework.yaml", {
         "apiVersion": "id.registrystack.org/formats/casework/project/v1alpha1",
         "kind": "CaseworkProject", "project": {"id": "coordinator-casework", "version": "1"},
-        "accessProfiles": [
-            {"id": "staff", "principalClaim": "casework_principal", "requiredScopes": ["casework:staff"], "role": "staff"},
-            {"id": "supervisor", "principalClaim": "casework_principal", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
-            {"id": "administrator", "principalClaim": "casework_principal", "requiredScopes": ["casework:admin"], "role": "administrator"},
-            {"id": "producer", "principalClaim": "casework_principal", "requiredScopes": ["casework:reviews:request"], "role": "requester"},
-        ],
-        "queues": [{"id": "review", "label": "Synthetic application review"}],
-        "teams": [{"id": "team", "label": "Application reviewers", "serves": ["review"],
-                   "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}],
+        "accessProfiles": {
+            "staff": {"principalClaim": "casework_principal", "requiredScopes": ["casework:staff"], "role": "staff"},
+            "supervisor": {"principalClaim": "casework_principal", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
+            "administrator": {"principalClaim": "casework_principal", "requiredScopes": ["casework:admin"], "role": "administrator"},
+            "producer": {"principalClaim": "casework_principal", "requiredScopes": ["casework:reviews:request"], "role": "requester"},
+        },
+        "queues": {"review": {"label": "Synthetic application review"}},
+        "teams": {"team": {"label": "Application reviewers", "serves": ["review"],
+                           "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}},
         "contextProviders": [{"id": "applications", "deploymentRef": "applications", "sourceNamespace": SOURCE,
             "capabilities": ["human-display", "service-status"], "serviceProfiles": {"service-status": "reader"}}],
         "reviewPolicies": [{
@@ -340,18 +340,18 @@ def write_casework(root, urls, resource, agent_subject, context_schema):
             "context": {"mode": "current-source", "provider": "applications", "contract": context_schema["contract"]}, "stages": [{
                 "id": "review", "queue": "review", "decidingProfiles": ["staff"], "requiredApprovals": 1,
             }],
-            "retention": {"terminalDays": 30, "accountabilityDays": 90},
+            "retention": {"terminalRetentionDays": 30, "accountabilityRetentionDays": 90},
             "displaySchema": {"$ref": "schemas/application-email.schema.json"},
-            "outcomes": [{"id": "approved", "label": "Correction authorized",
-                          "settlement": "approved", "reasonRequired": False, "publicReason": "none"},
-                         {"id": "not-authorized", "label": "Correction not authorized",
-                          "settlement": "rejected", "reasonRequired": False, "publicReason": "optional"}],
+            "outcomes": {"approved": {"label": "Correction authorized",
+                                      "settlement": "approved", "reasonRequired": False, "publicReason": "none"},
+                         "not-authorized": {"label": "Correction not authorized",
+                                            "settlement": "rejected", "reasonRequired": False, "publicReason": "optional"}},
         }],
-        "trustedProducers": [{
-            "id": "breg", "profile": "producer", "issuer": urls["issuer"],
+        "trustedProducers": {"breg": {
+            "profile": "producer", "issuer": urls["issuer"],
             "subject": CASEWORK_PRINCIPALS["producer"], "sourceNamespaces": [SOURCE],
-            "reviewPolicies": ["external-review"], "recoveryDays": 7,
-        }],
+            "reviewPolicies": ["external-review"], "retention": {"receiptRetentionDays": 7},
+        }},
         "taskTemplates": [
             booking_template,
             {**booking_template, "id": "book-appointment-expiry-control",
@@ -471,25 +471,25 @@ def write_review_casework(root, urls):
     _write(root / "casework.yaml", {
         "apiVersion": "id.registrystack.org/formats/casework/project/v1alpha1",
         "kind": "CaseworkProject", "project": {"id": "coordinator-review", "version": "1"},
-        "accessProfiles": [
-            {"id": "staff", "principalClaim": "casework_principal", "requiredScopes": ["casework:staff"], "role": "staff"},
-            {"id": "supervisor", "principalClaim": "casework_principal", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
-            {"id": "administrator", "principalClaim": "casework_principal", "requiredScopes": ["casework:admin"], "role": "administrator"},
-            {"id": "coordinator-producer", "principalClaim": "casework_principal", "requiredScopes": ["casework:review"], "role": "requester"},
-        ],
-        "queues": [{"id": "applications", "label": "Synthetic applications awaiting review"}],
-        "teams": [{"id": "reviewers", "label": "Application reviewers", "serves": ["applications"],
-                   "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}],
+        "accessProfiles": {
+            "staff": {"principalClaim": "casework_principal", "requiredScopes": ["casework:staff"], "role": "staff"},
+            "supervisor": {"principalClaim": "casework_principal", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
+            "administrator": {"principalClaim": "casework_principal", "requiredScopes": ["casework:admin"], "role": "administrator"},
+            "coordinator-producer": {"principalClaim": "casework_principal", "requiredScopes": ["casework:review"], "role": "requester"},
+        },
+        "queues": {"applications": {"label": "Synthetic applications awaiting review"}},
+        "teams": {"reviewers": {"label": "Application reviewers", "serves": ["applications"],
+                                "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}},
         "reviewPolicies": [{
             "id": "application-review", "version": "1", "purpose": "approval",
             "context": {"mode": "submitted"}, "stages": [{
                 "id": "review", "queue": "applications", "decidingProfiles": ["staff"], "requiredApprovals": 1,
             }],
-            "outcomes": [{"id": "approved", "label": "Approve",
-                          "settlement": "approved", "reasonRequired": False, "publicReason": "none"},
-                         {"id": "missing-evidence", "label": "Missing evidence",
-                          "settlement": "rejected", "reasonRequired": False, "publicReason": "optional"}],
-            "retention": {"terminalDays": 30, "accountabilityDays": 90},
+            "outcomes": {"approved": {"label": "Approve",
+                                      "settlement": "approved", "reasonRequired": False, "publicReason": "none"},
+                         "missing-evidence": {"label": "Missing evidence",
+                                              "settlement": "rejected", "reasonRequired": False, "publicReason": "optional"}},
+            "retention": {"terminalRetentionDays": 30, "accountabilityRetentionDays": 90},
             "displaySchema": {"type": "object", "additionalProperties": False,
                               "required": ["applicantName", "benefitProgram", "requestedAmount"],
                               "properties": {
@@ -498,12 +498,12 @@ def write_review_casework(root, urls):
                                   "requestedAmount": {"type": "integer", "minimum": 0, "maximum": 1000000},
                               }},
         }],
-        "trustedProducers": [{
-            "id": "coordinator", "profile": "coordinator-producer", "issuer": urls["issuer"],
+        "trustedProducers": {"coordinator": {
+            "profile": "coordinator-producer", "issuer": urls["issuer"],
             "subject": CASEWORK_PRINCIPALS["review-producer"], "sourceNamespaces": ["applications"],
-            "reviewPolicies": ["application-review"], "recoveryDays": 7,
+            "reviewPolicies": ["application-review"], "retention": {"receiptRetentionDays": 7},
             "completion": {"destinationId": "coordinator", "recipientBinding": "coordinator-v1"},
-        }],
+        }},
     })
     return root
 

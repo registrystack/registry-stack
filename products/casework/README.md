@@ -96,7 +96,14 @@ outcomes. Each outcome declares `publicReason: required`, `optional` or
 the ReviewResult, while the private `reason` stays in the accountability
 record and the audit journal records only that a public reason was given.
 Stage thresholds count independent
-eligible reviewers. Decisions and task holdings are revision-fenced; an old
+eligible reviewers. Every approval in one stage names the same outcome: one
+naming another outcome than the stage already chose is refused at
+`$.outcome` with `approval-outcome-differs`, and the
+`Registry-Casework-Validation-Allowed` header names the chosen outcome. The
+final stage settles the request with that outcome and the public reason of
+the approval that meets its threshold; earlier stages' outcomes and reasons,
+and other approvers' public reasons, are kept for accountability and not
+released. Decisions and task holdings are revision-fenced; an old
 response cannot authorize a later state.
 
 The same producer reads `GET /v1/review-requests/{requestId}/result` or its
@@ -105,9 +112,30 @@ submission digest and carries a terminal status such as `approved`,
 `rejected`, `answered`, `cancelled`, or `superseded`. A decided result names
 its `outcome` and any `publicReason`; a cancelled or superseded one carries
 neither. A completion destination,
-when configured, receives an authenticated payload-free wake; the producer
-fetches the result and authorizes any later mutation independently. A wake
-does not start a Coordinator run or carry a decision payload.
+when configured, receives an authenticated payload-free wake. A wake carries
+no decision payload; the producer fetches the result and authorizes any later
+mutation independently.
+
+## Refused older spellings
+
+`caseworkctl check` and the runtime refuse the older project spellings below
+at their path, name the replacement, and point at the row of the format table
+in [CHANGELOG.md](CHANGELOG.md). Rewrite the project by hand; there is no
+migration command. The identifier-keyed maps of row F4 are a configuration
+shape only: the served policy lists those items as arrays in identifier order,
+so reordering a map changes neither the served policy nor its digest.
+
+| Row | Before | After |
+| --- | --- | --- |
+| F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
+| F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
+| F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
+| F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
+| F5 | `type: activity` | `type: stage` |
+| F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
+| F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |
+| F8 | `atRisk: {workingDaysBefore: N}`, reminder `workingDaysBefore: N` | `atRisk: {before: {workingDays: N}}`, `reminders: {REMINDER_ID: {before: {workingDays: N}}}` |
+| F9 | routing `when: {activity: review}` | removed; a rule applies whenever a task is created, and one naming a `stage` matches only that stage's tasks |
 
 ## Current-source BReg review
 
@@ -165,9 +193,14 @@ current Directory, policy, task, and source-disclosure checks:
 4. `GET /v1/review-tasks` filters by an exact five-part SubjectBinding or a
    visible reference and sorts by due date, subject, or reference. Selection
    never discovers arbitrary source records. Follow `nextCursor` unchanged;
-   restart the walk when a live source change makes a cursor stale.
+   restart the walk when a live source change makes a cursor stale. The
+   reference filter and sort match the exact reference the producer or
+   provider supplies. A BReg producer supplies its machine string
+   `breg:{registry}:{action}:{proposal}:{version}`, so staff cannot find a
+   BReg review by a business number such as a licence number.
 5. `POST /v1/directory/clocks/recompute/preview` and `/apply` recompute
-   deadlines against the request's pinned policy closure.
+   deadlines against the request's pinned policy closure. A subject clock
+   covers one request, and a resubmission starts a new budget.
 6. Authored routing evaluates only declared fields at task or stage creation.
    Submitted routing reads the admitted snapshot; current-source routing uses
    the provider's minimized routing capability and retains derived metadata.

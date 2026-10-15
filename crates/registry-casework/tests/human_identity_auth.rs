@@ -250,11 +250,11 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
         [
             (
                 "casework.access-profile.shared-scopes",
-                "/accessProfiles/0/requiredScopes".to_owned()
+                "/accessProfiles/staff/requiredScopes".to_owned()
             ),
             (
                 "casework.access-profile.shared-scopes",
-                "/accessProfiles/4/requiredScopes".to_owned()
+                "/accessProfiles/staff-by-employee/requiredScopes".to_owned()
             ),
         ]
     );

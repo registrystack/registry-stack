@@ -19,20 +19,20 @@ use uuid::Uuid;
 fn project_value(source: bool, routing: bool) -> Value {
     let mut value = json!({
      "apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"acceptance","version":"1"},
-     "accessProfiles":[
-      {"id":"staff","role":"staff","principalClaim":"sub","requiredScopes":["casework:review"]},
-      {"id":"supervisor","role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervise"]},
-      {"id":"administrator","role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},
-      {"id":"producer","role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}],
-     "queues":[{"id":"reviews","label":"Reviews"},{"id":"north","label":"North reviews"}],
-     "teams":[{"id":"review-team","label":"Review team","serves":["reviews","north"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}],
-     "clocks":[{"id":"deadline","type":"subject","anchor":"request-accepted-at","completeOn":"result-terminal","after":{"elapsed":"PT48H"}}],
+     "accessProfiles":{
+      "staff":{"role":"staff","principalClaim":"sub","requiredScopes":["casework:review"]},
+      "supervisor":{"role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervise"]},
+      "administrator":{"role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},
+      "producer":{"role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
+     "queues":{"reviews":{"label":"Reviews"},"north":{"label":"North reviews"}},
+     "teams":{"review-team":{"label":"Review team","serves":["reviews","north"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
+     "clocks":{"deadline":{"type":"subject","anchor":{"type":"request-accepted"},"after":{"hours":48}}},
      "reviewPolicies":[{"id":"notice-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
       "stages":[{"id":"review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
-      "clocks":["deadline"],"retention":{"terminalDays":30,"accountabilityDays":90},
-      "outcomes":[{"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},{"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}],
+      "clocks":["deadline"],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
+      "outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},"rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}},
       "displaySchema":{"type":"object","additionalProperties":false,"required":["title","region"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}}],
-     "trustedProducers":[{"id":"notice-service","profile":"producer","issuer":"https://issuer.test","subject":"notice-service","trustedInitiatorIssuer":"https://issuer.test","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"recoveryDays":7}]
+     "trustedProducers":{"notice-service":{"profile":"producer","issuer":"https://issuer.test","subject":"notice-service","trustedInitiatorIssuer":"https://issuer.test","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"retention":{"receiptRetentionDays":7}}}
     });
     if source {
         let bytes = registry_platform_canonical_json::canonicalize_json(
@@ -689,6 +689,98 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     assert!(!published.contains("human-source-token"));
 }
 #[tokio::test]
+async fn approvals_in_one_stage_must_agree_on_the_outcome_they_release() {
+    let mut value = project_value(false, false);
+    value["reviewPolicies"][0]["stages"][0]["requiredApprovals"] = json!(2);
+    value["reviewPolicies"][0]["outcomes"]["approved-with-conditions"] = json!({"label":"Approve with conditions","settlement":"approved","reasonRequired":false,"publicReason":"required"});
+    let f = Fixture::new(value).await;
+    let accepted = f.create("agreeing").await;
+    let with_conditions = ReviewTaskDecisionRequest {
+        decision: DecisionKind::Approve {
+            outcome: "approved-with-conditions".into(),
+            public_reason: Some("Renew the permit within a year.".into()),
+        },
+    };
+    let first = f.task(accepted.request_id).await;
+    let held = f.claim(first, "a").await;
+    f.service
+        .decide_review_task(
+            &actor("a", CaseworkRole::Staff),
+            first,
+            with_conditions.clone(),
+            None,
+            "",
+            held.revision,
+            "first-approval",
+        )
+        .await
+        .unwrap();
+    let second = f.task(accepted.request_id).await;
+    assert_ne!(first, second);
+    let held = f.claim(second, "b").await;
+    let refused = f
+        .service
+        .decide_review_task(
+            &actor("b", CaseworkRole::Staff),
+            second,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            None,
+            "",
+            held.revision,
+            "differing-approval",
+        )
+        .await;
+    let Err(ReviewRuntimeError::Validation(error)) = refused else {
+        panic!("a differing approval must be refused: {refused:?}");
+    };
+    assert_eq!(error.path, "$.outcome");
+    assert_eq!(error.reason, ReviewValidationReason::ApprovalOutcomeDiffers);
+    assert_eq!(&*error.allowed, ["approved-with-conditions".to_owned()]);
+    assert_eq!(
+        f.db.query_one(
+            "SELECT count(*) FROM casework_review_decisions WHERE request_id=$1",
+            &[&accepted.request_id]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        1
+    );
+    let transition = f
+        .service
+        .decide_review_task(
+            &actor("b", CaseworkRole::Staff),
+            second,
+            with_conditions,
+            None,
+            "",
+            held.revision,
+            "agreeing-approval",
+        )
+        .await
+        .unwrap();
+    let ReviewTransition::Settled {
+        settlement:
+            ReviewSettlement::Approved {
+                outcome,
+                public_reason,
+            },
+    } = transition
+    else {
+        panic!("agreeing approvals settle the request: {transition:?}");
+    };
+    assert_eq!(outcome, "approved-with-conditions");
+    assert_eq!(
+        public_reason.as_deref(),
+        Some("Renew the permit within a year.")
+    );
+}
+#[tokio::test]
 async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation() {
     let f = Fixture::new(project_value(true, false)).await;
     for id in ["z", "a", "hidden"] {
@@ -1069,7 +1161,7 @@ async fn due_order_holdings_and_pinned_subject_clock_recompute() {
     let ClockPolicy::Subject { after, .. } = &mut active.clocks[0] else {
         panic!()
     };
-    after.elapsed = "PT1H".into();
+    *after = registry_casework_core::ElapsedDuration::Hours(1);
     let changed = CaseworkService::new(
         f.store.clone(),
         active,
@@ -1161,7 +1253,8 @@ async fn live_read_budget_requires_narrowing_and_exact_subject_narrows_before_sc
 #[tokio::test]
 async fn admission_namespace_cannot_substitute_the_pinned_provider_namespace() {
     let mut value = project_value(true, false);
-    value["trustedProducers"][0]["sourceNamespaces"] = json!(["notice-source", "other-source"]);
+    value["trustedProducers"]["notice-service"]["sourceNamespaces"] =
+        json!(["notice-source", "other-source"]);
     let f = Fixture::new(value).await;
     let mut request = f.request("subject");
     request.subject.source = "other-source".into();
@@ -1243,8 +1336,8 @@ async fn submitted_routing_needs_no_provider_and_request_clocks_do_not_share_rou
 #[tokio::test]
 async fn clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs() {
     let mut value = project_value(false, false);
-    value["calendars"] = json!([{"id":"office","timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"holidaySet":"office-holidays"}]);
-    value["clocks"] = json!([{"id":"deadline","type":"activity","anchor":"stage-entered-at","calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":[],"steps":[]}]);
+    value["calendars"] = json!({"office":{"timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"holidaySet":"office-holidays"}});
+    value["clocks"] = json!({"deadline":{"type":"stage","anchor":{"type":"stage-entered"},"calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":{},"steps":[]}});
     let f = Fixture::new(value).await;
     let admin = actor("admin", CaseworkRole::Administrator);
     let holiday = HolidaySetDocument {
@@ -1311,7 +1404,7 @@ async fn clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(
         1
     );
     let mut active = f.project.clone();
-    let ClockPolicy::Activity { after, .. } = &mut active.clocks[0] else {
+    let ClockPolicy::Stage { after, .. } = &mut active.clocks[0] else {
         panic!()
     };
     after.working_days = 9;

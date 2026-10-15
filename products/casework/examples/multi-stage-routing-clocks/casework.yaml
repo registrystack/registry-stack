@@ -2,17 +2,17 @@ apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
 project: {id: regional-review, version: "1"}
 accessProfiles:
-  - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
-  - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
-  - {id: administrator, principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
-  - {id: requester, principalClaim: sub, requiredScopes: [casework:request], role: requester}
+  staff: {principalClaim: sub, requiredScopes: [casework:staff], role: staff}
+  supervisor: {principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
+  administrator: {principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
+  requester: {principalClaim: sub, requiredScopes: [casework:request], role: requester}
 queues:
-  - {id: triage, label: Regional triage}
-  - {id: northern-review, label: Northern reviews}
-  - {id: overdue-review, label: Overdue reviews}
-  - {id: signoff, label: Supervisor signoff}
+  triage: {label: Regional triage}
+  northern-review: {label: Northern reviews}
+  overdue-review: {label: Overdue reviews}
+  signoff: {label: Supervisor signoff}
 teams:
-  - id: regional-team
+  regional-team:
     label: Regional review team
     serves: [triage, northern-review, overdue-review, signoff]
     memberProfiles: [staff]
@@ -26,7 +26,6 @@ reviewPolicies:
       - id: northern-requests
         because: The submitted region is north.
         when:
-          activity: review
           stage: technical
           fields: {region: {equals: north}}
         queue: northern-review
@@ -42,8 +41,8 @@ reviewPolicies:
         excludePreviousStageReviewers: true
     clocks: [review-deadline, response-budget]
     retention:
-      terminalDays: 30
-      accountabilityDays: 365
+      terminalRetentionDays: 30
+      accountabilityRetentionDays: 365
     displaySchema:
       type: object
       additionalProperties: false
@@ -52,35 +51,35 @@ reviewPolicies:
         summary: {type: string, maxLength: 160}
         region: {type: string, enum: [north, south, islands]}
     outcomes:
-      - {id: approved, label: Approve, settlement: approved, reasonRequired: false, publicReason: optional}
-      - {id: rejected, label: Return for correction, settlement: rejected, reasonRequired: true, publicReason: required}
+      approved: {label: Approve, settlement: approved, reasonRequired: false, publicReason: optional}
+      rejected: {label: Return for correction, settlement: rejected, reasonRequired: true, publicReason: required}
 trustedProducers:
-  - id: regional-service
+  regional-service:
     profile: requester
     issuer: https://identity.example.test
     subject: regional-review-producer
     sourceNamespaces: [regional-register]
     reviewPolicies: [regional-review]
-    recoveryDays: 7
+    retention: {receiptRetentionDays: 7}
 calendars:
-  - id: office
+  office:
     timezone: Asia/Bangkok
     workingWeekdays: [monday, tuesday, wednesday, thursday, friday]
     holidaySet: office-holidays
 clocks:
-  - id: response-budget
+  response-budget:
     type: subject
-    anchor: request-accepted-at
-    completeOn: result-terminal
-    after: {elapsed: PT48H}
-  - id: review-deadline
-    type: activity
-    anchor: stage-entered-at
+    anchor: {type: request-accepted}
+    after: {hours: 48}
+  review-deadline:
+    type: stage
+    anchor: {type: stage-entered}
     calendar: office
     after: {workingDays: 5}
     dueTime: "17:00"
-    atRisk: {workingDaysBefore: 1}
-    reminders: [{id: due-soon, workingDaysBefore: 1}]
+    atRisk: {before: {workingDays: 1}}
+    reminders:
+      due-soon: {before: {workingDays: 1}}
     steps:
       - id: supervisor-at-deadline
         because: The review deadline passed while the review remained active.

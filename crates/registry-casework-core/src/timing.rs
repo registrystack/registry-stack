@@ -4,15 +4,13 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Casework-owned timing pinned to admission and terminal settlement.
-/// Source observations and assignment changes cannot reset this budget.
+/// A subject clock covers one request: source observations and assignment
+/// changes cannot reset this budget, and a resubmission starts a new one.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewTiming {
     pub request_accepted_at: DateTime<Utc>,
-    /// Completed pause intervals. Final completion folds any open pause here.
-    pub paused_milliseconds: i64,
-    pub pause_started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
 }
 
@@ -21,7 +19,6 @@ pub struct ReviewTiming {
 #[serde(rename_all = "kebab-case")]
 pub enum BudgetState {
     Running,
-    Paused,
     Completed,
 }
 
@@ -32,8 +29,7 @@ pub struct ElapsedBudget {
     pub state: BudgetState,
     pub elapsed_milliseconds: i64,
     pub remaining_milliseconds: i64,
-    /// No due instant is predicted while the runtime says the clock is paused.
-    pub due_at: Option<DateTime<Utc>>,
+    pub due_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -48,50 +44,19 @@ pub fn evaluate_elapsed_budget(
     now: DateTime<Utc>,
 ) -> Result<ElapsedBudget, InvalidTiming> {
     let end = timing.completed_at.unwrap_or(now);
-    if budget_milliseconds <= 0
-        || timing.paused_milliseconds < 0
-        || timing.request_accepted_at > end
-        || end > now
-        || (timing.completed_at.is_some() && timing.pause_started_at.is_some())
-    {
+    if budget_milliseconds <= 0 || timing.request_accepted_at > end || end > now {
         return Err(InvalidTiming);
     }
-    let current_pause = match timing.pause_started_at {
-        Some(start) if start >= timing.request_accepted_at && start <= end => {
-            (end - start).num_milliseconds()
-        }
-        Some(_) => return Err(InvalidTiming),
-        None => 0,
-    };
-    let paused = timing
-        .paused_milliseconds
-        .checked_add(current_pause)
-        .ok_or(InvalidTiming)?;
-    let elapsed = (end - timing.request_accepted_at)
-        .num_milliseconds()
-        .checked_sub(paused)
-        .filter(|elapsed| *elapsed >= 0)
-        .ok_or(InvalidTiming)?;
+    let elapsed = (end - timing.request_accepted_at).num_milliseconds();
     let state = if timing.completed_at.is_some() {
         BudgetState::Completed
-    } else if timing.pause_started_at.is_some() {
-        BudgetState::Paused
     } else {
         BudgetState::Running
     };
-    let due_at = if state == BudgetState::Paused {
-        None
-    } else {
-        let duration = budget_milliseconds
-            .checked_add(paused)
-            .ok_or(InvalidTiming)?;
-        Some(
-            timing
-                .request_accepted_at
-                .checked_add_signed(Duration::try_milliseconds(duration).ok_or(InvalidTiming)?)
-                .ok_or(InvalidTiming)?,
-        )
-    };
+    let due_at = timing
+        .request_accepted_at
+        .checked_add_signed(Duration::try_milliseconds(budget_milliseconds).ok_or(InvalidTiming)?)
+        .ok_or(InvalidTiming)?;
     Ok(ElapsedBudget {
         state,
         elapsed_milliseconds: elapsed,
@@ -113,35 +78,25 @@ mod tests {
     }
 
     #[test]
-    fn explicit_pause_preserves_remaining_budget_and_resume_due_time() {
-        let mut timing = ReviewTiming {
+    fn a_running_budget_counts_from_acceptance_and_keeps_its_due_time() {
+        let timing = ReviewTiming {
             request_accepted_at: instant("2026-09-10T09:00:00+07:00"),
-            paused_milliseconds: 0,
-            pause_started_at: Some(instant("2026-09-10T13:00:00+07:00")),
             completed_at: None,
         };
-        let resumed_at = instant("2026-09-11T13:00:00+07:00");
-        let paused = evaluate_elapsed_budget(&timing, 48 * HOUR, resumed_at).unwrap();
-        assert_eq!(paused.state, BudgetState::Paused);
-        assert_eq!(paused.remaining_milliseconds, 44 * HOUR);
-        assert_eq!(paused.due_at, None);
-        timing.paused_milliseconds = 24 * HOUR;
-        timing.pause_started_at = None;
-        let resumed = evaluate_elapsed_budget(&timing, 48 * HOUR, resumed_at).unwrap();
-        assert_eq!(resumed.remaining_milliseconds, 44 * HOUR);
-        assert_eq!(resumed.due_at, Some(instant("2026-09-13T09:00:00+07:00")));
-        let restarted =
-            evaluate_elapsed_budget(&timing, 48 * HOUR, resumed_at + Duration::hours(2)).unwrap();
-        assert_eq!(restarted.due_at, resumed.due_at);
-        assert_eq!(restarted.remaining_milliseconds, 42 * HOUR);
+        let now = instant("2026-09-11T13:00:00+07:00");
+        let running = evaluate_elapsed_budget(&timing, 48 * HOUR, now).unwrap();
+        assert_eq!(running.state, BudgetState::Running);
+        assert_eq!(running.remaining_milliseconds, 20 * HOUR);
+        assert_eq!(running.due_at, instant("2026-09-12T09:00:00+07:00"));
+        let later = evaluate_elapsed_budget(&timing, 48 * HOUR, now + Duration::hours(2)).unwrap();
+        assert_eq!(later.due_at, running.due_at);
+        assert_eq!(later.remaining_milliseconds, 18 * HOUR);
     }
 
     #[test]
-    fn final_response_freezes_elapsed_time_including_cancellation_during_pause() {
+    fn final_response_freezes_elapsed_time() {
         let timing = ReviewTiming {
             request_accepted_at: instant("2026-09-10T09:00:00Z"),
-            paused_milliseconds: 24 * HOUR,
-            pause_started_at: None,
             completed_at: Some(instant("2026-09-11T13:00:00Z")),
         };
         let first =
@@ -150,31 +105,23 @@ mod tests {
             evaluate_elapsed_budget(&timing, 48 * HOUR, instant("2027-01-01T00:00:00Z")).unwrap();
         assert_eq!(first, later);
         assert_eq!(first.state, BudgetState::Completed);
-        assert_eq!(first.elapsed_milliseconds, 4 * HOUR);
+        assert_eq!(first.elapsed_milliseconds, 28 * HOUR);
     }
 
     #[test]
     fn inconsistent_review_timing_is_a_diagnostic_not_a_reset_budget() {
         let mut timing = ReviewTiming {
             request_accepted_at: instant("2026-09-10T09:00:00Z"),
-            paused_milliseconds: 5 * HOUR,
-            pause_started_at: None,
             completed_at: None,
         };
         let now = instant("2026-09-10T13:00:00Z");
-        assert_eq!(
-            evaluate_elapsed_budget(&timing, 48 * HOUR, now),
-            Err(InvalidTiming)
-        );
-        timing.paused_milliseconds = 0;
-        timing.pause_started_at = Some(now + Duration::hours(1));
-        assert_eq!(
-            evaluate_elapsed_budget(&timing, 48 * HOUR, now),
-            Err(InvalidTiming)
-        );
         assert_eq!(evaluate_elapsed_budget(&timing, 0, now), Err(InvalidTiming));
-        timing.pause_started_at = Some(now);
-        timing.completed_at = Some(now);
+        timing.completed_at = Some(now + Duration::hours(1));
+        assert_eq!(
+            evaluate_elapsed_budget(&timing, 48 * HOUR, now),
+            Err(InvalidTiming)
+        );
+        timing.completed_at = Some(timing.request_accepted_at - Duration::hours(1));
         assert_eq!(
             evaluate_elapsed_budget(&timing, 48 * HOUR, now),
             Err(InvalidTiming)

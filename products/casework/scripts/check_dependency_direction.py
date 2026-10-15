@@ -10,11 +10,11 @@ import sys
 from pathlib import Path
 
 # The Coordinator composes products through their public clients. It may use
-# the Casework client and core, never the runtime, its tooling, or the BReg
-# adapter. No Casework, review, or BReg crate may reach a Coordinator crate,
-# including through its own test dependencies.
+# the Casework client and what that client links, never the core directly, the
+# runtime, its tooling, or the BReg adapter. No Casework, review, or BReg crate
+# may reach a Coordinator crate, including through its own test dependencies.
 COORDINATOR_PREFIX = "registry-coordinator"
-CASEWORK_FOR_COORDINATOR = ("registry-casework-client", "registry-casework-core")
+CASEWORK_FOR_COORDINATOR = "registry-casework-client"
 
 
 def package_graph(
@@ -43,9 +43,15 @@ def package_graph(
 
 
 def closure(
-    start: str, every: dict[str, set[str]], linked: dict[str, set[str]]
+    start: str,
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
+    leaves: frozenset[str] = frozenset(),
 ) -> set[str]:
-    """Include the package's tests, but not its dependencies' tests."""
+    """Include the package's tests, but not its dependencies' tests.
+
+    A package in `leaves` is reached but its own dependencies are not followed.
+    """
     seen: set[str] = set()
     pending = list(every.get(start, set()))
     while pending:
@@ -53,7 +59,8 @@ def closure(
         if package in seen:
             continue
         seen.add(package)
-        pending.extend(linked.get(package, set()) - seen)
+        if package not in leaves:
+            pending.extend(linked.get(package, set()) - seen)
     return seen
 
 
@@ -118,15 +125,21 @@ def violations(metadata: dict) -> list[str]:
                     f"{', '.join(forbidden)}"
                 )
         elif package_name.startswith(COORDINATOR_PREFIX):
+            # What the Casework client links is the client's to choose; every
+            # other path to a Casework package is refused.
+            client_ids = frozenset(ids_by_name.get(CASEWORK_FOR_COORDINATOR, []))
             forbidden = sorted(
-                item
-                for item in reached
-                if item.startswith("registry-casework") and item not in CASEWORK_FOR_COORDINATOR
+                {
+                    names[item]
+                    for item in closure(package_id, every, linked, client_ids)
+                    if names[item].startswith("registry-casework")
+                    and names[item] != CASEWORK_FOR_COORDINATOR
+                }
             )
             if forbidden:
                 failures.append(
                     f"{package_name} transitively depends on Casework package(s) other than "
-                    f"its client and core: {', '.join(forbidden)}"
+                    f"its client: {', '.join(forbidden)}"
                 )
     return failures
 

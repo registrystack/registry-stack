@@ -2,17 +2,66 @@
 
 ## Unreleased
 
-- An activity clock whose due time falls inside a daylight-saving gap on a
+- BREAKING: every `ReviewDecisionReceipt` names the policy `outcome` its
+  decision selected; the field is required in the OpenAPI document and the
+  Rust, Node.js and Python clients, and a client refuses a receipt without
+  one. `outcomeLabel` stays optional.
+- BREAKING: the Casework project format aligns with the cross-product
+  configuration conventions. `caseworkctl check` and the runtime refuse every
+  old spelling at its path, name the replacement, and point at its row in the
+  format table below; there is no migration command. The served review
+  policy takes the same names: `ReviewPolicy`, `ReviewPolicyClosure`, the
+  served clocks and routing, and the trusted producer in its dependencies.
+  The identifier-keyed maps of row F4 are a configuration shape only: served
+  policies keep arrays, listed in identifier order, and reordering a map
+  changes neither the served policy nor its digest. Outcomes and clock
+  reminders are therefore listed in identifier order rather than authored
+  order. Stages, routing rules, clock steps, review policies, context
+  providers and task templates stay lists.
+
+  | Row | Before | After |
+  | --- | --- | --- |
+  | F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
+  | F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
+  | F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
+  | F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
+  | F5 | `type: activity` | `type: stage` |
+  | F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
+  | F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |
+  | F8 | `atRisk: {workingDaysBefore: N}`, reminder `workingDaysBefore: N` | `atRisk: {before: {workingDays: N}}`, `reminders: {REMINDER_ID: {before: {workingDays: N}}}` |
+  | F9 | routing `when: {activity: review}` | removed; a rule applies whenever a task is created, and one naming a `stage` matches only that stage's tasks |
+
+  Rows F1, F2, F3, F5, F6, F7, F8 and F9 also change the served policy in
+  the OpenAPI document and the Node.js and Python client types: served
+  clocks carry `anchor: {type}`, `after: {hours}` or `{workingDays}`,
+  `atRisk.before.workingDays` and `reminders[].before.workingDays`, no
+  `completeOn`; routing conditions carry no `activity`; policy retention
+  carries `terminalRetentionDays` and `accountabilityRetentionDays`; a served
+  producer carries `retention.receiptRetentionDays` instead of
+  `recoveryDays`. Use a fresh Casework database: pinned policy closures
+  stored in the old shape are not converted.
+- Correction to the v0.34.0 entry on review retention: a subject clock
+  never paused across a changes-requested round. It covers one request, and
+  a resubmission starts a new budget. The unused pause fields
+  (`pausedMilliseconds`, `pauseStartedAt`), the `paused` clock state and its
+  evaluation branch are removed, and `ElapsedBudget.dueAt` is always present.
+  Use a fresh Casework database: the clock occurrence table drops `paused_at`
+  and `paused_seconds`.
+- BREAKING: the trusted producer's review policy list findings read
+  `casework.review-producer.no-policies`, `too-many-policies`,
+  `invalid-policy` and `duplicate-policy` instead of `no-kinds`,
+  `too-many-kinds`, `invalid-kind` and `duplicate-kind`, and the refusal of
+  a missing initiator reads "the review policy excludes its initiator".
+- A stage clock whose due time falls inside a daylight-saving gap on a
   given date is due at the first instant after the gap, and one inside a
   fold at the earlier instant, so a due time that passes `check` evaluates on
   every date instead of failing at runtime.
 - BREAKING: `registry_casework_core::ClockPolicyError` gains
   `Calendar { at, reason }`, which keeps the calendar's refusal and the clock
-  field it concerns (such as `/reminders/1/workingDaysBefore`) instead of
+  field it concerns (such as `/reminders/due-soon/before/workingDays`) instead of
   reporting `Value`, and is no longer `Copy`. The runtime logs that reason
   before refusing a stored clock it cannot evaluate. `ClockPolicyError::Value`
-  now covers only an invalid elapsed duration or the wrong clock kind, and its
-  message names the duration form, such as `PT48H`.
+  now covers only the wrong clock kind.
 - `caseworkctl dev` pulls the same pinned PostgreSQL image from Docker Hub
   after ECR Public throttled hosted development journeys. Existing owned
   containers at the prior exact ECR reference remain valid.
@@ -54,7 +103,10 @@
 - BREAKING: every decided ReviewResult names the policy outcome it settled
   on. `outcome` is required on approved, rejected, changes-requested and
   answered results and absent on cancelled and superseded ones, and approval
-  decision receipts carry the selected outcome.
+  decision receipts carry the selected outcome. Upgrade Casework and every
+  review producer, including BReg, in the same release: a 0.41 producer
+  refuses approved results that name an outcome, and a current producer
+  refuses a 0.41 approved result that names none.
 - BREAKING: clients sending an approve without an outcome
   (`{"type":"approve"}`) are refused with 400 `request.invalid`, validation
   path `$.outcome`, reason `outcome-not-declared`, and the
@@ -74,6 +126,15 @@
   `maximum-bytes-exceeded` and a blank or control-character one with
   `text-invalid` at `$.publicReason`; the OpenAPI schema publishes the
   2000-byte bound.
+- BREAKING: every approval in one stage names the same outcome. An approval
+  naming another outcome than an earlier approval in its stage is refused
+  with 400 `request.invalid`, validation path `$.outcome`, reason
+  `approval-outcome-differs`, and the `Registry-Casework-Validation-Allowed`
+  header naming the outcome already chosen: approve with that outcome, or
+  request changes or reject. The final stage settles the request with that
+  outcome and the public reason of the approval that meets its threshold;
+  earlier stages' outcomes and reasons, and other approvers' public reasons,
+  are kept for accountability and not released.
 - BREAKING: a private `reason` over its 2000-byte bound is refused with
   `maximum-bytes-exceeded` at `$.reason` instead of `text-invalid`, so the
   refusal names the bound; a blank or control-character reason still answers

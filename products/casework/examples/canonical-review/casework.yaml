@@ -5,26 +5,26 @@ project:
   id: canonical-review
   version: "1"
 accessProfiles:
-  - id: staff
+  staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
     role: staff
-  - id: supervisor
+  supervisor:
     principalClaim: sub
     requiredScopes: [casework:supervisor]
     role: supervisor
-  - id: administrator
+  administrator:
     principalClaim: sub
     requiredScopes: [casework:admin]
     role: administrator
-  - id: requester
+  requester:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
 queues:
-  - id: facility-addresses
+  facility-addresses:
     label: Facility address reviews
-  - id: decisions
+  decisions:
     label: Decisions awaiting review
 contextProviders:
   - id: facility-proposal-context
@@ -45,8 +45,8 @@ reviewPolicies:
         decidingProfiles: [staff]
         requiredApprovals: 1
     retention:
-      terminalDays: 90
-      accountabilityDays: 365
+      terminalRetentionDays: 90
+      accountabilityRetentionDays: 365
     displaySchema:
       type: object
       additionalProperties: false
@@ -55,12 +55,12 @@ reviewPolicies:
         summary: {type: string, maxLength: 160}
         reference: {type: string, maxLength: 120}
     outcomes:
-      - id: confirmed
+      confirmed:
         label: Confirm
         settlement: answered
         reasonRequired: false
         publicReason: optional
-      - id: rejected
+      rejected:
         label: Return for correction
         settlement: answered
         reasonRequired: true
@@ -82,34 +82,34 @@ reviewPolicies:
         excludeInitiator: true
         requiredApprovals: 1
     retention:
-      terminalDays: 30
-      accountabilityDays: 365
+      terminalRetentionDays: 30
+      accountabilityRetentionDays: 365
     displaySchema:
       $ref: schemas/correct-address.schema.json
     outcomes:
-      - id: approved
+      approved:
         label: Approve correction
         settlement: approved
         reasonRequired: false
         publicReason: optional
-      - id: rejected
+      rejected:
         label: Return for correction
         settlement: rejected
         reasonRequired: true
         publicReason: required
 trustedProducers:
-  - id: requester
+  requester:
     profile: requester
     issuer: http://127.0.0.1:8093
     subject: b75315b2-5854-70f3-8867-511dd771a6da
     sourceNamespaces: [standalone]
     reviewPolicies: [decision]
-    recoveryDays: 30
-  - id: facility-registry
+    retention: {receiptRetentionDays: 30}
+  facility-registry:
     profile: requester
     issuer: https://identity.example.test
     subject: facility-registry-review-producer
     trustedInitiatorIssuer: https://identity.example.test
     sourceNamespaces: [facility-registry]
     reviewPolicies: [facility-address-review]
-    recoveryDays: 30
+    retention: {receiptRetentionDays: 30}

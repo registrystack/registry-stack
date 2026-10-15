@@ -221,8 +221,8 @@ async fn activation_preserves_pinned_provider_namespace_profiles_binding_and_cap
 
     let mut presentation = value.clone();
     presentation["contextProviders"][0]["description"] = json!("A clearer provider description");
-    presentation["queues"][0]["label"] = json!("Review notices");
-    presentation["reviewPolicies"][0]["outcomes"][0]["label"] = json!("Accept notice");
+    presentation["queues"]["reviews"]["label"] = json!("Review notices");
+    presentation["reviewPolicies"][0]["outcomes"]["approved"]["label"] = json!("Accept notice");
     assert!(activation_plan(&f, &presentation, &provider)
         .await
         .refusals
@@ -231,7 +231,7 @@ async fn activation_preserves_pinned_provider_namespace_profiles_binding_and_cap
     let mut candidates = Vec::new();
     let mut namespace = value.clone();
     namespace["contextProviders"][0]["sourceNamespace"] = json!("replacement-source");
-    namespace["trustedProducers"][0]["sourceNamespaces"] =
+    namespace["trustedProducers"]["notice-service"]["sourceNamespaces"] =
         json!(["notice-source", "replacement-source"]);
     candidates.push(namespace);
     let mut binding = value.clone();
@@ -267,18 +267,15 @@ async fn activation_preserves_pinned_provider_namespace_profiles_binding_and_cap
 #[tokio::test]
 async fn activation_preserves_pinned_clock_step_destination_queues() {
     let mut value = project_value(false, false);
-    value["calendars"] = json!([{"id":"workdays","timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday"],"holidaySet":"holidays"}]);
-    value["clocks"] = json!([{"id":"deadline","type":"activity","anchor":"stage-entered-at","calendar":"workdays","after":{"workingDays":1},"dueTime":"17:00","steps":[{"id":"escalate","because":"Deadline reached","at":"due","action":{"reassign":{"queue":"north"}}}]}]);
+    value["calendars"] = json!({"workdays":{"timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday"],"holidaySet":"holidays"}});
+    value["clocks"] = json!({"deadline":{"type":"stage","anchor":{"type":"stage-entered"},"calendar":"workdays","after":{"workingDays":1},"dueTime":"17:00","steps":[{"id":"escalate","because":"Deadline reached","at":"due","action":{"reassign":{"queue":"north"}}}]}});
     let f = Fixture::new(value.clone()).await;
     f.create("clock-pinned").await;
     let mut changed = value;
-    changed["queues"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|q| q["id"] != "north");
-    changed["teams"][0]["serves"] = json!(["reviews"]);
+    changed["queues"].as_object_mut().unwrap().remove("north");
+    changed["teams"]["review-team"]["serves"] = json!(["reviews"]);
     changed["reviewPolicies"][0]["clocks"] = json!([]);
-    changed["clocks"] = json!([]);
+    changed["clocks"] = json!({});
     let provider = CapabilitiesProvider(Vec::new());
     assert_activation_refused(&f, &changed, &provider).await;
 }

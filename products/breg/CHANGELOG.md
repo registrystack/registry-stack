@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: a Review result from Registry Casework names the policy outcome
+  it settled on, and BReg reads it. Upgrade Casework and every review
+  producer, including BReg, in the same release. A 0.41 BReg refuses an
+  approved result that names an outcome, and this BReg refuses a 0.41
+  approved result that names none; either way an approved Proposal stays
+  `submitted` until both sides are upgraded.
 - BREAKING: an event with no compiled delivery is bounded at 1 MiB, the
   Version 1 signable bound, instead of 2 MiB, and a larger one is refused
   when it is recorded. The runtime logs the envelope size and bound with the

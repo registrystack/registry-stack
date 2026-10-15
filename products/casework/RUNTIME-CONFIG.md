@@ -139,7 +139,7 @@ emits `scope`, so the maintained example and `caseworkctl init` set that explici
 override. `humanIdentity` defaults to claim
 `registry_actor_kind` with value `human` and applies only to human roles.
 Principal selection belongs exclusively to each authored
-`accessProfiles[].principalClaim` in `casework.yaml`. The removed runtime field
+`accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
 
 `audit` selects where Casework writes its audit entries and the key that

@@ -72,24 +72,24 @@ Keep human review authority separate from the requesting service:
 
 ```yaml
 accessProfiles:
-  - id: staff
+  staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
     role: staff
-  - id: supervisor
+  supervisor:
     principalClaim: sub
     requiredScopes: [casework:supervisor]
     role: supervisor
-  - id: administrator
+  administrator:
     principalClaim: sub
     requiredScopes: [casework:admin]
     role: administrator
-  - id: requester
+  requester:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
 queues:
-  - id: decisions
+  decisions:
     label: Decisions awaiting review
 ```
 
@@ -117,8 +117,8 @@ reviewPolicies:
         decidingProfiles: [staff]
         requiredApprovals: 1
     retention:
-      terminalDays: 90
-      accountabilityDays: 365
+      terminalRetentionDays: 90
+      accountabilityRetentionDays: 365
     displaySchema:
       type: object
       additionalProperties: false
@@ -143,28 +143,29 @@ reviewPolicies:
           minimum: 0
           maximum: 100000
     outcomes:
-      - id: confirmed
+      confirmed:
         label: Confirm
         settlement: answered
         reasonRequired: false
         publicReason: none
         resultRequired: true
-      - id: rejected
+      rejected:
         label: Return for correction
         settlement: answered
         reasonRequired: true
         publicReason: required
 trustedProducers:
-  - id: requester
+  requester:
     profile: requester
     issuer: https://identity.example.test
     subject: requester-service
     sourceNamespaces: [standalone]
     reviewPolicies: [decision]
-    recoveryDays: 30
+    retention:
+      receiptRetentionDays: 30
 ```
 
-A stage names its queue, eligible human profiles, and approval threshold. Optional `excludeInitiator` and `excludePreviousStageReviewers` rules restrict who may decide. Initiator exclusion requires the producer's `trustedInitiatorIssuer` and an issuer-qualified initiator in the request. Match principal claims across the producer and reviewer deployment so the exclusion identifies the same person.
+A stage names its queue, eligible human profiles, and approval threshold. Every approval in one stage names the same outcome: an approval naming another outcome than the stage's earlier approvals chose is refused at `$.outcome` with `approval-outcome-differs`, and the `Registry-Casework-Validation-Allowed` header names the outcome already chosen, so the reviewer approves with it or requests changes or rejects instead. Optional `excludeInitiator` and `excludePreviousStageReviewers` rules restrict who may decide. Initiator exclusion requires the producer's `trustedInitiatorIssuer` and an issuer-qualified initiator in the request. Match principal claims across the producer and reviewer deployment so the exclusion identifies the same person.
 
 Display snapshots, private drafts, structured results, and result constraints each have a 16 KiB bound. Schemas are closed JSON Schema 2020-12 objects, with a 64 KiB schema bound and bounded nesting. Declare only the fields the reviewer needs; increasing disclosure is not a recovery for an oversized payload.
 
@@ -179,9 +180,9 @@ for selection and recovery rules.
 
 Every decision names one of the policy's declared outcomes, an approval included, so an approval policy must declare at least one outcome with `settlement: approved`. Approval policies use approval, rejection, or changes-requested decisions. Answer policies use a configured outcome. A required reason or structured result must be supplied at decision time. The producer may narrow declared result properties with `resultConstraints`; it cannot widen the schema or introduce fields. Keep result data within the purpose of the review.
 
-Each outcome states whether the decision gives a public reason: `required`, `optional`, or `none`, with no default. A public reason is text of at most 2000 UTF-8 bytes that the producer receives on the ReviewResult for release to the subject's owner. The private `reason` stays in the accountability record and never reaches the producer. A reviewer approving without an outcome is refused at `$.outcome` with the policy's approval outcome identifiers listed in the `Registry-Casework-Validation-Allowed` header.
+Each outcome states whether the decision gives a public reason: `required`, `optional`, or `none`, with no default. A public reason is text of at most 2000 UTF-8 bytes that the producer receives on the ReviewResult for release to the subject's owner. The private `reason` stays in the accountability record and never reaches the producer. A reviewer approving without an outcome is refused at `$.outcome` with the policy's approval outcome identifiers listed in the `Registry-Casework-Validation-Allowed` header. The final stage settles the request: its outcome, with the public reason of the approval that meets its threshold, is the one the producer receives. Earlier stages' outcomes and reasons, and other approvers' public reasons, are kept in the accountability record and not released.
 
-`terminalDays` and `accountabilityDays` run from terminal settlement, with the accountability period at least as long as result availability. Open reviews have no terminal retention deadline yet. [Review retention and audit](../../operate/casework-retention/) explains erasure and recovery.
+`terminalRetentionDays` and `accountabilityRetentionDays` run from terminal settlement, with the accountability period at least as long as result availability. The producer's `retention.receiptRetentionDays`, at most 365, bounds how long its submission receipts stay recoverable. Open reviews have no terminal retention deadline yet. [Review retention and audit](../../operate/casework-retention/) explains erasure and recovery.
 
 {/* Evidence: crates/registry-casework-core/src/review.rs, ReviewPolicy, ReviewStagePolicy,
     ReviewRetentionPolicy, and ReviewOutcomePolicy;
@@ -300,25 +301,27 @@ directory:
 
 Routing selects a queue when a task or stage is created. Declare ordered `routing` rules on the review policy using fields from its display schema. The compiler derives the required routing projection. Submitted routing reads the admitted snapshot; current-source routing reads only the provider's routing context. The first matching rule wins, and the stage queue is the fallback. Derived routing metadata does not grant access to source records.
 
-### Subject and activity clocks
+### Subject and stage clocks
 
 A subject clock starts when the request is accepted and completes when its result becomes terminal. Each request has its own budget, including a new request after changes were requested. Declare the clock at project level and name it in the policy's `clocks` list:
 
 ```yaml
 clocks:
-  - id: review-deadline
+  review-deadline:
     type: subject
-    anchor: request-accepted-at
-    completeOn: result-terminal
+    anchor:
+      type: request-accepted
     after:
-      elapsed: PT48H
+      hours: 48
 ```
 
-An activity clock starts at stage entry and uses a declared working calendar. A due step can move a task to a served queue; an unserved target defers the unapplied step until service is restored.
+`after` names exactly one of `minutes`, `hours`, or `days`.
+
+A stage clock (`type: stage`) starts at stage entry (`anchor: {type: stage-entered}`) and uses a declared working calendar. Its `after`, `atRisk`, and `reminders` count working days: `after: {workingDays: 3}`, `atRisk: {before: {workingDays: 1}}`, and `reminders: {due-soon: {before: {workingDays: 1}}}`. A due step can move a task to a served queue; an unserved target defers the unapplied step until service is restored.
 
 ### Calendars and holiday revisions
 
-An Administrator publishes immutable holiday-set revisions. Missing holiday facts defer activity-clock scheduling. When the facts arrive, maintenance computes the occurrence and refreshes the task deadline. Existing calculations remain pinned until an authorized preview/apply recompute changes them. Inspect the affected task set, then apply the same unexpired preview; create another preview when Directory, task, or holiday state changed.
+An Administrator publishes immutable holiday-set revisions. Missing holiday facts defer stage-clock scheduling. When the facts arrive, maintenance computes the occurrence and refreshes the task deadline. Existing calculations remain pinned until an authorized preview/apply recompute changes them. Inspect the affected task set, then apply the same unexpired preview; create another preview when Directory, task, or holiday state changed.
 
 {/* Evidence: crates/registry-casework-core/src/policy.rs, ClockPolicy;
     crates/registry-casework/src/review.rs, insert_initial_review_clocks();

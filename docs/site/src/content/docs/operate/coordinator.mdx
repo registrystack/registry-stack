@@ -317,7 +317,7 @@ connections:
 ```
 
 `profile` names the Casework access profile the producer's client is admitted to, and `producer`
-names the producer's `id` in the Casework project's `trustedProducers`. The `authorization` obtains a
+names the producer's key under the Casework project's `trustedProducers`. The `authorization` obtains a
 token with the issuer and subject that producer declares; a Casework connection takes no task
 authority. A waiting run reads the review result through this connection every
 `resultCheckSeconds`, from 60 to 86,400 and 900 by default. Each read is one request to Casework per

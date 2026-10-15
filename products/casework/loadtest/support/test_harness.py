@@ -317,7 +317,7 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             policy_path = example / "casework.yaml"
             original = policy_path.read_text(encoding="utf-8")
             other_producer = original.split("trustedProducers:\n", 1)[1].replace(
-                "  - id: requester\n", "  - id: other-requester\n", 1
+                "  requester:\n    profile:", "  other-requester:\n    profile:", 1
             )
             policy_path.write_text(original + other_producer, encoding="utf-8")
             for index, (port, subject) in enumerate(((45678, "agent-0123abcd"), (45679, "agent-9876abcd"))):
@@ -337,7 +337,7 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             original = (EXAMPLE / "casework.yaml").read_text(encoding="utf-8")
             producer = original.split("trustedProducers:\n", 1)[1]
             for name, policy in (
-                ("missing", original.replace("  - id: requester\n", "  - id: other-requester\n")),
+                ("missing", original.replace("  requester:\n    profile:", "  other-requester:\n    profile:")),
                 ("duplicate", original + producer),
             ):
                 with self.subTest(name=name):

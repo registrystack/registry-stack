@@ -5,13 +5,11 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
-use crate::finding::{
-    ConfigFinding, Findings, ELAPSED_ACTION, ELAPSED_MESSAGE, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE,
-};
+use crate::finding::{ConfigFinding, Findings, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE};
 use crate::{
-    evaluate_elapsed_budget, evaluate_working_day_deadline, parse_elapsed_seconds,
-    CalendarEvaluationError, ElapsedBudget, ElapsedDuration, HolidaySetRevision, ReviewTiming,
-    WorkingCalendar, WorkingDayDeadlineRule, MAXIMUM_WORKING_DAY_OFFSET,
+    evaluate_elapsed_budget, evaluate_working_day_deadline, CalendarEvaluationError, ElapsedBudget,
+    HolidaySetRevision, ReviewTiming, WorkingCalendar, WorkingDayDeadlineRule,
+    MAXIMUM_WORKING_DAY_OFFSET,
 };
 
 pub const MAXIMUM_CLOCKS: usize = 32;
@@ -79,19 +77,18 @@ pub enum ClockPolicy {
         #[serde(deserialize_with = "crate::typed::local_id")]
         id: String,
         anchor: SubjectClockAnchor,
-        complete_on: SubjectClockCompletion,
         after: ElapsedDuration,
     },
-    Activity {
+    Stage {
         #[serde(deserialize_with = "crate::typed::local_id")]
         id: String,
-        anchor: ActivityClockAnchor,
+        anchor: StageClockAnchor,
         calendar: String,
-        after: WorkingDaysAfter,
+        after: WorkingDays,
         due_time: String,
         #[serde(default)]
         at_risk: Option<WorkingDaysBefore>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "crate::typed::id_keyed_or_list")]
         reminders: Vec<ClockReminder>,
         #[serde(default)]
         steps: Vec<ClockStep>,
@@ -113,21 +110,26 @@ enum ClockPolicyWire<'a> {
         #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: &'a str,
         anchor: SubjectClockAnchor,
-        complete_on: SubjectClockCompletion,
-        after: &'a ElapsedDuration,
+        after: ElapsedDuration,
     },
-    Activity {
+    Stage {
         #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: &'a str,
-        anchor: ActivityClockAnchor,
+        anchor: StageClockAnchor,
         calendar: &'a str,
-        after: WorkingDaysAfter,
+        after: WorkingDays,
         due_time: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "schema", schemars(default, with = "WorkingDaysBefore"))]
         at_risk: Option<WorkingDaysBefore>,
         #[serde(skip_serializing_if = "is_empty_slice")]
-        #[cfg_attr(feature = "schema", schemars(default))]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                default,
+                schema_with = "crate::typed::id_keyed_or_list_schema::<ClockReminder>"
+            )
+        )]
         reminders: &'a [ClockReminder],
         #[serde(skip_serializing_if = "is_empty_slice")]
         #[cfg_attr(feature = "schema", schemars(default))]
@@ -142,18 +144,12 @@ fn is_empty_slice<T>(items: &&[T]) -> bool {
 impl Serialize for ClockPolicy {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let wire = match self {
-            Self::Subject {
-                id,
-                anchor,
-                complete_on,
-                after,
-            } => ClockPolicyWire::Subject {
+            Self::Subject { id, anchor, after } => ClockPolicyWire::Subject {
                 id,
                 anchor: *anchor,
-                complete_on: *complete_on,
-                after,
+                after: *after,
             },
-            Self::Activity {
+            Self::Stage {
                 id,
                 anchor,
                 calendar,
@@ -162,7 +158,7 @@ impl Serialize for ClockPolicy {
                 at_risk,
                 reminders,
                 steps,
-            } => ClockPolicyWire::Activity {
+            } => ClockPolicyWire::Stage {
                 id,
                 anchor: *anchor,
                 calendar,
@@ -192,36 +188,152 @@ impl ClockPolicy {
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
-            Self::Subject { id, .. } | Self::Activity { id, .. } => id,
+            Self::Subject { id, .. } | Self::Stage { id, .. } => id,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum SubjectClockAnchor {
-    RequestAcceptedAt,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum SubjectClockCompletion {
-    ResultTerminal,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum ActivityClockAnchor {
-    StageEnteredAt,
-}
-
+/// The instant a subject clock counts from: `anchor: {type: request-accepted}`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkingDaysAfter {
+pub struct SubjectClockAnchor {
+    #[serde(rename = "type")]
+    pub kind: SubjectClockAnchorType,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum SubjectClockAnchorType {
+    RequestAccepted,
+}
+
+/// The instant a stage clock counts from: `anchor: {type: stage-entered}`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StageClockAnchor {
+    #[serde(rename = "type")]
+    pub kind: StageClockAnchorType,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum StageClockAnchorType {
+    StageEntered,
+}
+
+/// The largest elapsed budget in each unit: ten years of 24-hour days.
+pub const MAXIMUM_ELAPSED_DAYS: u32 = 3_650;
+pub const MAXIMUM_ELAPSED_HOURS: u32 = MAXIMUM_ELAPSED_DAYS * 24;
+pub const MAXIMUM_ELAPSED_MINUTES: u32 = MAXIMUM_ELAPSED_HOURS * 60;
+
+/// An elapsed budget written in exactly one unit (CFG-QTY-1), such as
+/// `after: {hours: 48}`. A day is 24 elapsed hours, not a calendar day.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", try_from = "ElapsedDurationUnits")]
+pub enum ElapsedDuration {
+    Minutes(u32),
+    Hours(u32),
+    Days(u32),
+}
+
+/// One object per unit, each with exactly that one member, the shape both
+/// configuration and the served policy carry.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ElapsedDuration {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ElapsedDuration".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let unit = |name: &str, maximum: u32| {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    name: {"type": "integer", "format": "uint32", "minimum": 1, "maximum": maximum}
+                },
+                "required": [name],
+                "additionalProperties": false,
+            })
+        };
+        schemars::json_schema!({
+            "description": "An elapsed budget in exactly one unit; a day is 24 elapsed hours.",
+            "oneOf": [
+                unit("minutes", MAXIMUM_ELAPSED_MINUTES),
+                unit("hours", MAXIMUM_ELAPSED_HOURS),
+                unit("days", MAXIMUM_ELAPSED_DAYS),
+            ]
+        })
+    }
+}
+
+impl ElapsedDuration {
+    /// The budget in seconds.
+    #[must_use]
+    pub fn seconds(&self) -> i64 {
+        match *self {
+            Self::Minutes(minutes) => i64::from(minutes) * 60,
+            Self::Hours(hours) => i64::from(hours) * 60 * 60,
+            Self::Days(days) => i64::from(days) * 24 * 60 * 60,
+        }
+    }
+}
+
+/// The units an elapsed budget may be written in, before exactly one is
+/// chosen.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ElapsedDurationUnits {
+    #[serde(default)]
+    minutes: Option<u32>,
+    #[serde(default)]
+    hours: Option<u32>,
+    #[serde(default)]
+    days: Option<u32>,
+}
+
+impl TryFrom<ElapsedDurationUnits> for ElapsedDuration {
+    type Error = String;
+
+    fn try_from(units: ElapsedDurationUnits) -> Result<Self, Self::Error> {
+        let (duration, value, maximum, unit) = match (units.minutes, units.hours, units.days) {
+            (Some(minutes), None, None) => (
+                Self::Minutes(minutes),
+                minutes,
+                MAXIMUM_ELAPSED_MINUTES,
+                "minutes",
+            ),
+            (None, Some(hours), None) => {
+                (Self::Hours(hours), hours, MAXIMUM_ELAPSED_HOURS, "hours")
+            }
+            (None, None, Some(days)) => (Self::Days(days), days, MAXIMUM_ELAPSED_DAYS, "days"),
+            _ => {
+                return Err(
+                    "an elapsed budget names exactly one of minutes, hours or days; \
+                     write one, such as after: {hours: 48}"
+                        .to_owned(),
+                )
+            }
+        };
+        if (1..=maximum).contains(&value) {
+            Ok(duration)
+        } else {
+            Err(format!(
+                "expected a whole number of {unit} from 1 to {maximum}; write one within the bound"
+            ))
+        }
+    }
+}
+
+/// A number of working days: `after: {workingDays: N}`, and the lead time
+/// inside `before`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkingDays {
     #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
     #[cfg_attr(
         feature = "schema",
@@ -230,18 +342,15 @@ pub struct WorkingDaysAfter {
     pub working_days: u32,
 }
 
+/// A lead time before a stage clock is due: `{before: {workingDays: N}}`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkingDaysBefore {
-    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_WORKING_DAY_OFFSET>")
-    )]
-    pub working_days_before: u32,
+    pub before: WorkingDays,
 }
 
+/// A named reminder, written `reminders: {ID: {before: {workingDays: N}}}`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -249,12 +358,13 @@ pub struct ClockReminder {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
-    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_WORKING_DAY_OFFSET>")
-    )]
-    pub working_days_before: u32,
+    pub before: WorkingDays,
+}
+
+impl registry_platform_yaml::Identified for ClockReminder {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -303,7 +413,7 @@ pub struct HolidaySetDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ActivityClockEvaluation {
+pub struct StageClockEvaluation {
     pub due_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at_risk_at: Option<DateTime<Utc>>,
@@ -338,11 +448,7 @@ pub enum ClockPolicyError {
     Bounds,
     #[error("a clock references an unknown calendar or queue")]
     Reference,
-    #[error(
-        "a clock's elapsed duration is invalid, or the clock is not the kind this \
-         evaluation reads; write a positive whole number of hours, minutes or \
-         seconds, such as PT48H"
-    )]
+    #[error("the clock is not the kind this evaluation reads")]
     Value,
     #[error("the supplied holiday-set revision does not match the clock calendar")]
     HolidaySet,
@@ -363,7 +469,7 @@ pub enum ClockPolicyError {
 /// Attach the Casework clock field a neutral calendar refusal concerns.
 fn clock_calendar_error(
     reason: CalendarEvaluationError,
-    reminder: Option<usize>,
+    reminder: Option<&str>,
 ) -> ClockPolicyError {
     let at = match (&reason, reminder) {
         (CalendarEvaluationError::InvalidDueTime { .. }, _) => Some("/dueTime".to_owned()),
@@ -371,10 +477,10 @@ fn clock_calendar_error(
             Some("/after/workingDays".to_owned())
         }
         (CalendarEvaluationError::InvalidWarningOffset { .. }, _) => {
-            Some("/atRisk/workingDaysBefore".to_owned())
+            Some("/atRisk/before/workingDays".to_owned())
         }
-        (CalendarEvaluationError::InvalidReminderOffset { .. }, Some(index)) => {
-            Some(format!("/reminders/{index}/workingDaysBefore"))
+        (CalendarEvaluationError::InvalidReminderOffset { .. }, Some(id)) => {
+            Some(format!("/reminders/{id}/before/workingDays"))
         }
         _ => None,
     };
@@ -399,21 +505,15 @@ pub fn clock_policy_findings(
             "Remove calendars until no more than the bound remain.",
         );
     }
-    findings.repeated(
-        calendars
-            .iter()
-            .enumerate()
-            .map(|(index, calendar)| (format!("/calendars/{index}/id"), calendar.id.as_str())),
-        "casework.calendar.duplicate-id",
-        "this calendar id is already declared",
-        "Give every calendar a unique id.",
-    );
-    for (index, calendar) in calendars.iter().enumerate() {
-        let at = format!("/calendars/{index}");
+    for calendar in calendars {
+        let at = format!(
+            "/calendars/{}",
+            registry_platform_yaml::escape_pointer_segment(&calendar.id)
+        );
         if !valid_identifier(&calendar.id) {
             findings.push(
                 "casework.calendar.invalid-id",
-                format!("{at}/id"),
+                at.clone(),
                 IDENTIFIER_MESSAGE,
                 IDENTIFIER_ACTION,
             );
@@ -461,41 +561,26 @@ pub fn clock_policy_findings(
             "Remove clocks until no more than the bound remain.",
         );
     }
-    findings.repeated(
-        clocks
-            .iter()
-            .enumerate()
-            .map(|(index, clock)| (format!("/clocks/{index}/id"), clock.id())),
-        "casework.clock.duplicate-id",
-        "this clock id is already declared",
-        "Give every clock a unique id.",
-    );
     let calendar_ids = calendars
         .iter()
         .map(|calendar| calendar.id.as_str())
         .collect::<BTreeSet<_>>();
-    for (index, clock) in clocks.iter().enumerate() {
-        let at = format!("/clocks/{index}");
+    for clock in clocks {
+        let at = format!(
+            "/clocks/{}",
+            registry_platform_yaml::escape_pointer_segment(clock.id())
+        );
         if !valid_identifier(clock.id()) {
             findings.push(
                 "casework.clock.invalid-id",
-                format!("{at}/id"),
+                at.clone(),
                 IDENTIFIER_MESSAGE,
                 IDENTIFIER_ACTION,
             );
         }
         match clock {
-            ClockPolicy::Subject { after, .. } => {
-                if parse_elapsed_seconds(&after.elapsed).is_none() {
-                    findings.push(
-                        "casework.clock.invalid-elapsed",
-                        format!("{at}/after/elapsed"),
-                        ELAPSED_MESSAGE,
-                        ELAPSED_ACTION,
-                    );
-                }
-            }
-            ClockPolicy::Activity {
+            ClockPolicy::Subject { .. } => {}
+            ClockPolicy::Stage {
                 calendar,
                 after,
                 due_time,
@@ -503,10 +588,10 @@ pub fn clock_policy_findings(
                 reminders,
                 steps,
                 ..
-            } => activity_clock_findings(
+            } => stage_clock_findings(
                 &mut findings,
                 &at,
-                ActivityClockParts {
+                StageClockParts {
                     calendar_known: calendar_ids.contains(calendar.as_str()),
                     after: *after,
                     due_time,
@@ -521,19 +606,19 @@ pub fn clock_policy_findings(
     findings.into_vec()
 }
 
-struct ActivityClockParts<'a> {
+struct StageClockParts<'a> {
     calendar_known: bool,
-    after: WorkingDaysAfter,
+    after: WorkingDays,
     due_time: &'a str,
     at_risk: Option<WorkingDaysBefore>,
     reminders: &'a [ClockReminder],
     steps: &'a [ClockStep],
 }
 
-fn activity_clock_findings(
+fn stage_clock_findings(
     findings: &mut Findings,
     at: &str,
-    clock: ActivityClockParts<'_>,
+    clock: StageClockParts<'_>,
     queues: &BTreeSet<String>,
 ) {
     let offsets = 1..=crate::MAXIMUM_WORKING_DAY_OFFSET;
@@ -562,12 +647,12 @@ fn activity_clock_findings(
     }
     if clock
         .at_risk
-        .is_some_and(|value| !offsets.contains(&value.working_days_before))
+        .is_some_and(|value| !offsets.contains(&value.before.working_days))
     {
         offsets_valid = false;
         findings.push(
             "casework.clock.working-days-out-of-range",
-            format!("{at}/atRisk/workingDaysBefore"),
+            format!("{at}/atRisk/before/workingDays"),
             offset_message.as_str(),
             offset_action,
         );
@@ -580,29 +665,23 @@ fn activity_clock_findings(
             "Remove reminders until no more than the bound remain.",
         );
     }
-    findings.repeated(
-        clock
-            .reminders
-            .iter()
-            .enumerate()
-            .map(|(index, reminder)| (format!("{at}/reminders/{index}/id"), reminder.id.as_str())),
-        "casework.clock.duplicate-reminder-id",
-        "this reminder id is already declared on the clock",
-        "Give every reminder of the clock a unique id.",
-    );
-    for (index, reminder) in clock.reminders.iter().enumerate() {
+    for reminder in clock.reminders {
+        let reminder_at = format!(
+            "{at}/reminders/{}",
+            registry_platform_yaml::escape_pointer_segment(&reminder.id)
+        );
         if !valid_identifier(&reminder.id) {
             findings.push(
                 "casework.clock.invalid-reminder-id",
-                format!("{at}/reminders/{index}/id"),
+                reminder_at.clone(),
                 IDENTIFIER_MESSAGE,
                 IDENTIFIER_ACTION,
             );
         }
-        if !offsets.contains(&reminder.working_days_before) {
+        if !offsets.contains(&reminder.before.working_days) {
             findings.push(
                 "casework.clock.working-days-out-of-range",
-                format!("{at}/reminders/{index}/workingDaysBefore"),
+                format!("{reminder_at}/before/workingDays"),
                 offset_message.as_str(),
                 offset_action,
             );
@@ -664,11 +743,7 @@ fn activity_clock_findings(
 
 /// Exercise the shared working-day evaluator, so the check accepts exactly
 /// the due times the runtime evaluates, without a second time grammar.
-fn valid_due_time(
-    after: WorkingDaysAfter,
-    due_time: &str,
-    at_risk: Option<WorkingDaysBefore>,
-) -> bool {
+fn valid_due_time(after: WorkingDays, due_time: &str, at_risk: Option<WorkingDaysBefore>) -> bool {
     let empty_holidays: &[&str] = &[];
     let weekdays = [Weekday::Mon];
     let calendar = WorkingCalendar {
@@ -684,7 +759,7 @@ fn valid_due_time(
     let rule = WorkingDayDeadlineRule {
         after_working_days: after.working_days,
         due_time,
-        warning_working_days_before: at_risk.map(|value| value.working_days_before),
+        warning_working_days_before: at_risk.map(|value| value.before.working_days),
         reminder_working_days_before: None,
     };
     evaluate_working_day_deadline(&calendar, &rule, Utc::now()).is_ok()
@@ -698,18 +773,20 @@ pub fn evaluate_subject_clock(
     let ClockPolicy::Subject { after, .. } = clock else {
         return Err(ClockPolicyError::Value);
     };
-    let seconds = parse_elapsed_seconds(&after.elapsed).ok_or(ClockPolicyError::Value)?;
-    let milliseconds = seconds.checked_mul(1_000).ok_or(ClockPolicyError::Value)?;
+    let milliseconds = after
+        .seconds()
+        .checked_mul(1_000)
+        .ok_or(ClockPolicyError::Value)?;
     evaluate_elapsed_budget(timing, milliseconds, now).map_err(|_| ClockPolicyError::Timing)
 }
 
-pub fn evaluate_activity_clock(
+pub fn evaluate_stage_clock(
     clock: &ClockPolicy,
     calendar_policy: &CalendarPolicy,
     holiday_set: &HolidaySetDocument,
     anchor: DateTime<Utc>,
-) -> Result<ActivityClockEvaluation, ClockPolicyError> {
-    let ClockPolicy::Activity {
+) -> Result<StageClockEvaluation, ClockPolicyError> {
+    let ClockPolicy::Stage {
         calendar,
         after,
         due_time,
@@ -750,25 +827,25 @@ pub fn evaluate_activity_clock(
         &WorkingDayDeadlineRule {
             after_working_days: after.working_days,
             due_time,
-            warning_working_days_before: at_risk.map(|value| value.working_days_before),
+            warning_working_days_before: at_risk.map(|value| value.before.working_days),
             reminder_working_days_before: None,
         },
         anchor,
     )
     .map_err(|reason| clock_calendar_error(reason, None))?;
     let mut occurrences = Vec::with_capacity(reminders.len());
-    for (index, reminder) in reminders.iter().enumerate() {
+    for reminder in reminders {
         let evaluated = evaluate_working_day_deadline(
             &calendar,
             &WorkingDayDeadlineRule {
                 after_working_days: after.working_days,
                 due_time,
                 warning_working_days_before: None,
-                reminder_working_days_before: Some(reminder.working_days_before),
+                reminder_working_days_before: Some(reminder.before.working_days),
             },
             anchor,
         )
-        .map_err(|reason| clock_calendar_error(reason, Some(index)))?;
+        .map_err(|reason| clock_calendar_error(reason, Some(&reminder.id)))?;
         occurrences.push(ReminderOccurrence {
             id: reminder.id.clone(),
             at: evaluated
@@ -785,7 +862,7 @@ pub fn evaluate_activity_clock(
             reassign_queue: step.action.reassign.queue.clone(),
         })
         .collect();
-    Ok(ActivityClockEvaluation {
+    Ok(StageClockEvaluation {
         due_at: base.due_at,
         at_risk_at: base.warning_at,
         reminders: occurrences,
@@ -840,18 +917,20 @@ mod tests {
     }
 
     fn deadline() -> ClockPolicy {
-        ClockPolicy::Activity {
+        ClockPolicy::Stage {
             id: "review-deadline".to_owned(),
-            anchor: ActivityClockAnchor::StageEnteredAt,
+            anchor: StageClockAnchor {
+                kind: StageClockAnchorType::StageEntered,
+            },
             calendar: "office".to_owned(),
-            after: WorkingDaysAfter { working_days: 5 },
+            after: WorkingDays { working_days: 5 },
             due_time: "17:00".to_owned(),
             at_risk: Some(WorkingDaysBefore {
-                working_days_before: 1,
+                before: WorkingDays { working_days: 1 },
             }),
             reminders: vec![ClockReminder {
                 id: "due-soon".to_owned(),
-                working_days_before: 1,
+                before: WorkingDays { working_days: 1 },
             }],
             steps: vec![ClockStep {
                 id: "supervisor-at-deadline".to_owned(),
@@ -868,7 +947,7 @@ mod tests {
 
     #[test]
     fn working_day_policy_uses_the_external_holiday_revision_for_every_occurrence() {
-        let evaluation = evaluate_activity_clock(
+        let evaluation = evaluate_stage_clock(
             &deadline(),
             &office_calendar(),
             &HolidaySetDocument {
@@ -922,7 +1001,7 @@ mod tests {
     fn a_due_time_that_passes_check_evaluates_across_daylight_saving_gaps_and_folds() {
         let queues = BTreeSet::from(["overdue-review".to_owned()]);
         let mut clock = deadline();
-        let ClockPolicy::Activity {
+        let ClockPolicy::Stage {
             after,
             due_time,
             reminders,
@@ -933,7 +1012,7 @@ mod tests {
         };
         after.working_days = 2;
         "02:30".clone_into(due_time);
-        reminders[0].working_days_before = 1;
+        reminders[0].before.working_days = 1;
         assert_eq!(
             clock_policy_findings(&[new_york_every_day()], &[clock.clone()], &queues),
             []
@@ -941,7 +1020,7 @@ mod tests {
 
         // 02:30 does not exist on 2026-03-08 in New York; the warning and
         // reminder move to 03:00 EDT, the first instant after the gap.
-        let spring = evaluate_activity_clock(
+        let spring = evaluate_stage_clock(
             &clock,
             &new_york_every_day(),
             &no_holidays(),
@@ -957,10 +1036,10 @@ mod tests {
 
         // 01:30 happens twice on 2026-11-01 in New York; the earlier wins.
         "01:30".clone_into(match &mut clock {
-            ClockPolicy::Activity { due_time, .. } => due_time,
+            ClockPolicy::Stage { due_time, .. } => due_time,
             ClockPolicy::Subject { .. } => unreachable!(),
         });
-        let autumn = evaluate_activity_clock(
+        let autumn = evaluate_stage_clock(
             &clock,
             &new_york_every_day(),
             &no_holidays(),
@@ -974,26 +1053,26 @@ mod tests {
     }
 
     #[test]
-    fn a_value_refusal_names_the_duration_fix_and_not_the_calendar() {
+    fn a_value_refusal_names_the_clock_kind_and_not_the_calendar() {
         assert_eq!(
             ClockPolicyError::Value.to_string(),
-            "a clock's elapsed duration is invalid, or the clock is not the kind this \
-             evaluation reads; write a positive whole number of hours, minutes or \
-             seconds, such as PT48H"
+            "the clock is not the kind this evaluation reads"
         );
     }
 
     #[test]
     fn a_calendar_refusal_keeps_its_reason_and_names_the_clock_field() {
         let mut clock = deadline();
-        let ClockPolicy::Activity { reminders, .. } = &mut clock else {
+        let ClockPolicy::Stage { reminders, .. } = &mut clock else {
             unreachable!()
         };
         reminders.push(ClockReminder {
             id: "overdue-soon".to_owned(),
-            working_days_before: MAXIMUM_WORKING_DAY_OFFSET + 1,
+            before: WorkingDays {
+                working_days: MAXIMUM_WORKING_DAY_OFFSET + 1,
+            },
         });
-        let error = evaluate_activity_clock(
+        let error = evaluate_stage_clock(
             &clock,
             &office_calendar(),
             &no_holidays(),
@@ -1003,7 +1082,7 @@ mod tests {
         assert_eq!(
             error,
             ClockPolicyError::Calendar {
-                at: Some("/reminders/1/workingDaysBefore".to_owned()),
+                at: Some("/reminders/overdue-soon/before/workingDays".to_owned()),
                 reason: CalendarEvaluationError::InvalidReminderOffset {
                     value: MAXIMUM_WORKING_DAY_OFFSET + 1,
                     limit: MAXIMUM_WORKING_DAY_OFFSET,
@@ -1012,14 +1091,14 @@ mod tests {
         );
         assert_eq!(
             error.to_string(),
-            "the clock calendar cannot be evaluated at /reminders/1/workingDaysBefore: \
+            "the clock calendar cannot be evaluated at /reminders/overdue-soon/before/workingDays: \
              the reminder offset 3651 is out of range; use 1 to 3650 working days before the due date"
         );
 
         let mut zone = office_calendar();
         zone.timezone = "Not/A_Zone".to_owned();
         assert_eq!(
-            evaluate_activity_clock(
+            evaluate_stage_clock(
                 &deadline(),
                 &zone,
                 &no_holidays(),
@@ -1036,25 +1115,22 @@ mod tests {
     fn subject_policy_calls_the_shared_request_wide_elapsed_evaluator() {
         let clock = ClockPolicy::Subject {
             id: "response-budget".to_owned(),
-            anchor: SubjectClockAnchor::RequestAcceptedAt,
-            complete_on: SubjectClockCompletion::ResultTerminal,
-            after: ElapsedDuration {
-                elapsed: "PT48H".to_owned(),
+            anchor: SubjectClockAnchor {
+                kind: SubjectClockAnchorType::RequestAccepted,
             },
+            after: ElapsedDuration::Hours(48),
         };
         let result = evaluate_subject_clock(
             &clock,
             &ReviewTiming {
                 request_accepted_at: instant("2026-09-10T09:00:00+07:00"),
-                paused_milliseconds: 24 * 60 * 60 * 1_000,
-                pause_started_at: None,
                 completed_at: None,
             },
             instant("2026-09-11T13:00:00+07:00"),
         )
         .unwrap();
-        assert_eq!(result.remaining_milliseconds, 44 * 60 * 60 * 1_000);
-        assert_eq!(result.due_at, Some(instant("2026-09-13T09:00:00+07:00")));
+        assert_eq!(result.remaining_milliseconds, 20 * 60 * 60 * 1_000);
+        assert_eq!(result.due_at, instant("2026-09-12T09:00:00+07:00"));
     }
 
     #[test]
@@ -1065,7 +1141,7 @@ mod tests {
             []
         );
         let mut clock = deadline();
-        let ClockPolicy::Activity { steps, .. } = &mut clock else {
+        let ClockPolicy::Stage { steps, .. } = &mut clock else {
             unreachable!()
         };
         steps[0].action.reassign.queue = "undeclared".to_owned();
@@ -1077,7 +1153,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(
                 "casework.clock.unknown-queue",
-                "/clocks/0/steps/0/action/reassign/queue"
+                "/clocks/review-deadline/steps/0/action/reassign/queue"
             )]
         );
     }
@@ -1102,39 +1178,29 @@ mod tests {
 
     #[test]
     fn clock_authoring_contract_is_closed_and_uses_the_documented_names() {
-        let subject = read_clock(
-            r#"id: response-budget
-type: subject
-anchor: request-accepted-at
-completeOn: result-terminal
-after: {elapsed: PT48H}
-"#,
-        )
-        .expect("documented subject clock");
+        let subject = read_clock(SUBJECT_CLOCK).expect("documented subject clock");
         assert!(matches!(subject, ClockPolicy::Subject { .. }));
 
-        let activity = read_clock(
+        let stage = read_clock(
             r#"id: review-deadline
-type: activity
-anchor: stage-entered-at
+type: stage
+anchor: {type: stage-entered}
 calendar: office
 after: {workingDays: 5}
 dueTime: "17:00"
+atRisk: {before: {workingDays: 1}}
+reminders:
+  due-soon: {before: {workingDays: 1}}
 "#,
         )
-        .expect("documented activity clock");
-        assert!(matches!(activity, ClockPolicy::Activity { .. }));
+        .expect("documented stage clock");
+        let ClockPolicy::Stage { reminders, .. } = &stage else {
+            panic!("stage clock")
+        };
+        assert_eq!(reminders[0].id, "due-soon");
 
-        let refused = read_clock(
-            r#"id: response-budget
-type: subject
-anchor: request-accepted-at
-completeOn: result-terminal
-after: {elapsed: PT48H}
-invented: true
-"#,
-        )
-        .expect_err("an unknown member is refused");
+        let refused = read_clock(&format!("{SUBJECT_CLOCK}invented: true\n"))
+            .expect_err("an unknown member is refused");
         let diagnostics = refused.diagnostics();
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, "config.unknown-key");
@@ -1143,56 +1209,21 @@ invented: true
 
     const SUBJECT_CLOCK: &str = r#"id: response-budget
 type: subject
-anchor: request-accepted-at
-completeOn: result-terminal
-after: {elapsed: PT48H}
+anchor: {type: request-accepted}
+after: {hours: 48}
 "#;
 
     #[test]
-    fn cfg_name_2_each_previous_clock_value_is_refused_and_the_current_one_named() {
-        for (current, previous, pointer) in [
-            (
-                "anchor: request-accepted-at",
-                "anchor: firstSubmittedAt",
-                "/anchor",
-            ),
-            (
-                "completeOn: result-terminal",
-                "completeOn: reviewCompleted",
-                "/completeOn",
-            ),
-        ] {
-            let authored = SUBJECT_CLOCK.replacen(current, previous, 1);
-            assert_ne!(authored, SUBJECT_CLOCK);
-            let report = read_clock(&authored).expect_err("the previous spelling is refused");
-            let diagnostics = report.diagnostics();
-            assert_eq!(diagnostics.len(), 1, "{pointer}");
-            assert_eq!(diagnostics[0].code, "config.unknown-variant");
-            assert_eq!(diagnostics[0].path, pointer);
-            let named = current.rsplit(' ').next().unwrap().trim_matches(['[', ']']);
-            assert!(
-                diagnostics[0].message.contains(named)
-                    || diagnostics[0].suggested_action.contains(named),
-                "{pointer} names {named}"
-            );
-        }
-        let report = read_clock(
-            r#"id: review-deadline
-type: activity
-anchor: stageEnteredAt
-calendar: office
-after: {workingDays: 5}
-dueTime: "17:00"
-"#,
-        )
-        .expect_err("the previous spelling is refused");
+    fn an_unknown_anchor_type_is_refused_and_the_accepted_one_named() {
+        let authored = SUBJECT_CLOCK.replacen("request-accepted", "first-submitted", 1);
+        let report = read_clock(&authored).expect_err("an unknown anchor type is refused");
         let diagnostics = report.diagnostics();
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, "config.unknown-variant");
-        assert_eq!(diagnostics[0].path, "/anchor");
+        assert_eq!(diagnostics[0].path, "/anchor/type");
         assert!(
-            diagnostics[0].message.contains("stage-entered-at")
-                || diagnostics[0].suggested_action.contains("stage-entered-at")
+            diagnostics[0].message.contains("request-accepted")
+                || diagnostics[0].suggested_action.contains("request-accepted")
         );
     }
 
@@ -1204,9 +1235,8 @@ dueTime: "17:00"
             serde_json::json!({
                 "id": "response-budget",
                 "type": "subject",
-                "anchor": "request-accepted-at",
-                "completeOn": "result-terminal",
-                "after": {"elapsed": "PT48H"},
+                "anchor": {"type": "request-accepted"},
+                "after": {"hours": 48},
             })
         );
     }

@@ -165,8 +165,8 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
                 clocks: Vec::new(),
                 retention: ReviewRetentionPolicy {
-                    terminal_days: 90,
-                    accountability_days: 365,
+                    terminal_retention_days: 90,
+                    accountability_retention_days: 365,
                 },
                 display_schema: json!({
                     "type": "object",
@@ -200,8 +200,8 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
                 clocks: Vec::new(),
                 retention: ReviewRetentionPolicy {
-                    terminal_days: 90,
-                    accountability_days: 365,
+                    terminal_retention_days: 90,
+                    accountability_retention_days: 365,
                 },
                 display_schema: json!({
                     "type": "object",
@@ -237,7 +237,9 @@ fn project(issuer: &str) -> CaseworkProject {
                     "registry-correction".to_owned(),
                     "registry-answer".to_owned(),
                 ],
-                recovery_days: 30,
+                retention: registry_casework_core::ProducerRetention {
+                    receipt_retention_days: 30,
+                },
                 completion: None,
             },
             ReviewProducerPolicy {
@@ -252,7 +254,9 @@ fn project(issuer: &str) -> CaseworkProject {
                     "registry-correction".to_owned(),
                     "registry-answer".to_owned(),
                 ],
-                recovery_days: 30,
+                retention: registry_casework_core::ProducerRetention {
+                    receipt_retention_days: 30,
+                },
                 completion: None,
             },
         ],
@@ -688,17 +692,17 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
                 .header("authorization", format!("Bearer {token}"))
                 .header(CASEWORK_PROFILE_HEADER, "producer")
                 .body(Body::empty())
-                .expect("review kind request"),
+                .expect("review policy request"),
         )
         .await
-        .expect("review kind response");
+        .expect("review policy response");
     assert_eq!(kinds.status(), StatusCode::OK);
     let kinds: Vec<registry_casework_core::ReviewPolicyClosure> = serde_json::from_slice(
         &to_bytes(kinds.into_body(), 128 * 1024)
             .await
-            .expect("bounded review kind response"),
+            .expect("bounded review policy response"),
     )
-    .expect("review kind JSON");
+    .expect("review policy JSON");
     assert_eq!(kinds.len(), 2);
     assert!(kinds
         .iter()
@@ -3435,7 +3439,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         receipt.decision,
         registry_casework_core::ReviewDecisionType::Answer
     );
-    assert_eq!(receipt.outcome.as_deref(), Some("found"));
+    assert_eq!(receipt.outcome, "found");
     let receipt_wire = serde_json::to_value(receipt).expect("receipt wire");
     assert_eq!(receipt_wire.as_object().expect("receipt object").len(), 5);
     assert_eq!(receipt_wire["outcomeLabel"], "Found");
@@ -3499,7 +3503,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         approved.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert_eq!(approved.outcome.as_deref(), Some("approved"));
+    assert_eq!(approved.outcome, "approved");
     revoked.store(true, Ordering::SeqCst);
     assert_client_status(
         client
@@ -3791,7 +3795,7 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
             .value;
         let receipt = record.decision_receipt.unwrap();
         assert_eq!(receipt.policy, accepted.policy);
-        assert_eq!(receipt.outcome.as_deref(), Some(*code));
+        assert_eq!(receipt.outcome, *code);
         assert_eq!(receipt.outcome_label.as_deref(), Some(*label));
         assert_eq!(receipt.decided_at, record.occurred_at);
         assert_eq!(
