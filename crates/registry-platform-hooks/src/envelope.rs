@@ -932,10 +932,12 @@ mod tests {
     fn the_envelope_ceiling_is_the_signable_bound_inside_the_outbox_column() {
         assert_eq!(MAX_ENVELOPE_BYTES, 1_048_576);
         assert_eq!(EnvelopeLimits::default().max_envelope_bytes, 1_048_576);
-        assert!(
-            MAX_ENVELOPE_BYTES <= 2_097_152,
-            "the outbox column holds it"
-        );
+        const {
+            assert!(
+                MAX_ENVELOPE_BYTES <= 2_097_152,
+                "the outbox column holds it"
+            )
+        };
     }
 
     #[cfg(feature = "receiver")]
