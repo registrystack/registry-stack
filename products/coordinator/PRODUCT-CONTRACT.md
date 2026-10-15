@@ -164,7 +164,8 @@ signature under the operator's `eventSources` key binding. The source owns event
 disclosure. The receiving workflow uses the same finite execution engine and independently
 authorized downstream connections as an explicit start.
 
-The source URI, event ID and trigger bind admission; canonical event bytes bind exact retries.
+The authenticated source URI, event ID and trigger bind admission independently of the local
+source alias; canonical event bytes bind exact retries.
 Admission, Run and durable job commit together. A repeated exact delivery recovers the same Run
 before evaluating any changed mapping. Delivery attempt time must be fresh within 30 seconds;
 the immutable event time may be older after an outage. Acknowledgement is an empty HTTP204 and
@@ -187,7 +188,7 @@ receiver over HTTP.
 |---|---|
 | A signature binds the destination, source, event contract and canonical body. | `event_trigger_tests::substituted_signature_destination_source_and_contract_are_refused` |
 | Delivery attempt time is fresh; an old event commit time alone does not prevent recovery. | `event_trigger_tests::stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused` and `exact_event_identity_survives_retry_replay_and_old_commit_time` |
-| Concurrent delivery, restart and package activation recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` |
+| Concurrent delivery, restart, package activation and local source alias renaming recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` and `source_alias_rename_recovers_one_original_run_after_restart` |
 | An admitted event grants no source mutation authority. | `breg_event_native::native_proposal_event_admits_one_run_without_conferring_apply_authority` |
 | Review results remain bound to the original producer, source, workflow and subject under current authority. | `review_provider_postgres::exact_admission_result_restart_feed_and_current_ownership_share_one_run` and `revoked_sources_do_not_disclose_or_starve_the_authorized_result_feed` |
 | Policy identity covers the workflow and outcome mapping; first acceptance fixes the concrete policy across recovery. | `review_provider::derived_policy_pins_workflow_and_mapping_without_duplicate_identity` and `review_provider_postgres::current_selection_recovers_original_acceptance_after_policy_change_and_restart` |

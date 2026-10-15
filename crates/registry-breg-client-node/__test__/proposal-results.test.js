@@ -199,9 +199,9 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       const prior = await client.getProposal(binding, id);
       const current = structuredClone(value); current.revision++;
       const attempt = client.prepareProposal(prior, 'edit', '{"input":{}}', 'edit-binding');
-      for (const [operation, send] of [['edit', () => client.executeProposal(attempt)],
-        ['upload', () => client.uploadProposalAttachment(prior, 'support', 'application/pdf', Buffer.from('%PDF-fixture'), 'upload-binding')],
-        ['remove', () => client.deleteProposalAttachment(prior, 'support', 'remove-binding')]]) {
+      for (const send of [() => client.executeProposal(attempt),
+        () => client.uploadProposalAttachment(prior, 'support', 'application/pdf', Buffer.from('%PDF-fixture'), 'upload-binding'),
+        () => client.deleteProposalAttachment(prior, 'support', 'remove-binding')]) {
         value = structuredClone(current);
         assert.equal(JSON.parse((await send()).documentJson).actionRevision, digest);
         value.actionRevision = successor;

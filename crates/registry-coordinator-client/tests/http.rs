@@ -149,14 +149,12 @@ fn request() -> StartRunRequest {
     }
 }
 
-async fn run_state_answers(
+async fn run_status_answers(
     server: &Server,
-    state: Value,
+    run: Value,
+    run_id: Uuid,
 ) -> Vec<(&'static str, Result<String, CoordinatorClientError>)> {
     let client = server.client();
-    let run_id = Uuid::parse_str(RUN).unwrap();
-    let mut run = status();
-    run["state"] = state;
     server.answer(200, "application/json", &run.to_string());
     let mut answers = vec![
         (
@@ -230,20 +228,23 @@ async fn every_run_status_response_rejects_unknown_effective_states() {
         json!({"running": null}),
     ] {
         let before = server.count();
-        let invalid_answers: Vec<_> = run_state_answers(&server, state.clone())
-            .await
-            .into_iter()
-            .filter_map(|(operation, answer)| {
-                (!matches!(
-                    answer,
-                    Err(CoordinatorClientError::Protocol {
-                        status: 200,
-                        failure: registry_coordinator_client::CoordinatorProtocolFailure::Body
-                    })
-                ))
-                .then_some(operation)
-            })
-            .collect();
+        let mut run = status();
+        run["state"] = state.clone();
+        let invalid_answers: Vec<_> =
+            run_status_answers(&server, run, Uuid::parse_str(RUN).unwrap())
+                .await
+                .into_iter()
+                .filter_map(|(operation, answer)| {
+                    (!matches!(
+                        answer,
+                        Err(CoordinatorClientError::Protocol {
+                            status: 200,
+                            failure: registry_coordinator_client::CoordinatorProtocolFailure::Body
+                        })
+                    ))
+                    .then_some(operation)
+                })
+                .collect();
         assert!(
             invalid_answers.is_empty(),
             "state {state}: responses accepted by {invalid_answers:?}"
@@ -266,13 +267,150 @@ async fn every_run_status_response_preserves_each_closed_effective_state() {
         "cancel-requested",
     ] {
         let before = server.count();
-        for (operation, answer) in run_state_answers(&server, json!(state)).await {
+        let mut run = status();
+        run["state"] = json!(state);
+        for (operation, answer) in
+            run_status_answers(&server, run, Uuid::parse_str(RUN).unwrap()).await
+        {
             assert_eq!(
                 answer.unwrap_or_else(|_| panic!("{operation} refused {state}")),
                 state
             );
         }
         assert_eq!(server.count(), before + 7, "each operation sends once");
+    }
+}
+
+#[tokio::test]
+async fn every_run_response_rejects_a_nil_identity_without_resending() {
+    let server = Server::new(status()).await;
+    let mut run = status();
+    run["runId"] = json!(Uuid::nil());
+    // Request the same nil identity so correlation alone cannot reject it.
+    for (operation, answer) in run_status_answers(&server, run, Uuid::nil()).await {
+        let error = answer
+            .err()
+            .unwrap_or_else(|| panic!("{operation} accepted nil"));
+        assert!(
+            matches!(
+                error,
+                CoordinatorClientError::Protocol {
+                    status: 200,
+                    failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                }
+            ),
+            "{operation}: {error:?}"
+        );
+        assert!(error.is_outcome_unknown(), "{operation}");
+    }
+    server.answer(
+        200,
+        "application/json",
+        &json!({"runId":Uuid::nil(),"status":"retry-scheduled"}).to_string(),
+    );
+    let error = server
+        .client()
+        .retry_same(&token(), Uuid::nil(), "response-lost")
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        CoordinatorClientError::Protocol {
+            status: 200,
+            failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+        }
+    ));
+    assert!(error.is_outcome_unknown());
+    assert_eq!(server.count(), 8, "each operation sends once");
+}
+
+#[tokio::test]
+async fn every_run_status_response_preserves_nonnil_uuid_versions_and_spellings() {
+    let server = Server::new(status()).await;
+    for spelling in [
+        "00000000-0000-0000-0000-000000000001",
+        "f47ac10b-58cc-11cf-a447-001122334455",
+        "F47AC10B-58CC-11CF-A447-001122334455",
+        "f47ac10b58cc11cfa447001122334455",
+        "{f47ac10b-58cc-11cf-a447-001122334455}",
+        "urn:uuid:f47ac10b-58cc-11cf-a447-001122334455",
+    ] {
+        let id = Uuid::parse_str(spelling).unwrap();
+        let mut run = status();
+        run["runId"] = json!(spelling);
+        let before = server.count();
+        for (operation, answer) in run_status_answers(&server, run, id).await {
+            assert_eq!(
+                answer.unwrap_or_else(|_| panic!("{operation} refused nonnil")),
+                "running"
+            );
+        }
+        assert_eq!(server.count(), before + 7);
+    }
+}
+
+#[tokio::test]
+async fn inspection_and_reconciliation_require_one_consistent_recovery_decision() {
+    let server = Server::new(inspection()).await;
+    let client = server.client();
+    let id = Uuid::parse_str(RUN).unwrap();
+    for reason in [
+        "not-recoverable",
+        "deadline-reached",
+        "receipt-expired",
+        "binding-changed",
+        "other-binding-live",
+        "snapshot-incompatible",
+        "cancelled",
+        "restore-hold",
+        "restore-review-required",
+        "payload-erased",
+        "evaluation-uncertain",
+    ] {
+        for operation_present in [false, true] {
+            for (allowed, reason, valid) in [
+                (true, Value::Null, true),
+                (false, json!(reason), true),
+                (true, json!(reason), false),
+                (false, Value::Null, false),
+            ] {
+                let mut document = inspection();
+                document["recovery"]["retryAllowed"] = json!(allowed);
+                document["recovery"]["reason"] = reason;
+                if !operation_present {
+                    document["recovery"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("operation");
+                }
+                server.answer(200, "application/json", &document.to_string());
+                let before = server.count();
+                for answer in [
+                    client.inspect(&token(), id).await,
+                    client.reconcile(&token(), id, "response-lost").await,
+                ] {
+                    if valid {
+                        assert_eq!(
+                            serde_json::to_value(answer.unwrap().value).unwrap(),
+                            document
+                        );
+                    } else {
+                        let error = answer.err().expect("contradictory decision accepted");
+                        assert!(matches!(
+                            error,
+                            CoordinatorClientError::Protocol {
+                                status: 200,
+                                failure:
+                                    registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                            }
+                        ));
+                        assert!(error.is_outcome_unknown());
+                    }
+                }
+                assert_eq!(server.count(), before + 2, "each operation sends once");
+            }
+        }
     }
 }
 
@@ -1004,6 +1142,27 @@ fn config_bounds_and_debug_do_not_expose_configured_values() {
             CoordinatorClientConfig::new(url.clone()).with_max_mutation_retries(retries)
         )
         .is_ok());
+    }
+}
+
+#[test]
+fn recovery_deserialization_preserves_optional_operation_and_rejects_missing_block_reason() {
+    use registry_coordinator_client::RecoveryStatus;
+
+    for document in [
+        json!({"retryAllowed": true, "reason": null}),
+        json!({"retryAllowed": false, "reason": "not-recoverable", "operation": null}),
+    ] {
+        assert!(serde_json::from_value::<RecoveryStatus>(document).is_ok());
+    }
+    for document in [
+        json!({"retryAllowed": false}),
+        json!({"retryAllowed": false, "reason": null}),
+        json!({"retryAllowed": true, "reason": "not-recoverable"}),
+        json!({"retryAllowed": true, "reason": null, "extra": 1}),
+        json!({"retryAllowed": false, "reason": "unknown-reason"}),
+    ] {
+        assert!(serde_json::from_value::<RecoveryStatus>(document).is_err());
     }
 }
 

@@ -255,14 +255,6 @@ pub async fn execute(
                 },
             }
         }
-        // The current client reports a malformed successful Proposal body as
-        // InvalidRequest. After the validated prepared dispatch it is evidence
-        // of an unreadable outcome, never proof the mutation was refused.
-        Err(registry_breg_client::BaseRegistryClientError::InvalidRequest { .. }) => {
-            CallOutcome::Uncertain {
-                code: "invalid-response".into(),
-            }
-        }
         Err(error) => match failure(error, true) {
             // Submit evaluates the Action's plan. The generic lifecycle
             // Operation has no Action-specific refusal schema, but the owner's

@@ -48,7 +48,10 @@ The runtime-free wire crate is the client's sole shared-protocol exception;
 the client does not depend on a provider runtime, core or Review HTTP client.
 Presentation titles and descriptions do not change it. Exact package bytes have a separate
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
-Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
+Every returned run identity must be nonnil. Inspection requires `retryAllowed` to be true
+exactly when its blocking `reason` is null. Inconsistent documents are protocol failures;
+a malformed successful admission or control answer leaves the outcome unknown and is never
+automatically resent. Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
 revisions, deadlines, next observations, persistent floors, and count/limit. Original inputs,
 raw product responses, prepared requests, and protected correlation values remain absent.
 The reviewed Workflow declares any terminal output projection.

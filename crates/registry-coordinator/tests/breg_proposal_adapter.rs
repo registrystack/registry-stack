@@ -385,9 +385,10 @@ async fn frozen_transition_response_retains_original_digest(
     let original = prepared.clone();
     let outcome = breg_proposal::execute(&client, "writer", &command, &prepared, transition).await;
     let expected_code = if transition == Transition::Apply {
-        // Apply carries the digest in its prepared body, so the owning client
-        // rejects it before the Coordinator's saved binding check.
-        "invalid-response"
+        // The owning client rejects Apply's mismatched prepared digest as a
+        // post-send protocol failure. The shared adapter keeps its outcome
+        // uncertain until the original command recovers an exact receipt.
+        "transport-uncertain"
     } else {
         "proposal-binding-mismatch"
     };

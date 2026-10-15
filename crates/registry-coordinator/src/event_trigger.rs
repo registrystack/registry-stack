@@ -323,6 +323,9 @@ pub fn verify_delivery(
     // The platform envelope accepts UUID wire spellings. Normalize only the
     // dedup identity, preserving exact bytes for the conflicting-content check.
     let event_id = uuid::Uuid::parse_str(id).map_err(|_| invalid_event())?;
+    // Local source aliases select authentication; the authenticated producer URI
+    // owns the Run even when an operator renames that alias.
+    let owner = idempotency_key(EVENT_OWNER_DOMAIN, &[event_source.as_bytes()]);
     Ok(VerifiedEvent {
         value,
         digest: sha256_uri(body),
@@ -336,8 +339,8 @@ pub fn verify_delivery(
         ),
         actor: Actor {
             issuer: "urn:registrystack:coordinator:event-source".into(),
-            subject: idempotency_key(EVENT_OWNER_DOMAIN, &[event_source.as_bytes()]),
-            client_id: source_name.into(),
+            subject: owner.clone(),
+            client_id: owner,
             operator: false,
         },
     })

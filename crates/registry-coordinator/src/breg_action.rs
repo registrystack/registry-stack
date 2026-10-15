@@ -225,9 +225,6 @@ pub async fn execute(
                     code: "invalid-response".into(),
                 },
             },
-            Err(BaseRegistryClientError::InvalidRequest { .. }) => CallOutcome::Uncertain {
-                code: "invalid-response".into(),
-            },
             Err(error) => failure(error, true),
         };
     }
@@ -244,8 +241,36 @@ pub async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use super::declared_refusal;
-    use registry_breg_client::BRegProblemCode;
+    use super::{declared_refusal, failure};
+    use crate::protocol::CallOutcome;
+    use registry_breg_client::{BRegProblemCode, BRegProtocolFailure, BaseRegistryClientError};
+
+    #[test]
+    fn local_invalid_commands_and_post_send_protocol_failures_keep_distinct_outcomes() {
+        assert!(matches!(
+            failure(
+                BaseRegistryClientError::InvalidRequest {
+                    reason: "synthetic local preparation refusal"
+                },
+                true
+            ),
+            CallOutcome::Refused { code } if code == "invalid-command"
+        ));
+        for status in [200, 201] {
+            assert!(matches!(
+                failure(
+                    BaseRegistryClientError::Protocol {
+                        status,
+                        failure: BRegProtocolFailure::Body,
+                        trace_id: None,
+                        metadata: None,
+                    },
+                    true
+                ),
+                CallOutcome::Uncertain { code } if code == "transport-uncertain"
+            ));
+        }
+    }
 
     #[test]
     fn declared_refusal_classification_requires_every_typed_execution_guard() {
