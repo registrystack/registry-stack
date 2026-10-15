@@ -55,6 +55,10 @@
   when the published key declares `use: sig`, lists `verify` alone if it lists
   `key_ops`, and carries no private member. The pinned ThunderID 1.0.1 issuer
   publishes such keys, so an existing local session starts as before.
+- BREAKING: a Proposal lifecycle event's `subject.recordReference` is the
+  Proposal's resource path, `/v1/proposals/{id}`, instead of a hashed
+  reference. Record events keep their hashed reference. A receiver that
+  matched Proposal events by the hashed value matches the path instead.
 - The Python client exposes `verify_webhook_delivery`, the shared Rust webhook
   verifier the Node client already offers, with keyword-only `method`, `path`,
   `headers`, `body` and `key`. Refusal raises `BaseRegistryClientError` with
