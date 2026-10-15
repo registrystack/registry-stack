@@ -466,7 +466,7 @@ impl Gateway {
                     owner_is_caller: true,
                     target: Some(own.record_identifier),
                     cursor,
-                    top: Some(20),
+                    limit: Some(20),
                     ..Default::default()
                 },
             )

@@ -109,7 +109,7 @@ before(async () => {
         }));
       }
       if (request.method === 'GET' && path.includes('/ingestion-runs')) {
-        return answer(200, { runs: [runWire()], hasMore: false, nextAfter: null });
+        return answer(200, { runs: [runWire()], hasMore: false, nextCursor: null });
       }
       if (request.method === 'POST' && path.endsWith('/chunks')) {
         return answer(200, { run: runWire({ committedItems: 1, nextChunkIndex: 1 }), receipt: receiptWire() });
@@ -242,16 +242,16 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
   const outcome = await client.listIngestionRuns('people', {
     accessProfile: 'importer.v1',
     limit: 25,
-    after: RUN_ID,
+    cursor: RUN_ID,
     status: 'open',
     inputDigest: INPUT_DIGEST,
   });
   assert.equal(outcome.value.runs.length, 1);
   assert.equal(outcome.value.runs[0].runId, RUN_ID);
   assert.equal(outcome.value.hasMore, false);
-  assert.equal(outcome.value.nextAfter, null);
+  assert.equal(outcome.value.nextCursor, null);
   const query = new URLSearchParams(seen.at(-1).url.split('?')[1]);
-  assert.deepEqual([...query.keys()], ['accessProfile', 'limit', 'after', 'status', 'inputDigest']);
+  assert.deepEqual([...query.keys()], ['accessProfile', 'limit', 'cursor', 'status', 'inputDigest']);
   assert.equal(query.get('accessProfile'), 'importer.v1');
   assert.equal(query.get('status'), 'open');
   assert.equal(query.get('inputDigest'), INPUT_DIGEST);
@@ -265,10 +265,14 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
   await assert.rejects(client.listIngestionRuns('people', { inputDigest: 'xyz' }), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
-  // The engine parses the after pair as a canonical run id, so a cursor it
+  // The engine parses the cursor pair as a canonical run id, so a cursor it
   // could never issue is refused before it is sent.
-  await assert.rejects(client.listIngestionRuns('people', { after: 'cursor+/=' }), (error) => (
+  await assert.rejects(client.listIngestionRuns('people', { cursor: 'cursor+/=' }), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
+  ));
+  await assert.rejects(client.listIngestionRuns('people', { after: RUN_ID }), (error) => (
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
+      && error.message.includes('cursor')
   ));
   await assert.rejects(client.listIngestionRuns('people', { accessProfile: 'x\n' }), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid-request'

@@ -2428,7 +2428,7 @@ fn ingestion_announcement(profile: &str) -> BRegIngestionRunRequest {
 
 #[tokio::test]
 async fn ingestion_exchanges_select_the_announced_run_access_profile() {
-    let page = json!({"runs": [], "hasMore": false, "nextAfter": null});
+    let page = json!({"runs": [], "hasMore": false, "nextCursor": null});
     let fixture = test_client(vec![
         ingestion_response(
             StatusCode::CREATED,

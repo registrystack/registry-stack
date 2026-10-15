@@ -789,6 +789,74 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
 }
 
 #[tokio::test]
+async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
+    let fixture =
+        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
+            &key("limit-list-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    for index in 0..2 {
+        let input = BRegActionInvocationRequest::new(
+            &action,
+            map(json!({"target":record.value.data.record_identifier,"value":"After"})),
+            None,
+        )
+        .unwrap();
+        client
+            .start_proposal(&action, &input, &key(&format!("limit-list-{index}")))
+            .await
+            .unwrap();
+    }
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let page = client
+        .list_proposals(
+            &collection,
+            &BRegProposalQuery {
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(page.items.len(), 1);
+    assert!(page.next_cursor.is_some());
+    let response = reqwest::get(format!(
+        "{}/v1/proposals?accessProfile=clerk&top=1",
+        fixture.http.base_url
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let problem: Value = response.json().await.unwrap();
+    assert_eq!(problem["code"], "query.invalid", "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("`limit`"),
+        "{problem}"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn proposal_list_audit_counts_only_each_actions_returned_items() {
     let mut source = registry_source(false);
     for id in ["correct-alternate", "correct-empty"] {

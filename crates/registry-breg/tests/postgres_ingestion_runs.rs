@@ -3816,7 +3816,7 @@ async fn listing_runs_filters_by_the_callers_bound_access_context() {
 
     let cross_context_cursor = harness
         .get_json(
-            &format!("/v1/records/widgets/ingestion-runs?after={run_id}"),
+            &format!("/v1/records/widgets/ingestion-runs?cursor={run_id}"),
             &zone_b,
         )
         .await;
@@ -3824,6 +3824,61 @@ async fn listing_runs_filters_by_the_callers_bound_access_context() {
         cross_context_cursor.status(),
         StatusCode::BAD_REQUEST,
         "a cursor naming another context's run is refused"
+    );
+}
+
+/// A run listing pages with `limit` and `cursor` and answers `nextCursor`; the
+/// former `after` parameter is refused with a problem naming `cursor`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn listing_runs_pages_by_cursor_and_refuses_after_naming_cursor() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let first = harness
+        .create_run(&claims, &plan_chunks(&announce_items("cursor-a", 1), 3))
+        .await;
+    let second = harness
+        .create_run(&claims, &plan_chunks(&announce_items("cursor-b", 1), 3))
+        .await;
+
+    let page = harness
+        .get_json("/v1/records/widgets/ingestion-runs?limit=1", &claims)
+        .await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let page = body_json(page).await;
+    assert_eq!(page["hasMore"], true, "{page}");
+    assert!(page.get("nextAfter").is_none(), "{page}");
+    let cursor = page["nextCursor"].as_str().expect("nextCursor").to_owned();
+    let next = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs?limit=1&cursor={cursor}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(next.status(), StatusCode::OK);
+    let next = body_json(next).await;
+    let mut listed = [
+        page["runs"][0]["runId"].as_str().unwrap().to_owned(),
+        next["runs"][0]["runId"].as_str().unwrap().to_owned(),
+    ];
+    listed.sort();
+    let mut created = [first, second];
+    created.sort();
+    assert_eq!(listed, created);
+    assert_eq!(next["hasMore"], false, "{next}");
+    assert_eq!(next["nextCursor"], Value::Null, "{next}");
+
+    let renamed = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs?after={cursor}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(renamed.status(), StatusCode::BAD_REQUEST);
+    let problem = body_json(renamed).await;
+    assert_eq!(problem["code"], "query.invalid", "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("`cursor`"),
+        "{problem}"
     );
 }
 

@@ -1097,6 +1097,7 @@ pub(super) async fn list(
         ..Default::default()
     };
     let mut seen = BTreeSet::new();
+    let mut renamed_top = false;
     if let Some(raw) = raw_query {
         if raw.len() > MAX_RAW_QUERY_BYTES {
             return concealed();
@@ -1128,10 +1129,11 @@ pub(super) async fn list(
                     Ok(id) => query.after = Some(id),
                     Err(_) => return concealed(),
                 },
-                "top" => match value.parse::<usize>() {
+                "limit" => match value.parse::<usize>() {
                     Ok(limit) if (1..=100).contains(&limit) => query.limit = limit,
                     _ => return concealed(),
                 },
+                "top" => renamed_top = true,
                 _ => return concealed(),
             }
         }
@@ -1154,6 +1156,14 @@ pub(super) async fn list(
         .collect::<Vec<_>>();
     if authorities.is_empty() {
         return concealed();
+    }
+    // Refused only after authority, so an unauthorized caller still sees the
+    // same concealment as any other refused query.
+    if renamed_top {
+        return problem_with_detail(
+            ProblemCode::QueryInvalid,
+            "The Proposal list takes `limit` for its page size; `top` is not accepted.",
+        );
     }
     match mutations
         .list_proposals(&authorities, &query, &claims, &correlation)

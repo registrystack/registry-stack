@@ -527,7 +527,7 @@ class BaseRegistryClient:
         entity_route: str,
         *,
         limit: int | None = None,
-        after: str | None = None,
+        cursor: str | None = None,
         status: IngestionRunStatus | None = None,
         input_digest: str | None = None,
         access_profile: str | None = None,

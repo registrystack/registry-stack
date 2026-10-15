@@ -1148,7 +1148,7 @@ impl PostgresRecordMutationService {
         Ok(json!({
             "runs": runs,
             "hasMore": page.has_more,
-            "nextAfter": next_after,
+            "nextCursor": next_after,
         }))
     }
 

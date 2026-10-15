@@ -835,7 +835,7 @@ fn ingestion_run_request(
 fn ingestion_run_list_query(
     py: Python<'_>,
     limit: Option<u32>,
-    after: Option<String>,
+    cursor: Option<String>,
     status: Option<String>,
     input_digest: Option<String>,
     access_profile: Option<String>,
@@ -851,9 +851,9 @@ fn ingestion_run_list_query(
             .limit(limit)
             .map_err(|error| ingestion_error(py, error))?;
     }
-    if let Some(after) = after {
+    if let Some(cursor) = cursor {
         query = query
-            .after(after)
+            .cursor(cursor)
             .map_err(|error| ingestion_error(py, error))?;
     }
     if let Some(status) = status {
@@ -3053,20 +3053,20 @@ impl BaseRegistryClient {
     }
 
     /// Read one bounded page of ingestion runs for one entity route.
-    #[pyo3(signature = (entity_route, *, limit=None, after=None, status=None, input_digest=None, access_profile=None))]
+    #[pyo3(signature = (entity_route, *, limit=None, cursor=None, status=None, input_digest=None, access_profile=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_ingestion_runs<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         limit: Option<u32>,
-        after: Option<String>,
+        cursor: Option<String>,
         status: Option<String>,
         input_digest: Option<String>,
         access_profile: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query =
-            ingestion_run_list_query(py, limit, after, status, input_digest, access_profile)?;
+            ingestion_run_list_query(py, limit, cursor, status, input_digest, access_profile)?;
         let value = py
             .detach(|| {
                 self.runtime

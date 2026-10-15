@@ -598,7 +598,7 @@ export interface BRegIngestionRunInput {
 export interface BRegIngestionRunListInput {
   accessProfile?: string | null
   limit?: SafeInteger | null
-  after?: string | null
+  cursor?: string | null
   status?: BRegIngestionRunStatus | null
   inputDigest?: string | null
 }
@@ -637,7 +637,7 @@ export interface BRegIngestionRun {
 export interface BRegIngestionRunPage {
   readonly runs: ReadonlyArray<BRegIngestionRun>
   readonly hasMore: boolean
-  readonly nextAfter: string | null
+  readonly nextCursor: string | null
 }
 
 export interface BRegIngestionReceiptBatch {

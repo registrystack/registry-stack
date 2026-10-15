@@ -1849,9 +1849,15 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
         return Ok(BRegIngestionRunListQuery::default());
     };
     let object = input_object(value.clone(), "run list query must be an object")?;
+    if object.contains_key("after") {
+        return Err(binding_error(
+            "invalid-request",
+            "run list query takes cursor, not after",
+        ));
+    }
     only_fields(
         &object,
-        &["accessProfile", "limit", "after", "status", "inputDigest"],
+        &["accessProfile", "limit", "cursor", "status", "inputDigest"],
         "invalid-request",
         "run list query contains an unsupported field",
     )?;
@@ -1882,13 +1888,13 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
         })?;
         query = query.limit(limit).map_err(ingestion_error)?;
     }
-    if let Some(after) = optional_string(
+    if let Some(cursor) = optional_string(
         &object,
-        "after",
+        "cursor",
         "invalid-request",
-        "run list query after must be a string",
+        "run list query cursor must be a string",
     )? {
-        query = query.after(after).map_err(ingestion_error)?;
+        query = query.cursor(cursor).map_err(ingestion_error)?;
     }
     if let Some(status) = optional_string(
         &object,

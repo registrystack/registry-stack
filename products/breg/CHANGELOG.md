@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: the Proposal list takes `limit` (1 to 100, default 50) for its
+  page size and refuses `top` with `query.invalid` naming `limit`. An
+  ingestion run listing takes `cursor` and answers `nextCursor`, and refuses
+  `after` with `query.invalid` naming `cursor`. Both refusals come after the
+  caller's authority is checked, so an unauthorized caller still sees
+  concealment. Record, metadata, statistics and GIS lists keep `$top` and
+  `$skiptoken`. The Rust `BRegProposalQuery.top` field is `limit`;
+  `BRegIngestionRunListQuery::after` is `cursor` and
+  `BRegIngestionRunPage::next_after` is `next_cursor`; the Node.js and Python
+  clients take `cursor` and return `nextCursor`.
 - `bregctl dev` pulls the same pinned PostgreSQL image from Docker Hub after
   ECR Public throttled hosted development journeys. Existing owned containers
   at the prior exact ECR reference remain valid.

@@ -762,7 +762,7 @@ pub struct BRegProposalQuery {
     pub target: Option<String>,
     pub state: Option<BRegProposalState>,
     pub cursor: Option<String>,
-    pub top: Option<u32>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1110,7 +1110,7 @@ impl BaseRegistryClient {
         query: &BRegProposalQuery,
     ) -> Result<BRegComplete<BRegProposalPage>, BaseRegistryClientError> {
         if collection.source != self.source_binding()
-            || query.top.is_some_and(|top| !(1..=100).contains(&top))
+            || query.limit.is_some_and(|limit| !(1..=100).contains(&limit))
             || query
                 .action
                 .as_ref()
@@ -1149,8 +1149,8 @@ impl BaseRegistryClient {
         if let Some(cursor) = &query.cursor {
             pairs.push(("cursor".to_owned(), cursor.clone()));
         }
-        if let Some(top) = query.top {
-            pairs.push(("top".to_owned(), top.to_string()));
+        if let Some(limit) = query.limit {
+            pairs.push(("limit".to_owned(), limit.to_string()));
         }
         let response = self
             .proposal_list_exchange(&collection.path, &pairs)
@@ -1158,7 +1158,7 @@ impl BaseRegistryClient {
         let value =
             crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
         let mut page: BRegProposalPage = serde_json::from_value(value).map_err(|_| refusal())?;
-        if page.items.len() > query.top.unwrap_or(50) as usize
+        if page.items.len() > query.limit.unwrap_or(50) as usize
             || page.next_cursor.as_ref().is_some_and(|cursor| {
                 !valid_cursor(cursor)
                     || page.items.is_empty()
