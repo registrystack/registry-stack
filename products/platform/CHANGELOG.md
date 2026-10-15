@@ -9,7 +9,8 @@
 - BREAKING: `registry-platform-hooks` bounds an event envelope at 1 MiB
   (`MAX_ENVELOPE_BYTES`), the Version 1 signable bound, instead of 2 MiB, so
   no envelope is admitted that could never be signed and delivered. A larger
-  envelope is refused with `InvalidProjection`; publish a smaller event.
+  envelope is refused with `HookEnvelopeError::PayloadTooLarge`; publish a
+  smaller event.
 - BREAKING: `registry-platform-calendar` resolves a working-day deadline
   inside a daylight-saving gap to the first instant after the gap, and one
   inside a fold to the earlier instant, instead of refusing it with
