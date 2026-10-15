@@ -192,7 +192,7 @@ export class CaseworkClientError extends Error {
   readonly protocolFailure?: CaseworkProtocolFailure
 }
 
-export type ClockRuntimeState = 'running' | 'paused' | 'completed' | 'cancelled' | 'verification-pending' | 'source-facts-missing'
+export type ClockRuntimeState = 'running' | 'completed' | 'cancelled' | 'verification-pending' | 'source-facts-missing'
 export type ClockNextEffect =
   | { kind: 'reminder'; id: string; at: string }
   | { kind: 'reassign'; id: string; at: string; because: string; queueId: string }
@@ -335,7 +335,7 @@ export interface ReviewClockOccurrence {
   clockId: string
   requestId: Uuid
   correlation: ReviewClockCorrelation
-  state: 'running' | 'paused' | 'completed' | 'cancelled' | 'source-facts-missing'
+  state: 'running' | 'completed' | 'cancelled' | 'source-facts-missing'
   policyDigest: ContentDigest
   anchorAt: string
   dueAt?: string

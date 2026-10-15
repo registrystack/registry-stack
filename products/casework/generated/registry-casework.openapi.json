@@ -2593,6 +2593,7 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "description": "A subject clock covers one request. The correlation names the subject\nthe request reviews; the budget is the request's own, and a\nresubmission starts a new one.",
             "properties": {
               "id": {
                 "type": "string"
@@ -2809,7 +2810,6 @@
       "ReviewClockState": {
         "enum": [
           "running",
-          "paused",
           "completed",
           "cancelled",
           "source-facts-missing"

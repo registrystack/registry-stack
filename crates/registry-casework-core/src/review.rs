@@ -107,6 +107,9 @@ impl ReviewRetentionPolicy {
     deny_unknown_fields
 )]
 pub enum ReviewClockCorrelation {
+    /// A subject clock covers one request. The correlation names the subject
+    /// the request reviews; the budget is the request's own, and a
+    /// resubmission starts a new one.
     Subject {
         source: String,
         subject_type: String,
@@ -1187,7 +1190,6 @@ pub struct ReviewAccountabilityRecord {
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewClockState {
     Running,
-    Paused,
     Completed,
     Cancelled,
     SourceFactsMissing,
@@ -3065,7 +3067,7 @@ mod tests {
     }
 
     #[test]
-    fn subject_clock_correlation_survives_new_review_rounds_but_activity_does_not() {
+    fn subject_clock_correlation_names_the_subject_of_each_request_and_activity_names_the_task() {
         let clock = ClockPolicy::Subject {
             id: "response-budget".to_owned(),
             anchor: crate::SubjectClockAnchor::RequestAcceptedAt,

@@ -34,7 +34,6 @@ where
 fn every_clock_state_is_kebab_case() {
     assert_words(&[
         (ClockRuntimeState::Running, "running"),
-        (ClockRuntimeState::Paused, "paused"),
         (ClockRuntimeState::Completed, "completed"),
         (ClockRuntimeState::Cancelled, "cancelled"),
         (
@@ -48,11 +47,18 @@ fn every_clock_state_is_kebab_case() {
     ]);
     assert_words(&[
         (ReviewClockState::Running, "running"),
-        (ReviewClockState::Paused, "paused"),
         (ReviewClockState::Completed, "completed"),
         (ReviewClockState::Cancelled, "cancelled"),
         (ReviewClockState::SourceFactsMissing, "source-facts-missing"),
     ]);
+}
+
+/// A subject clock covers one request and never pauses, so no clock state
+/// reads `paused`.
+#[test]
+fn no_clock_state_reads_paused() {
+    assert!(serde_json::from_value::<ClockRuntimeState>(json!("paused")).is_err());
+    assert!(serde_json::from_value::<ReviewClockState>(json!("paused")).is_err());
 }
 
 #[test]

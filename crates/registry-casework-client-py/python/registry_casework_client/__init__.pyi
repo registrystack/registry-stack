@@ -101,7 +101,7 @@ class DirectoryMember(_DirectoryMemberOptional):
     subject: str
 
 ClockRuntimeState: TypeAlias = Literal[
-    "running", "paused", "completed", "cancelled", "verification-pending",
+    "running", "completed", "cancelled", "verification-pending",
     "source-facts-missing",
 ]
 
@@ -637,7 +637,7 @@ class ReviewClockOccurrence(_ReviewClockOccurrenceOptional):
     clockId: str
     requestId: Uuid
     correlation: ReviewClockCorrelation
-    state: Literal["running", "paused", "completed", "cancelled", "source-facts-missing"]
+    state: Literal["running", "completed", "cancelled", "source-facts-missing"]
     policyDigest: ContentDigest
     anchorAt: str
 class ReviewTaskDraftInput(TypedDict):

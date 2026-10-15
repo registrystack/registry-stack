@@ -1046,15 +1046,13 @@ mod tests {
             &clock,
             &ReviewTiming {
                 request_accepted_at: instant("2026-09-10T09:00:00+07:00"),
-                paused_milliseconds: 24 * 60 * 60 * 1_000,
-                pause_started_at: None,
                 completed_at: None,
             },
             instant("2026-09-11T13:00:00+07:00"),
         )
         .unwrap();
-        assert_eq!(result.remaining_milliseconds, 44 * 60 * 60 * 1_000);
-        assert_eq!(result.due_at, Some(instant("2026-09-13T09:00:00+07:00")));
+        assert_eq!(result.remaining_milliseconds, 20 * 60 * 60 * 1_000);
+        assert_eq!(result.due_at, instant("2026-09-12T09:00:00+07:00"));
     }
 
     #[test]

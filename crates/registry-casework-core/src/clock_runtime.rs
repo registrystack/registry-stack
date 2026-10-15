@@ -11,7 +11,6 @@ use crate::{HolidaySetDocument, SubjectBinding};
 #[serde(rename_all = "kebab-case")]
 pub enum ClockRuntimeState {
     Running,
-    Paused,
     Completed,
     Cancelled,
     VerificationPending,
@@ -43,7 +42,7 @@ pub struct ClockOccurrenceView {
     pub next_effect: Option<ClockNextEffect>,
     /// The earliest unapplied reminder and reassignment, ordered by time.
     /// At most two effects; these are authored instants, not retry timers.
-    /// Paused, completed, cancelled and source-facts-missing clocks omit them.
+    /// Completed, cancelled and source-facts-missing clocks omit them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upcoming_effects: Vec<ClockNextEffect>,
 }

@@ -2924,22 +2924,7 @@ async fn a_new_request_clock_never_reuses_an_expired_requests_budget() {
     assert_eq!(
         subject_clock.due_at,
         Some(subject_clock.anchor_at + TimeDelta::hours(1)),
-        "the fresh subject clock computes a full deadline from the new round, not the old paused budget"
-    );
-
-    let paused_seconds: i64 = fixture
-        .database
-        .query_one(
-            "SELECT paused_seconds FROM casework_review_clock_occurrences
-             WHERE clock_occurrence_id=$1",
-            &[&subject_clock.clock_occurrence_id],
-        )
-        .await
-        .expect("read the fresh occurrence's paused budget")
-        .get(0);
-    assert_eq!(
-        paused_seconds, 0,
-        "a fresh subject clock starts with no paused budget"
+        "the fresh subject clock computes a full deadline from the new round"
     );
 
     fixture

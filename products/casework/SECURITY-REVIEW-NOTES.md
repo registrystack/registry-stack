@@ -814,8 +814,9 @@ Proof obligations:
   matching `changes-requested`, refuses its underscore spelling, and refuses
   mismatched action and time.
 - `crates/registry-casework/tests/review_postgres.rs`:
-  `subject_clock_pauses_and_continues_across_review_rounds` reads a persisted
-  ChangesRequested receipt and checks its serialized `changes-requested` word.
+  `request_clock_completes_for_changes_requested_and_later_request_gets_fresh_budget`
+  reads a persisted ChangesRequested receipt and checks its serialized
+  `changes-requested` word.
 - `crates/registry-casework-client-node/src/lib.rs`:
   `protocol_failures_use_the_public_snake_case_vocabulary` asserts the current
   `header-bounds`, `trace-context`, `media-type` and other protocol words.

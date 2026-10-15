@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Correction to the v0.34.0 entry on review retention: a subject clock
+  never paused across a changes-requested round. It covers one request, and
+  a resubmission starts a new budget. The unused pause fields
+  (`pausedMilliseconds`, `pauseStartedAt`), the `paused` clock state and its
+  evaluation branch are removed, and `ElapsedBudget.dueAt` is always present.
+  Use a fresh Casework database: the clock occurrence table drops `paused_at`
+  and `paused_seconds`.
 - An activity clock whose due time falls inside a daylight-saving gap on a
   given date is due at the first instant after the gap, and one inside a
   fold at the earlier instant, so a due time that passes `check` evaluates on

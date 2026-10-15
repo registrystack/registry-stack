@@ -5069,7 +5069,7 @@ async fn settle_review(
     } else {
         "completed"
     };
-    transaction.execute("UPDATE casework_review_clock_occurrences SET state=$2,completed_at=CASE WHEN $2='completed' THEN $3::timestamptz ELSE NULL END,paused_at=NULL,next_action_at=NULL,updated_at=$3 WHERE request_id=$1 AND state NOT IN('completed','cancelled')",&[&record.request_id,&clock_state,&now]).await?;
+    transaction.execute("UPDATE casework_review_clock_occurrences SET state=$2,completed_at=CASE WHEN $2='completed' THEN $3::timestamptz ELSE NULL END,next_action_at=NULL,updated_at=$3 WHERE request_id=$1 AND state NOT IN('completed','cancelled')",&[&record.request_id,&clock_state,&now]).await?;
 
     let response = ReviewResult {
         result_id,
@@ -5988,7 +5988,6 @@ fn review_clock_from_row(row: &Row) -> Result<ReviewClockOccurrence, ReviewRunti
     };
     let state = match row.get::<_, String>(9).as_str() {
         "running" => ReviewClockState::Running,
-        "paused" => ReviewClockState::Paused,
         "completed" => ReviewClockState::Completed,
         "cancelled" => ReviewClockState::Cancelled,
         "source-facts-missing" => ReviewClockState::SourceFactsMissing,

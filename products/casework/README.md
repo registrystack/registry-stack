@@ -167,7 +167,8 @@ current Directory, policy, task, and source-disclosure checks:
    never discovers arbitrary source records. Follow `nextCursor` unchanged;
    restart the walk when a live source change makes a cursor stale.
 5. `POST /v1/directory/clocks/recompute/preview` and `/apply` recompute
-   deadlines against the request's pinned policy closure.
+   deadlines against the request's pinned policy closure. A subject clock
+   covers one request, and a resubmission starts a new budget.
 6. Authored routing evaluates only declared fields at task or stage creation.
    Submitted routing reads the admitted snapshot; current-source routing uses
    the provider's minimized routing capability and retains derived metadata.

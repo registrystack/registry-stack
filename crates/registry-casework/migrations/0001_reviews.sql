@@ -475,12 +475,10 @@ CREATE TABLE casework_review_clock_occurrences (
     task_id uuid REFERENCES casework_review_tasks(task_id) ON DELETE SET NULL,
     policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
     policy jsonb NOT NULL CHECK (octet_length(policy::text) <= 65536),
-    state text NOT NULL CHECK (state IN ('running','paused','completed','cancelled','source-facts-missing')),
+    state text NOT NULL CHECK (state IN ('running','completed','cancelled','source-facts-missing')),
     anchor_at timestamptz NOT NULL,
     due_at timestamptz,
     at_risk_at timestamptz,
-    paused_at timestamptz,
-    paused_seconds bigint NOT NULL DEFAULT 0 CHECK (paused_seconds >= 0),
     completed_at timestamptz,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
@@ -489,7 +487,6 @@ CREATE TABLE casework_review_clock_occurrences (
     steps jsonb NOT NULL DEFAULT '[]'::jsonb,
     next_action_at timestamptz,
     UNIQUE(subject_source,subject_type,subject_id,clock_id,scope,correlation_key),
-    CHECK ((state='paused') = (paused_at IS NOT NULL)),
     CHECK ((state='completed') = (completed_at IS NOT NULL)),
     -- Each accepted request owns a pinned clock budget. A successor request
     -- cannot consume or resume another request's elapsed review time.
