@@ -38,6 +38,10 @@
 //! WASM handler is run through the product's own handler seam, so the
 //! reviewed program, the script engine, and the module format stay on the
 //! product side of the boundary.
+//!
+//! The opt-in `receiver` feature adds `receiver::verify_delivery`, the one
+//! receiver-side reading of a signed Version 1 delivery that every product
+//! receiving a hook delivery calls.
 
 mod declaration;
 #[cfg(feature = "postgres")]
@@ -47,6 +51,8 @@ pub mod delivery_schema;
 mod envelope;
 mod error;
 mod message;
+#[cfg(feature = "receiver")]
+pub mod receiver;
 mod validate;
 
 pub use declaration::{

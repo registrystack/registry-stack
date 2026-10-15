@@ -4913,7 +4913,7 @@ dependencies = [
  "base64 0.23.1",
  "jsonschema",
  "registry-platform-canonical-json",
- "registry-platform-crypto",
+ "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-record",
@@ -6172,7 +6172,9 @@ name = "registry-platform-hooks"
 version = "0.42.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "registry-platform-canonical-json",
+ "registry-platform-crypto",
  "registry-platform-dispatch",
  "registry-platform-httputil",
  "registry-platform-yaml",
