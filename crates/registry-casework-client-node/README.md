@@ -23,8 +23,9 @@ checked before disclosure. Prior holding is not authorship. Keep the caller,
 profiles, queue and own-decisions view unchanged when following `nextCursor`;
 on `410 review.result-expired`, refetch without a cursor.
 
+`decisionReceipt.outcome` names the outcome every decision selects, and
 `decisionReceipt.outcomeLabel` is the decision-time pinned policy label, never
-the current policy's label. Approval has no outcome or label. The explicit
+the current policy's label. The explicit
 audited `reviewAccountability` read also returns that receipt through its
 independent accountability retention, including after result erasure. Own history
 and single-task receipts end at result expiry or erasure.
