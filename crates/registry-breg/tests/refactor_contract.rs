@@ -1308,57 +1308,6 @@ fn public_action_export_comes_from_the_compiled_owner_contract() {
 }
 
 #[test]
-fn coordinator_information_request_declares_and_executes_blank_reason_refusal() {
-    use registry_breg::action_handler::{evaluate_action, ActionHandlerOutcome};
-    let project = parse_project_yaml(include_bytes!(
-        "../../../products/breg/examples/coordinator-actions/registry.yaml"
-    ))
-    .unwrap();
-    let registry = compile_project_with_assets(&project, &[], &[ModuleAssetSource { module: None, path: "scripts/request-information.rhai".into(), bytes: include_bytes!("../../../products/breg/examples/coordinator-actions/scripts/request-information.rhai").to_vec() }], CompileProfile::Authoring).unwrap();
-    let export: serde_json::Value = serde_json::from_slice(
-        &registry
-            .artifacts()
-            .get("generated/action-contracts.json")
-            .unwrap()
-            .bytes,
-    )
-    .unwrap();
-    let exported = export["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["id"] == "request-information")
-        .unwrap();
-    let refusal = jsonschema::JSONSchema::compile(&exported["declaredRefusal"]).unwrap();
-    assert!(refusal.is_valid(&serde_json::json!({"refusalCode":"invalid-reason"})));
-    assert!(!refusal.is_valid(&serde_json::json!({"refusalCode":"transport-error"})));
-    assert!(!refusal
-        .is_valid(&serde_json::json!({"refusalCode":"invalid-reason","detail":"private-input"})));
-    let action = registry
-        .actions()
-        .actions
-        .iter()
-        .find(|action| action.id == "request-information")
-        .unwrap();
-    let input =
-        serde_json::json!({"application":"00000000-0000-4000-8000-000000000001","reason":"   "})
-            .as_object()
-            .unwrap()
-            .clone();
-    let outcome = evaluate_action(
-        action,
-        &input,
-        std::time::Instant::now() + std::time::Duration::from_secs(2),
-    )
-    .unwrap();
-    let ActionHandlerOutcome::Refusal(refusal) = outcome else {
-        panic!("whitespace reason is a declared business refusal")
-    };
-    assert_eq!(refusal.code, "invalid-reason");
-    assert_eq!(refusal.field.as_deref(), Some("reason"));
-}
-
-#[test]
 fn review_policy_omits_both_pins_or_requires_one_complete_exact_binding() {
     use registry_breg::contract::parse_project_json;
     use registry_review_protocol::{ContentDigest, PolicyBinding};

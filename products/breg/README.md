@@ -350,9 +350,6 @@ verify stored values and existing action authority and concurrency contracts.
 For current native Proposal context pairing and independent application authority,
 use the [canonical Casework review](../casework/examples/canonical-review/README.md).
 The status service and human context reader have separate purpose-specific grants.
-The [Coordinator Review provider](../coordinator/examples/review-provider/README.md)
-adds an authored choice between automatic assessment and Casework review, with
-BReg retaining application authority and current-condition checks.
 The [committed product events](../coordinator/examples/product-events/README.md)
 journey shows record and Action effects starting independently authorized
 Coordinator work through the shared signed event contract.
