@@ -279,7 +279,7 @@ Bind every logical connection under one `connections` map, with at most sixteen 
 Each entry selects its complete contract through `type`: `breg`, `casework-review-producer`,
 `messaging`, `scheduling`, `external-http`, or `evaluation`.
 
-BReg Action and Proposal calls need a standing BReg service identity and permitted profile.
+BReg Action calls need a standing BReg service identity and permitted profile.
 Keep a separate task-bound connection for record reads when the workflow needs both.
 A task-bound Scheduling connection also needs ordinary `observationAuthorization` with the
 same original owner and receipt-read scopes, independent of task-grant expiry.

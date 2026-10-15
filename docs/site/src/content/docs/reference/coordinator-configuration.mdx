@@ -136,7 +136,7 @@ await-review:
   onCancel: withdraw
 ```
 
-Casework submission exposes `result`; BReg Proposal submission exposes `application`.
+Casework submission exposes `result`.
 `timeoutSeconds` is required, from one second to one year, and shorter than `deadlineSeconds`.
 A settled completion takes `next`; timeout takes `onTimeout`, or reports `wait-timed-out`.
 `onCancel` takes a durable authored cleanup route. A leased read records intent and routes when
@@ -145,7 +145,7 @@ Neither timeout nor cancellation reverses an accepted downstream effect.
 
 Every observation has a persistent minimum spacing of at least 30 seconds.
 Top-level `minimumObservationIntervalSeconds` defaults to 30 and accepts 30 to 86,400.
-Casework and BReg pending reads default to 900 seconds. Casework `resultCheckSeconds` accepts
+Casework pending reads default to 900 seconds. Casework `resultCheckSeconds` accepts
 60 to 86,400; external polling declares `intervalSeconds`. These intervals and deployment
 minimums constrain the effective read floor. Restart, wake-up, timeout, and recovery retain
 that floor and the original deadline. Retry hints can delay observations within the host ceiling
@@ -154,8 +154,8 @@ of 86,400 seconds; unusable hints hold the wait.
 Unavailable observations remain pending within the original budget. Invalid, refused, blocked,
 or mismatched evidence holds the wait for recovery and cannot become a business-failure outcome.
 Inspection reports the completion revision, next observation, persistent floor, count, and limit.
-Protected correlation values remain absent. A Coordinator timeout does not establish that a BReg
-Proposal failed or stop source-owned work.
+Protected correlation values remain absent. A Coordinator timeout does not establish that the
+awaited work failed or stop source-owned work.
 
 {/* Evidence: crates/registry-coordinator/src/definition.rs, CompletionReference, Step;
     crates/registry-coordinator/src/adapters.rs;
@@ -205,7 +205,7 @@ An `external.get/v1` alias can specialize `responseSchema` and declare a named `
 completion with `interpret` and `intervalSeconds`. The typed pure interpreter receives `command`
 and `response`, returning `pending`, `complete` with a typed `result`, or `refused` with a declared
 code. The host repeats the saved original read and enforces transport and observation budgets.
-This external completion path is independent of review and registry application.
+This external completion path is independent of Casework review.
 
 An `evaluation` connection selects `system-one` or `openai-decisions`, `baseUrl`, `model`, and
 bearer authorization with a stable account `principal`, or explicit local authorization on

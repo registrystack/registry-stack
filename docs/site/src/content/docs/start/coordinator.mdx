@@ -39,8 +39,8 @@ Every step has one of five types:
 - `choose` picks the next step from one value, such as a field of an earlier call's output.
 - `wait-until` waits until an instant. The wait is stored in PostgreSQL, so it survives a
   restart.
-- `wait-for` waits, up to a timeout, for a named completion of an earlier accepted call: a Casework result, exact BReg
-  Proposal application, or bounded external read. The host reads authoritative evidence within a
+- `wait-for` waits, up to a timeout, for a named completion of an earlier accepted call: a Casework result or a
+  bounded external read. The host reads authoritative evidence within a
   durable observation budget. A completion wake-up only advances an eligible read.
 - `finish` ends the run with a declared outcome and output, which the caller reads from the run's
   status.
