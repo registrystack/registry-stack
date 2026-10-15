@@ -98,7 +98,9 @@ reviewAuthorities:
 `casework` matches the authority ID in `registry.yaml`. `profile` selects the
 authority's producer profile, `producerId` names its trusted producer binding,
 and `client` names a registered BReg development client used to authenticate.
-`recoveryDays` bounds uncertain-submission recovery. The composed command
+`recoveryDays` bounds uncertain-submission recovery. Keep it no larger than
+the Casework producer's `retention.receiptRetentionDays`: BReg retries
+against a receipt that Casework keeps only that long. The composed command
 registers `requester` and writes these values for its selected local port.
 Use a separate registration attempt whose facility has not been deactivated:
 
