@@ -157,6 +157,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
                 serde_json::json!({
                     "path": value.path,
                     "reason": validation_reason(value.reason),
+                    "allowed": value.allowed,
                 })
             });
         }
@@ -329,7 +330,7 @@ fn auth<'a>(
 /// Every validation reason the binding can answer, in the order the mapping
 /// below names them. A reason the client adds stops that mapping compiling, so
 /// a new reason is named here before it can reach a caller.
-const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 14] = {
+const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 16] = {
     use casework_client_sdk::ReviewValidationReason;
     [
         ReviewValidationReason::PolicyNotAllowed,
@@ -346,6 +347,8 @@ const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 14] = {
         ReviewValidationReason::FieldNotDeclared,
         ReviewValidationReason::ConstraintInvalid,
         ReviewValidationReason::ConstraintViolated,
+        ReviewValidationReason::PublicReasonRequired,
+        ReviewValidationReason::PublicReasonNotDeclared,
     ]
 };
 
@@ -366,6 +369,8 @@ fn validation_reason(value: casework_client_sdk::ReviewValidationReason) -> &'st
         ReviewValidationReason::FieldNotDeclared => "field-not-declared",
         ReviewValidationReason::ConstraintInvalid => "constraint-invalid",
         ReviewValidationReason::ConstraintViolated => "constraint-violated",
+        ReviewValidationReason::PublicReasonRequired => "public-reason-required",
+        ReviewValidationReason::PublicReasonNotDeclared => "public-reason-not-declared",
     }
 }
 

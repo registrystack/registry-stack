@@ -33,7 +33,10 @@ void client.delegateReviewTask(token, profile, id, 2, 'delegate-1', { delegate: 
 void client.reviewTaskDraft(token, profile, id)
 void client.saveReviewTaskDraft(token, profile, id, 2, 'draft-1', { body: { note: 'Private' } })
 void client.deleteReviewTaskDraft(token, profile, id, 2, 'delete-1')
-const decision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
+const decision: ReviewTaskDecisionRequest = { decision: { type: 'approve', outcome: 'approved', publicReason: 'Approved as submitted.' } }
+// @ts-expect-error an approval names one of the policy's approval outcomes
+const bareApproval: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
+void bareApproval
 void client.decideReviewTask(token, profile, id, 2, 'decision-1', decision)
 void client.reviewHistory(token, profile, id, { limit: 25 })
 void client.ownReviewDecisions(token, profile, { limit: 25 })

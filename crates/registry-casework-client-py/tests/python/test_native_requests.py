@@ -150,6 +150,11 @@ class _Handler(BaseHTTPRequestHandler):
                         "additionalProperties": False,
                         "properties": {},
                     },
+                    "outcomes": [{
+                        "id": "approved", "label": "Approve",
+                        "settlement": "approved", "reasonRequired": False,
+                        "publicReason": "optional",
+                    }],
                 },
                 "context": {
                     "strategy": "source",
@@ -233,6 +238,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "Idempotency window expired",
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key.",
             )
+            return
+        if self.headers.get("idempotency-key") == "undeclared-outcome-key":
+            self.respond_outcome_refusal()
             return
         if self.path == "/tenant/v1/directory/holidays":
             self.respond(body["document"], status=201)
@@ -324,6 +332,26 @@ class _Handler(BaseHTTPRequestHandler):
             "code": code,
             "traceId": TRACE_ID,
         }, status=410, media_type="application/problem+json")
+
+    def respond_outcome_refusal(self) -> None:
+        body = json.dumps({
+            "type": "https://id.registrystack.org/problems/registry-casework/request/invalid",
+            "title": "Invalid request",
+            "status": 400,
+            "detail": "The Casework request is invalid.",
+            "code": "request.invalid",
+            "traceId": TRACE_ID,
+        }).encode()
+        self.send_response(400)
+        self.send_header("content-type", "application/problem+json")
+        self.send_header("cache-control", "no-store")
+        self.send_header("traceparent", TRACEPARENT)
+        self.send_header("registry-casework-validation-path", "$.outcome")
+        self.send_header("registry-casework-validation-reason", "outcome-not-declared")
+        self.send_header("registry-casework-validation-allowed", "approved,approved-with-note")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *args: object) -> None:
         pass
@@ -473,7 +501,8 @@ class NativeRequestTests(unittest.TestCase):
                 "", "staff", ITEM_ID, 1, "delete-key"
             ),
             lambda: self.client.decide_review_task(
-                "", "staff", ITEM_ID, 1, "decision-key", {"type": "approve"}
+                "", "staff", ITEM_ID, 1, "decision-key",
+                {"decision": {"type": "approve", "outcome": "approved"}},
             ),
             lambda: self.client.review_history("", "staff", ITEM_ID),
             lambda: self.client.add_review_note(
@@ -488,6 +517,19 @@ class NativeRequestTests(unittest.TestCase):
                     call()
                 self.assertEqual(error.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
+
+    def test_an_undeclared_outcome_refusal_names_the_declared_outcomes(self) -> None:
+        with self.assertRaises(CaseworkClientError) as error:
+            self.client.decide_review_task(
+                "secret", "staff", ITEM_ID, 1, "undeclared-outcome-key",
+                {"decision": {"type": "approve", "outcome": "accepted"}},
+            )
+        self.assertEqual(error.exception.code, "request.invalid")
+        self.assertEqual(error.exception.validation, {
+            "path": "$.outcome",
+            "reason": "outcome-not-declared",
+            "allowed": ["approved", "approved-with-note"],
+        })
 
     def test_review_responses_enforce_object_results_and_exact_tasks(self) -> None:
         accepted = {
@@ -733,8 +775,14 @@ def normalized_fixture(value):
         "context": {"mode":"current-source", "provider":"registry", "contract":{"id":"registry-context", "revision":POLICY_DIGEST, "schemaDigest":POLICY_DIGEST}},
         "stages": closure["stages"], "retention": closure["retention"], "displaySchema": closure["displaySchema"],
     }
+    if "outcomes" in closure:
+        policy["outcomes"] = closure["outcomes"]
     dependencies = {"accessProfiles":[],"queues":[],"teams":[],"clocks":[],"calendars":[],"contextProvider":None,"taskTemplates":[],"trustedProducers":[],"inbox":{"defaultPageSize":25,"maximumCandidateScan":100,"maximumSourceReads":25,"maximumConcurrentSourceReads":4,"pageDeadlineMilliseconds":2000}}
-    canonical = json.dumps({"schema":"registry-casework-review-policy/v1","policy":policy,"dependencies":dependencies},sort_keys=True,separators=(",",":"))
+    # Outcome labels are presentation and stay out of the behavioral digest.
+    digested = dict(policy)
+    if "outcomes" in digested:
+        digested["outcomes"] = [{**outcome, "label": ""} for outcome in digested["outcomes"]]
+    canonical = json.dumps({"schema":"registry-casework-review-policy/v1","policy":digested,"dependencies":dependencies},sort_keys=True,separators=(",",":"))
     digest = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
     value["policy"] = {"id":policy.pop("id"),"version":policy.pop("version"),"digest":digest}
     value["policyClosure"] = {"identity":value["policy"],**policy,"dependencies":dependencies}

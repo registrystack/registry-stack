@@ -1204,6 +1204,7 @@ fn client_error(error: CaseworkClientError) -> NapiError {
                 "validation": validation.map(|validation| json!({
                     "path": validation.path,
                     "reason": validation.reason,
+                    "allowed": validation.allowed,
                 })),
                 "detail": detail,
                 "message": message,
