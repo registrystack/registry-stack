@@ -1419,3 +1419,66 @@ async fn inspection_preserves_minimized_effects_and_waits_without_accepting_corr
     assert!(matches!(error, CoordinatorClientError::Protocol { .. }));
     assert!(!error.to_string().contains(CANARY));
 }
+
+#[tokio::test]
+async fn inspection_wait_budgets_are_validated_for_inspect_and_reconcile() {
+    let server = Server::new(inspection()).await;
+    let client = server.client();
+    for (interval, observations, limit, valid) in [
+        (30, 0, 1, true),
+        (86_400, 1, 1, true),
+        (900, 9, 10, true),
+        (29, 0, 1, false),
+        (0, 0, 1, false),
+        (86_401, 0, 1, false),
+        (u32::MAX, 0, 1, false),
+        (30, 0, 0, false),
+        (30, 11, 10, false),
+        (30, u32::MAX, 1, false),
+    ] {
+        let mut document = inspection();
+        document["waits"] = json!([{
+            "step": "observe", "acceptedStep": "submit", "completion": "result",
+            "completionRevision": request().workflow_revision,
+            "timeoutAt": "2026-10-10T12:05:00Z", "nextObservationAt": null,
+            "notBefore": "2026-10-10T12:01:00Z",
+            "minimumIntervalSeconds": interval, "observations": observations,
+            "observationLimit": limit
+        }]);
+        server.answer(200, "application/json", &document.to_string());
+        for reconcile in [false, true] {
+            let before = server.count();
+            let result = if reconcile {
+                client
+                    .reconcile(&token(), RUN.parse().unwrap(), "response-lost")
+                    .await
+            } else {
+                client.inspect(&token(), RUN.parse().unwrap()).await
+            };
+            if valid {
+                let wait = result.unwrap().value.waits.remove(0);
+                assert_eq!(wait.minimum_interval_seconds, interval);
+                assert_eq!(wait.observations, observations);
+                assert_eq!(wait.observation_limit, limit);
+            } else {
+                let error = result
+                    .err()
+                    .expect("impossible wait budget must be refused");
+                assert!(matches!(
+                    error,
+                    CoordinatorClientError::Protocol {
+                        status: 200,
+                        failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                    }
+                ));
+                assert!(error.is_outcome_unknown());
+                assert!(!error.to_string().contains("fixture-token"));
+            }
+            assert_eq!(
+                server.count(),
+                before + 1,
+                "inspection and recovery never resend"
+            );
+        }
+    }
+}

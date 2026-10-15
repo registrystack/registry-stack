@@ -173,7 +173,7 @@ pub struct EffectStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "WaitStatusDocument")]
 pub struct WaitStatus {
     pub step: String,
     pub accepted_step: String,
@@ -186,6 +186,48 @@ pub struct WaitStatus {
     pub minimum_interval_seconds: u32,
     pub observations: u32,
     pub observation_limit: u32,
+}
+
+// The runtime owns the polling fence; inspection must preserve its valid budget.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaitStatusDocument {
+    step: String,
+    accepted_step: String,
+    completion: String,
+    #[serde(deserialize_with = "revision")]
+    completion_revision: String,
+    timeout_at: DateTime<Utc>,
+    next_observation_at: Option<DateTime<Utc>>,
+    not_before: DateTime<Utc>,
+    minimum_interval_seconds: u32,
+    observations: u32,
+    observation_limit: u32,
+}
+
+impl TryFrom<WaitStatusDocument> for WaitStatus {
+    type Error = &'static str;
+
+    fn try_from(document: WaitStatusDocument) -> Result<Self, Self::Error> {
+        if !(30..=86_400).contains(&document.minimum_interval_seconds)
+            || document.observation_limit == 0
+            || document.observations > document.observation_limit
+        {
+            return Err("expected a consistent observation budget");
+        }
+        Ok(Self {
+            step: document.step,
+            accepted_step: document.accepted_step,
+            completion: document.completion,
+            completion_revision: document.completion_revision,
+            timeout_at: document.timeout_at,
+            next_observation_at: document.next_observation_at,
+            not_before: document.not_before,
+            minimum_interval_seconds: document.minimum_interval_seconds,
+            observations: document.observations,
+            observation_limit: document.observation_limit,
+        })
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
