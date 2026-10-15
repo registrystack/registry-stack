@@ -916,3 +916,241 @@ async fn proposal_input_snapshot_bound_is_checked_before_protected_io() {
         }
     }
 }
+
+#[tokio::test]
+async fn proposal_pages_require_progress_without_interpreting_opaque_cursors() {
+    let fixture = Fixture::start().await;
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    for cursor in [ID.to_owned(), "x".repeat(512)] {
+        for items in [json!([]), json!([proposal("draft")])] {
+            fixture.answer(json!({"items":items,"nextCursor":cursor}));
+            let count = fixture.requests.load(Ordering::SeqCst);
+            let error = fixture
+                .client
+                .list_proposals(
+                    &collection,
+                    &BRegProposalQuery {
+                        cursor: Some(cursor.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .err()
+                .expect("an echoed cursor must not advance a traversal");
+            assert_eq!(error.kind(), "invalid-request");
+            assert!(!error.is_outcome_unknown());
+            assert_eq!(fixture.requests.load(Ordering::SeqCst), count + 1);
+        }
+        fixture.answer(json!({"items":[],"nextCursor":cursor}));
+        assert!(fixture
+            .client
+            .list_proposals(&collection, &Default::default())
+            .await
+            .is_err());
+        // A nonempty page may carry an opaque token unrelated to its final ID.
+        fixture.answer(json!({"items":[proposal("draft")],"nextCursor":cursor}));
+        let page = fixture
+            .client
+            .list_proposals(&collection, &Default::default())
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(page.next_cursor.as_deref(), Some(cursor.as_str()));
+        fixture.answer(json!({"items":[]}));
+        let count = fixture.requests.load(Ordering::SeqCst);
+        assert!(fixture
+            .client
+            .list_proposals(
+                &collection,
+                &BRegProposalQuery {
+                    cursor: page.next_cursor,
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap()
+            .value
+            .items
+            .is_empty());
+        assert_eq!(fixture.requests.load(Ordering::SeqCst), count + 1);
+    }
+}
+
+#[tokio::test]
+async fn application_ids_require_canonical_non_nil_identity_and_preserve_exact_recovery() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let mut original = proposal("submitted");
+    original["links"]["apply"] = json!({"method":"POST","path":format!("/v1/proposals/{ID}/apply"),
+        "accessProfile":"writer","operation":"apply","ifMatch":"\"condition\""});
+    let held = fixture.proposal(original.clone()).await;
+    let attempt = fixture
+        .client
+        .prepare_proposal(
+            &held,
+            "apply",
+            json!({"submissionVersion":1,"effectDigest":DIGEST}),
+            &BRegIdempotencyKey::parse("canonical-application-id").unwrap(),
+        )
+        .unwrap();
+    let canonical = "123e4567-e89b-42d3-a456-426614174000";
+    let mut receipt = original;
+    receipt["state"] = json!("applied");
+    receipt["revision"] = json!(3);
+    receipt["application"] = json!({"applicationId":canonical,"submissionVersion":1,
+        "effectDigest":DIGEST,"resultLinks":[]});
+    receipt["links"]["apply"]["availability"] = json!({"available":false,"observedRevision":3,
+        "reason":"already-applied","recovery":"receipt-only"});
+    for id in [
+        canonical.to_uppercase(),
+        canonical.replace('-', ""),
+        "00000000-0000-0000-0000-000000000000".to_owned(),
+    ] {
+        let mut invalid = receipt.clone();
+        invalid["application"]["applicationId"] = json!(id);
+        fixture.answer(invalid.clone());
+        for observed in [
+            fixture.client.get_proposal(&binding, ID).await,
+            fixture.client.read_proposal(&held).await,
+        ] {
+            let error = observed.expect_err("malformed application identity must be refused");
+            assert_eq!(error.kind(), "invalid-request");
+            assert!(!error.is_outcome_unknown());
+            assert!(!format!("{error:?}").contains(&id));
+        }
+        let error = fixture
+            .client
+            .execute_proposal(&attempt)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), "protocol");
+        assert!(error.is_outcome_unknown());
+        fixture.answer(json!({"items":[invalid]}));
+        assert!(fixture
+            .client
+            .list_proposals(&collection, &Default::default())
+            .await
+            .is_err());
+    }
+    fixture.answer(receipt);
+    let committed = fixture
+        .client
+        .execute_proposal(&attempt)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(committed.application().unwrap().application_id, canonical);
+    let count = fixture.requests.load(Ordering::SeqCst);
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    let restored = BRegPreparedProposal::from_slice(attempt.as_bytes()).unwrap();
+    let recovered = fixture
+        .client
+        .recover_proposal(&committed, &restored)
+        .unwrap();
+    assert_eq!(recovered.as_bytes(), attempt.as_bytes());
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), count);
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+    assert_eq!(
+        fixture
+            .client
+            .execute_proposal(&recovered)
+            .await
+            .unwrap()
+            .value
+            .application()
+            .unwrap()
+            .application_id,
+        canonical
+    );
+}
+
+#[tokio::test]
+async fn attachment_availability_uses_the_same_complete_unavailable_contract_as_lifecycle_links() {
+    let fixture = Fixture::start().await;
+    let source: Value =
+        serde_json::from_slice(include_bytes!("fixtures/attachments.json")).unwrap();
+    let mut original = source["proposal"].clone();
+    original["links"]["self"] = proposal("draft")["links"]["self"].clone();
+    original["links"]["edit"] = json!({"method":"POST","path":format!("/v1/proposals/{ID}/edit"),
+        "accessProfile":"writer","operation":"edit","ifMatch":"\"condition\""});
+    let held = fixture.proposal(original.clone()).await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let key = BRegIdempotencyKey::parse("attachment-availability").unwrap();
+    let attempt = fixture
+        .client
+        .prepare_proposal(&held, "edit", json!({"input":{}}), &key)
+        .unwrap();
+    for operation in ["download", "upload", "remove"] {
+        for missing in ["reason", "recovery"] {
+            let mut invalid = original.clone();
+            let mut availability = json!({"available":false,"observedRevision":3,
+                "reason":"stale-revision","recovery":"refresh"});
+            availability.as_object_mut().unwrap().remove(missing);
+            invalid["attachments"]["supporting-file"]["links"][operation]["availability"] =
+                availability;
+            fixture.answer(invalid.clone());
+            assert_eq!(
+                fixture
+                    .client
+                    .get_proposal(&binding, ID)
+                    .await
+                    .err()
+                    .unwrap()
+                    .kind(),
+                "invalid-request"
+            );
+            assert_eq!(
+                fixture
+                    .client
+                    .read_proposal(&held)
+                    .await
+                    .err()
+                    .unwrap()
+                    .kind(),
+                "invalid-request"
+            );
+            fixture.answer(json!({"items":[invalid.clone()]}));
+            assert!(fixture
+                .client
+                .list_proposals(&collection, &Default::default())
+                .await
+                .is_err());
+            invalid["revision"] = json!(4);
+            invalid["attachments"]["supporting-file"]["links"][operation]["availability"]
+                ["observedRevision"] = json!(4);
+            fixture.answer(invalid);
+            let error = fixture
+                .client
+                .execute_proposal(&attempt)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), "protocol");
+            assert!(error.is_outcome_unknown());
+            let error = fixture
+                .client
+                .delete_proposal_attachment(&held, "supporting-file", &key)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), "protocol");
+            assert!(error.is_outcome_unknown());
+        }
+        for availability in [
+            json!({"available":true,"observedRevision":3}),
+            json!({"available":false,"observedRevision":3,"reason":"stale-revision","recovery":"refresh"}),
+        ] {
+            let mut valid = original.clone();
+            valid["attachments"]["supporting-file"]["links"][operation]["availability"] =
+                availability;
+            fixture.proposal(valid).await;
+        }
+    }
+    let mut receipt = original;
+    receipt["revision"] = json!(4);
+    fixture.answer(receipt);
+    assert!(fixture.client.execute_proposal(&attempt).await.is_ok());
+}

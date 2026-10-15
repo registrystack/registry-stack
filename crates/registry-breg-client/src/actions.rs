@@ -680,6 +680,7 @@ fn decode_receipt(
         .get("applicationId")
         .and_then(Value::as_str)
         .and_then(canonical_uuid)
+        .filter(|identifier| !identifier.is_nil())
         .ok_or(BRegActionError::InvalidResponse)?;
     let values = object
         .get("results")
@@ -1042,6 +1043,10 @@ mod tests {
     }
 
     fn action_binding_with_conditions(handler: bool, required: bool) -> BRegActionBinding {
+        action_binding_at_source(handler, required, "https://registry.example/")
+    }
+
+    fn action_binding_at_source(handler: bool, required: bool, source: &str) -> BRegActionBinding {
         let input_mode = if handler { "handler" } else { "fixed" };
         let maximum_string_bytes = handler.then_some(json!(16_384)).unwrap_or(Value::Null);
         let optional_nullable = handler;
@@ -1095,7 +1100,7 @@ mod tests {
         });
         crate::BRegMetadata::from_slice(&serde_json::to_vec(&metadata).unwrap())
             .unwrap()
-            .bind_source("https://registry.example/".to_owned())
+            .bind_source(source.to_owned())
             .select_action("update-item", "writer")
             .unwrap()
     }
@@ -1400,6 +1405,112 @@ mod tests {
         .unwrap()
         .clone();
         assert!(BRegActionInvocationRequest::new(&handler, nullable, Some(&conditions)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn invocation_receipts_require_non_nil_application_ids_without_restricting_record_ids() {
+        use axum::{body::Bytes, extract::State, http::HeaderMap, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        type InvocationFixture = (Arc<Mutex<Value>>, Arc<Mutex<Vec<(String, Vec<u8>)>>>);
+        let nil = "00000000-0000-0000-0000-000000000000";
+        let canonical = "123e4567-e89b-42d3-a456-426614174000";
+        let receipt = Arc::new(Mutex::new(
+            json!({"action":"update-item","applicationId":nil,
+            "results":{"item":{"recordType":"item","recordId":nil,"revision":2}}}),
+        ));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/v1/actions/update-item",
+                post(
+                    |State((receipt, requests)): State<InvocationFixture>,
+                     headers: HeaderMap,
+                     body: Bytes| async move {
+                        requests.lock().unwrap().push((
+                            headers["idempotency-key"].to_str().unwrap().to_owned(),
+                            body.to_vec(),
+                        ));
+                        (
+                            [
+                                (
+                                    "traceparent",
+                                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                                ),
+                                ("cache-control", "no-store"),
+                                ("vary", "authorization, accept"),
+                            ],
+                            Json(receipt.lock().unwrap().clone()),
+                        )
+                    },
+                ),
+            )
+            .with_state((receipt.clone(), requests.clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // Keep the default retry budget: malformed successful evidence is never resent.
+        let client = BaseRegistryClient::new(crate::BaseRegistryClientConfig::new(
+            format!("http://{address}/").parse().unwrap(),
+        ))
+        .unwrap();
+        let action = action_binding_at_source(false, false, &client.source_binding());
+        let input = json!({"targetId":"00000000-0000-4000-8000-000000000001"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let request = BRegActionInvocationRequest::new(&action, input.clone(), None).unwrap();
+        let key = BRegIdempotencyKey::parse("application-identity").unwrap();
+        let prepared = client.prepare_action(&action, &request, &key).unwrap();
+        for application_id in [
+            nil.to_owned(),
+            canonical.to_uppercase(),
+            canonical.replace('-', ""),
+        ] {
+            receipt.lock().unwrap()["applicationId"] = json!(application_id);
+            let count = requests.lock().unwrap().len();
+            let error = client
+                .invoke_action(&action, &request, &key)
+                .await
+                .expect_err("malformed application evidence");
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    status: 200,
+                    failure: crate::BRegProtocolFailure::Body,
+                    ..
+                }
+            ));
+            assert!(error.is_outcome_unknown());
+            assert_eq!(requests.lock().unwrap().len(), count + 1);
+        }
+        for application_id in [
+            "123e4567-e89b-12d3-a456-426614174000",
+            canonical,
+            "0192a870-1234-7abc-8def-123456789abc",
+        ] {
+            receipt.lock().unwrap()["applicationId"] = json!(application_id);
+            let observed = client
+                .invoke_action(&action, &request, &key)
+                .await
+                .unwrap()
+                .value;
+            assert_eq!(
+                observed.application_identifier().to_string(),
+                application_id
+            );
+            assert!(observed.results()["item"].record_identifier().is_nil());
+        }
+        let sent = requests.lock().unwrap().last().unwrap().clone();
+        let restored = BRegPreparedAction::from_slice(prepared.as_bytes()).unwrap();
+        let recovered = client
+            .recover_action(&action, &restored, &input, &key)
+            .unwrap();
+        client
+            .invoke_action(&action, &recovered, &key)
+            .await
+            .unwrap();
+        assert_eq!(requests.lock().unwrap().last().unwrap(), &sent);
+        server.abort();
     }
 
     #[test]

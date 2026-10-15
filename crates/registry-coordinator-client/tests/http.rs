@@ -351,6 +351,57 @@ async fn every_run_status_response_preserves_nonnil_uuid_versions_and_spellings(
 }
 
 #[tokio::test]
+async fn every_run_status_response_requires_a_deadline_after_admission() {
+    let server = Server::new(status()).await;
+    for (admitted, deadline, valid) in [
+        ("2026-10-10T12:00:00Z", "2026-10-10T12:00:00Z", false),
+        ("2026-10-10T12:00:00Z", "2026-10-10T11:59:59Z", false),
+        ("2026-10-10T12:00:00Z", "2026-10-10T19:00:00+07:00", false),
+        ("2026-10-10T12:00:00Z", "2026-10-10T18:59:59+07:00", false),
+        // Historical admissions remain readable, including exact start replay.
+        ("2000-01-01T00:00:00Z", "2000-01-01T00:00:01Z", true),
+        (
+            "2026-10-10T12:00:00.000001Z",
+            "2026-10-10T12:00:01.000001Z",
+            true,
+        ),
+        ("2026-10-10T12:00:00Z", "2026-10-10T19:00:01+07:00", true),
+    ] {
+        let before = server.count();
+        let mut run = status();
+        run["admittedAt"] = json!(admitted);
+        run["deadlineAt"] = json!(deadline);
+        for (operation, answer) in
+            run_status_answers(&server, run, Uuid::parse_str(RUN).unwrap()).await
+        {
+            if valid {
+                assert_eq!(
+                    answer.unwrap_or_else(|_| panic!("{operation} refused valid chronology")),
+                    "running"
+                );
+            } else {
+                let error = answer
+                    .err()
+                    .unwrap_or_else(|| panic!("{operation} accepted impossible chronology"));
+                assert!(
+                    matches!(
+                        error,
+                        CoordinatorClientError::Protocol {
+                            status: 200,
+                            failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                        }
+                    ),
+                    "{operation}: {error:?}"
+                );
+                assert!(error.is_outcome_unknown(), "{operation}");
+                assert!(!format!("{error:?}").contains(admitted));
+            }
+        }
+        assert_eq!(server.count(), before + 7, "each operation sends once");
+    }
+}
+
+#[tokio::test]
 async fn inspection_and_reconciliation_require_one_consistent_recovery_decision() {
     let server = Server::new(inspection()).await;
     let client = server.client();
