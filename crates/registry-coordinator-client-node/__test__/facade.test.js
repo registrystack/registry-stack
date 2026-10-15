@@ -220,6 +220,47 @@ test('every run response rejects a nil identity with an unknown outcome and one 
   }
 });
 
+test('every run status response requires a deadline after admission', async (context) => {
+  let run;
+  const { baseUrl, requests } = await serve(context, (request) => ({
+    status: 200,
+    document: request.url.endsWith('/inspect') || request.url.endsWith('/reconcile')
+      ? { ...INSPECTION, run }
+      : request.url.includes('?limit=') ? { runs: [run] } : run,
+  }));
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  for (const [deadlineAt, valid] of [
+    [STATUS.admittedAt, false], ['2026-10-10T00:59:59Z', false], [STATUS.deadlineAt, true],
+  ]) {
+    run = { ...STATUS, deadlineAt };
+    for (const [call, document] of [
+      [() => client.start('token-canary', 'original-admission', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} }), run],
+      [() => client.status('token-canary', RUN_ID), run],
+      [() => client.cancel('token-canary', RUN_ID, 'caller-withdrew'), run],
+      [() => client.inspect('token-canary', RUN_ID), { ...INSPECTION, run }],
+      [() => client.reconcile('token-canary', RUN_ID, 'response-lost'), { ...INSPECTION, run }],
+      [() => client.list('token-canary', 1), { runs: [run] }],
+    ]) {
+      const before = requests.length;
+      if (valid) {
+        assert.deepEqual(await call(), { kind: 'complete', value: document });
+      } else {
+        await assert.rejects(call, (error) => {
+          assert.ok(error instanceof CoordinatorClientError);
+          assert.equal(error.kind, 'protocol');
+          assert.equal(error.protocolFailure, 'body');
+          assert.equal(error.status, 200);
+          assert.equal(error.outcomeUnknown, true);
+          assert.doesNotMatch(inspectValue(error), /token-canary|original-admission/);
+          return true;
+        });
+      }
+      assert.equal(requests.length, before + 1);
+    }
+  }
+});
+
 test('inspect and reconcile preserve consistent recovery decisions and reject contradictions', async (context) => {
   let document;
   const { baseUrl, requests } = await serve(context, () => ({ status: 200, document }));

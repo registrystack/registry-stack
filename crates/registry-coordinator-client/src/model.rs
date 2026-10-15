@@ -29,17 +29,14 @@ pub struct WorkflowContract {
 
 /// The authenticated runtime's progress, not authorization to source records.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RunStatusDocument")]
 pub struct RunStatus {
-    #[serde(deserialize_with = "run_id")]
     pub run_id: Uuid,
     pub workflow: String,
-    #[serde(deserialize_with = "revision")]
     pub workflow_revision: String,
 
     pub binding_digest: String,
     pub step: String,
-    #[serde(deserialize_with = "run_state")]
     pub state: String,
     pub outcome: Option<String>,
     pub output: Option<Value>,
@@ -54,6 +51,62 @@ pub struct RunStatus {
     pub restore_review_required: bool,
     pub cancel_requested: bool,
     pub authored_cancel_requested: bool,
+}
+
+// Admissions add a positive authored duration; retained status keeps that deadline.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunStatusDocument {
+    #[serde(deserialize_with = "run_id")]
+    run_id: Uuid,
+    workflow: String,
+    #[serde(deserialize_with = "revision")]
+    workflow_revision: String,
+
+    binding_digest: String,
+    step: String,
+    #[serde(deserialize_with = "run_state")]
+    state: String,
+    outcome: Option<String>,
+    output: Option<Value>,
+    failure_code: Option<String>,
+    failure_path: Option<String>,
+    admitted_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    next_due_at: Option<DateTime<Utc>>,
+    uncertain: bool,
+    restore_review_required: bool,
+    cancel_requested: bool,
+    authored_cancel_requested: bool,
+}
+
+impl TryFrom<RunStatusDocument> for RunStatus {
+    type Error = &'static str;
+
+    fn try_from(document: RunStatusDocument) -> Result<Self, Self::Error> {
+        if document.deadline_at <= document.admitted_at {
+            return Err("expected a deadline after admission");
+        }
+        Ok(Self {
+            run_id: document.run_id,
+            workflow: document.workflow,
+            workflow_revision: document.workflow_revision,
+            binding_digest: document.binding_digest,
+            step: document.step,
+            state: document.state,
+            outcome: document.outcome,
+            output: document.output,
+            failure_code: document.failure_code,
+            failure_path: document.failure_path,
+            admitted_at: document.admitted_at,
+            deadline_at: document.deadline_at,
+            next_due_at: document.next_due_at,
+            uncertain: document.uncertain,
+            restore_review_required: document.restore_review_required,
+            cancel_requested: document.cancel_requested,
+            authored_cancel_requested: document.authored_cancel_requested,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

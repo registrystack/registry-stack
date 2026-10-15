@@ -134,6 +134,34 @@ class NativeRequestTests(unittest.TestCase):
             self.assertNotIn(KEY, rendered(error))
             self.assertEqual(len(self.observed()), 1)
 
+    def test_every_run_status_response_requires_a_deadline_after_admission(self) -> None:
+        for deadline, valid in (
+            (STATUS["admittedAt"], False), ("2000-01-01T00:00:00Z", False), (STATUS["deadlineAt"], True),
+        ):
+            run = {**STATUS, "deadlineAt": deadline}
+            for call, document in (
+                (lambda: self.client.start("token-canary", KEY, START_REQUEST), run),
+                (lambda: self.client.status("token-canary", RUN), run),
+                (lambda: self.client.cancel("token-canary", RUN, "caller-withdrew"), run),
+                (lambda: self.client.inspect("token-canary", RUN), {**INSPECTION, "run": run}),
+                (lambda: self.client.reconcile("token-canary", RUN, "response-lost"), {**INSPECTION, "run": run}),
+                (lambda: self.client.list("token-canary", 1), {"runs": [run]}),
+            ):
+                self.service.script(ok(document))
+                if valid:
+                    self.assertEqual(call(), {"kind": "complete", "value": document})
+                else:
+                    with self.assertRaises(CoordinatorClientError) as refused:
+                        call()
+                    error = refused.exception
+                    self.assertEqual(error.kind, "protocol")
+                    self.assertEqual(error.protocol_failure, "body")
+                    self.assertEqual(error.status, 200)
+                    self.assertIs(error.outcome_unknown, True)
+                    self.assertNotIn("token-canary", rendered(error))
+                    self.assertNotIn(KEY, rendered(error))
+                self.assertEqual(len(self.observed()), 1)
+
     def test_inspect_and_reconcile_preserve_consistent_recovery_decisions_and_reject_contradictions(self) -> None:
         for operation in (None, INSPECTION["recovery"]["operation"]):
             for allowed, reason, valid in (
