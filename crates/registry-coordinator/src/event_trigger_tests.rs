@@ -382,6 +382,7 @@ fn a_signed_event_over_the_value_profile_is_refused_naming_the_bound_and_fix() {
     assert!(body.len() <= MAXIMUM_EVENT_BYTES);
     let error = verify(&body, &headers).err().unwrap();
     assert_eq!(error.code, "event-too-large");
+    let message = error.message.clone();
 
     let response = event_problem(error);
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -389,13 +390,27 @@ fn a_signed_event_over_the_value_profile_is_refused_naming_the_bound_and_fix() {
     assert_eq!(problem.code(), "event.too-large");
     let detail = problem.detail();
     for bound in [
-        crate::functions::MAXIMUM_VALUE_BYTES,
-        crate::functions::MAXIMUM_VALUE_DEPTH,
-        crate::functions::MAXIMUM_VALUE_NODES,
-        crate::functions::MAXIMUM_VALUE_ARRAY_ITEMS,
-        crate::functions::MAXIMUM_VALUE_STRING_BYTES,
+        format!("{} canonical bytes", crate::functions::MAXIMUM_VALUE_BYTES),
+        format!(
+            "{} levels of nesting",
+            crate::functions::MAXIMUM_VALUE_DEPTH
+        ),
+        format!("{} values", crate::functions::MAXIMUM_VALUE_NODES),
+        format!(
+            "{} items per array",
+            crate::functions::MAXIMUM_VALUE_ARRAY_ITEMS
+        ),
+        format!(
+            "{} members per object",
+            crate::functions::MAXIMUM_VALUE_OBJECT_MEMBERS
+        ),
+        format!(
+            "{} bytes per string",
+            crate::functions::MAXIMUM_VALUE_STRING_BYTES
+        ),
     ] {
-        assert!(detail.contains(&bound.to_string()), "{bound}: {detail}");
+        assert!(detail.contains(&bound), "{bound}: {detail}");
+        assert!(message.contains(&bound), "{bound}: {message}");
     }
     assert!(
         detail.contains("project fewer or smaller fields into the event"),

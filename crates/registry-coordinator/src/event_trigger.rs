@@ -457,11 +457,12 @@ fn event_too_large() -> CoordinatorError {
     CoordinatorError::new(
         "event-too-large",
         format!(
-            "the committed event exceeds the event value profile of {} canonical bytes, {} levels of nesting, {} values, {} items or members per container, and {} bytes per string; project fewer or smaller fields into the event",
+            "the committed event exceeds the event value profile of {} canonical bytes, {} levels of nesting, {} values, {} items per array, {} members per object, and {} bytes per string; project fewer or smaller fields into the event",
             crate::functions::MAXIMUM_VALUE_BYTES,
             crate::functions::MAXIMUM_VALUE_DEPTH,
             crate::functions::MAXIMUM_VALUE_NODES,
             crate::functions::MAXIMUM_VALUE_ARRAY_ITEMS,
+            crate::functions::MAXIMUM_VALUE_OBJECT_MEMBERS,
             crate::functions::MAXIMUM_VALUE_STRING_BYTES,
         ),
     )

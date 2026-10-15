@@ -379,7 +379,7 @@ impl ProblemCode {
             }
             Self::EventInvalid => "The signed event must satisfy the accepted canonical envelope and typed event contract.",
             Self::EventSourceUnavailable => "Restore the configured event source signing key and its enabled secret provider before retrying delivery.",
-            Self::EventTooLarge => "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array or members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
+            Self::EventTooLarge => "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array, 256 members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
             Self::EventUnauthenticated => "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
             Self::ExecutionHeld => {
                 "Execution is under restore hold until an operator releases it."

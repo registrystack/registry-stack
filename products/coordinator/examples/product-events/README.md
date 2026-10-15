@@ -54,7 +54,8 @@ chooses a principal, connection or credential.
 
 Intake accepts at most 1 MiB, the Version 1 signable bound, and the admitted
 event must fit the 128 KiB structured value profile, so use minimized producer
-projections. The producer refreshes its signed delivery time for each attempt; the receiver
+projections. A signed event over that profile is refused with `event.too-large`
+(413), whose detail lists each bound. The producer refreshes its signed delivery time for each attempt; the receiver
 allows 30 seconds of delivery-time skew.
 
 Stable event identity deduplicates retries and operator replay even when the
