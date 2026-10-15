@@ -15,7 +15,9 @@ async function harness() {
   if(request.method==='GET'&&!request.url.startsWith('/v1/registry')) {
    response.setHeader('content-type','application/pdf');response.setHeader('content-disposition','attachment');response.setHeader('x-content-type-options','nosniff');response.setHeader('vary','authorization');return response.end(bytes);
   }
-  response.setHeader('content-type','application/json');response.setHeader('vary','authorization, accept');response.end(JSON.stringify(request.url.startsWith('/v1/registry')?fixture.metadata:fixture.proposal));
+  const value=structuredClone(request.url.startsWith('/v1/registry')?fixture.metadata:fixture.proposal);
+  if(['PATCH','DELETE'].includes(request.method))value.revision++;
+  response.setHeader('content-type','application/json');response.setHeader('vary','authorization, accept');response.end(JSON.stringify(value));
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const client=new BaseRegistryClient({baseUrl:`http://127.0.0.1:${server.address().port}`});
@@ -38,9 +40,11 @@ test('disallowed bytes and missing slots never leave the native boundary',async(
 });
 test('three binary exchanges follow exact promoted paths and conditions',async()=>{
  const h=await harness();try {
-  await h.client.uploadProposalAttachment(h.proposal,slot,'application/pdf',bytes,'upload');
+  const uploaded=JSON.parse((await h.client.uploadProposalAttachment(h.proposal,slot,'application/pdf',bytes,'upload')).documentJson);
+  assert.equal(uploaded.revision,fixture.proposal.revision+1);assert.equal(uploaded.submissionVersion,fixture.proposal.submissionVersion);assert.equal(uploaded.state,'draft');
   const raw=await h.client.downloadProposalAttachment(h.proposal,slot);assert.deepEqual(raw.body,bytes);
-  await h.client.deleteProposalAttachment(h.proposal,slot,'remove');
+  const removed=JSON.parse((await h.client.deleteProposalAttachment(h.proposal,slot,'remove')).documentJson);
+  assert.equal(removed.revision,fixture.proposal.revision+1);assert.equal(removed.submissionVersion,fixture.proposal.submissionVersion);assert.equal(removed.state,'draft');
   const path=`/v1/proposals/${fixture.proposal.id}/attachments/${slot}`;
   assert.equal(h.requests[2].url,`${path}?accessProfile=writer`);assert.equal(h.requests[2].method,'PATCH');assert.equal(h.requests[2].headers['if-match'],'"condition"');assert.equal(h.requests[2].headers['idempotency-key'],'upload');assert.deepEqual(h.requests[2].body,bytes);
   assert.equal(h.requests[3].url,`${path}?accessProfile=writer&submissionVersion=2`);assert.equal(h.requests[3].headers.accept,'*/*');

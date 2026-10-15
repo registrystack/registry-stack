@@ -235,7 +235,9 @@ fn proposal_document() -> Value {
             "remove":{"method":"DELETE","path":path,"accessProfile":"writer","operation":"remove","ifMatch":SERVER_ETAG}}}}})
 }
 fn proposal_response() -> MockResponse {
-    MockResponse::json(StatusCode::OK, proposal_document())
+    let mut receipt = proposal_document();
+    receipt["revision"] = json!(4);
+    MockResponse::json(StatusCode::OK, receipt)
         .with_header("cache-control", "no-store")
         .with_header("vary", "authorization, accept")
 }

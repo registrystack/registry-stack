@@ -30,11 +30,14 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
   let value = document();
   let downloadBytes;
   const requests = [];
+  const wireRequests = [];
   const metadata = {id: 'registry', version: '1', revision: digest, metadataVersion: '1', recordTypes: [], operations: [],
     proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [],
       get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['reader']}}};
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk;
     requests.push(request.url);
+    wireRequests.push({method: request.method, url: request.url, body, key: request.headers['idempotency-key'], condition: request.headers['if-match']});
     if (downloadBytes !== undefined && request.method === 'GET' && request.url.includes('/attachments/')) {
       response.writeHead(200, {'content-type': 'application/pdf', 'content-disposition': 'attachment', 'x-content-type-options': 'nosniff',
         'cache-control': 'no-store', vary: 'authorization', traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
@@ -128,11 +131,62 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         const count = requests.length;
         await assert.rejects(send(), error => error.kind === 'invalid-request');
         assert.equal(requests.length, count + 1, 'validate the actual received mutation response');
+        for (const mutate of [item => {item.revision--;}, item => {item.revision++;},
+          item => {item.state = 'submitted';}, item => {item.submissionVersion++;}]) {
+          value = structuredClone(current); mutate(value);
+          const before = requests.length;
+          await assert.rejects(send(), error => error.kind === 'invalid-request');
+          assert.equal(requests.length, before + 1);
+        }
       }
+      value = structuredClone(current); value.actionRevision = successor;
       assert.equal(JSON.parse((await client.readProposal(prior)).documentJson).actionRevision, successor, 'ordinary reads can observe a new revision');
     });
+    await t.test('Submit validates the exact receipt while replay and saved recovery retain the original request', async () => {
+      value = document(); value.state = 'draft'; value.submissionVersion = 1; delete value.application;
+      value.links.submit = {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'reader', operation: 'submit', ifMatch: '"submit-condition"'};
+      const prior = await client.getProposal(binding, id);
+      const initial = structuredClone(value);
+      const attempt = client.prepareProposal(prior, 'submit', '{}', 'exact-submit');
+      const saved = attempt.toBytes();
+      const receipt = {...structuredClone(initial), revision: 9, state: 'submitted'};
+      for (const invalid of [initial, {...receipt, revision: 8}, {...receipt, revision: 10},
+        {...receipt, state: 'draft'}, {...receipt, state: 'applied'}, {...receipt, submissionVersion: 2}]) {
+        value = invalid;
+        const count = requests.length;
+        await assert.rejects(client.executeProposal(attempt), error => error.kind === 'invalid-request');
+        assert.equal(requests.length, count + 1);
+      }
+      value = receipt;
+      assert.equal(JSON.parse((await client.executeProposal(attempt)).documentJson).state, 'submitted');
+      const sent = wireRequests.at(-1);
+      assert.equal(JSON.parse((await client.executeProposal(attempt)).documentJson).revision, 9);
+      assert.deepEqual(wireRequests.at(-1), sent);
+      value = {...structuredClone(receipt), revision: 10, state: 'applied'};
+      value.links.submit.availability = {available: false, observedRevision: 10, reason: 'already-applied', recovery: 'receipt-only'};
+      const current = await client.readProposal(prior);
+      const before = requests.length;
+      const recovered = client.recoverProposal(current, BRegPreparedProposal.fromBytes(saved));
+      assert.equal(requests.length, before, 'recovery performs no exchange');
+      assert.deepEqual(recovered.toBytes(), saved);
+      value = receipt;
+      assert.equal(JSON.parse((await client.executeProposal(recovered)).documentJson).revision, 9);
+      assert.deepEqual(wireRequests.at(-1), sent);
+    });
+    await t.test('held Proposal reads refuse backward workflow revisions and permit equal or later observations', async () => {
+      value = document();
+      const held = await client.getProposal(binding, id);
+      value.revision = 7;
+      const count = requests.length;
+      await assert.rejects(client.readProposal(held), error => error.kind === 'invalid-request');
+      assert.equal(requests.length, count + 1);
+      for (const revision of [8, 9]) {
+        value.revision = revision;
+        assert.equal(JSON.parse((await client.readProposal(held)).documentJson).revision, revision);
+      }
+    });
     await t.test('explicit Rebase and exact recovery admit only the next successor Draft', async () => {
-      for (const [state, before, after] of [['draft', 0, 0], ['submitted', 2, 3]]) {
+      for (const [state, before, after] of [['draft', 1, 1], ['submitted', 2, 3]]) {
         value = document(); value.state = state; value.submissionVersion = before; delete value.application;
         value.links.rebase = {method: 'POST', path: `/v1/proposals/${id}/rebase`, accessProfile: 'reader', operation: 'rebase', ifMatch: '"rebase-condition"',
           availability: {available: true, observedRevision: 8}};
@@ -167,6 +221,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       await assert.rejects(client.uploadProposalAttachment(retained, 'support', 'application/pdf', Buffer.from('%PDF'), 'wrong-media'), error => error.kind === 'invalid-request');
       await assert.rejects(client.uploadProposalAttachment(retained, 'support', 'text/plain', Buffer.from('12345'), 'too-large'), error => error.kind === 'invalid-request');
       assert.equal(requests.length, count, 'new uploads keep current policy before I/O');
+      value.revision++;
       await client.uploadProposalAttachment(retained, 'support', 'text/plain', Buffer.from('ok'), 'allowed-upload');
       downloadBytes = Buffer.concat([downloadBytes, Buffer.from('x')]);
       await assert.rejects(client.downloadProposalAttachment(retained, 'support'), error => error.kind === 'transport' && error.transportKind === 'response-too-large');

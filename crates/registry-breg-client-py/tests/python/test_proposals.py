@@ -121,7 +121,7 @@ class ProposalPageTests(unittest.TestCase):
 
 class ProposalStartTests(unittest.TestCase):
     def test_start_accepts_exact_draft_replay_but_refuses_valid_non_draft_responses(self):
-        value = dict(PROPOSAL, state='draft', submissionVersion=0)
+        value = dict(PROPOSAL, state='draft', submissionVersion=1)
         requests = []
         metadata = dict(METADATA, actions=[{
             'id': 'correct', 'apiName': 'correct', 'revision': REVISION, 'display': {}, 'execution': {'mode': 'proposal'},

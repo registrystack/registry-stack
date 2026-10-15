@@ -18,7 +18,9 @@ class AttachmentTests(unittest.TestCase):
    def respond(self):
     body=self.rfile.read(int(self.headers.get('content-length','0')));requests.append((self.command,self.path,dict(self.headers),body))
     binary=self.command=='GET' and not self.path.startswith('/v1/registry')
-    payload=CONTENT if binary else json.dumps(FIXTURE['metadata'] if self.path.startswith('/v1/registry') else FIXTURE['proposal']).encode()
+    value=FIXTURE['metadata'] if self.path.startswith('/v1/registry') else dict(FIXTURE['proposal'])
+    if self.command in ('PATCH','DELETE'):value['revision']+=1
+    payload=CONTENT if binary else json.dumps(value).encode()
     self.send_response(200);self.send_header('content-type','application/pdf' if binary else 'application/json');self.send_header('cache-control','no-store');self.send_header('vary','authorization' if binary else 'authorization, accept');self.send_header('traceparent','00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');self.send_header('content-length',str(len(payload)))
     if binary:self.send_header('content-disposition','attachment');self.send_header('x-content-type-options','nosniff')
     self.end_headers();self.wfile.write(payload)
@@ -40,9 +42,11 @@ class AttachmentTests(unittest.TestCase):
    with self.assertRaises(BaseRegistryClientError):self.client.upload_proposal_attachment(self.proposal,SLOT,mime,body,'bad')
   self.assertEqual(len(self.requests),2)
  def test_three_exchanges_follow_promoted_paths(self):
-  self.client.upload_proposal_attachment(self.proposal,SLOT,'application/pdf',CONTENT,'upload')
+  uploaded=self.client.upload_proposal_attachment(self.proposal,SLOT,'application/pdf',CONTENT,'upload').document
+  self.assertEqual(uploaded['revision'],FIXTURE['proposal']['revision']+1);self.assertEqual(uploaded['submissionVersion'],FIXTURE['proposal']['submissionVersion']);self.assertEqual(uploaded['state'],'draft')
   self.assertEqual(self.client.download_proposal_attachment(self.proposal,SLOT)['body'],CONTENT)
-  self.client.delete_proposal_attachment(self.proposal,SLOT,'remove')
+  removed=self.client.delete_proposal_attachment(self.proposal,SLOT,'remove').document
+  self.assertEqual(removed['revision'],FIXTURE['proposal']['revision']+1);self.assertEqual(removed['submissionVersion'],FIXTURE['proposal']['submissionVersion']);self.assertEqual(removed['state'],'draft')
   path=f"/v1/proposals/{FIXTURE['proposal']['id']}/attachments/{SLOT}"
   self.assertEqual(self.requests[2][1],path+'?accessProfile=writer');self.assertEqual(self.requests[2][3],CONTENT);self.assertEqual(self.requests[2][2]['if-match'],'"condition"')
   self.assertEqual(self.requests[3][1],path+'?accessProfile=writer&submissionVersion=2');self.assertEqual(self.requests[4][0],'DELETE')

@@ -741,6 +741,8 @@ struct PreparedEvidence {
     action_id: String,
     action_revision: String,
     submission_version: u32,
+    revision: u64,
+    state: BRegProposalState,
     link: BRegProposalLink,
     body: String,
     key: String,
@@ -759,7 +761,13 @@ impl BRegPreparedProposal {
         }
         let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;
         let data: PreparedEvidence = serde_json::from_value(value).map_err(|_| refusal())?;
-        if data.version != 1
+        if data.version != 2
+            || data.revision == 0
+            || data
+                .link
+                .availability
+                .as_ref()
+                .is_some_and(|availability| availability.observed_revision != data.revision)
             || Uuid::parse_str(&data.proposal_id).is_err()
             || !digest(&data.action_revision)
         {
@@ -1082,6 +1090,13 @@ impl BaseRegistryClient {
         if current.id != prior.id
             || current.action_id != prior.action_id
             || current.action_revision != prior.action_revision
+            || !transition_progress(
+                "edit",
+                prior.state,
+                prior.submission_version,
+                prior.revision,
+                &current,
+            )
         {
             return Err(refusal());
         }
@@ -1215,12 +1230,14 @@ impl BaseRegistryClient {
             return Err(refusal());
         }
         let evidence = PreparedEvidence {
-            version: 1,
+            version: 2,
             source: self.source_binding(),
             proposal_id: proposal.id.clone(),
             action_id: proposal.action_id.clone(),
             action_revision: proposal.action_revision.clone(),
             submission_version: proposal.submission_version,
+            revision: proposal.revision,
+            state: proposal.state,
             link: link.clone(),
             body: serde_json::to_string(&body).map_err(|_| refusal())?,
             key: key.as_str().to_owned(),
@@ -1242,14 +1259,14 @@ impl BaseRegistryClient {
         }
         let key = BRegIdempotencyKey::parse(&evidence.key).map_err(|_| refusal())?;
         let response = self
-            .proposal_exchange(&evidence.link, Some(evidence.body.into_bytes()), Some(&key))
+            .proposal_exchange(
+                &evidence.link,
+                Some(evidence.body.as_bytes().to_vec()),
+                Some(&key),
+            )
             .await?;
         let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
-        if proposal.id != evidence.proposal_id
-            || proposal.action_id != evidence.action_id
-            || proposal.action_revision != evidence.action_revision
-                && !rebase_successor(&evidence.link, evidence.submission_version, &proposal)
-        {
+        if !transition_successor(&evidence, &proposal) {
             return Err(refusal());
         }
         Ok(BRegComplete {
@@ -1268,7 +1285,10 @@ impl BaseRegistryClient {
         let link = proposal.links.get("self").ok_or_else(refusal)?;
         let response = self.proposal_exchange(link, None, None).await?;
         let current = BRegProposal::from_slice(response.value.as_bytes())?;
-        if current.id != proposal.id || current.action_id != proposal.action_id {
+        if current.id != proposal.id
+            || current.action_id != proposal.action_id
+            || current.revision < proposal.revision
+        {
             return Err(refusal());
         }
         Ok(BRegComplete {
@@ -1283,23 +1303,16 @@ impl BaseRegistryClient {
         attempt: &BRegPreparedProposal,
     ) -> Result<BRegPreparedProposal, BaseRegistryClientError> {
         let evidence = attempt.decode()?;
-        let next_revision = evidence
-            .link
-            .availability
-            .as_ref()
-            .is_some_and(|availability| {
-                availability.observed_revision.checked_add(1) == Some(current.revision)
-            });
+        let successor = transition_successor(&evidence, current);
         let same_version = evidence.submission_version == current.submission_version;
-        let advanced_draft = matches!(evidence.link.operation.as_str(), "revise" | "rebase")
-            && current.state == BRegProposalState::Draft
-            && evidence.submission_version.checked_add(1) == Some(current.submission_version)
-            && next_revision;
-        let rebased_draft = rebase_successor(&evidence.link, evidence.submission_version, current);
+        let advanced_draft =
+            matches!(evidence.link.operation.as_str(), "revise" | "rebase") && successor;
+        let rebased_draft = evidence.link.operation == "rebase" && successor;
         if current.source.as_deref() != Some(self.source_binding().as_str())
             || evidence.source != self.source_binding()
             || evidence.proposal_id != current.id
             || evidence.action_id != current.action_id
+            || current.revision < evidence.revision
             || evidence.action_revision != current.action_revision && !rebased_draft
             || !(same_version || advanced_draft)
             || !current.links.values().any(|link| {
@@ -1308,7 +1321,7 @@ impl BaseRegistryClient {
                     && link.access_profile == evidence.link.access_profile
                     && link.operation == evidence.link.operation
                     && (link == &evidence.link
-                        || next_revision
+                        || successor
                             && link
                                 .availability
                                 .as_ref()
@@ -1325,18 +1338,44 @@ impl BaseRegistryClient {
         Ok(recovered)
     }
 }
-fn rebase_successor(
-    link: &BRegProposalLink,
-    submission_version: u32,
+// Mutation receipts describe this one transition, including on a same-key replay.
+// A current read may have advanced further and is checked separately during recovery.
+fn transition_successor(evidence: &PreparedEvidence, current: &BRegProposal) -> bool {
+    let operation = evidence.link.operation.as_str();
+    current.id == evidence.proposal_id
+        && current.action_id == evidence.action_id
+        && (current.action_revision == evidence.action_revision || operation == "rebase")
+        && transition_progress(
+            operation,
+            evidence.state,
+            evidence.submission_version,
+            evidence.revision,
+            current,
+        )
+        && (operation != "apply"
+            || crate::strict_json::from_slice(evidence.body.as_bytes()).is_ok_and(|body| {
+                body["effectDigest"].as_str() == current.effect_digest.as_deref()
+            }))
+}
+fn transition_progress(
+    operation: &str,
+    prior_state: BRegProposalState,
+    prior_version: u32,
+    prior_revision: u64,
     current: &BRegProposal,
 ) -> bool {
-    link.operation == "rebase"
-        && current.state == BRegProposalState::Draft
-        && link.availability.as_ref().is_some_and(|availability| {
-            availability.observed_revision.checked_add(1) == Some(current.revision)
-        })
-        && (submission_version == current.submission_version
-            || submission_version.checked_add(1) == Some(current.submission_version))
+    use BRegProposalState::{Applied, Cancelled, Draft, Submitted};
+    let (state, version) = match (operation, prior_state) {
+        ("edit", Draft) | ("rebase", Draft) => (Draft, Some(prior_version)),
+        ("submit", Draft) | ("retry", Submitted) => (Submitted, Some(prior_version)),
+        ("revise" | "rebase", Submitted) => (Draft, prior_version.checked_add(1)),
+        ("cancel", Draft | Submitted) => (Cancelled, Some(prior_version)),
+        ("apply", Submitted) => (Applied, Some(prior_version)),
+        _ => return false,
+    };
+    prior_revision.checked_add(1) == Some(current.revision)
+        && current.state == state
+        && version == Some(current.submission_version)
 }
 fn valid_review_projection(context: &BRegProposalReviewContext, is_context: bool) -> bool {
     if is_context {
@@ -1481,12 +1520,255 @@ mod tests {
         value["state"] = json!(state);
         value["submissionVersion"] = json!(version);
         value["revision"] = json!(revision);
+        if state == "applied" {
+            value["effectDigest"] = json!(REVISION);
+        }
         let mut link = value["links"]["apply"].clone();
         link["path"] = json!(format!("/v1/proposals/{ID}/{operation}"));
         link["operation"] = json!(operation);
         link["availability"]["observedRevision"] = json!(revision);
         value["links"] = json!({operation:link});
         value
+    }
+
+    #[tokio::test]
+    async fn transition_receipts_refuse_the_unchanged_proposal() {
+        let original = transition_document("submit", "draft", 1, 2);
+        let (client, _, server) = proposal_response_client(original.clone()).await;
+        let prior = proposal(&client, original);
+        let attempt = client
+            .prepare_proposal(
+                &prior,
+                "submit",
+                json!({}),
+                &BRegIdempotencyKey::parse("unchanged-submit").unwrap(),
+            )
+            .unwrap();
+        assert!(client.execute_proposal(&attempt).await.is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn proposal_reads_refuse_a_revision_older_than_the_held_proposal() {
+        let mut older = document();
+        older["revision"] = json!(1);
+        older["links"]["apply"]["availability"]["observedRevision"] = json!(1);
+        let (client, response, server) = proposal_response_client(older).await;
+        let prior = proposal(&client, document());
+        assert!(client.read_proposal(&prior).await.is_err());
+        for (revision, state, version) in [(2, "submitted", 1), (3, "applied", 1), (5, "draft", 2)]
+        {
+            let mut current = document();
+            current["revision"] = json!(revision);
+            current["state"] = json!(state);
+            current["submissionVersion"] = json!(version);
+            current["links"]["apply"]["availability"]["observedRevision"] = json!(revision);
+            if version == 2 {
+                current["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
+            }
+            *response.lock().unwrap() = current.clone();
+            assert_eq!(
+                serde_json::to_value(client.read_proposal(&prior).await.unwrap().value).unwrap(),
+                current
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transition_receipts_require_exact_progress_and_allow_exact_replay() {
+        let (client, response, server) = proposal_response_client(json!({})).await;
+        for (operation, before, after, version, body) in [
+            ("edit", "draft", "draft", 1, json!({"input":{}})),
+            ("submit", "draft", "submitted", 1, json!({})),
+            ("revise", "submitted", "draft", 2, json!({})),
+            ("rebase", "draft", "draft", 1, json!({"input":{}})),
+            ("rebase", "submitted", "draft", 2, json!({"input":{}})),
+            ("retry", "submitted", "submitted", 1, json!({})),
+            ("cancel", "draft", "cancelled", 1, json!({})),
+            ("cancel", "submitted", "cancelled", 1, json!({})),
+            (
+                "apply",
+                "submitted",
+                "applied",
+                1,
+                json!({"submissionVersion":1,"effectDigest":REVISION}),
+            ),
+        ] {
+            // Availability is optional. The held Proposal supplies the original revision/state.
+            let mut original = transition_document(operation, before, 1, 2);
+            original["links"][operation]
+                .as_object_mut()
+                .unwrap()
+                .remove("availability");
+            let prior = proposal(&client, original.clone());
+            let prepared = client
+                .prepare_proposal(
+                    &prior,
+                    operation,
+                    body,
+                    &BRegIdempotencyKey::parse("exact-transition").unwrap(),
+                )
+                .unwrap();
+            let restored = BRegPreparedProposal::from_slice(prepared.as_bytes()).unwrap();
+            let attempt = client.recover_proposal(&prior, &restored).unwrap();
+            assert_eq!(attempt.as_bytes(), prepared.as_bytes());
+            let receipt = transition_document(operation, after, version, 3);
+            *response.lock().unwrap() = receipt.clone();
+            for _ in 0..2 {
+                let value = client.execute_proposal(&attempt).await.unwrap().value;
+                assert_eq!(
+                    serde_json::to_value(value).unwrap(),
+                    receipt,
+                    "{operation}:{before}"
+                );
+            }
+            for (field, value) in [
+                ("revision", json!(2)),
+                ("revision", json!(4)),
+                ("submissionVersion", json!(if version == 1 { 2 } else { 1 })),
+                (
+                    "state",
+                    json!(if after == "draft" {
+                        "submitted"
+                    } else {
+                        "draft"
+                    }),
+                ),
+            ] {
+                let mut invalid = receipt.clone();
+                invalid[field] = value;
+                invalid["links"][operation]["availability"]["observedRevision"] =
+                    invalid["revision"].clone();
+                *response.lock().unwrap() = invalid;
+                assert!(
+                    client.execute_proposal(&attempt).await.is_err(),
+                    "{operation}:{before}:{field}"
+                );
+            }
+            if operation == "apply" {
+                for effect in [Value::Null, json!(format!("sha256:{}", "b".repeat(64)))] {
+                    let mut invalid = receipt.clone();
+                    invalid["effectDigest"] = effect;
+                    *response.lock().unwrap() = invalid;
+                    assert!(client.execute_proposal(&attempt).await.is_err());
+                }
+            }
+            let mut rollback = original;
+            rollback["revision"] = json!(1);
+            rollback["links"][operation]["availability"] = json!({"available":false,"observedRevision":1,
+                "reason":"stale-revision","recovery":"receipt-only"});
+            assert!(client
+                .recover_proposal(&proposal(&client, rollback), &restored)
+                .is_err());
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn receipt_recovery_after_later_reads_replays_the_original_successor() {
+        let original = transition_document("submit", "draft", 1, 2);
+        let (client, response, server) = proposal_response_client(json!({})).await;
+        let prior = proposal(&client, original);
+        let attempt = client
+            .prepare_proposal(
+                &prior,
+                "submit",
+                json!({}),
+                &BRegIdempotencyKey::parse("lost-submit-response").unwrap(),
+            )
+            .unwrap();
+        let saved = BRegPreparedProposal::from_slice(attempt.as_bytes()).unwrap();
+        let mut later = transition_document("submit", "applied", 1, 4);
+        later["links"]["submit"]["availability"] = json!({"available":false,"observedRevision":4,
+            "reason":"already-applied","recovery":"receipt-only"});
+        let recovered = client
+            .recover_proposal(&proposal(&client, later.clone()), &saved)
+            .unwrap();
+        assert_eq!(recovered.as_bytes(), saved.as_bytes());
+        let receipt = transition_document("submit", "submitted", 1, 3);
+        *response.lock().unwrap() = receipt.clone();
+        assert_eq!(
+            serde_json::to_value(client.execute_proposal(&recovered).await.unwrap().value).unwrap(),
+            receipt
+        );
+        *response.lock().unwrap() = later;
+        assert!(client.execute_proposal(&recovered).await.is_err());
+        server.abort();
+    }
+
+    #[test]
+    fn prepared_proposals_require_the_original_state_and_revision() {
+        let client = client("https://registry.example/");
+        let prior = proposal(&client, transition_document("submit", "draft", 1, 2));
+        let attempt = client
+            .prepare_proposal(
+                &prior,
+                "submit",
+                json!({}),
+                &BRegIdempotencyKey::parse("bound-transition").unwrap(),
+            )
+            .unwrap();
+        let evidence: Value = serde_json::from_slice(attempt.as_bytes()).unwrap();
+        assert_eq!(evidence["version"], json!(2));
+        assert_eq!(evidence["state"], json!("draft"));
+        assert_eq!(evidence["revision"], json!(2));
+        for field in ["state", "revision"] {
+            let mut invalid = evidence.clone();
+            invalid.as_object_mut().unwrap().remove(field);
+            assert!(
+                BRegPreparedProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err()
+            );
+        }
+        for (field, value) in [
+            ("version", json!(1)),
+            ("revision", json!(0)),
+            ("revision", json!(3)),
+        ] {
+            let mut invalid = evidence.clone();
+            invalid[field] = value;
+            assert!(
+                BRegPreparedProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn transition_receipts_refuse_revision_and_submission_overflow() {
+        let (client, response, server) = proposal_response_client(json!({})).await;
+        for (operation, state, version, revision, body) in [
+            ("submit", "draft", 1, u64::MAX, json!({})),
+            ("revise", "submitted", u32::MAX, 2, json!({})),
+            ("rebase", "submitted", u32::MAX, 2, json!({"input":{}})),
+        ] {
+            let prior = proposal(
+                &client,
+                transition_document(operation, state, version, revision),
+            );
+            let attempt = client
+                .prepare_proposal(
+                    &prior,
+                    operation,
+                    body,
+                    &BRegIdempotencyKey::parse("overflow-transition").unwrap(),
+                )
+                .unwrap();
+            *response.lock().unwrap() = transition_document(
+                operation,
+                if operation == "submit" {
+                    "submitted"
+                } else {
+                    "draft"
+                },
+                version,
+                if revision == u64::MAX { 1 } else { 3 },
+            );
+            assert!(
+                client.execute_proposal(&attempt).await.is_err(),
+                "{operation}"
+            );
+        }
+        server.abort();
     }
 
     #[tokio::test]
@@ -1539,7 +1821,7 @@ mod tests {
     #[tokio::test]
     async fn rebase_receipts_recover_changed_action_revisions_for_draft_and_submitted_work() {
         let (client, response, server) = proposal_response_client(json!({})).await;
-        for (state, before, after) in [("draft", 0, 0), ("draft", 2, 2), ("submitted", 1, 2)] {
+        for (state, before, after) in [("draft", 1, 1), ("draft", 2, 2), ("submitted", 1, 2)] {
             let prior = proposal(&client, transition_document("rebase", state, before, 2));
             let attempt = client
                 .prepare_proposal(
@@ -1630,12 +1912,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attachment_receipts_refuse_the_unchanged_proposal() {
+        let fixture: Value =
+            serde_json::from_slice(include_bytes!("../tests/fixtures/attachments.json")).unwrap();
+        let original = fixture["proposal"].clone();
+        let (client, _, server) = proposal_response_client(original.clone()).await;
+        let prior = proposal(&client, original);
+        let key = BRegIdempotencyKey::parse("unchanged-attachment").unwrap();
+        let upload = client
+            .upload_proposal_attachment(&prior, "supporting-file", "application/pdf", b"%PDF", &key)
+            .await;
+        let remove = client
+            .delete_proposal_attachment(&prior, "supporting-file", &key)
+            .await;
+        assert_eq!([upload.is_err(), remove.is_err()], [true, true]);
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn attachment_mutation_responses_preserve_the_action_revision() {
         let fixture: Value =
             serde_json::from_slice(include_bytes!("../tests/fixtures/attachments.json")).unwrap();
         let original = fixture["proposal"].clone();
-        let (client, response, server) = proposal_response_client(original.clone()).await;
-        let prior = proposal(&client, original.clone());
+        let mut current = original.clone();
+        current["revision"] = json!(4);
+        let (client, response, server) = proposal_response_client(current.clone()).await;
+        let prior = proposal(&client, original);
         let key = BRegIdempotencyKey::parse("attachment-binding").unwrap();
         assert!(client
             .upload_proposal_attachment(&prior, "supporting-file", "application/pdf", b"%PDF", &key)
@@ -1645,17 +1947,42 @@ mod tests {
             .delete_proposal_attachment(&prior, "supporting-file", &key)
             .await
             .is_ok());
-        let mut changed = original;
-        changed["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
-        *response.lock().unwrap() = changed;
-        assert!(client
-            .upload_proposal_attachment(&prior, "supporting-file", "application/pdf", b"%PDF", &key)
-            .await
-            .is_err());
-        assert!(client
-            .delete_proposal_attachment(&prior, "supporting-file", &key)
-            .await
-            .is_err());
+        for (field, value) in [
+            (
+                "actionRevision",
+                json!(format!("sha256:{}", "b".repeat(64))),
+            ),
+            ("revision", json!(3)),
+            ("revision", json!(5)),
+            ("state", json!("submitted")),
+            ("submissionVersion", json!(3)),
+        ] {
+            let mut changed = current.clone();
+            changed[field] = value;
+            // Keep this response independently valid so receipt correlation makes the refusal.
+            changed["attachments"] = json!({});
+            *response.lock().unwrap() = changed;
+            assert!(
+                client
+                    .upload_proposal_attachment(
+                        &prior,
+                        "supporting-file",
+                        "application/pdf",
+                        b"%PDF",
+                        &key
+                    )
+                    .await
+                    .is_err(),
+                "upload:{field}"
+            );
+            assert!(
+                client
+                    .delete_proposal_attachment(&prior, "supporting-file", &key)
+                    .await
+                    .is_err(),
+                "remove:{field}"
+            );
+        }
         server.abort();
     }
 
@@ -1721,6 +2048,11 @@ mod tests {
             &json!([{"actionId":"correct-address","accessProfile":"author","operations":["get-review-status"]}]),
             &client.source_binding(),"author","correct-address",true).unwrap();
         assert!(client.read_proposal_review_status(&prior).await.is_ok());
+        let mut older = valid.clone();
+        older["revision"] = json!(1);
+        *response.lock().unwrap() = older;
+        assert!(client.read_proposal_review_status(&prior).await.is_err());
+        *response.lock().unwrap() = valid.clone();
         assert!(client
             .read_proposal_review_by_id(&binding, ID)
             .await

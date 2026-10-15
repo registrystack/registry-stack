@@ -266,7 +266,9 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     requests.push({url: request.url, body, headers: request.headers});
     response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store', 'vary': 'authorization, accept',
       traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
-    response.end(JSON.stringify(request.url.startsWith('/tenant/v1/registry') ? contractDocument : proposal)
+    const value = request.url.startsWith('/tenant/v1/registry') ? contractDocument
+      : request.method === 'POST' && request.url.includes('/edit?') ? {...proposal, revision: proposal.revision + 1} : proposal;
+    response.end(JSON.stringify(value)
       .replace('9007199254740992', '9007199254740993'));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -295,7 +297,10 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     await assert.rejects(client.executeProposal(restored), error => error.kind === 'invalid-request');
     const recovered = client.recoverProposal(await client.readProposal(current), restored);
     assert.deepEqual(recovered.toBytes(), bytes);
-    await client.executeProposal(recovered);
+    const edited = JSON.parse((await client.executeProposal(recovered)).documentJson);
+    assert.equal(edited.revision, proposal.revision + 1);
+    assert.equal(edited.submissionVersion, proposal.submissionVersion);
+    assert.equal(edited.state, 'draft');
     assert.equal(requests.at(-1).url, `/tenant/v1/proposals/${id}/edit?accessProfile=${profile}`);
     assert.equal(requests.at(-1).body, '{"input":{"decimal":"12.3400","nullable":null,"wide":9007199254740993}}');
     assert.match(requests.at(-1).body, /"wide":9007199254740993/);

@@ -155,6 +155,7 @@ class ProposalResultTests(unittest.TestCase):
         self.assertEqual(len(self.requests), count)
         recovered = self.client.recover_proposal(self.client.read_proposal(proposal), restored)
         self.assertEqual(recovered.to_bytes(), saved)
+        self.value['revision'] += 1
         self.client.execute_proposal(recovered)
         path, headers, wire = self.requests[-1]
         headers = {key.lower(): value for key, value in headers.items()}
@@ -214,10 +215,65 @@ class ProposalResultTests(unittest.TestCase):
                 send()
             self.assertEqual(raised.exception.kind, 'invalid-request')
             self.assertEqual(len(self.requests), count + 1)
+            for field, value in [('revision', 8), ('revision', 10), ('state', 'submitted'), ('submissionVersion', 3)]:
+                self.value = copy.deepcopy(current)
+                self.value[field] = value
+                count = len(self.requests)
+                with self.subTest(operation=operation, field=field, value=value), self.assertRaises(BaseRegistryClientError) as raised:
+                    send()
+                self.assertEqual(raised.exception.kind, 'invalid-request')
+                self.assertEqual(len(self.requests), count + 1)
+        self.value = dict(current, actionRevision=successor)
         self.assertEqual(self.client.read_proposal(prior).document['actionRevision'], successor)
 
+    def test_submit_exact_receipt_replay_and_saved_recovery_after_later_progress(self):
+        self.value = document()
+        self.value.update(state='draft', submissionVersion=1)
+        del self.value['application']
+        self.value['links']['submit'] = {'method': 'POST', 'path': '/v1/proposals/' + ID + '/submit', 'accessProfile': 'reader', 'operation': 'submit', 'ifMatch': '"submit-condition"'}
+        prior = self.client.get_proposal(self.binding, ID)
+        initial = copy.deepcopy(self.value)
+        attempt = self.client.prepare_proposal(prior, 'submit', {}, 'exact-submit')
+        saved = attempt.to_bytes()
+        receipt = dict(copy.deepcopy(initial), revision=9, state='submitted')
+        for invalid in [initial, dict(receipt, revision=8), dict(receipt, revision=10),
+                        dict(receipt, state='draft'), dict(receipt, state='applied'), dict(receipt, submissionVersion=2)]:
+            self.value = invalid
+            count = len(self.requests)
+            with self.subTest(receipt=invalid), self.assertRaises(BaseRegistryClientError) as raised:
+                self.client.execute_proposal(attempt)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertEqual(len(self.requests), count + 1)
+        self.value = receipt
+        self.assertEqual(self.client.execute_proposal(attempt).document['state'], 'submitted')
+        sent = self.requests[-1]
+        self.assertEqual(self.client.execute_proposal(attempt).document['revision'], 9)
+        self.assertEqual(self.requests[-1], sent)
+        self.value = dict(copy.deepcopy(receipt), revision=10, state='applied')
+        self.value['links']['submit']['availability'] = {'available': False, 'observedRevision': 10, 'reason': 'already-applied', 'recovery': 'receipt-only'}
+        current = self.client.read_proposal(prior)
+        count = len(self.requests)
+        recovered = self.client.recover_proposal(current, BRegPreparedProposal.from_bytes(saved))
+        self.assertEqual(len(self.requests), count)
+        self.assertEqual(recovered.to_bytes(), saved)
+        self.value = receipt
+        self.assertEqual(self.client.execute_proposal(recovered).document['revision'], 9)
+        self.assertEqual(self.requests[-1], sent)
+
+    def test_held_reads_refuse_backward_revisions_but_permit_equal_and_later(self):
+        held = self.client.get_proposal(self.binding, ID)
+        self.value['revision'] = 7
+        count = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.read_proposal(held)
+        self.assertEqual(raised.exception.kind, 'invalid-request')
+        self.assertEqual(len(self.requests), count + 1)
+        for revision in [8, 9]:
+            self.value['revision'] = revision
+            self.assertEqual(self.client.read_proposal(held).document['revision'], revision)
+
     def test_explicit_rebase_and_exact_recovery_admit_only_next_successor_draft(self):
-        for state, before, after in [('draft', 0, 0), ('submitted', 2, 3)]:
+        for state, before, after in [('draft', 1, 1), ('submitted', 2, 3)]:
             self.value = document()
             self.value.update(state=state, submissionVersion=before)
             del self.value['application']
@@ -260,6 +316,7 @@ class ProposalResultTests(unittest.TestCase):
                 self.client.upload_proposal_attachment(retained, 'support', media, body, 'refused-upload')
             self.assertEqual(raised.exception.kind, 'invalid-request')
         self.assertEqual(len(self.requests), count)
+        self.value['revision'] += 1
         self.client.upload_proposal_attachment(retained, 'support', 'text/plain', b'ok', 'allowed-upload')
         self.download_bytes += b'x'
         with self.assertRaises(BaseRegistryClientError) as raised:

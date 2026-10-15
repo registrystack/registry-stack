@@ -16,7 +16,7 @@ const metadata = {
       requiresIdempotencyKey: true, inputSchema: 'action-correct-invoke-input', responseSchema: 'action-correct-invoke-response'}},
     bounds: {maximumTargets: 16, maximumFieldMutations: 128, maximumSnapshotBytes: 2097152}}],
 };
-const proposal = {id, actionId: 'correct', actionRevision: revision, submissionVersion: 0, revision: 1, state: 'draft', links: {
+const proposal = {id, actionId: 'correct', actionRevision: revision, submissionVersion: 1, revision: 1, state: 'draft', links: {
   self: {method: 'GET', path: `/v1/proposals/${id}`, accessProfile: 'author', operation: 'get'},
   submit: {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'author', operation: 'submit', ifMatch: '"draft-condition"'},
 }};
@@ -32,6 +32,7 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     response.setHeader('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');
     if (request.url.startsWith('/tenant/v1/registry')) return response.end(JSON.stringify(metadata));
     if (request.url.startsWith('/tenant/v1/proposals?')) return response.end(JSON.stringify({items: [proposal]}));
+    if (request.url.includes('/submit?')) return response.end(JSON.stringify({...proposal, revision: 2, state: 'submitted'}));
     response.end(JSON.stringify(proposal));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -51,7 +52,7 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     const binding = contract.selectAction('correct', 'author');
     const draft = await client.startProposal(binding, '{}', 'start-once');
     assert.equal(draft.identifier, id);
-    assert.equal(JSON.parse(draft.documentJson).submissionVersion, 0);
+    assert.equal(JSON.parse(draft.documentJson).submissionVersion, 1);
     const attempt = client.prepareProposal(draft, 'submit', '{}', 'submit-once');
     const saved = attempt.toBytes();
     const restored = BRegPreparedProposal.fromBytes(saved);
