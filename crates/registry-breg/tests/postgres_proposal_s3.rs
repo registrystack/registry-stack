@@ -1007,21 +1007,30 @@ async fn interrupted_s3_put_retains_durable_staging_for_operator_cleanup() {
     let fixture = client_http::ClientFixture::start_with_mutations(
         registry(false),
         claims("synthetic-author", "zone-a"),
-        move |mutations| {
-            mutations
-                .with_attachment_storage(storage)
-                .with_action_timeout_for_test(Duration::from_millis(300))
-        },
+        move |mutations| mutations.with_attachment_storage(storage),
     )
     .await;
     let draft = start(&fixture, "After", "s3-interrupted-start").await;
+    // Only the interrupted upload gets a short deadline; setup and the
+    // post-cancellation read retain the ordinary service budget.
+    let interrupted_upload = fixture
+        .client_with_mutations(
+            claims("synthetic-author", "zone-a"),
+            (*fixture.mutations)
+                .clone()
+                .with_action_timeout_for_test(Duration::from_millis(300)),
+        )
+        .await;
     s3.state.mode.store(4, Ordering::SeqCst);
-    assert!(
-        !raw_upload(&fixture.http, &draft, "support", "s3-interrupted-upload")
-            .await
-            .status()
-            .is_success()
-    );
+    assert!(!raw_upload(
+        &interrupted_upload,
+        &draft,
+        "support",
+        "s3-interrupted-upload"
+    )
+    .await
+    .status()
+    .is_success());
     assert_eq!(s3.state.puts.load(Ordering::SeqCst), 1);
     let row=fixture.database.admin.query_one("SELECT state,(SELECT count(*) FROM registry_internal.registry_proposal_attachments) FROM registry_internal.registry_attachment_blobs",&[]).await.unwrap();
     assert_eq!(row.get::<_, String>(0), "staged");
@@ -1048,6 +1057,7 @@ async fn interrupted_s3_put_retains_durable_staging_for_operator_cleanup() {
     assert_eq!(result.external_deletion_tombstones, 1);
     assert_eq!(s3.state.deletes.load(Ordering::SeqCst), 1);
     assert!(s3.state.bytes.lock().await.is_empty());
+    drop(interrupted_upload);
     fixture.finish().await;
 }
 
