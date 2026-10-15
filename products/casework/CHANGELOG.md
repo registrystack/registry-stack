@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `caseworkctl dev` pulls the same pinned PostgreSQL image from Docker Hub
+  after ECR Public throttled hosted development journeys. Existing owned
+  containers at the prior exact ECR reference remain valid.
+- Review fixture display preserves JSON null where a policy permits it, such
+  as optional document context fields. Configuration validation stays strict.
 - BREAKING: replace source-owned WorkItems, prepared attempts and source actions
   with one ReviewPolicy/ReviewRequest/ReviewTask/Decision/ReviewResult model.
   Requests select a policy by ID, with an optional exact version and digest;

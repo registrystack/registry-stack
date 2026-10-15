@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `bregctl dev` pulls the same pinned PostgreSQL image from Docker Hub after
+  ECR Public throttled hosted development journeys. Existing owned containers
+  at the prior exact ECR reference remain valid.
 - BREAKING: projects declare `recordTypes` and Actions. Immediate Actions
   commit their plan in one transaction; durable Proposals freeze the same plan
   for inspection, optional Review, and independently authorized application.

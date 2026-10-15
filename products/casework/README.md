@@ -41,6 +41,10 @@ contracts. `dev` owns a retained local Casework database and issuer; `dev token`
 writes owner-only headers for a registered teaching client. Use
 `caseworkctl dev events ./casework` for a bounded local runtime journal and
 `caseworkctl dev stop ./casework` when finished. A stop preserves the database.
+The dev database pulls `docker.io/library/postgres:17.11` at pinned digest
+`sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`.
+Retained owned containers using the previous exact ECR Public reference at
+that digest remain valid.
 
 Each protected API call authenticates with `Authorization: Bearer ...` and selects
 one declared profile. Shared producer Review routes use `Registry-Review-Profile`;

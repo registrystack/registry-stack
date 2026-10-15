@@ -3554,7 +3554,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "6460560e9960a83a7adee946a5c79b1785cc69604617692d16f188935ad4f790"
+        "sha256": "79d7b38258e7f91d60d331c680b8165c5c6392e83d5cebf1d88eddb3776ded13"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -3612,7 +3612,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
-        "sha256": "1849e7c1329b630d005ff2b34eaaafb75e5ccf436d7a984cfee8b12547ed6f3f",
+        "sha256": "58fd684bc91478e42ec0e8f92effeab533f5b89caf720b7ad1e139b8ce0c54ef",
         "mediaType": "application/schema+json"
       }
     },
@@ -3734,11 +3734,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "0824b88d69078a00d56beed299837466a049b80c36ddf4ee60144784394617f8"
+        "sha256": "bbcd216d8d94ead31a52e290c87f8782c95f939057cc5e31e4c90a49a02d2dc1"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "0824b88d69078a00d56beed299837466a049b80c36ddf4ee60144784394617f8",
+        "sha256": "bbcd216d8d94ead31a52e290c87f8782c95f939057cc5e31e4c90a49a02d2dc1",
         "mediaType": "application/schema+json"
       }
     },
@@ -3774,7 +3774,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "1f5ccfccc62fd8574cbd1387d6ac9b282b2be5b92dcb3dc093503e04a9313d74",
+        "sha256": "1f5814998c5c6f1df2d2ea2e2def20b87877c5a65df3937d40e7fbfc3334fd6f",
         "mediaType": "application/schema+json"
       }
     },
@@ -3792,7 +3792,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "6a028b2d732083292a5bf00fe19b3582346562dbc637793d587f090b20fa3ed1",
+        "sha256": "d153511b9d4bb9c8aa713ecb2e10fee4b9deae3cfbda9847e556aca6f0bf5dc1",
         "mediaType": "application/schema+json"
       }
     },
@@ -3936,7 +3936,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
-        "sha256": "3073cf0c2b7b443403be4421e350b7afb876c59ca269543af3d95bef155eaffb",
+        "sha256": "b9158ab194325cbd1a807922d07d35f4616eff823d9b1c76892e73f330443cdd",
         "mediaType": "application/schema+json"
       }
     },

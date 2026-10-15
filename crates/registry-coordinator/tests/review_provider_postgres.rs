@@ -13,7 +13,7 @@ use registry_coordinator::{
 };
 use registry_review_protocol::{
     ContentDigest, ReviewCancelRequest, ReviewCancelResponse, ReviewContext, ReviewCreateRequest,
-    ReviewResult, ReviewResultStatus, SubjectBinding,
+    ReviewRequestLifecycle, ReviewResult, ReviewResultStatus, SubjectBinding,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -447,6 +447,15 @@ async fn restore_fences_cancellation_and_release_of_sealed_and_unsealed_results(
             })
             .await;
             let restarted = Store::connect(&h.url, &h.namespace).await.unwrap();
+            let status = restarted
+                .review_request_owned(accepted.request_id, &h.actor, &h.producer, &h.workflows())
+                .await
+                .unwrap();
+            assert_eq!(status.lifecycle, ReviewRequestLifecycle::Reviewing);
+            assert_eq!(status.updated_at, status.created_at);
+            if !sealed {
+                h.sql(&format!("DO $$ BEGIN IF EXISTS(SELECT 1 FROM {{schema}}.runs WHERE run_id='{id}'::uuid AND review_completed_at IS NOT NULL) THEN RAISE EXCEPTION 'held status materialized a result'; END IF; END $$", id=accepted.request_id)).await;
+            }
             let cancellation = ReviewCancelRequest {
                 subject: accepted.subject.clone(),
                 reason: "restore-must-preserve-approved-outcome".into(),
@@ -480,11 +489,19 @@ async fn restore_fences_cancellation_and_release_of_sealed_and_unsealed_results(
                 .items
                 .is_empty());
             h.sql("UPDATE {schema}.control SET restore_hold=false; UPDATE {schema}.runs SET restore_review_required=false").await;
-            assert_eq!(
-                h.result(accepted.request_id).await.status,
-                ReviewResultStatus::Approved
-            );
         }
+        assert_eq!(
+            h.store
+                .review_request_owned(accepted.request_id, &h.actor, &h.producer, &h.workflows())
+                .await
+                .unwrap()
+                .lifecycle,
+            ReviewRequestLifecycle::Approved
+        );
+        assert_eq!(
+            h.result(accepted.request_id).await.status,
+            ReviewResultStatus::Approved
+        );
     }
     h.cleanup().await;
 }
@@ -922,6 +939,12 @@ async fn feed_rechecks_a_restore_flag_changed_while_its_candidate_row_is_locked(
     let accepted = h.admit(h.request(), "feed-restore-race").await;
     h.worker().tick().await.unwrap();
     h.result(accepted.request_id).await;
+    let second = h.admit(h.request(), "feed-after-held-row").await;
+    h.worker().tick().await.unwrap();
+    h.result(second.request_id).await;
+    let third = h.admit(h.request(), "feed-after-first-window").await;
+    h.worker().tick().await.unwrap();
+    h.result(third.request_id).await;
     let (mut blocker, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
         .await
         .unwrap();
@@ -963,7 +986,18 @@ async fn feed_rechecks_a_restore_flag_changed_while_its_candidate_row_is_locked(
     .await
     .unwrap();
     tx.commit().await.unwrap();
-    assert!(feed.await.unwrap().unwrap().items.is_empty());
+    let page = feed.await.unwrap().unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].request_id, second.request_id);
+    assert_eq!(page.next_cursor, Some(second.request_id));
+    let continued = h
+        .store
+        .review_results_owned(&h.actor, &h.producer, &h.workflows(), page.next_cursor, 1)
+        .await
+        .unwrap();
+    assert_eq!(continued.items.len(), 1);
+    assert_eq!(continued.items[0].request_id, third.request_id);
+    assert!(continued.next_cursor.is_none());
     drop(probe);
     probe_connection.await.unwrap();
     drop(blocker);

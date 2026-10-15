@@ -234,9 +234,9 @@ pub async fn verified_successor(
     let candidate = prepare(prior, current, source, &fingerprint);
     let directory = tempfile::Builder::new()
         .prefix("breg-proposal-activation-")
-        .tempdir_in("/private/tmp")
+        .tempdir()
         .unwrap();
-    let path = directory.path().join("package");
+    let path = directory.path().canonicalize().unwrap().join("package");
     candidate.publish_to_directory(&path).unwrap();
     load_package(
         &path,

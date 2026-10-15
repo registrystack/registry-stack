@@ -211,6 +211,56 @@ async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_to
 }
 
 #[tokio::test]
+async fn proposal_list_binds_only_canonical_non_nil_ids() {
+    let fixture = Fixture::start().await;
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let canonical = "123e4567-e89b-42d3-a456-426614174000";
+    let key = BRegIdempotencyKey::parse("canonical-proposal-id").unwrap();
+    for id in [
+        canonical.to_ascii_uppercase(),
+        canonical.replace('-', ""),
+        "00000000-0000-0000-0000-000000000000".to_owned(),
+    ] {
+        let item: Value =
+            serde_json::from_str(&proposal("submitted").to_string().replace(ID, &id)).unwrap();
+        fixture.answer(json!({"items":[item]}));
+        let requests = fixture.requests.load(Ordering::SeqCst);
+        let tokens = fixture.token.0.load(Ordering::SeqCst);
+        let error = fixture
+            .client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .err()
+            .expect("noncanonical Proposal must not become bound");
+        assert_eq!(fixture.requests.load(Ordering::SeqCst), requests + 1);
+        assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens + 1);
+        let debug = format!("{error:?}");
+        assert!(!debug.contains(&id));
+        assert!(!debug.contains("proposal-boundary-token"));
+    }
+
+    let item: Value =
+        serde_json::from_str(&proposal("draft").to_string().replace(ID, canonical)).unwrap();
+    fixture.answer(json!({"items":[item]}));
+    let page = fixture
+        .client
+        .list_proposals(&collection, &BRegProposalQuery::default())
+        .await
+        .unwrap()
+        .value;
+    let held = &page.items[0];
+    assert_eq!(held.id(), canonical);
+    let requests = fixture.requests.load(Ordering::SeqCst);
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    fixture
+        .client
+        .prepare_proposal(held, "submit", json!({}), &key)
+        .expect("canonical listed Proposal can prepare an advertised transition");
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+}
+
+#[tokio::test]
 async fn review_status_reads_require_complete_terminal_evidence_and_parse_instants() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;

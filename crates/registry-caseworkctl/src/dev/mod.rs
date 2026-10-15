@@ -47,12 +47,13 @@ use zeroize::Zeroizing;
 const DATABASE_NAME: &str = "casework_dev";
 const MIGRATION_ROLE: &str = "casework_dev_migration";
 const RUNTIME_ROLE: &str = "casework_dev_runtime";
-// Pull the digest-identical Docker Official Images mirror. Public help keeps
-// the canonical upstream tag and digest, whose image identity is unchanged.
+// Pull the pinned Docker Official Images reference from Docker Hub.
 const IMAGE: &str =
-    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+    "docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const LEGACY_ECR_IMAGE: &str =
+    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const LABEL: &str = "org.registrystack.caseworkctl.dev-owner";
 /// Loopback ports a first start takes when no flag names one. Each lies below
 /// `FIRST_SOURCE_PORT`, so no outgoing connection on the machine can hold one
@@ -160,8 +161,8 @@ enum DevAction {
     /// Casework child. Standalone sessions also own a pinned issuer container;
     /// --issuer-project borrows a separately running Base Registry Engine (BReg)
     /// session's registered issuer. The database runs the pinned image
-    /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
-    /// the Docker Official Images mirror of postgres:17.11 at that digest,
+    /// docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// the Docker Official Images reference at that digest,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each
     /// started service have 45 seconds to answer as ready. A start that passes
@@ -3296,7 +3297,7 @@ fn verified_container(state: &State, container: &Value) -> Result<()> {
         || container["Config"]["Labels"][LABEL] != state.owner
         || !matches!(
             container["Config"]["Image"].as_str(),
-            Some(IMAGE | CANONICAL_IMAGE)
+            Some(IMAGE | CANONICAL_IMAGE | LEGACY_ECR_IMAGE)
         )
         || state
             .container_id

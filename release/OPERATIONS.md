@@ -318,16 +318,17 @@ published release artifacts.
 
 ### Pull pinned prerequisite images
 
-Root CI's PostgreSQL services, nightly platform coverage, and the release
-upgrade rehearsal pull canonical `docker.io/library/postgres`. Local dev tools
-use the Docker Official Images published through
-`public.ecr.aws/docker/library/postgres` at the same version and digest. Debian
+Root CI's PostgreSQL services, nightly platform coverage, the release upgrade
+rehearsal, and the BReg and Casework dev tools pull canonical
+`docker.io/library/postgres`. The Messaging dev tool uses the Docker Official
+Images published through `public.ecr.aws/docker/library/postgres` at the same
+version and digest. Debian
 recipe roots use `public.ecr.aws/docker/library/debian`, and Mailpit uses its
 upstream `ghcr.io/axllent/mailpit` mirror. Each reference retains the exact
 upstream manifest digest; the registry endpoint changes, not the selected image
 bytes.
 The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
-`messagingctl` name the exact mirror references they pull. A `bregctl`
+`messagingctl` name the exact image references they pull. A `bregctl`
 session whose schema requires PostGIS still pulls `postgis/postgis` from
 Docker Hub.
 

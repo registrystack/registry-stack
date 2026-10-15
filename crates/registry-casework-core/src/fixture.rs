@@ -2,8 +2,8 @@
 use crate::HolidaySetDocument;
 use chrono::{DateTime, NaiveDate, Utc};
 use registry_platform_yaml::{
-    ApiVersion, BoundedU64, Decoded, EnvelopeRule, Expect, FormatSpec, Invalid, LocalId, Reader,
-    Report, RetiredApiVersion, UniqueList,
+    ApiVersion, BoundedU64, Decoded, EnvelopeRule, Expect, ForeignValue, FormatSpec, Invalid,
+    LocalId, Reader, Report, RetiredApiVersion, UniqueList,
 };
 use serde::{Deserialize, Deserializer};
 use std::fmt;
@@ -178,8 +178,11 @@ pub struct CaseworkFixture {
 pub struct CaseworkFixtureReview {
     pub policy: LocalId,
     /// Business values remain JSON; the selected policy owns their schema.
-    #[cfg_attr(feature = "schema", schemars(extend("x-registry-passthrough" = "Synthetic business fields are validated against the selected compiled ReviewPolicy displaySchema.")))]
-    pub display: std::collections::BTreeMap<String, serde_json::Value>,
+    #[cfg_attr(feature = "schema", schemars(extend(
+        "x-registry-foreign" = "json",
+        "x-registry-passthrough" = "Synthetic business fields are validated against the selected compiled ReviewPolicy displaySchema."
+    )))]
+    pub display: std::collections::BTreeMap<String, ForeignValue>,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
@@ -279,7 +282,13 @@ impl CaseworkFixture {
             match project.compile_policy(fixture.review.policy.as_str()) {
                 Ok(closure) => {
                     let display = serde_json::Value::Object(
-                        fixture.review.display.clone().into_iter().collect(),
+                        fixture
+                            .review
+                            .display
+                            .clone()
+                            .into_iter()
+                            .map(|(key, value)| (key, value.into_value()))
+                            .collect(),
                     );
                     if let Err(error) = closure.validate_display(&display) {
                         let pointer = match &error {
