@@ -453,6 +453,12 @@ impl MutationTransaction {
 
     /// Internal ownership admission survives audit-key rotation. Audit events
     /// continue to use the separately keyed, database-scoped actor reference.
+    ///
+    /// Never project this value in a response, event, export or log. It is
+    /// an unkeyed hash of the database, issuer and subject, so anyone who
+    /// knows the first two can confirm a subject by hashing guesses, and
+    /// subject spaces such as national identifiers are small enough to
+    /// enumerate. A projected owner commitment needs its own keyed derivation.
     pub(crate) fn proposal_owner_reference(&self, principal: &str) -> String {
         crate::idempotency::sha256_reference(
             "breg-proposal-owner-v1",
