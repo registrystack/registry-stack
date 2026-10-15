@@ -201,8 +201,14 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
           assert.equal(requests.length, before + 1);
         }
       }
-      value = structuredClone(current); value.actionRevision = successor;
-      assert.equal(JSON.parse((await client.readProposal(prior)).documentJson).actionRevision, successor, 'ordinary reads can observe a new revision');
+      for (const version of [current.submissionVersion, current.submissionVersion + 1]) {
+        value = structuredClone(current); value.submissionVersion = version;
+        assert.equal(JSON.parse((await client.readProposal(prior)).documentJson).actionRevision, digest);
+        value.actionRevision = successor;
+        const count = requests.length;
+        await assert.rejects(client.readProposal(prior), error => error.kind === 'invalid-request');
+        assert.equal(requests.length, count + 1, 'validate the actual received refresh response');
+      }
     });
     await t.test('Submit validates the exact receipt while replay and saved recovery retain the original request', async () => {
       value = document(); value.state = 'draft'; value.submissionVersion = 1; delete value.application; delete value.effectDigest;

@@ -1227,6 +1227,7 @@ impl BaseRegistryClient {
         let current = BRegProposal::from_slice(response.value.as_bytes())?;
         if current.id != proposal.id
             || current.action_id != proposal.action_id
+            || current.action_revision != proposal.action_revision
             || current.revision < proposal.revision
             || current.submission_version < proposal.submission_version
         {
@@ -1606,9 +1607,6 @@ mod tests {
             }
             current["submissionVersion"] = json!(version);
             current["links"]["apply"]["availability"]["observedRevision"] = json!(revision);
-            if version == 2 {
-                current["actionRevision"] = json!(format!("sha256:{}", "b".repeat(64)));
-            }
             *response.lock().unwrap() = current.clone();
             assert_eq!(
                 serde_json::to_value(client.read_proposal(&prior).await.unwrap().value).unwrap(),
