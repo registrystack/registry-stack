@@ -1216,11 +1216,11 @@ formats:
     conformance:
       requiredText: /project/id
       optionalText: none
-      integer: /reviewPolicies/0/retention/terminalRetentionDays
+      integer: /reviewPolicies/decision/retention/terminalRetentionDays
       boolean: none
-      idList: /reviewPolicies
+      idList: /reviewPolicies/decision/stages
       set: /accessProfiles/staff/requiredScopes
-      reference: /reviewPolicies/0/stages/0/queue
+      reference: /reviewPolicies/decision/stages/0/queue
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: unclassified

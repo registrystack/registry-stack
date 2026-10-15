@@ -13,7 +13,7 @@ use support::{
 
 const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
 const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
-const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], role: staff}}\nreviewPolicies:\n  - id: decision\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
+const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], role: staff}}\nreviewPolicies:\n  decision:\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
 const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
@@ -420,7 +420,7 @@ fn casework_current_policy_directory_and_fixture_relationships_resolve() {
     let casework = fixture("products/casework/examples/standalone-decision/casework.yaml")
         .replacen("  staff:\n", "  <|profile|>staff:\n", 1)
         .replacen("  decisions:\n", "  <|queue|>decisions:\n", 1)
-        .replacen("  - id: decision", "  - id: <|policy|>decision", 1)
+        .replacen("  decision:\n", "  <|policy|>decision:\n", 1)
         .replacen("      - id: answer", "      - id: <|stage|>answer", 1)
         .replacen("  requester:\n", "  <|requester-profile|>requester:\n", 1)
         .replacen("      confirmed:\n", "      <|outcome|>confirmed:\n", 1)
@@ -527,8 +527,8 @@ fn casework_current_policy_directory_and_fixture_relationships_resolve() {
 fn casework_read_only_context_provider_and_schema_files_resolve() {
     let casework = fixture("products/casework/examples/canonical-review/casework.yaml")
         .replacen(
-            "  - id: facility-proposal-context",
-            "  - id: <|provider|>facility-proposal-context",
+            "  facility-proposal-context:\n",
+            "  <|provider|>facility-proposal-context:\n",
             1,
         )
         .replacen(
@@ -619,11 +619,7 @@ fn casework_routing_teams_clocks_and_holiday_sets_resolve() {
             "    memberProfiles: [<|member-profile|>staff]",
             1,
         )
-        .replacen(
-            "  - id: regional-review",
-            "  - id: <|policy|>regional-review",
-            1,
-        )
+        .replacen("  regional-review:\n", "  <|policy|>regional-review:\n", 1)
         .replacen(
             "          stage: technical",
             "          stage: <|stage-use|>technical",
@@ -785,15 +781,15 @@ fn casework_policy_scopes_and_task_template_references_stay_local() {
              accessProfiles: {<|profile|>staff: {}}\n\
              teams: {<|team|>reviewers: {}}\n\
              contextProviders:\n  \
-               - id: provider\n    \
+               provider:\n    \
                  sourceNamespace: <|provider-namespace|>opaque-source\n    \
                  deploymentRef: deployment\n\
              reviewPolicies:\n  \
-               - id: alpha\n    \
+               alpha:\n    \
                  context: {mode: submitted}\n    \
                  stages: [{id: <|alpha-stage|>review, queue: queue, decidingProfiles: [staff]}]\n    \
                  outcomes: {<|alpha-outcome|>approved: {}}\n  \
-               - id: <|beta-policy|>beta\n    \
+               <|beta-policy|>beta:\n    \
                  context: {mode: submitted}\n    \
                  routing: [{id: route, when: {stage: <|stage-use|>review}, queue: queue}]\n    \
                  stages: [{id: <|beta-stage|>review, queue: queue, decidingProfiles: [staff]}]\n    \
@@ -803,7 +799,7 @@ fn casework_policy_scopes_and_task_template_references_stay_local() {
                  sourceNamespaces: [<|producer-namespace|>opaque-source]\n    \
                  reviewPolicies: [beta]\n\
              taskTemplates:\n  \
-               - id: task\n    \
+               task:\n    \
                  eligibleTeams: [<|team-use|>reviewers]\n    \
                  eligibleProfiles: [<|profile-use|>staff]\n    \
                  source: <|template-namespace|>opaque-source\n    \
@@ -862,11 +858,11 @@ fn casework_current_bad_references_are_reported_at_the_written_values() {
                  serves: [<|team-queue|>missing-queue]\n    \
                  memberProfiles: [<|team-profile|>missing-profile]\n\
              contextProviders:\n  \
-               - id: provider\n    \
+               provider:\n    \
                  sourceNamespace: <|opaque-provider|>remote-source\n    \
                  deploymentRef: deployment\n\
              reviewPolicies:\n  \
-               - id: policy\n    \
+               policy:\n    \
                  context: {mode: current-source, provider: <|provider|>missing-provider}\n    \
                  routing: [{id: route, when: {stage: <|stage|>missing-stage}, queue: <|route-queue|>missing-queue}]\n    \
                  stages: [{id: review, queue: <|stage-queue|>missing-queue, decidingProfiles: [<|stage-profile|>missing-profile]}]\n    \
@@ -884,7 +880,7 @@ fn casework_current_bad_references_are_reported_at_the_written_values() {
                  calendar: <|calendar|>missing-calendar\n    \
                  steps: [{action: {reassign: {queue: <|clock-queue|>missing-queue}}}]\n\
              taskTemplates:\n  \
-               - id: task\n    \
+               task:\n    \
                  eligibleTeams: [<|template-team|>missing-team]\n    \
                  eligibleProfiles: [<|template-profile|>missing-profile]\n    \
                  source: <|opaque-template|>remote-source\n    \

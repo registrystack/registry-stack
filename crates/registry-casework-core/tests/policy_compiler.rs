@@ -15,13 +15,13 @@ fn project_value() -> Value {
         "queues":{"reviews":{"label":"Reviews"},"north":{"label":"North reviews"}},
         "teams":{"review-team":{"label":"Review team","serves":["reviews","north"],"memberProfiles":["reviewer"],"supervisorProfiles":["supervisor"]}},
         "clocks":{"decision-due":{"type":"subject","anchor":{"type":"request-accepted"},"after":{"hours":48}}},
-        "reviewPolicies":[{
-            "id":"notice-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
+        "reviewPolicies":{"notice-review":{
+            "version":"1","purpose":"approval","context":{"mode":"submitted"},
             "stages":[{"id":"review","queue":"reviews","decidingProfiles":["reviewer"],"requiredApprovals":2,"excludeInitiator":true}],
             "clocks":["decision-due"],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
             "outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},"rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}},
             "displaySchema":{"type":"object","additionalProperties":false,"required":["title"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}
-        }],
+        }},
         "trustedProducers":{"notice-service":{"profile":"producer","issuer":"https://issuer.example","subject":"notice-service","trustedInitiatorIssuer":"https://people.example","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"retention":{"receiptRetentionDays":7}}}
     })
 }
@@ -31,9 +31,15 @@ fn decode(value: Value) -> CaseworkProject {
 fn source_value() -> Value {
     let mut value = project_value();
     let digest = ContentDigest::for_bytes(b"contract");
-    value["reviewPolicies"][0]["context"] = json!({"mode":"current-source","provider":"notice-context","contract":{"id":"notice-context-v1","revision":digest,"schemaDigest":ContentDigest::for_bytes(&registry_platform_canonical_json::canonicalize_json(&value["reviewPolicies"][0]["displaySchema"]).unwrap())}});
-    value["contextProviders"] = json!([{"id":"notice-context","capabilities":["human-display","service-status"],"sourceNamespace":"notice-source","deploymentRef":"notice-service","serviceProfiles":{"service-status":"status-reader"}}]);
+    value["reviewPolicies"]["notice-review"]["context"] = json!({"mode":"current-source","provider":"notice-context","contract":{"id":"notice-context-v1","revision":digest,"schemaDigest":ContentDigest::for_bytes(&registry_platform_canonical_json::canonicalize_json(&value["reviewPolicies"]["notice-review"]["displaySchema"]).unwrap())}});
+    value["contextProviders"] = json!({"notice-context":{"capabilities":["human-display","service-status"],"sourceNamespace":"notice-source","deploymentRef":"notice-service","serviceProfiles":{"service-status":"status-reader"}}});
     value
+}
+/// The template as the one entry of an id-keyed taskTemplates mapping.
+fn templates(template: &Value) -> Value {
+    let mut body = template.clone();
+    let id = body.as_object_mut().unwrap().remove("id").unwrap();
+    json!({ id.as_str().unwrap(): body })
 }
 fn task_template() -> Value {
     json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["review-team"],"eligibleProfiles":["reviewer"],"source":"notice-source","reviewPolicies":["notice-review"],"agent":{"issuer":"https://agent.example","subject":"summary-agent"},"client":"summary-client","resource":"urn:registry:records","scopes":["records:get"],"purpose":"prepare-summary","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get"]}]},"subjects":{"region":"region"},"lifetimeSeconds":900})
@@ -43,7 +49,7 @@ fn fixed_review_grants_need_status_without_disclosing_source_claims() {
     let mut value = source_value();
     let mut template = task_template();
     template["subjects"] = json!({});
-    value["taskTemplates"] = json!([template.clone()]);
+    value["taskTemplates"] = templates(&template);
     let project = decode(value.clone());
     project.compile_policy("notice-review").unwrap();
     assert_eq!(
@@ -121,7 +127,7 @@ fn contract_identity_provider_authority_and_routing_are_in_the_digest() {
         .unwrap();
     for field in ["id", "revision"] {
         let mut value = source_value();
-        value["reviewPolicies"][0]["context"]["contract"][field] = if field == "id" {
+        value["reviewPolicies"]["notice-review"]["context"]["contract"][field] = if field == "id" {
             json!("changed-contract")
         } else {
             json!(ContentDigest::for_bytes(b"changed"))
@@ -136,7 +142,7 @@ fn contract_identity_provider_authority_and_routing_are_in_the_digest() {
         );
     }
     let mut value = source_value();
-    value["contextProviders"][0]["serviceProfiles"]["service-status"] =
+    value["contextProviders"]["notice-context"]["serviceProfiles"]["service-status"] =
         json!("other-status-reader");
     assert_ne!(
         decode(value)
@@ -154,37 +160,39 @@ fn only_capabilities_used_by_the_policy_are_required() {
         .unwrap();
     for capability in ["human-display", "service-status"] {
         let mut value = source_value();
-        value["contextProviders"][0]["capabilities"]
+        value["contextProviders"]["notice-context"]["capabilities"]
             .as_array_mut()
             .unwrap()
             .retain(|item| item != capability);
         assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
     let mut routed = source_value();
-    routed["reviewPolicies"][0]["routing"] = json!([{"id":"north","because":"Review north notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
+    routed["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Review north notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&routed).unwrap()).is_err());
-    routed["contextProviders"][0]["capabilities"]
+    routed["contextProviders"]["notice-context"]["capabilities"]
         .as_array_mut()
         .unwrap()
         .push(json!("routing-context"));
-    routed["contextProviders"][0]["serviceProfiles"]["routing-context"] = json!("routing-reader");
+    routed["contextProviders"]["notice-context"]["serviceProfiles"]["routing-context"] =
+        json!("routing-reader");
     let project = decode(routed);
     assert_eq!(project.review_policies[0].routing_fields(), vec!["region"]);
     project.compile_policy("notice-review").unwrap();
     let mut submitted = project_value();
-    submitted["reviewPolicies"][0]["routing"] = json!([{"id":"north","because":"Review north notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
+    submitted["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Review north notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
     decode(submitted).compile_policy("notice-review").unwrap();
 }
 #[test]
 fn field_derived_grants_require_their_own_capability() {
     let mut value = source_value();
-    value["taskTemplates"] = json!([task_template()]);
+    value["taskTemplates"] = templates(&task_template());
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
-    value["contextProviders"][0]["capabilities"]
+    value["contextProviders"]["notice-context"]["capabilities"]
         .as_array_mut()
         .unwrap()
         .push(json!("task-grant-context"));
-    value["contextProviders"][0]["serviceProfiles"]["task-grant-context"] = json!("grant-reader");
+    value["contextProviders"]["notice-context"]["serviceProfiles"]["task-grant-context"] =
+        json!("grant-reader");
     let closure = decode(value).compile_policy("notice-review").unwrap();
     assert_eq!(closure.dependencies.task_templates.len(), 1);
     let mut invalid = task_template();
@@ -200,9 +208,12 @@ fn local_schema_checks_exact_export_bytes_and_drift_before_compilation() {
     let directory = std::env::temp_dir().join(format!("casework-schema-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
     let mut value = source_value();
-    let bytes = serde_json::to_vec_pretty(&value["reviewPolicies"][0]["displaySchema"]).unwrap();
-    value["reviewPolicies"][0]["displaySchema"] = json!({"$ref":"display.schema.json"});
-    value["reviewPolicies"][0]["context"]["contract"]["schemaDigest"] =
+    let bytes =
+        serde_json::to_vec_pretty(&value["reviewPolicies"]["notice-review"]["displaySchema"])
+            .unwrap();
+    value["reviewPolicies"]["notice-review"]["displaySchema"] =
+        json!({"$ref":"display.schema.json"});
+    value["reviewPolicies"]["notice-review"]["context"]["contract"]["schemaDigest"] =
         json!(ContentDigest::for_bytes(&bytes));
     std::fs::write(directory.join("display.schema.json"), &bytes).unwrap();
     std::fs::write(
@@ -220,7 +231,7 @@ fn local_schema_checks_exact_export_bytes_and_drift_before_compilation() {
     drifted.push(b'\n');
     std::fs::write(directory.join("display.schema.json"), drifted).unwrap();
     assert!(CaseworkProject::load(directory.join("casework.yaml")).is_err());
-    value["reviewPolicies"][0]["displaySchema"] = json!({"$ref":"../outside.json"});
+    value["reviewPolicies"]["notice-review"]["displaySchema"] = json!({"$ref":"../outside.json"});
     std::fs::write(
         directory.join("casework.yaml"),
         serde_json::to_vec(&value).unwrap(),
@@ -237,10 +248,12 @@ fn retired_authoring_shapes_and_invalid_approval_outcomes_are_refused() {
         assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"]["approved"]["reasonRequired"] = json!(true);
+    value["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["reasonRequired"] =
+        json!(true);
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"]["approved"]["settlement"] = json!("rejected");
+    value["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["settlement"] =
+        json!("rejected");
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
     value["clocks"]["decision-due"]["pauseWhile"] = json!(["awaiting-applicant"]);
@@ -250,9 +263,12 @@ fn retired_authoring_shapes_and_invalid_approval_outcomes_are_refused() {
 #[test]
 fn captured_schema_bytes_are_the_only_compiler_inputs() {
     let mut value = source_value();
-    let bytes = serde_json::to_vec_pretty(&value["reviewPolicies"][0]["displaySchema"]).unwrap();
-    value["reviewPolicies"][0]["displaySchema"] = json!({"$ref":"schemas/display.json"});
-    value["reviewPolicies"][0]["context"]["contract"]["schemaDigest"] =
+    let bytes =
+        serde_json::to_vec_pretty(&value["reviewPolicies"]["notice-review"]["displaySchema"])
+            .unwrap();
+    value["reviewPolicies"]["notice-review"]["displaySchema"] =
+        json!({"$ref":"schemas/display.json"});
+    value["reviewPolicies"]["notice-review"]["context"]["contract"]["schemaDigest"] =
         json!(ContentDigest::for_bytes(&bytes));
     let document = serde_json::to_vec(&value).unwrap();
     assert_eq!(
@@ -285,7 +301,7 @@ fn grants_refuse_unknown_fields_teams_namespaces_and_nonportable_subjects() {
         let mut value = project_value();
         let mut template = task_template();
         template[field] = replacement;
-        value["taskTemplates"] = json!([template]);
+        value["taskTemplates"] = templates(&template);
         assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
     let template: TaskTemplate = serde_json::from_value(task_template()).unwrap();
@@ -385,10 +401,10 @@ fn decision_and_draft_bounds_are_checked_without_a_runtime() {
 #[test]
 fn routing_uses_selected_context_fields_and_accepts_native_property_names() {
     let mut value = project_value();
-    value["reviewPolicies"][0]["displaySchema"]["properties"]["display name"] =
+    value["reviewPolicies"]["notice-review"]["displaySchema"]["properties"]["display name"] =
         json!({"type":"string","maxLength":160});
     decode(value.clone());
-    value["reviewPolicies"][0]["routing"] = json!([{"id":"north","because":"Route by native display name","when":{"fields":{"display name":{"equals":"north"}}},"queue":"north"}]);
+    value["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Route by native display name","when":{"fields":{"display name":{"equals":"north"}}},"queue":"north"}]);
     let project = decode(value);
     assert_eq!(
         project.review_policies[0].routing_fields(),
@@ -400,15 +416,17 @@ fn routing_uses_selected_context_fields_and_accepts_native_property_names() {
 #[test]
 fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
     let mut original = source_value();
-    original["contextProviders"][0]["description"] = json!("context-providers/original.json");
+    original["contextProviders"]["notice-context"]["description"] =
+        json!("context-providers/original.json");
     let before = decode(original.clone())
         .compile_policy("notice-review")
         .unwrap();
     let mut renamed = original.clone();
     renamed["queues"]["reviews"]["label"] = json!("Decision queue");
     renamed["teams"]["review-team"]["label"] = json!("Decision team");
-    renamed["reviewPolicies"][0]["outcomes"]["approved"]["label"] = json!("Accept");
-    renamed["contextProviders"][0]["description"] = json!("context-providers/relocated.json");
+    renamed["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["label"] = json!("Accept");
+    renamed["contextProviders"]["notice-context"]["description"] =
+        json!("context-providers/relocated.json");
     let after = decode(renamed.clone())
         .compile_policy("notice-review")
         .unwrap();
@@ -423,7 +441,7 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
         ContentDigest::for_bytes(&serde_json::to_vec(&original).unwrap()),
         ContentDigest::for_bytes(&serde_json::to_vec(&renamed).unwrap())
     );
-    renamed["reviewPolicies"][0]["stages"][0]["requiredApprovals"] = json!(1);
+    renamed["reviewPolicies"]["notice-review"]["stages"][0]["requiredApprovals"] = json!(1);
     assert_ne!(
         decode(renamed)
             .compile_policy("notice-review")
@@ -436,19 +454,20 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
 #[test]
 fn routing_explanation_and_grant_label_are_presentation_only() {
     let mut value = project_value();
-    value["reviewPolicies"][0]["routing"] = json!([{"id":"north","because":"Route notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
-    value["taskTemplates"] = json!([task_template()]);
+    value["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Route notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
+    value["taskTemplates"] = templates(&task_template());
     let before = decode(value.clone())
         .compile_policy("notice-review")
         .unwrap();
-    value["reviewPolicies"][0]["routing"][0]["because"] = json!("Use the north queue");
-    value["taskTemplates"][0]["label"] = json!("Create a summary");
+    value["reviewPolicies"]["notice-review"]["routing"][0]["because"] =
+        json!("Use the north queue");
+    value["taskTemplates"]["summary"]["label"] = json!("Create a summary");
     let after = decode(value.clone())
         .compile_policy("notice-review")
         .unwrap();
     assert_eq!(before.binding(), after.binding());
     after.verify().unwrap();
-    value["reviewPolicies"][0]["routing"][0]["queue"] = json!("reviews");
+    value["reviewPolicies"]["notice-review"]["routing"][0]["queue"] = json!("reviews");
     assert_ne!(
         before.binding(),
         decode(value)
@@ -486,17 +505,19 @@ fn clock_step_explanation_is_presentation_and_effect_is_behavior() {
 #[test]
 fn every_outcome_states_whether_a_public_reason_is_given() {
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"]["approved"]
+    value["reviewPolicies"]["notice-review"]["outcomes"]["approved"]
         .as_object_mut()
         .unwrap()
         .remove("publicReason");
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project_value();
-    value["reviewPolicies"][0]["outcomes"]["approved"]["publicReason"] = json!("sometimes");
+    value["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["publicReason"] =
+        json!("sometimes");
     assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     for rule in ["required", "optional", "none"] {
         let mut value = project_value();
-        value["reviewPolicies"][0]["outcomes"]["approved"]["publicReason"] = json!(rule);
+        value["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["publicReason"] =
+            json!(rule);
         decode(value).compile_policy("notice-review").unwrap();
     }
 }
@@ -560,4 +581,29 @@ fn a_producer_names_its_review_policies_in_its_findings() {
         .diagnostics()
         .iter()
         .any(|item| item.code == "casework.review-producer.duplicate-policy"));
+}
+
+#[test]
+fn a_producer_names_its_receipt_retention_in_its_findings() {
+    let retention = "/trustedProducers/notice-service/retention/receiptRetentionDays";
+    let mut project = CaseworkProject::from_slice(&serde_json::to_vec(&project_value()).unwrap())
+        .expect("the fixture project loads");
+    // The reader bounds the value first; the model check holds the same bound
+    // for a project built in code.
+    project.trusted_producers[0]
+        .retention
+        .receipt_retention_days = 0;
+    assert!(project.findings().iter().any(|finding| finding.code
+        == "casework.review-producer.receipt-retention-out-of-range"
+        && finding.pointer == retention));
+    let mut value = project_value();
+    value["trustedProducers"]["notice-service"]["retention"]["receiptRetentionDays"] = json!(31);
+    let Err(ConfigLoadError::Refused(report)) =
+        CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+    else {
+        panic!("the project must be refused");
+    };
+    assert!(report.diagnostics().iter().any(|item| item.code
+        == "casework.review-producer.receipt-retention-exceeds-result-retention"
+        && item.path == retention));
 }

@@ -133,6 +133,113 @@ fn reordering_a_named_map_changes_neither_the_served_policy_nor_its_digest() {
     );
 }
 
+/// A project with two review policies, two context providers and two task
+/// templates, each map written in the order `order` gives.
+fn two_of_each(order: [usize; 2]) -> String {
+    let display = json!({"type":"object","additionalProperties":false,"required":["title"],"properties":{"title":{"type":"string","maxLength":160}}});
+    let schema_digest = serde_json::to_string(&ContentDigest::for_bytes(
+        &registry_platform_canonical_json::canonicalize_json(&display).unwrap(),
+    ))
+    .unwrap();
+    let revision = serde_json::to_string(&ContentDigest::for_bytes(b"contract")).unwrap();
+    let ordered = |entries: [String; 2]| format!("{}{}", entries[order[0]], entries[order[1]]);
+    let policy = |id: &str| {
+        format!(
+            "  {id}:\n    version: \"1\"\n    purpose: approval\n    context: {{mode: current-source, provider: {id}-context, contract: {{id: {id}-context-v1, revision: {revision}, schemaDigest: {schema_digest}}}}}\n    stages: [{{id: review, queue: reviews, decidingProfiles: [reviewer], requiredApprovals: 1}}]\n    retention: {{terminalRetentionDays: 30, accountabilityRetentionDays: 90}}\n    outcomes: {{approved: {{label: Approve, settlement: approved, reasonRequired: false, publicReason: optional}}, rejected: {{label: Reject, settlement: rejected, reasonRequired: true, publicReason: required}}}}\n    displaySchema: {display}\n"
+        )
+    };
+    let provider = |id: &str| {
+        format!(
+            "  {id}-context: {{capabilities: [human-display, service-status], sourceNamespace: notice-source, deploymentRef: notice-service, serviceProfiles: {{service-status: status-reader}}}}\n"
+        )
+    };
+    let template = |id: &str| {
+        format!(
+            "  {id}-summary: {{version: \"1\", label: Prepare summary, eligibleTeams: [review-team], eligibleProfiles: [reviewer], source: notice-source, reviewPolicies: [alpha, beta], agent: {{issuer: \"https://agent.example\", subject: {id}-agent}}, client: {id}-client, resource: \"urn:registry:records\", scopes: [\"records:get\"], purpose: prepare-summary, bounds: {{type: breg, permissions: [{{collection: records, operations: [get]}}]}}, subjects: {{}}, lifetimeSeconds: 900}}\n"
+        )
+    };
+    format!(
+        "apiVersion: {CASEWORK_API_VERSION}\nkind: {CASEWORK_KIND}\nproject: {{id: review-project, version: \"1\"}}\n\
+         accessProfiles:\n  reviewer: {{role: staff, principalClaim: principal, requiredScopes: [\"casework:review\"]}}\n  supervisor: {{role: supervisor, principalClaim: principal, requiredScopes: [\"casework:supervise\"]}}\n  administrator: {{role: administrator, principalClaim: principal, requiredScopes: [\"casework:admin\"]}}\n  producer: {{role: requester, principalClaim: principal, requiredScopes: [\"casework:request\"]}}\n\
+         queues: {{reviews: {{label: Reviews}}}}\n\
+         teams: {{review-team: {{label: Review team, serves: [reviews], memberProfiles: [reviewer], supervisorProfiles: [supervisor]}}}}\n\
+         contextProviders:\n{}\
+         reviewPolicies:\n{}\
+         taskTemplates:\n{}\
+         trustedProducers:\n  notice-service: {{profile: producer, issuer: \"https://issuer.example\", subject: notice-service, trustedInitiatorIssuer: \"https://people.example\", sourceNamespaces: [notice-source], reviewPolicies: [alpha, beta], retention: {{receiptRetentionDays: 7}}}}\n",
+        ordered([provider("alpha"), provider("beta")]),
+        ordered([policy("alpha"), policy("beta")]),
+        ordered([template("alpha"), template("beta")]),
+    )
+}
+
+#[test]
+fn reordering_review_policies_context_providers_and_task_templates_changes_no_served_policy() {
+    let forward = read(&two_of_each([0, 1])).expect("the forward project reads");
+    let reversed = read(&two_of_each([1, 0])).expect("the reversed project reads");
+    for project in [&forward, &reversed] {
+        let ids = |items: Vec<&str>| items.join(",");
+        assert_eq!(
+            ids(project
+                .review_policies
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect()),
+            "alpha,beta"
+        );
+        assert_eq!(
+            ids(project
+                .context_providers
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect()),
+            "alpha-context,beta-context"
+        );
+        assert_eq!(
+            ids(project
+                .task_templates
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect()),
+            "alpha-summary,beta-summary"
+        );
+    }
+    for policy in ["alpha", "beta"] {
+        let before = forward.compile_policy(policy).unwrap();
+        let after = reversed.compile_policy(policy).unwrap();
+        assert_eq!(before.dependencies.task_templates.len(), 2);
+        assert_eq!(after.identity.digest, before.identity.digest);
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+    }
+}
+
+#[test]
+fn a_repeated_stage_or_routing_rule_id_is_the_shared_duplicate_id() {
+    for (text, path) in [
+        (
+            replaced("      - id: signoff\n", "      - id: technical\n"),
+            "/reviewPolicies/regional-review/stages/1/id",
+        ),
+        (
+            replaced(
+                "    stages:\n",
+                "      - id: northern-requests\n        because: The submitted region is north.\n        when: {fields: {region: {equals: north}}}\n        queue: northern-review\n    stages:\n",
+            ),
+            "/reviewPolicies/regional-review/routing/1/id",
+        ),
+    ] {
+        let diagnostics = read(&text).expect_err("a repeated id is refused");
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic.code == "config.duplicate-id"
+                && diagnostic.path == path),
+            "no config.duplicate-id at {path}: {diagnostics:#?}"
+        );
+    }
+}
+
 #[test]
 fn an_elapsed_budget_names_exactly_one_unit() {
     for (after, seconds) in [
@@ -164,7 +271,7 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
     );
     assert_refused(
         &replaced("terminalRetentionDays: 30", "terminalDays: 30"),
-        "/reviewPolicies/0/retention/terminalDays",
+        "/reviewPolicies/regional-review/retention/terminalDays",
         "terminalRetentionDays",
         "F2",
     );
@@ -173,7 +280,7 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
             "accountabilityRetentionDays: 365",
             "accountabilityDays: 365",
         ),
-        "/reviewPolicies/0/retention/accountabilityDays",
+        "/reviewPolicies/regional-review/retention/accountabilityDays",
         "accountabilityRetentionDays",
         "F2",
     );
@@ -197,8 +304,31 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
             "      approved: {label: Approve,",
             "      approved: {id: approved, label: Approve,",
         ),
-        "/reviewPolicies/0/outcomes/approved/id",
+        "/reviewPolicies/regional-review/outcomes/approved/id",
         "outcomes: {OUTCOME_ID: {",
+        "F4",
+    );
+    assert_refused(
+        &replaced(
+            "reviewPolicies:\n  regional-review:\n",
+            "reviewPolicies:\n  - id: regional-review\n",
+        ),
+        "/reviewPolicies/0/id",
+        "reviewPolicies: {POLICY_ID: {",
+        "F4",
+    );
+    assert_refused(
+        &format!(
+            "{EXAMPLE}contextProviders:\n  - {{id: regional-context, deploymentRef: regional}}\n"
+        ),
+        "/contextProviders/0/id",
+        "contextProviders: {PROVIDER_ID: {",
+        "F4",
+    );
+    assert_refused(
+        &format!("{EXAMPLE}taskTemplates:\n  - {{id: regional-summary, version: \"1\"}}\n"),
+        "/taskTemplates/0/id",
+        "taskTemplates: {TEMPLATE_ID: {",
         "F4",
     );
     assert_refused(
@@ -254,7 +384,7 @@ fn every_old_spelling_is_refused_with_its_replacement_and_table_row() {
             "        when:\n          stage: technical\n",
             "        when:\n          activity: review\n          stage: technical\n",
         ),
-        "/reviewPolicies/0/routing/0/when/activity",
+        "/reviewPolicies/regional-review/routing/0/when/activity",
         "Remove activity",
         "F9",
     );

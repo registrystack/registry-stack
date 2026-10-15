@@ -10,7 +10,7 @@ commits the agent's operation.
 
 Add `taskTemplates` to the Casework project. Each template declares:
 
-- A stable `id`, immutable `version`, and human-readable `label`.
+- A stable id as its key under `taskTemplates`, an immutable `version`, and a human-readable `label`.
 - `eligibleTeams`, human Staff/Supervisor `eligibleProfiles`, `source`, and
   `reviewPolicies` naming the held ReviewTasks that may issue the grant.
 - Exact `agent: {issuer, subject}`, OAuth `client`, one absolute `resource`,

@@ -94,7 +94,17 @@ pub struct CaseworkProject {
         schemars(schema_with = "crate::typed::id_keyed_schema::<QueuePolicy>")
     )]
     pub queues: Vec<QueuePolicy>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "crate::typed::id_keyed_schema::<crate::ReviewContextProviderPolicy>"
+        )
+    )]
     pub context_providers: Vec<crate::ReviewContextProviderPolicy>,
     #[serde(
         default,
@@ -106,7 +116,15 @@ pub struct CaseworkProject {
         schemars(schema_with = "crate::typed::id_keyed_schema::<TeamPolicy>")
     )]
     pub teams: Vec<TeamPolicy>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<ReviewPolicy>")
+    )]
     pub review_policies: Vec<ReviewPolicy>,
     #[serde(
         default,
@@ -140,7 +158,15 @@ pub struct CaseworkProject {
     pub clocks: Vec<ClockPolicy>,
     #[serde(default)]
     pub inbox: InboxPolicy,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::id_keyed",
+        serialize_with = "crate::typed::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::id_keyed_schema::<crate::TaskTemplate>")
+    )]
     pub task_templates: Vec<crate::TaskTemplate>,
 }
 
@@ -239,6 +265,18 @@ pub const CASEWORK_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         RemovedKey {
             pointer: "/clocks/*/id",
             replacement: "Write clocks as a mapping from each id to the rest of its entry, clocks: {CLOCK_ID: {type: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/contextProviders/*/id",
+            replacement: "Write contextProviders as a mapping from each id to the rest of its entry, contextProviders: {PROVIDER_ID: {capabilities: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/reviewPolicies/*/id",
+            replacement: "Write reviewPolicies as a mapping from each id to the rest of its entry, reviewPolicies: {POLICY_ID: {version: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/taskTemplates/*/id",
+            replacement: "Write taskTemplates as a mapping from each id to the rest of its entry, taskTemplates: {TEMPLATE_ID: {version: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
         },
         RemovedKey {
             pointer: "/reviewPolicies/*/outcomes/*/id",
@@ -613,8 +651,8 @@ impl CaseworkProject {
         resolver: impl Fn(&str) -> Result<Vec<u8>, ()>,
     ) -> Vec<ConfigFinding> {
         let mut findings = Findings::default();
-        for (index, policy) in self.review_policies.iter_mut().enumerate() {
-            let at = format!("/reviewPolicies/{index}/displaySchema");
+        for policy in &mut self.review_policies {
+            let at = format!("{}/displaySchema", keyed("reviewPolicies", &policy.id));
             let reference = policy
                 .display_schema
                 .get("$ref")
@@ -699,14 +737,13 @@ impl CaseworkProject {
         findings.repeated(
             self.context_providers
                 .iter()
-                .enumerate()
-                .map(|(i, p)| (format!("/contextProviders/{i}/id"), p.id.as_str())),
+                .map(|p| (keyed("contextProviders", &p.id), p.id.as_str())),
             "casework.context-provider.duplicate-id",
             "this provider id is already declared",
             "Give each provider a unique id.",
         );
-        for (index, provider) in self.context_providers.iter().enumerate() {
-            let at = format!("/contextProviders/{index}");
+        for provider in &self.context_providers {
+            let at = keyed("contextProviders", &provider.id);
             for (name, value) in [
                 ("id", &provider.id),
                 ("sourceNamespace", &provider.source_namespace),
@@ -739,9 +776,9 @@ impl CaseworkProject {
                 }
             }
         }
-        for (index, policy) in self.review_policies.iter().enumerate() {
+        for policy in &self.review_policies {
             if let ReviewContextPolicy::CurrentSource { provider, contract } = &policy.context {
-                let at = format!("/reviewPolicies/{index}/context");
+                let at = format!("{}/context", keyed("reviewPolicies", &policy.id));
                 if !bounded_config_text(&contract.id, crate::MAXIMUM_CONTEXT_CONTRACT_ID_BYTES) {
                     findings.push(
                         "casework.review-policy.context-contract",
@@ -825,7 +862,11 @@ impl CaseworkProject {
                 ) {
                     findings.push(
                         finding.reason.code(),
-                        format!("/reviewPolicies/{index}/routing{}", finding.path),
+                        format!(
+                            "{}/routing{}",
+                            keyed("reviewPolicies", &policy.id),
+                            finding.path
+                        ),
                         finding.reason.message(),
                         finding.reason.suggested_action(),
                     );
@@ -900,16 +941,16 @@ impl CaseworkProject {
         findings.repeated(
             self.task_templates
                 .iter()
-                .enumerate()
-                .map(|(index, template)| {
-                    (format!("/taskTemplates/{index}/id"), template.id.as_str())
-                }),
+                .map(|template| (keyed("taskTemplates", &template.id), template.id.as_str())),
             "casework.task-template.duplicate-id",
             "this task template id is already declared",
             "Give every task template a unique id.",
         );
-        for (index, template) in self.task_templates.iter().enumerate() {
-            findings.extend_under(&format!("/taskTemplates/{index}"), template.findings(self));
+        for template in &self.task_templates {
+            findings.extend_under(
+                &keyed("taskTemplates", &template.id),
+                template.findings(self),
+            );
         }
     }
 
@@ -1046,14 +1087,13 @@ impl CaseworkProject {
         findings.repeated(
             self.review_policies
                 .iter()
-                .enumerate()
-                .map(|(index, policy)| (format!("/reviewPolicies/{index}/id"), policy.id.as_str())),
+                .map(|policy| (keyed("reviewPolicies", &policy.id), policy.id.as_str())),
             "casework.review-policy.duplicate-id",
             "this review policy id is already declared",
             "Give every review policy a unique id.",
         );
-        for (policy_index, policy) in self.review_policies.iter().enumerate() {
-            let at = format!("/reviewPolicies/{policy_index}");
+        for policy in &self.review_policies {
+            let at = keyed("reviewPolicies", &policy.id);
             findings.extend_under(&at, policy.findings());
             for (clock_index, clock_id) in policy.clocks.iter().enumerate() {
                 if !self.clocks.iter().any(|clock| clock.id() == clock_id) {
@@ -1193,11 +1233,10 @@ impl CaseworkProject {
             }
             let mut exclusion_reported = producer.trusted_initiator_issuer.is_some();
             for (policy_index, policy_id) in producer.review_policies.iter().enumerate() {
-                let Some((declared_index, policy)) = self
+                let Some(policy) = self
                     .review_policies
                     .iter()
-                    .enumerate()
-                    .find(|(_, policy)| policy.id == *policy_id)
+                    .find(|policy| policy.id == *policy_id)
                 else {
                     findings.push(
                         "casework.review-producer.unknown-review-policy",
@@ -1212,14 +1251,15 @@ impl CaseworkProject {
                 {
                     findings.add(
                         ConfigFinding::new(
-                            "casework.review-producer.recovery-exceeds-retention",
+                            "casework.review-producer.receipt-retention-exceeds-result-retention",
                             format!("{at}/retention/receiptRetentionDays"),
                             "receiptRetentionDays is longer than the result retention of a review policy this producer submits",
                             "Make receiptRetentionDays no longer than that review policy's retention.terminalRetentionDays.",
                         )
                         .with_related(
                             format!(
-                                "/reviewPolicies/{declared_index}/retention/terminalRetentionDays"
+                                "{}/retention/terminalRetentionDays",
+                                keyed("reviewPolicies", &policy.id)
                             ),
                             "terminalRetentionDays is written here",
                         ),
@@ -1241,7 +1281,8 @@ impl CaseworkProject {
                             )
                             .with_related(
                                 format!(
-                                    "/reviewPolicies/{declared_index}/stages/{stage_index}/excludeInitiator"
+                                    "{}/stages/{stage_index}/excludeInitiator",
+                                    keyed("reviewPolicies", &policy.id)
                                 ),
                                 "excludeInitiator is set here",
                             ),
@@ -1423,7 +1464,7 @@ impl ReviewProducerPolicy {
             .contains(&self.retention.receipt_retention_days)
         {
             findings.push(
-                "casework.review-producer.recovery-days-out-of-range",
+                "casework.review-producer.receipt-retention-out-of-range",
                 format!("{at}/retention/receiptRetentionDays"),
                 format!(
                     "expected a whole number of days from 1 to {}",

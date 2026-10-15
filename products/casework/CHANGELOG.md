@@ -14,17 +14,17 @@
   served clocks and routing, and the trusted producer in its dependencies.
   The identifier-keyed maps of row F4 are a configuration shape only: served
   policies keep arrays, listed in identifier order, and reordering a map
-  changes neither the served policy nor its digest. Outcomes and clock
-  reminders are therefore listed in identifier order rather than authored
-  order. Stages, routing rules, clock steps, review policies, context
-  providers and task templates stay lists.
+  changes neither the served policy nor its digest. Outcomes, clock
+  reminders, review policies, context providers and task templates are
+  therefore listed in identifier order rather than authored order. Stages,
+  routing rules and clock steps stay lists.
 
   | Row | Before | After |
   | --- | --- | --- |
   | F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
   | F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
   | F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
-  | F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
+  | F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, `reviewPolicies`, `contextProviders`, `taskTemplates`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
   | F5 | `type: activity` | `type: stage` |
   | F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
   | F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |
@@ -51,7 +51,22 @@
   `casework.review-producer.no-policies`, `too-many-policies`,
   `invalid-policy` and `duplicate-policy` instead of `no-kinds`,
   `too-many-kinds`, `invalid-kind` and `duplicate-kind`, and the refusal of
-  a missing initiator reads "the review policy excludes its initiator".
+  a missing initiator reads "the review policy excludes its initiator". Its
+  receipt retention findings read
+  `casework.review-producer.receipt-retention-out-of-range` and
+  `receipt-retention-exceeds-result-retention` instead of
+  `recovery-days-out-of-range` and `recovery-exceeds-retention`.
+- A repeated stage id or routing rule id within one review policy is
+  refused by the reader as `config.duplicate-id` at the `id` of the second
+  item (CFG-ID-5), before the semantic checks run. The product codes
+  `casework.review-policy.duplicate-stage-id` and
+  `casework.routing.duplicate-rule-id` no longer appear for a project read
+  from a file. Stages and routing rules stay ordered lists. Migration: no
+  file changes; a script that matches either product code must match
+  `config.duplicate-id`.
+- The runtime's readiness check refuses a database holding a retired
+  Casework schema with the same fresh-database instruction that `migrate`
+  gives, instead of reporting its migration ledger as newer than the binary.
 - A stage clock whose due time falls inside a daylight-saving gap on a
   given date is due at the first instant after the gap, and one inside a
   fold at the earlier instant, so a due time that passes `check` evaluates on

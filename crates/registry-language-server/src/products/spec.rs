@@ -51,6 +51,8 @@ pub(super) enum Scope {
         field: &'static str,
     },
     Composite(&'static [(usize, &'static str)]),
+    /// Scope to the key of the nearest id-keyed mapping entry a `*` visited.
+    EnclosingKey,
     /// Action-local inputs, effects, attachments, and review context fields.
     BregAction,
     /// The record type targeted by a fixed effect or function write ceiling.
@@ -97,6 +99,18 @@ impl NameRule {
             path,
             kind,
             scope: Scope::Ancestor { skip, field },
+            suffix: None,
+            reports_unresolved: true,
+            ignored_when_present: None,
+            only_when: None,
+        }
+    }
+    /// A name scoped to the id-keyed entry that encloses it.
+    pub const fn keyed(path: &'static str, kind: &'static str) -> Self {
+        Self {
+            path,
+            kind,
+            scope: Scope::EnclosingKey,
             suffix: None,
             reports_unresolved: true,
             ignored_when_present: None,

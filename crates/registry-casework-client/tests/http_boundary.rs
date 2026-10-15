@@ -3075,16 +3075,19 @@ fn fixture_closure(policy: ReviewPolicy) -> registry_casework_client::ReviewPoli
         .map(|s| (s.queue.clone(), json!({"label":"Reviews"})))
         .collect();
     let providers = if provider {
-        vec![
-            json!({"id":"registry","capabilities":["human-display","service-status"],"sourceNamespace":"registry","deploymentRef":"registry-context","serviceProfiles":{"service-status":"status"}}),
-        ]
+        json!({"registry":{"capabilities":["human-display","service-status"],"sourceNamespace":"registry","deploymentRef":"registry-context","serviceProfiles":{"service-status":"status"}}})
     } else {
-        vec![]
+        json!({})
     };
+    let mut policy_body = serde_json::to_value(&policy).expect("policy serializes");
+    policy_body
+        .as_object_mut()
+        .expect("policy object")
+        .remove("id");
     let project: registry_casework_core::CaseworkProject = serde_json::from_value(json!({
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1", "kind":"CaseworkProject", "project":{"id":"client-fixture","version":"1"},
         "accessProfiles":{"supervisor":{"role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"]},"administrator":{"role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},"staff":{"role":"staff","principalClaim":"sub","requiredScopes":["casework:staff"]},"requester":{"role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
-        "queues":queues, "reviewPolicies":[policy.clone()], "contextProviders":providers,
+        "queues":queues, "reviewPolicies":{policy.id.clone(): policy_body}, "contextProviders":providers,
         "trustedProducers":{"requester":{"profile":"requester","issuer":"https://issuer.example","subject":"producer","sourceNamespaces":["registry"],"reviewPolicies":[policy.id],"retention":{"receiptRetentionDays":30}}}
     })).expect("fixture project");
     assert!(

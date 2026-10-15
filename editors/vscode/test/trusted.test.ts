@@ -79,7 +79,7 @@ suite('Registry Stack extension', () => {
     const productFixtures = [
       ['breg', 'registry.yaml', 'kind: BRegProject\nrecordTypes:\n  - id: host-person\n', 'host-person'],
       ['coordinator', 'workflow.yaml', 'kind: CoordinatorProject\noperations:\n  host-operation: {uses: breg.read-record/v1, connection: external-registry}\n', 'host-operation'],
-      ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  - id: host-queue\n', 'host-queue'],
+      ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  host-queue: {label: Host queue}\n', 'host-queue'],
       ['scheduling', 'scheduling.yaml', 'kind: SchedulingProject\nservices:\n  - id: host-service\n', 'host-service'],
       ['messaging', 'messaging.yaml', 'kind: MessagingProject\nproviders:\n  - id: host-provider\n', 'host-provider'],
       ['discovery', 'origins.yaml', 'apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: host-origin\n', 'host-origin'],

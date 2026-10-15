@@ -40,10 +40,9 @@ test('the documented local Casework callers form a complete valid directory seed
 
 test('the documented review policy and producer use the owning schema grammar', () => {
   const example = fencedYamlUnder('### Review policies and producers', '');
-  const kind = example.reviewPolicies[0];
+  const kind = Object.values(example.reviewPolicies)[0];
 
   for (const key of [
-    'id',
     'version',
     'purpose',
     'context',
@@ -58,7 +57,7 @@ test('the documented review policy and producer use the owning schema grammar', 
   assert.deepEqual(kind.context, { mode: 'submitted' });
   const schema = JSON.parse(readFileSync(resolve(here, '../../../products/casework/generated/project/project.schema.json'), 'utf8'));
   for (const key of Object.keys(kind)) {
-    assert.ok(Object.hasOwn(schema.$defs.ReviewPolicy.properties, key), `unknown policy key ${key}`);
+    assert.ok(Object.hasOwn(schema.properties.reviewPolicies.additionalProperties.properties, key), `unknown policy key ${key}`);
   }
   assert.equal(kind.retention.terminalRetentionDays, 90);
   assert.equal(kind.retention.accountabilityRetentionDays, 365);

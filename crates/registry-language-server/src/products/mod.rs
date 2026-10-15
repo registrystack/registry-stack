@@ -233,6 +233,8 @@ pub(crate) fn is_project_document(
 struct Match<'a> {
     scalar: &'a YamlScalar,
     parents: Vec<&'a YamlValue>,
+    /// The mapping keys a `*` visited on the way here, innermost first.
+    keys: Vec<&'a str>,
 }
 
 fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
@@ -240,6 +242,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
         value: &'a YamlValue,
         parts: &[&str],
         parents: &mut Vec<&'a YamlValue>,
+        keys: &mut Vec<&'a str>,
         output: &mut Vec<Match<'a>>,
     ) {
         if parts.is_empty() {
@@ -247,6 +250,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
                 output.push(Match {
                     scalar,
                     parents: parents.iter().rev().copied().collect(),
+                    keys: keys.iter().rev().copied().collect(),
                 });
             }
             return;
@@ -259,6 +263,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
                         output.push(Match {
                             scalar: &pair.key,
                             parents: parents.iter().rev().copied().collect(),
+                            keys: keys.iter().rev().copied().collect(),
                         });
                     }
                 }
@@ -266,19 +271,21 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
             "*" => match value {
                 YamlValue::Sequence(items) => {
                     for item in items {
-                        walk(item, &parts[1..], parents, output);
+                        walk(item, &parts[1..], parents, keys, output);
                     }
                 }
                 YamlValue::Mapping(items) => {
                     for item in items {
-                        walk(&item.value, &parts[1..], parents, output);
+                        keys.push(item.key.value.as_str());
+                        walk(&item.value, &parts[1..], parents, keys, output);
+                        keys.pop();
                     }
                 }
                 _ => {}
             },
             key => {
                 if let Some(child) = value.get(key) {
-                    walk(child, &parts[1..], parents, output);
+                    walk(child, &parts[1..], parents, keys, output);
                 }
             }
         }
@@ -288,6 +295,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
     walk(
         value,
         &path.split('/').collect::<Vec<_>>(),
+        &mut Vec::new(),
         &mut Vec::new(),
         &mut output,
     );
@@ -330,6 +338,7 @@ fn scope(found: &Match<'_>, rule: Scope, path: &Path) -> Option<Option<String>> 
         )?)),
         Scope::Document => Some(Some(path.to_string_lossy().into_owned())),
         Scope::Ancestor { skip, field } => Some(Some(ancestor_field(found, skip, field)?)),
+        Scope::EnclosingKey => Some(Some((*found.keys.first()?).to_owned())),
         Scope::Composite(fields) => {
             let values = fields
                 .iter()

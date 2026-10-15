@@ -460,29 +460,16 @@ const CASEWORK_DECLARATIONS: &[N] = &[
     N::global("queues/$key", "Casework queue"),
     N::global("accessProfiles/$key", "Casework access profile"),
     N::global("teams/$key", "Casework team"),
-    N::global("contextProviders/*/id", "Casework context provider"),
+    N::global("contextProviders/$key", "Casework context provider"),
     N::global(
         "contextProviders/*/deploymentRef",
         "Casework context provider deployment",
     ),
-    N::global("reviewPolicies/*/id", "Casework review policy"),
-    N::scoped(
-        "reviewPolicies/*/stages/*/id",
-        "Casework review stage",
-        1,
-        "id",
-    ),
-    N::scoped(
-        "reviewPolicies/*/outcomes/$key",
-        "Casework review outcome",
-        1,
-        "id",
-    ),
+    N::global("reviewPolicies/$key", "Casework review policy"),
+    N::keyed("reviewPolicies/*/stages/*/id", "Casework review stage"),
+    N::keyed("reviewPolicies/*/outcomes/$key", "Casework review outcome"),
     N {
-        scope: Scope::Ancestor {
-            skip: 2,
-            field: "id",
-        },
+        scope: Scope::EnclosingKey,
         reports_unresolved: false,
         ..N::global(
             "reviewPolicies/*/displaySchema/properties/$key",
@@ -492,24 +479,19 @@ const CASEWORK_DECLARATIONS: &[N] = &[
     N::global("trustedProducers/$key", "Casework trusted producer"),
     N::global("calendars/$key", "Casework calendar"),
     N::global("clocks/$key", "Casework clock"),
-    N::global("taskTemplates/*/id", "Casework task template"),
+    N::global("taskTemplates/$key", "Casework task template"),
 ];
 const CASEWORK_REFERENCES: &[N] = &[
     N::global(
         "reviewPolicies/*/context/provider",
         "Casework context provider",
     ),
-    N::scoped(
+    N::keyed(
         "reviewPolicies/*/routing/*/when/stage",
         "Casework review stage",
-        2,
-        "id",
     ),
     N {
-        scope: Scope::Ancestor {
-            skip: 3,
-            field: "id",
-        },
+        scope: Scope::EnclosingKey,
         reports_unresolved: false,
         ..N::global(
             "reviewPolicies/*/routing/*/when/fields/$key",

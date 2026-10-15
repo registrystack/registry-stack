@@ -1823,3 +1823,23 @@ async fn retired_schema_refusal_preserves_data_before_any_ledger_write() {
         .unwrap()
         .get::<_, bool>(0));
 }
+
+#[tokio::test]
+async fn readiness_refuses_a_retired_schema_before_its_ledger_version() {
+    let fixture = Fixture::single("retired_ready").await;
+    fixture
+        .client
+        .batch_execute(
+            "CREATE TABLE casework_schema_migrations(version bigint PRIMARY KEY, applied_at timestamptz NOT NULL);
+             INSERT INTO casework_schema_migrations VALUES(22, now());
+             CREATE TABLE casework_items(id integer PRIMARY KEY, payload text);
+             INSERT INTO casework_items VALUES(1, 'retained operator data')",
+        )
+        .await
+        .unwrap();
+    let refused = fixture.migration.ready().await;
+    assert!(
+        matches!(refused, Err(StoreError::RetiredSchema)),
+        "a retired schema names the fresh-database fix, not its ledger version: {refused:?}"
+    );
+}

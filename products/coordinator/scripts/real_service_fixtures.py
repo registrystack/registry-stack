@@ -310,7 +310,7 @@ def write_casework(root, urls, resource, agent_subject, context_schema):
         "subjects": {"tenant_claim": "tenant"},
     }
     booking_template = {
-        **template, "id": "book-appointment", "label": "Deferred synthetic appointment",
+        **template, "label": "Deferred synthetic appointment",
         "authorizationMode": "deferred", "lifetimeSeconds": 3600, "resource": SCHEDULING_RESOURCE,
         # Exact Scheduling bounds need no source field projection. The held
         # review still rechecks BReg's purpose-specific service status.
@@ -333,10 +333,10 @@ def write_casework(root, urls, resource, agent_subject, context_schema):
         "queues": {"review": {"label": "Synthetic application review"}},
         "teams": {"team": {"label": "Application reviewers", "serves": ["review"],
                            "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}},
-        "contextProviders": [{"id": "applications", "deploymentRef": "applications", "sourceNamespace": SOURCE,
-            "capabilities": ["human-display", "service-status"], "serviceProfiles": {"service-status": "reader"}}],
-        "reviewPolicies": [{
-            "id": "external-review", "version": "1", "purpose": "approval",
+        "contextProviders": {"applications": {"deploymentRef": "applications", "sourceNamespace": SOURCE,
+            "capabilities": ["human-display", "service-status"], "serviceProfiles": {"service-status": "reader"}}},
+        "reviewPolicies": {"external-review": {
+            "version": "1", "purpose": "approval",
             "context": {"mode": "current-source", "provider": "applications", "contract": context_schema["contract"]}, "stages": [{
                 "id": "review", "queue": "review", "decidingProfiles": ["staff"], "requiredApprovals": 1,
             }],
@@ -346,17 +346,17 @@ def write_casework(root, urls, resource, agent_subject, context_schema):
                                       "settlement": "approved", "reasonRequired": False, "publicReason": "none"},
                          "not-authorized": {"label": "Correction not authorized",
                                             "settlement": "rejected", "reasonRequired": False, "publicReason": "optional"}},
-        }],
+        }},
         "trustedProducers": {"breg": {
             "profile": "producer", "issuer": urls["issuer"],
             "subject": CASEWORK_PRINCIPALS["producer"], "sourceNamespaces": [SOURCE],
             "reviewPolicies": ["external-review"], "retention": {"receiptRetentionDays": 7},
         }},
-        "taskTemplates": [
-            booking_template,
-            {**booking_template, "id": "book-appointment-expiry-control",
-             "label": "Synthetic expired approval control", "lifetimeSeconds": 5},
-        ],
+        "taskTemplates": {
+            "book-appointment": booking_template,
+            "book-appointment-expiry-control": {
+                **booking_template, "label": "Synthetic expired approval control", "lifetimeSeconds": 5},
+        },
     })
     _write(root / "dev-clients.yaml", {
         "apiVersion": "id.registrystack.org/formats/casework/dev-clients/v1alpha1",
@@ -480,8 +480,8 @@ def write_review_casework(root, urls):
         "queues": {"applications": {"label": "Synthetic applications awaiting review"}},
         "teams": {"reviewers": {"label": "Application reviewers", "serves": ["applications"],
                                 "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}},
-        "reviewPolicies": [{
-            "id": "application-review", "version": "1", "purpose": "approval",
+        "reviewPolicies": {"application-review": {
+            "version": "1", "purpose": "approval",
             "context": {"mode": "submitted"}, "stages": [{
                 "id": "review", "queue": "applications", "decidingProfiles": ["staff"], "requiredApprovals": 1,
             }],
@@ -497,7 +497,7 @@ def write_review_casework(root, urls):
                                   "benefitProgram": {"type": "string", "minLength": 1, "maxLength": 64},
                                   "requestedAmount": {"type": "integer", "minimum": 0, "maximum": 1000000},
                               }},
-        }],
+        }},
         "trustedProducers": {"coordinator": {
             "profile": "coordinator-producer", "issuer": urls["issuer"],
             "subject": CASEWORK_PRINCIPALS["review-producer"], "sourceNamespaces": ["applications"],

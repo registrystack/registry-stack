@@ -27,7 +27,7 @@ queues:
   decisions:
     label: Decisions awaiting review
 contextProviders:
-  - id: facility-proposal-context
+  facility-proposal-context:
     capabilities: [human-display, service-status]
     sourceNamespace: facility-registry
     deploymentRef: facility-registry
@@ -35,7 +35,7 @@ contextProviders:
       service-status: casework-review-status
 
 reviewPolicies:
-  - id: decision
+  decision:
     version: "1"
     purpose: answer
     context: {mode: submitted}
@@ -65,7 +65,7 @@ reviewPolicies:
         settlement: answered
         reasonRequired: true
         publicReason: required
-  - id: facility-address-review
+  facility-address-review:
     version: "1"
     purpose: approval
     context:

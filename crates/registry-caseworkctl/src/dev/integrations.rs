@@ -272,7 +272,7 @@ impl Integrations {
                     ));
                 }
             }
-            for (index, template) in policy.task_templates.iter().enumerate() {
+            for template in &policy.task_templates {
                 if !self
                     .service_clients
                     .iter()
@@ -281,7 +281,10 @@ impl Integrations {
                     found.push(ConfigFinding::new(
                         "casework.dev-clients.missing-task-exchange-client",
                         "/integrations/serviceClients",
-                        format!("no task-exchange service client is the client of the task template casework.yaml declares at /taskTemplates/{index}"),
+                        format!(
+                            "no task-exchange service client is the client of the task template casework.yaml declares at {}",
+                            config::member("/taskTemplates", &template.id)
+                        ),
                         "Declare that client under serviceClients with taskExchange: true.",
                     ));
                 }

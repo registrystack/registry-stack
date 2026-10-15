@@ -412,7 +412,7 @@ exceptions:
 
 - rule: "CFG-SEC-1"
   format: "casework/project"
-  location: "products/casework/generated/project/project.schema.json#/$defs/ReviewContextProviderPolicy/properties/deploymentRef"
+  location: "products/casework/generated/project/project.schema.json#/properties/contextProviders/additionalProperties/properties/deploymentRef"
   class: "exchange-model"
   reason: "deploymentRef is the published Casework v1alpha1 model's logical reference to a runtime contextProviders binding. It contains no credential, secret-provider expression, or endpoint. The runtime binding separately owns purpose-specific secret references."
   resolution: "Permanent for the Casework v1alpha1 provider-binding exchange model. Provider agreement and runtime configuration checks resolve the logical binding and preserve separate credential custody."

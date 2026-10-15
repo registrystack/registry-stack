@@ -317,59 +317,6 @@
         }
       ]
     },
-    "ReviewContextProviderPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "capabilities": {
-          "items": {
-            "$ref": "#/$defs/ReviewContextCapability"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "deploymentRef": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "serviceProfiles": {
-          "additionalProperties": false,
-          "default": {},
-          "properties": {
-            "human-display": {
-              "type": "string"
-            },
-            "routing-context": {
-              "type": "string"
-            },
-            "service-status": {
-              "type": "string"
-            },
-            "task-grant-context": {
-              "type": "string"
-            }
-          },
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "sourceNamespace": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "capabilities",
-        "sourceNamespace",
-        "deploymentRef"
-      ],
-      "type": "object"
-    },
     "ReviewOutcomeSettlement": {
       "enum": [
         "approved",
@@ -378,95 +325,6 @@
         "answered"
       ],
       "type": "string"
-    },
-    "ReviewPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "clocks": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "context": {
-          "$ref": "#/$defs/ReviewContextPolicy"
-        },
-        "displaySchema": {
-          "x-registry-foreign": "json-schema-2020-12"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "outcomes": {
-          "additionalProperties": {
-            "additionalProperties": false,
-            "properties": {
-              "label": {
-                "type": "string"
-              },
-              "publicReason": {
-                "$ref": "#/$defs/ReviewPublicReasonRule",
-                "description": "Whether a decision with this outcome gives text for release to the\nsubject's owner. There is no default: the policy author decides what\nan applicant is told."
-              },
-              "reasonRequired": {
-                "type": "boolean"
-              },
-              "resultRequired": {
-                "type": "boolean"
-              },
-              "settlement": {
-                "$ref": "#/$defs/ReviewOutcomeSettlement"
-              }
-            },
-            "required": [
-              "label",
-              "settlement",
-              "reasonRequired",
-              "publicReason"
-            ],
-            "type": "object"
-          },
-          "description": "Written in configuration as a mapping from each outcome id; served\nas a list by id.",
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "purpose": {
-          "$ref": "#/$defs/ReviewPurpose"
-        },
-        "resultSchema": {
-          "x-registry-foreign": "json-schema-2020-12"
-        },
-        "retention": {
-          "$ref": "#/$defs/ReviewRetentionPolicy"
-        },
-        "routing": {
-          "items": {
-            "$ref": "#/$defs/RoutingRule"
-          },
-          "type": "array"
-        },
-        "stages": {
-          "items": {
-            "$ref": "#/$defs/ReviewStagePolicy"
-          },
-          "type": "array"
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "version",
-        "purpose",
-        "context",
-        "stages",
-        "retention",
-        "displaySchema"
-      ],
-      "type": "object"
     },
     "ReviewPublicReasonRule": {
       "description": "Whether a decision gives a public reason with an outcome.",
@@ -766,157 +624,6 @@
       ],
       "type": "object"
     },
-    "TaskTemplate": {
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "else": {
-            "properties": {
-              "lifetimeSeconds": {
-                "maximum": 900
-              }
-            }
-          },
-          "if": {
-            "properties": {
-              "authorizationMode": {
-                "const": "deferred"
-              }
-            },
-            "required": [
-              "authorizationMode"
-            ]
-          },
-          "then": {
-            "properties": {
-              "lifetimeSeconds": {
-                "maximum": 604800
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "authorizationMode": {
-                "const": "deferred"
-              }
-            },
-            "required": [
-              "authorizationMode"
-            ]
-          },
-          "then": {
-            "properties": {
-              "bounds": {
-                "properties": {
-                  "type": {
-                    "not": {
-                      "const": "evidence"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      ],
-      "properties": {
-        "agent": {
-          "$ref": "#/$defs/TemplateAgent"
-        },
-        "authorizationMode": {
-          "$ref": "#/$defs/TaskAuthorizationMode",
-          "description": "Immediate authorizations last at most fifteen minutes. Deferred is an\nexplicit governed window of at most seven days; assertion TTL stays sixty seconds."
-        },
-        "bounds": {
-          "$ref": "#/$defs/TaskGrantBounds"
-        },
-        "client": {
-          "type": "string"
-        },
-        "eligibleProfiles": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "eligibleTeams": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "evidenceContext": {
-          "$ref": "#/$defs/EvidenceRequesterContext",
-          "description": "Evidence-only requester context signed into the authority assertion.\nOther products derive neither requester admission nor relying-party\naudience from these fields and therefore forbid the block entirely."
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "label": {
-          "type": "string"
-        },
-        "lifetimeSeconds": {
-          "format": "uint64",
-          "maximum": 604800,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "purpose": {
-          "type": "string"
-        },
-        "resource": {
-          "type": "string"
-        },
-        "reviewPolicies": {
-          "description": "Policies whose currently held ReviewTasks may issue this grant.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "scopes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "source": {
-          "type": "string"
-        },
-        "subjects": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Exact token identity keys mapped to governed source logical fields.\nValues are extracted from the approving caller's disclosed source read.",
-          "propertyNames": {
-            "$ref": "#/$defs/ExternalId"
-          },
-          "type": "object"
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "version",
-        "label",
-        "eligibleTeams",
-        "eligibleProfiles",
-        "source",
-        "agent",
-        "client",
-        "resource",
-        "scopes",
-        "purpose",
-        "bounds",
-        "subjects",
-        "lifetimeSeconds"
-      ],
-      "type": "object"
-    },
     "TemplateAgent": {
       "additionalProperties": false,
       "description": "The agent a template names, as `casework.yaml` writes it: the issuer is\nthe URL of the token issuer that authenticates the agent (CFG-VAL-7).",
@@ -1144,11 +851,60 @@
       "type": "object"
     },
     "contextProviders": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ReviewContextProviderPolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/$defs/ReviewContextCapability"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "deploymentRef": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "serviceProfiles": {
+            "additionalProperties": false,
+            "default": {},
+            "properties": {
+              "human-display": {
+                "type": "string"
+              },
+              "routing-context": {
+                "type": "string"
+              },
+              "service-status": {
+                "type": "string"
+              },
+              "task-grant-context": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
+          },
+          "sourceNamespace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capabilities",
+          "sourceNamespace",
+          "deploymentRef"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "inbox": {
       "$ref": "#/$defs/InboxPolicy",
@@ -1186,18 +942,250 @@
       "type": "object"
     },
     "reviewPolicies": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ReviewPolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "clocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "context": {
+            "$ref": "#/$defs/ReviewContextPolicy"
+          },
+          "displaySchema": {
+            "x-registry-foreign": "json-schema-2020-12"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "publicReason": {
+                  "$ref": "#/$defs/ReviewPublicReasonRule",
+                  "description": "Whether a decision with this outcome gives text for release to the\nsubject's owner. There is no default: the policy author decides what\nan applicant is told."
+                },
+                "reasonRequired": {
+                  "type": "boolean"
+                },
+                "resultRequired": {
+                  "type": "boolean"
+                },
+                "settlement": {
+                  "$ref": "#/$defs/ReviewOutcomeSettlement"
+                }
+              },
+              "required": [
+                "label",
+                "settlement",
+                "reasonRequired",
+                "publicReason"
+              ],
+              "type": "object"
+            },
+            "description": "Written in configuration as a mapping from each outcome id; served\nas a list by id.",
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
+          },
+          "purpose": {
+            "$ref": "#/$defs/ReviewPurpose"
+          },
+          "resultSchema": {
+            "x-registry-foreign": "json-schema-2020-12"
+          },
+          "retention": {
+            "$ref": "#/$defs/ReviewRetentionPolicy"
+          },
+          "routing": {
+            "items": {
+              "$ref": "#/$defs/RoutingRule"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/$defs/ReviewStagePolicy"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "purpose",
+          "context",
+          "stages",
+          "retention",
+          "displaySchema"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "taskTemplates": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/TaskTemplate"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "lifetimeSeconds": {
+                  "maximum": 900
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "authorizationMode": {
+                  "const": "deferred"
+                }
+              },
+              "required": [
+                "authorizationMode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "lifetimeSeconds": {
+                  "maximum": 604800
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "authorizationMode": {
+                  "const": "deferred"
+                }
+              },
+              "required": [
+                "authorizationMode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "bounds": {
+                  "properties": {
+                    "type": {
+                      "not": {
+                        "const": "evidence"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/TemplateAgent"
+          },
+          "authorizationMode": {
+            "$ref": "#/$defs/TaskAuthorizationMode",
+            "description": "Immediate authorizations last at most fifteen minutes. Deferred is an\nexplicit governed window of at most seven days; assertion TTL stays sixty seconds."
+          },
+          "bounds": {
+            "$ref": "#/$defs/TaskGrantBounds"
+          },
+          "client": {
+            "type": "string"
+          },
+          "eligibleProfiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "eligibleTeams": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidenceContext": {
+            "$ref": "#/$defs/EvidenceRequesterContext",
+            "description": "Evidence-only requester context signed into the authority assertion.\nOther products derive neither requester admission nor relying-party\naudience from these fields and therefore forbid the block entirely."
+          },
+          "label": {
+            "type": "string"
+          },
+          "lifetimeSeconds": {
+            "format": "uint64",
+            "maximum": 604800,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "reviewPolicies": {
+            "description": "Policies whose currently held ReviewTasks may issue this grant.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source": {
+            "type": "string"
+          },
+          "subjects": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Exact token identity keys mapped to governed source logical fields.\nValues are extracted from the approving caller's disclosed source read.",
+            "propertyNames": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "type": "object"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "label",
+          "eligibleTeams",
+          "eligibleProfiles",
+          "source",
+          "agent",
+          "client",
+          "resource",
+          "scopes",
+          "purpose",
+          "bounds",
+          "subjects",
+          "lifetimeSeconds"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "teams": {
       "additionalProperties": {

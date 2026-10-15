@@ -88,10 +88,10 @@ class ProductContractTests(unittest.TestCase):
             self.assertIn(field, properties)
         for retired in ("reviewKinds", "reviewProducers", "hostedKinds", "sources", "itemKinds"):
             self.assertNotIn(retired, properties)
-        policy = schema["$defs"]["ReviewPolicy"]
+        policy = properties["reviewPolicies"]["additionalProperties"]
         for field in ("context", "stages", "outcomes", "clocks", "displaySchema", "resultSchema"):
             self.assertIn(field, policy["properties"])
-        self.assertNotIn("sourceProfile", schema["$defs"]["ReviewContextProviderPolicy"]["properties"])
+        self.assertNotIn("sourceProfile", properties["contextProviders"]["additionalProperties"]["properties"])
 
     def test_http_contract_has_policy_binding_and_review_staffing(self):
         document = json.loads((PRODUCT / "generated/registry-casework.openapi.json").read_text())

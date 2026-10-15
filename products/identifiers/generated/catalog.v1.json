@@ -3970,7 +3970,7 @@
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "44b270efb5a4f18e36636354a510dda06a479ce4725f4a3df84a06d249f835f8"
+        "sha256": "76603343a97d90453469654b798ff5b272ad65a2a4b4fd77af39de31a457c47a"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
@@ -3988,7 +3988,7 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "44b270efb5a4f18e36636354a510dda06a479ce4725f4a3df84a06d249f835f8"
+        "sha256": "76603343a97d90453469654b798ff5b272ad65a2a4b4fd77af39de31a457c47a"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
@@ -4006,11 +4006,11 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "44b270efb5a4f18e36636354a510dda06a479ce4725f4a3df84a06d249f835f8"
+        "sha256": "76603343a97d90453469654b798ff5b272ad65a2a4b4fd77af39de31a457c47a"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "6eab9d34b4164565258e014b40140b45dca3bbe927cabb6a12c610ca1dc07ff3",
+        "sha256": "a54a5d29464f6de1e0b46ea7ae91a2fd6ff563090f98f7686496ddad45344b7d",
         "mediaType": "application/schema+json"
       }
     },

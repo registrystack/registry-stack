@@ -27,23 +27,23 @@ fn project_value(source: bool, routing: bool) -> Value {
      "queues":{"reviews":{"label":"Reviews"},"north":{"label":"North reviews"}},
      "teams":{"review-team":{"label":"Review team","serves":["reviews","north"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
      "clocks":{"deadline":{"type":"subject","anchor":{"type":"request-accepted"},"after":{"hours":48}}},
-     "reviewPolicies":[{"id":"notice-review","version":"1","purpose":"approval","context":{"mode":"submitted"},
+     "reviewPolicies":{"notice-review":{"version":"1","purpose":"approval","context":{"mode":"submitted"},
       "stages":[{"id":"review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
       "clocks":["deadline"],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
       "outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},"rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}},
-      "displaySchema":{"type":"object","additionalProperties":false,"required":["title","region"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}}],
+      "displaySchema":{"type":"object","additionalProperties":false,"required":["title","region"],"properties":{"title":{"type":"string","maxLength":160},"region":{"type":"string","maxLength":20}}}}},
      "trustedProducers":{"notice-service":{"profile":"producer","issuer":"https://issuer.test","subject":"notice-service","trustedInitiatorIssuer":"https://issuer.test","sourceNamespaces":["notice-source"],"reviewPolicies":["notice-review"],"retention":{"receiptRetentionDays":7}}}
     });
     if source {
         let bytes = registry_platform_canonical_json::canonicalize_json(
-            &value["reviewPolicies"][0]["displaySchema"],
+            &value["reviewPolicies"]["notice-review"]["displaySchema"],
         )
         .unwrap();
-        value["reviewPolicies"][0]["context"] = json!({"mode":"current-source","provider":"notice-context","contract":{"id":"notice-context-v1","revision":ContentDigest::for_bytes(b"producer-v1"),"schemaDigest":ContentDigest::for_bytes(&bytes)}});
-        value["contextProviders"] = json!([{"id":"notice-context","capabilities":["human-display","service-status","routing-context","task-grant-context"],"sourceNamespace":"notice-source","deploymentRef":"notices","serviceProfiles":{"service-status":"status","routing-context":"routing","task-grant-context":"grants"}}]);
+        value["reviewPolicies"]["notice-review"]["context"] = json!({"mode":"current-source","provider":"notice-context","contract":{"id":"notice-context-v1","revision":ContentDigest::for_bytes(b"producer-v1"),"schemaDigest":ContentDigest::for_bytes(&bytes)}});
+        value["contextProviders"] = json!({"notice-context":{"capabilities":["human-display","service-status","routing-context","task-grant-context"],"sourceNamespace":"notice-source","deploymentRef":"notices","serviceProfiles":{"service-status":"status","routing-context":"routing","task-grant-context":"grants"}}});
     }
     if routing {
-        value["reviewPolicies"][0]["routing"] = json!([{"id":"north","because":"Route north notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
+        value["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Route north notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);
     }
     value
 }
@@ -406,10 +406,12 @@ async fn current_policy_selection_recovers_before_updates_and_requires_live_auth
     assert_eq!(accepted.submission_digest, digest);
 
     let mut value = project_value(false, false);
-    value["reviewPolicies"][0]["version"] = json!("2");
+    value["reviewPolicies"]["notice-review"]["version"] = json!("2");
     // New work now requires different context, while the original acceptance stays usable.
-    value["reviewPolicies"][0]["displaySchema"]["required"] = json!(["title", "region", "reason"]);
-    value["reviewPolicies"][0]["displaySchema"]["properties"]["reason"] = json!({"type":"string"});
+    value["reviewPolicies"]["notice-review"]["displaySchema"]["required"] =
+        json!(["title", "region", "reason"]);
+    value["reviewPolicies"]["notice-review"]["displaySchema"]["properties"]["reason"] =
+        json!({"type":"string"});
     let changed = CaseworkService::new(
         f.store.clone(),
         decode(&value),
@@ -534,7 +536,7 @@ async fn concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_in
 {
     let f = Fixture::new(project_value(false, false)).await;
     let mut value = project_value(false, false);
-    value["reviewPolicies"][0]["version"] = json!("2");
+    value["reviewPolicies"]["notice-review"]["version"] = json!("2");
     let next = CaseworkService::new(
         f.store.clone(),
         decode(&value),
@@ -587,10 +589,10 @@ async fn concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_in
 #[tokio::test]
 async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     let mut value = project_value(false, false);
-    let mut second = value["reviewPolicies"][0]["stages"][0].clone();
+    let mut second = value["reviewPolicies"]["notice-review"]["stages"][0].clone();
     second["id"] = json!("independent");
     second["excludePreviousStageReviewers"] = json!(true);
-    value["reviewPolicies"][0]["stages"]
+    value["reviewPolicies"]["notice-review"]["stages"]
         .as_array_mut()
         .unwrap()
         .push(second);
@@ -691,8 +693,8 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
 #[tokio::test]
 async fn approvals_in_one_stage_must_agree_on_the_outcome_they_release() {
     let mut value = project_value(false, false);
-    value["reviewPolicies"][0]["stages"][0]["requiredApprovals"] = json!(2);
-    value["reviewPolicies"][0]["outcomes"]["approved-with-conditions"] = json!({"label":"Approve with conditions","settlement":"approved","reasonRequired":false,"publicReason":"required"});
+    value["reviewPolicies"]["notice-review"]["stages"][0]["requiredApprovals"] = json!(2);
+    value["reviewPolicies"]["notice-review"]["outcomes"]["approved-with-conditions"] = json!({"label":"Approve with conditions","settlement":"approved","reasonRequired":false,"publicReason":"required"});
     let f = Fixture::new(value).await;
     let accepted = f.create("agreeing").await;
     let with_conditions = ReviewTaskDecisionRequest {
@@ -873,7 +875,7 @@ async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation
 #[tokio::test]
 async fn current_source_routing_is_purpose_bound_once_and_never_persists_fields() {
     let mut value = project_value(true, true);
-    value["reviewPolicies"][0]["stages"][0]["requiredApprovals"] = json!(2);
+    value["reviewPolicies"]["notice-review"]["stages"][0]["requiredApprovals"] = json!(2);
     let f = Fixture::new(value).await;
     let accepted = f.create("routed").await;
     let calls = f.state.routing.lock().unwrap().clone();
