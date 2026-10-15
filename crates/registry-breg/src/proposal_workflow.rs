@@ -148,6 +148,7 @@ impl ProposalWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
         if self.state != ProposalState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -168,6 +169,7 @@ impl ProposalWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
         if !matches!(self.state, ProposalState::Draft | ProposalState::Submitted) {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -194,6 +196,7 @@ impl ProposalWorkflow {
     ) -> Result<WorkflowTransition, WorkflowError> {
         // Operation-specific ownership is checked by the Proposal controller;
         // a separately granted operator may cancel another author's work.
+        self.refuse_rejected()?;
         if matches!(
             self.state,
             ProposalState::Applied | ProposalState::Cancelled
@@ -212,6 +215,7 @@ impl ProposalWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
         if self.state != ProposalState::Draft {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -230,6 +234,7 @@ impl ProposalWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
         if self.state != ProposalState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -238,6 +243,32 @@ impl ProposalWorkflow {
             workflow: self,
             effect: TransitionEffect::RetryScheduled,
         })
+    }
+
+    /// Records the review authority's rejection of the current submission.
+    /// A rejection is terminal: the review policy's changes-requested outcome,
+    /// not this state, is how a reviewer allows another attempt.
+    pub fn reject(
+        mut self,
+        _context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
+        if self.state != ProposalState::Submitted {
+            return Err(WorkflowError::InvalidTransition);
+        }
+        self.state = ProposalState::Rejected;
+        self.workflow_revision = self.workflow_revision.next()?;
+        Ok(WorkflowTransition {
+            workflow: self,
+            effect: TransitionEffect::Rejected,
+        })
+    }
+
+    fn refuse_rejected(&self) -> Result<(), WorkflowError> {
+        if self.state == ProposalState::Rejected {
+            return Err(WorkflowError::Rejected);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -258,6 +289,7 @@ impl ProposalWorkflow {
         {
             return Err(WorkflowError::InvalidApplicationReason);
         }
+        self.refuse_rejected()?;
         if self.state != ProposalState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -378,6 +410,11 @@ impl ProposalWorkflow {
             }
             ProposalState::Applied => {
                 if current_proposal.is_none() || self.application.is_none() {
+                    return Err(WorkflowError::InvalidRestoredState);
+                }
+            }
+            ProposalState::Rejected => {
+                if current_proposal.is_none() || self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
@@ -1611,6 +1648,7 @@ pub enum TransitionEffect {
         reason: DraftStartReason,
     },
     Cancelled,
+    Rejected,
     Applied(ApplicationReceipt),
 }
 
@@ -1628,6 +1666,7 @@ pub enum ProposalState {
     Submitted,
     Cancelled,
     Applied,
+    Rejected,
 }
 
 #[cfg(feature = "runtime")]
@@ -1638,6 +1677,7 @@ impl ProposalState {
             "submitted" => Ok(Self::Submitted),
             "cancelled" => Ok(Self::Cancelled),
             "applied" => Ok(Self::Applied),
+            "rejected" => Ok(Self::Rejected),
             _ => Err(WorkflowError::InvalidRestoredState),
         }
     }
@@ -1648,6 +1688,7 @@ impl ProposalState {
             Self::Submitted => "submitted",
             Self::Cancelled => "cancelled",
             Self::Applied => "applied",
+            Self::Rejected => "rejected",
         }
     }
 }
@@ -2235,6 +2276,7 @@ impl fmt::Debug for TransitionEffect {
                 .field("reason", reason)
                 .finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::Rejected => formatter.write_str("Rejected"),
             Self::Applied(receipt) => formatter.debug_tuple("Applied").field(receipt).finish(),
         }
     }
@@ -2296,6 +2338,8 @@ impl fmt::Debug for ApplicationId {
 pub enum WorkflowError {
     #[error("request workflow transition is not valid from the current state")]
     InvalidTransition,
+    #[error("the review rejected this Proposal and a rejection is terminal")]
+    Rejected,
     #[error("application reason is invalid or exceeds its bounds")]
     InvalidApplicationReason,
     #[error("proposal version is stale")]
@@ -2896,10 +2940,70 @@ mod source_owned_review_tests {
         );
     }
 
+    #[test]
+    fn a_rejection_is_terminal_and_refuses_every_later_transition() {
+        let submitted = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(required_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let revision = submitted.workflow_revision();
+        let transition = submitted
+            .reject(context("review-authority", "2026-09-19T00:01:00Z"))
+            .expect("a submitted Proposal is rejected");
+        assert!(matches!(transition.effect(), TransitionEffect::Rejected));
+        let rejected = transition.into_workflow();
+        assert_eq!(rejected.state(), ProposalState::Rejected);
+        assert_eq!(rejected.workflow_revision(), revision.next().unwrap());
+        let later = context("submitter", "2026-09-19T00:02:00Z");
+        assert_eq!(
+            rejected.clone().revise(later.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            rejected.clone().rebase(later.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            rejected.clone().cancel(later.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            rejected.clone().retry(later.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            rejected.clone().edit_draft(later.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            rejected.clone().reject(later).err(),
+            Some(WorkflowError::Rejected)
+        );
+        assert_eq!(
+            workflow()
+                .reject(context("review-authority", "2026-09-19T00:01:00Z"))
+                .err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn rejected_round_trips_through_storage() {
+        assert_eq!(
+            ProposalState::from_storage("rejected"),
+            Ok(ProposalState::Rejected)
+        );
+        assert_eq!(ProposalState::Rejected.as_storage(), "rejected");
+    }
+
     #[cfg(feature = "runtime")]
     #[test]
     fn unknown_stored_request_states_are_invalid() {
-        for state in ["approved", "needs_changes", "rejected", "canceled", ""] {
+        for state in ["approved", "needs_changes", "canceled", ""] {
             assert_eq!(
                 ProposalState::from_storage(state),
                 Err(WorkflowError::InvalidRestoredState)

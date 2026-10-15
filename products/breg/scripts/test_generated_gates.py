@@ -53,7 +53,7 @@ class GeneratedGateTests(unittest.TestCase):
                 self.assertTrue(any(artifact in error for error in errors), errors)
         response = json.loads((baseline / required[3]).read_text())
         self.assertTrue({"actionId", "submissionVersion", "state", "links"} <= response["properties"].keys())
-        self.assertEqual(["draft", "submitted", "applied", "cancelled"], response["properties"]["state"]["enum"])
+        self.assertEqual(["draft", "submitted", "applied", "cancelled", "rejected"], response["properties"]["state"]["enum"])
 
     def test_action_contract_exports_are_required_and_compared_byte_for_byte(self) -> None:
         baseline = SCRIPT_DIR.parent / "generated/facility"

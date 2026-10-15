@@ -145,12 +145,17 @@ pub(crate) fn append_proposal_openapi(
         );
         if operation == ProposalOperation::List {
             let parameters = document["parameters"].as_array_mut().unwrap();
-            for name in ["action", "owner", "target", "state", "cursor", "limit"] {
+            for name in [
+                "action", "owner", "target", "state", "turn", "cursor", "limit",
+            ] {
                 let schema = match name {
                     "limit" => json!({"type":"integer","minimum":1,"maximum":100,"default":50}),
                     "owner" => json!({"const":"caller"}),
                     "target" => json!({"type":"string","format":"uuid"}),
-                    "state" => json!({"enum":["draft","submitted","applied","cancelled"]}),
+                    "state" => {
+                        json!({"enum":["draft","submitted","applied","cancelled","rejected"]})
+                    }
+                    "turn" => json!({"enum":["party","official","nobody"]}),
                     _ => json!({"type":"string"}),
                 };
                 parameters.push(json!({"name":name,"in":"query","schema":schema}));
@@ -209,7 +214,8 @@ fn proposal_submission_schema() -> Value {
             "current":{"type":"boolean"},
             "effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
             "review":{"anyOf":[review,{"type":"null"}]},
-            "application":{"anyOf":[application,{"type":"null"}]}}})
+            "application":{"anyOf":[application,{"type":"null"}]},
+            "decision":crate::artifacts::proposal_decision_schema()}})
 }
 
 fn merge_operation(

@@ -151,8 +151,17 @@ headers because infrastructure commonly logs headers.
 
 Proposal event data uses `actionId`, `actionRevision`, `proposalId`,
 `submissionVersion`, `revision`, `fromState`, `state`, `transition`,
-`effectDigest`, `authorityKind`, and `systemApplyGrantRevision`.
-The two digest fields may be null until applicable. It contains no editable
+`effectDigest`, `authorityKind`, `systemApplyGrantRevision`, and `turn`.
+The two digest fields may be null until applicable. `transition` is one of
+`started`, `edited`, `submitted`, `revised`, `rebased`, `retried`, `cancelled`,
+`applied`, `rejected` and `review-returned`. A review result for the current
+submission records `rejected` (the Proposal ends in the terminal `rejected`
+state) or `review-returned` (changes were requested; the Proposal stays
+`submitted`), in the transaction that records the result; its `authorityKind`
+is `review`. Other review outcomes record no lifecycle event. `turn` is
+`party`, `official` or `nobody`, whose move the Proposal waits on after the
+transition, derived as the [Proposals guide](proposals.md#whose-turn-it-is)
+describes. The event never carries the decision's public reason. It contains no editable
 inputs, target values, attachment bytes, or application-reason text. Its schema
 is `https://id.registrystack.org/contracts/breg/proposal-event/v1`.
 

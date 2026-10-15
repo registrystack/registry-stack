@@ -134,6 +134,82 @@ fn validate_recovery_actor(
 }
 
 impl MutationTransaction {
+    /// Carry a review result just recorded for one submission into the
+    /// Proposal lifecycle, in the transaction that recorded it. A rejection
+    /// of the current submission ends the Proposal in `rejected`; a
+    /// changes-requested result leaves it submitted and revisable and records
+    /// `review-returned`. Any other result, or a result for a submission that
+    /// is no longer current, changes nothing. The caller holds the Proposal's
+    /// state row lock.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn record_review_result(
+        &self,
+        tx: &Transaction<'_>,
+        registry: &CompiledRegistry,
+        authority: &str,
+        action_id: &str,
+        proposal_id: Uuid,
+        version: i64,
+        status: &str,
+    ) -> Result<(), MutationError> {
+        let transition = match status {
+            "rejected" => "rejected",
+            "changes-requested" => "review-returned",
+            _ => return Ok(()),
+        };
+        let action = proposal_action(registry, action_id)?;
+        let document =
+            proposal_store::load_document(tx, proposal_id, proposal_store::DocumentLock::None)
+                .await?;
+        if document.header.state != "submitted" || document.header.submission_version != version {
+            return Ok(());
+        }
+        let mut workflow = proposal_store::load(tx, action_id, proposal_id, false).await?;
+        if transition == "rejected" {
+            let previous = i64::try_from(workflow.workflow_revision().get())
+                .map_err(|_| MutationError::Unavailable)?;
+            let actor = self.proposal_actor(&format!("review-authority:{authority}"))?;
+            workflow = workflow
+                .reject(transition_context(&actor)?)
+                .map_err(workflow_error)?
+                .into_workflow();
+            proposal_store::save(tx, action_id, proposal_id, previous, &workflow).await?;
+        }
+        let document =
+            proposal_store::load_document(tx, proposal_id, proposal_store::DocumentLock::None)
+                .await?;
+        let reference = format!("/v1/proposals/{proposal_id}");
+        let event_source = self.event_source();
+        crate::proposal_events::insert_proposal_lifecycle_event(
+            tx,
+            registry,
+            action,
+            self.event_destinations.as_deref(),
+            crate::proposal_events::ProposalLifecycleEvent {
+                action_id,
+                action_revision: &document.action_revision,
+                proposal_id,
+                version: workflow.current_version().get(),
+                revision: workflow.workflow_revision().get(),
+                from_state: "submitted",
+                state: workflow.state().as_storage(),
+                transition,
+                effect_digest: workflow
+                    .current_proposal()
+                    .map(|proposal| proposal.effect_digest().as_str()),
+                authority_kind: "review",
+                system_grant_revision: None,
+                turn: current_turn(tx, &document, workflow.current_proposal()).await?,
+                reference: &reference,
+                package_revision: &self.expected.activation_id,
+                schema_fingerprint: &self.expected.schema_fingerprint,
+                source: &event_source,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
     pub(crate) async fn read_proposal_attachment(
         &self,
         attachment: &crate::attachment_store::StoredAttachment,
@@ -267,6 +343,7 @@ impl MutationTransaction {
         authority: &ProposalAuthority,
         document: Option<&ProposalDocument>,
         count: usize,
+        public_reason_served: bool,
         correlation: &RequestCorrelation,
     ) -> Result<(), MutationError> {
         let reference = document
@@ -302,7 +379,10 @@ impl MutationTransaction {
                 record_reference: reference,
                 record_revision: document.map(|document| document.header.workflow_revision),
                 result_count: Some(count),
-                field_set_reference: None,
+                // A served public reason is recorded as a fixed marker; its
+                // text never reaches the journal.
+                field_set_reference: public_reason_served
+                    .then(|| PUBLIC_REASON_REFERENCE.to_owned()),
                 correlation: correlation.clone(),
             },
         )?;
@@ -1476,6 +1556,7 @@ impl MutationTransaction {
                     "caller"
                 },
                 system_grant_revision: input.authority.system_grant_revision(),
+                turn: current_turn(tx, &document, workflow.current_proposal()).await?,
                 reference: &reference,
                 package_revision: &self.expected.activation_id,
                 schema_fingerprint: &self.expected.schema_fingerprint,
@@ -2472,12 +2553,18 @@ impl MutationTransaction {
         if (review_lapsed || erased) && application.is_null() {
             return Ok(None);
         }
-        Ok(Some(json!({
+        let mut value = json!({
             "id":document.proposal_id,"actionId":document.action_id,
             "submissionVersion":version,"current":frozen.is_some(),
             "effectDigest":submission.get::<_,String>(0),
             "review":review,"application":application
-        })))
+        });
+        if let Some(decision) =
+            review_decision(tx, &document.action_id, document.proposal_id, version).await?
+        {
+            value["decision"] = decision;
+        }
+        Ok(Some(value))
     }
 
     pub(crate) async fn proposal_review_value(
@@ -2602,6 +2689,16 @@ impl MutationTransaction {
                     proposal_application_status(tx, document, proposal).await?;
             }
         }
+        value["turn"] = json!(
+            current_turn(
+                tx,
+                document,
+                workflow
+                    .as_ref()
+                    .and_then(|workflow| workflow.current_proposal())
+            )
+            .await?
+        );
         if let Some(application) = workflow
             .as_ref()
             .and_then(|workflow| workflow.application())
@@ -2611,23 +2708,38 @@ impl MutationTransaction {
         let Some(claims) = claims else {
             return Ok(value);
         };
-        let pending_review = if workflow
+        // The decision is disclosed on the reads only, beside the inputs the
+        // same Get authority discloses; a lifecycle command's response omits it.
+        if document.header.state != "draft"
+            && workflow
+                .as_ref()
+                .is_some_and(|workflow| workflow.current_proposal().is_some())
+            && matches!(
+                current.operation,
+                ProposalAuthorityOperation::Lifecycle(
+                    ProposalOperation::Get | ProposalOperation::List
+                )
+            )
+        {
+            if let Some(decision) = review_decision(
+                tx,
+                &document.action_id,
+                document.proposal_id,
+                document.header.submission_version,
+            )
+            .await?
+            {
+                value["decision"] = decision;
+            }
+        }
+        let review_refusal = match workflow
             .as_ref()
             .and_then(|workflow| workflow.current_proposal())
-            .is_some_and(|frozen| {
-                matches!(
-                    frozen.review_requirement(),
-                    CompiledProposalReview::Required { .. }
-                )
-            }) {
-            proposal_review_result(tx, document).await?["state"] != "approved"
-        } else {
-            false
-        };
-        let review_outcome = if pending_review {
-            review_outcome(tx, document).await?
-        } else {
-            None
+        {
+            Some(frozen) if document.header.state == "submitted" => {
+                review_progress(tx, document, frozen).await?.apply_refusal()
+            }
+            _ => None,
         };
         let review_available = match &action.execution {
             CompiledActionExecution::Proposal { proposal } => match &proposal.review {
@@ -2748,7 +2860,7 @@ impl MutationTransaction {
                 ProposalOperation::Apply => {
                     document.header.state == "submitted"
                         && document.blocked_reason.is_none()
-                        && !pending_review
+                        && review_refusal.is_none()
                         && review_available
                 }
                 ProposalOperation::GetReviewContext | ProposalOperation::GetReviewStatus => {
@@ -2795,6 +2907,9 @@ impl MutationTransaction {
                 if document.header.state == "applied" {
                     link["availability"]["reason"] = json!("already-applied");
                     link["availability"]["recovery"] = json!("receipt-only");
+                } else if document.header.state == "rejected" {
+                    link["availability"]["reason"] = json!("review-rejected");
+                    link["availability"]["recovery"] = json!("receipt-only");
                 } else if match operation {
                     ProposalOperation::Edit | ProposalOperation::Submit => {
                         document.header.state != "draft"
@@ -2818,14 +2933,19 @@ impl MutationTransaction {
                     link["availability"]["reason"] = json!("contract-changed");
                     link["availability"]["recovery"] = json!("correct-input");
                 } else if operation == ProposalOperation::Retry && !retry_available {
-                    link["availability"]["reason"] = json!("invalid-input");
-                    link["availability"]["recovery"] = json!("correct-input");
+                    // A review that has ended leaves nothing to retry: the
+                    // same review outcome Apply reports names Revise.
+                    let (reason, recovery) = review_refusal
+                        .filter(|(_, recovery)| *recovery == "revise")
+                        .unwrap_or(("invalid-input", "correct-input"));
+                    link["availability"]["reason"] = json!(reason);
+                    link["availability"]["recovery"] = json!(recovery);
                 } else if !review_available {
                     link["availability"]["reason"] = json!("dependency-outage");
                     link["availability"]["recovery"] = json!("retry");
-                } else if let Some(reason) = review_outcome {
+                } else if let Some((reason, recovery)) = review_refusal {
                     link["availability"]["reason"] = json!(reason);
-                    link["availability"]["recovery"] = json!("revise");
+                    link["availability"]["recovery"] = json!(recovery);
                 } else {
                     link["availability"]["reason"] = json!("pending-review");
                     link["availability"]["recovery"] = json!("refresh");
@@ -2942,7 +3062,7 @@ async fn proposal_application_status(
     let automatic = frozen.application_policy().is_automatic();
     let mut value = json!({"mode":if automatic {"automatic"} else {"manual"}});
     match document.header.state.as_str() {
-        "applied" | "cancelled" => {
+        "applied" | "cancelled" | "rejected" => {
             value["state"] = json!(document.header.state);
             return Ok(value);
         }
@@ -3108,21 +3228,71 @@ fn proposal_action<'a>(
     Ok(action)
 }
 
-/// Name a retained review outcome that ends the current submission's path to
-/// Apply. Only Revise produces a submission that can be applied after it. A
-/// Casework `cancelled` or `superseded` the producer caused by withdrawing is
-/// not an outcome of review, so it reads as no outcome here.
-async fn review_outcome(
+/// How far the current submission's review has gone, read from BReg's
+/// retained submission and result rows only. No authority is asked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReviewProgress {
+    /// The submission's Action requires no review.
+    NotRequired,
+    /// The review authority holds the request, or BReg is still delivering it.
+    Pending,
+    /// Delivery or result lookup failed and Retry may resume it.
+    Retrying,
+    /// The review submission failed for good; only a later submission can
+    /// be reviewed.
+    Failed,
+    Approved,
+    /// An approval whose availability window has passed: it can no longer
+    /// authorize Apply.
+    ApprovalExpired,
+    Rejected,
+    ChangesRequested,
+    /// An `answered` result, which has no meaning for a Proposal.
+    Answered,
+    /// A Casework `cancelled` or `superseded` the producer did not cause.
+    Ended,
+}
+
+impl ReviewProgress {
+    /// The Apply availability a review that has not approved this
+    /// submission gives. `None` for an approval or no review.
+    fn apply_refusal(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::NotRequired | Self::Approved => None,
+            Self::Pending => Some(("pending-review", "refresh")),
+            // Retry resumes the delivery or lookup that failed.
+            Self::Retrying => Some(("dependency-outage", "retry")),
+            Self::Rejected => Some(("review-rejected", "revise")),
+            Self::ChangesRequested => Some(("review-changes-requested", "revise")),
+            Self::Failed | Self::ApprovalExpired | Self::Answered | Self::Ended => {
+                Some(("review-ended", "revise"))
+            }
+        }
+    }
+}
+
+/// Read the current submission's review progress. A Casework `cancelled` or
+/// `superseded` the producer caused by withdrawing is not an outcome of
+/// review, so it reads as pending until the withdrawal settles.
+async fn review_progress(
     tx: &Transaction<'_>,
     document: &ProposalDocument,
-) -> Result<Option<&'static str>, MutationError> {
+    frozen: &crate::proposal_workflow::ProposalSnapshot,
+) -> Result<ReviewProgress, MutationError> {
+    if !matches!(
+        frozen.review_requirement(),
+        CompiledProposalReview::Required { .. }
+    ) {
+        return Ok(ReviewProgress::NotRequired);
+    }
     let row = tx
         .query_opt(
-            "SELECT r.status,s.withdrawn
-        FROM registry_internal.registry_proposal_review_results r
-        JOIN registry_internal.registry_proposal_review_submissions s
+            "SELECT s.state,s.withdrawn,s.last_error_code IS NOT NULL,r.status,
+        r.available_until<=transaction_timestamp()
+        FROM registry_internal.registry_proposal_review_submissions s
+        LEFT JOIN registry_internal.registry_proposal_review_results r
           USING(action_id,proposal_id,submission_version)
-        WHERE r.action_id=$1 AND r.proposal_id=$2 AND r.submission_version=$3",
+        WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3",
             &[
                 &document.action_id,
                 &document.proposal_id,
@@ -3131,14 +3301,142 @@ async fn review_outcome(
         )
         .await
         .map_err(map_database_error)?;
-    Ok(row.and_then(
-        |row| match (row.get::<_, String>(0).as_str(), row.get::<_, bool>(1)) {
-            ("rejected", _) => Some("review-rejected"),
-            ("changes-requested", _) => Some("review-changes-requested"),
-            ("cancelled" | "superseded", false) => Some("review-ended"),
-            _ => None,
-        },
+    let Some(row) = row else {
+        return Ok(ReviewProgress::Pending);
+    };
+    let state: String = row.get(0);
+    let withdrawn: bool = row.get(1);
+    let erroring: bool = row.get(2);
+    let status: Option<String> = row.get(3);
+    let expired: Option<bool> = row.get(4);
+    Ok(match status.as_deref() {
+        Some("approved") if expired == Some(true) => ReviewProgress::ApprovalExpired,
+        Some("approved") => ReviewProgress::Approved,
+        Some("rejected") => ReviewProgress::Rejected,
+        Some("changes-requested") => ReviewProgress::ChangesRequested,
+        Some("answered") => ReviewProgress::Answered,
+        Some("cancelled" | "superseded") if !withdrawn => ReviewProgress::Ended,
+        Some(_) => ReviewProgress::Pending,
+        None if state == "failed" => ReviewProgress::Failed,
+        None if erroring && matches!(state.as_str(), "pending" | "uncertain" | "accepted") => {
+            ReviewProgress::Retrying
+        }
+        None => ReviewProgress::Pending,
+    })
+}
+
+/// The turn of a Proposal as it stands in this transaction.
+pub(crate) async fn current_turn(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+    frozen: Option<&crate::proposal_workflow::ProposalSnapshot>,
+) -> Result<&'static str, MutationError> {
+    let blocked = document.blocked_reason.is_some();
+    if document.header.state != "submitted" {
+        return Ok(proposal_turn(
+            &document.header.state,
+            blocked,
+            ReviewProgress::NotRequired,
+            &Value::Null,
+        ));
+    }
+    let frozen = frozen.ok_or(MutationError::PreconditionFailed)?;
+    let review = review_progress(tx, document, frozen).await?;
+    let application = proposal_application_status(tx, document, frozen).await?;
+    Ok(proposal_turn(
+        &document.header.state,
+        blocked,
+        review,
+        &application,
     ))
+}
+
+/// Whose move a Proposal waits on: the party that drives it, an official
+/// who reviews or applies it, or nobody. Derived from the lifecycle state,
+/// the current submission's review progress and its application status;
+/// nothing stores it.
+pub(crate) fn proposal_turn(
+    state: &str,
+    blocked: bool,
+    review: ReviewProgress,
+    application: &Value,
+) -> &'static str {
+    match state {
+        "draft" => return "party",
+        "submitted" => {}
+        _ => return "nobody",
+    }
+    if blocked {
+        return "party";
+    }
+    match review {
+        ReviewProgress::Pending | ReviewProgress::Retrying => return "official",
+        ReviewProgress::Failed
+        | ReviewProgress::ApprovalExpired
+        | ReviewProgress::Rejected
+        | ReviewProgress::ChangesRequested
+        | ReviewProgress::Answered
+        | ReviewProgress::Ended => return "party",
+        ReviewProgress::NotRequired | ReviewProgress::Approved => {}
+    }
+    if application["mode"] == "manual" {
+        return "official";
+    }
+    match (
+        application["state"].as_str(),
+        application["recovery"].as_str(),
+    ) {
+        (Some("blocked"), Some("retry")) => "official",
+        (Some("blocked"), _) => "party",
+        _ => "nobody",
+    }
+}
+
+/// The audit marker of a read that served a decision's public reason.
+pub(crate) const PUBLIC_REASON_REFERENCE: &str = "proposal-review-public-reason";
+
+/// The reviewer's decision on one submission, read through the protocol's
+/// own result type. Only the status, its time and the public reason are
+/// served: the public reason is the one reviewer text the protocol releases
+/// to the subject's owner. Provider-side ends (cancelled, superseded) are not
+/// decisions, and a result whose content retention erased has none.
+async fn review_decision(
+    tx: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+    version: i64,
+) -> Result<Option<Value>, MutationError> {
+    let Some(row) = tx
+        .query_opt(
+            "SELECT result FROM registry_internal.registry_proposal_review_results
+             WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&action_id, &proposal_id, &version],
+        )
+        .await
+        .map_err(map_database_error)?
+    else {
+        return Ok(None);
+    };
+    let stored: Value = row.get(0);
+    if stored.as_object().is_some_and(Map::is_empty) {
+        return Ok(None);
+    }
+    let result: registry_review_protocol::ReviewResult =
+        serde_json::from_value(stored).map_err(|_| MutationError::Unavailable)?;
+    use registry_review_protocol::ReviewResultStatus as Status;
+    if matches!(result.status, Status::Cancelled | Status::Superseded) {
+        return Ok(None);
+    }
+    let mut decision = json!({
+        "status": result.status,
+        "decidedAt": result
+            .completed_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    });
+    if let Some(reason) = result.public_reason {
+        decision["publicReason"] = json!(reason);
+    }
+    Ok(Some(decision))
 }
 
 async fn proposal_review_result(
@@ -3241,8 +3539,11 @@ fn transition_context(actor: &str) -> Result<TrustedTransitionContext, MutationE
             .map_err(workflow_error)?,
     ))
 }
-fn workflow_error(_: crate::proposal_workflow::WorkflowError) -> MutationError {
-    MutationError::PreconditionFailed
+fn workflow_error(error: crate::proposal_workflow::WorkflowError) -> MutationError {
+    match error {
+        crate::proposal_workflow::WorkflowError::Rejected => MutationError::ProposalRejected,
+        _ => MutationError::PreconditionFailed,
+    }
 }
 fn verify_apply_binding(
     input: &ProposalMutationInput<'_>,
@@ -3458,6 +3759,63 @@ mod disclosure_tests {
                 !wire.contains(forbidden),
                 "private receipt member {forbidden}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+
+    #[test]
+    fn turn_follows_state_review_and_application() {
+        let manual = json!({"mode":"manual","state":"pending"});
+        let queued = json!({"mode":"automatic","state":"queued"});
+        let retry = json!({"mode":"automatic","state":"blocked","recovery":"retry"});
+        let correct = json!({"mode":"automatic","state":"blocked","recovery":"correct-input"});
+        for state in ["applied", "cancelled", "rejected"] {
+            assert_eq!(
+                proposal_turn(state, false, ReviewProgress::NotRequired, &Value::Null),
+                "nobody",
+                "{state}"
+            );
+        }
+        assert_eq!(
+            proposal_turn("draft", false, ReviewProgress::NotRequired, &Value::Null),
+            "party"
+        );
+        assert_eq!(
+            proposal_turn("submitted", true, ReviewProgress::Pending, &manual),
+            "party",
+            "a blocked submission waits on its party"
+        );
+        for review in [ReviewProgress::Pending, ReviewProgress::Retrying] {
+            assert_eq!(
+                proposal_turn("submitted", false, review, &queued),
+                "official"
+            );
+        }
+        for review in [
+            ReviewProgress::Failed,
+            ReviewProgress::ApprovalExpired,
+            ReviewProgress::Rejected,
+            ReviewProgress::ChangesRequested,
+            ReviewProgress::Answered,
+            ReviewProgress::Ended,
+        ] {
+            assert_eq!(proposal_turn("submitted", false, review, &queued), "party");
+        }
+        for review in [ReviewProgress::NotRequired, ReviewProgress::Approved] {
+            assert_eq!(
+                proposal_turn("submitted", false, review, &manual),
+                "official"
+            );
+            assert_eq!(proposal_turn("submitted", false, review, &queued), "nobody");
+            assert_eq!(
+                proposal_turn("submitted", false, review, &retry),
+                "official"
+            );
+            assert_eq!(proposal_turn("submitted", false, review, &correct), "party");
         }
     }
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha5.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha6.schema.json",
   "title": "EventsExplanation",
   "description": "Author inspection of deliveries enriched from each owning hook with its phase, handler type and Proposal transition selection. Proposal envelope fields come from the canonical Proposal event schema and include no Record values. Empty condition tests are omitted. Program bytes are absent.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/events-explanation/v1alpha5"
+      "const": "id.registrystack.org/formats/breg/events-explanation/v1alpha6"
     },
     "kind": {
       "const": "BRegEventsExplanation"
@@ -56,7 +56,9 @@
                 "rebased",
                 "retried",
                 "cancelled",
-                "applied"
+                "applied",
+                "rejected",
+                "review-returned"
               ]
             }
           }

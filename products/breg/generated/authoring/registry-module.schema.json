@@ -3186,7 +3186,9 @@
         "rebased",
         "retried",
         "cancelled",
-        "applied"
+        "applied",
+        "rejected",
+        "review-returned"
       ],
       "type": "string"
     },

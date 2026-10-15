@@ -247,7 +247,8 @@ async fn compact_reviewed_change_uses_fresh_external_approval_and_recovers_recei
         assert!(
             registry_breg::review_store::run_review_authority_once_for_test(
                 &fixture.pool,
-                &authority.registry
+                &authority.registry,
+                &fixture.mutations,
             )
             .await
             .unwrap()
@@ -506,6 +507,7 @@ async fn exact_submission_observation_rejects_revised_and_rebased_successors() {
                 registry_breg::review_store::run_review_authority_once_for_test(
                     &fixture.pool,
                     &authority.registry,
+                    &fixture.mutations,
                 )
                 .await
                 .unwrap()

@@ -1139,11 +1139,13 @@ pub fn proposal_schema() -> Value {
         "id":{"type":"string","format":"uuid"},
         "actionId":{"type":"string"},"actionRevision":{"type":"string"},
         "submissionVersion":{"type":"integer","minimum":0},"revision":{"type":"integer","minimum":1},
-        "state":{"enum":["draft","submitted","applied","cancelled"]},
+        "state":{"enum":["draft","submitted","applied","cancelled","rejected"]},
         "title":{"type":"string","maxLength":1024},
         "input":{"type":"object"},
         "application":proposal_application_schema(),
         "applicationStatus":proposal_application_status_schema(),
+        "turn":{"enum":["party","official","nobody"]},
+        "decision":proposal_decision_schema(),
         "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
         "attachments":{"type":"object","maxProperties":8,"additionalProperties":proposal_attachment_schema()},
         "links":{"type":"object","additionalProperties":{
@@ -1156,10 +1158,22 @@ pub fn proposal_schema() -> Value {
     }})
 }
 
+/// The reviewer's decision on a submission. The public reason is the only
+/// reviewer text BReg serves.
+pub fn proposal_decision_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["status","decidedAt"],
+    "properties":{
+        "status":{"enum":["approved","rejected","changes-requested","answered"]},
+        "decidedAt":{"type":"string","format":"date-time"},
+        "publicReason":{"type":"string","minLength":1,
+            "x-maximum-utf8-bytes":registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES}
+    }})
+}
+
 fn proposal_application_status_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["state","mode"],
     "properties":{
-        "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled"]},
+        "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled","rejected"]},
         "mode":{"enum":["automatic","manual"]},
         "reason":{"enum":["contract-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
         "recovery":{"enum":["retry","correct-input"]},
@@ -1206,7 +1220,7 @@ pub fn availability_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
         "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
             "reason":{"enum":["pending-review","review-rejected","review-changes-requested","review-ended","stale-revision","contract-changed","dependency-outage","invalid-input","already-applied"]},
-            "recovery":{"enum":["refresh","revise","retry","correct-input","terminal","receipt-only"]}},
+            "recovery":{"enum":["refresh","revise","retry","correct-input","receipt-only"]}},
         "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 

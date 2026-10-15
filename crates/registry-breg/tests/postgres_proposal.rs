@@ -13,7 +13,8 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
-    BRegProblemCode, BRegProposalQuery, BRegProposalState, BRegRecordFormat,
+    BRegProblemCode, BRegProposalDecisionStatus, BRegProposalQuery, BRegProposalState,
+    BRegProposalTurn, BRegRecordFormat,
 };
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -279,6 +280,7 @@ async fn coherent_observation_fences_review_approval_and_job_creation() {
             "local-review",
             &accepted,
             &result,
+            &fixture.mutations,
         );
         tokio::pin!(reconciliation);
         let waited = tokio::select! {
@@ -1848,6 +1850,7 @@ async fn ordinary_get_excludes_review_result_and_job_publication_until_observati
                     "local-review",
                     &accepted,
                     &result,
+                    &fixture.mutations,
                 )
                 .await?;
                 tx.commit()
@@ -2150,9 +2153,11 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
                 current["applicationStatus"].clone(),
                 current["links"]["apply"]["availability"].clone(),
                 current["links"]["revise"]["availability"]["available"].clone(),
+                current["turn"].clone(),
             )
         };
-        let (status, apply, _) = observe().await;
+        let (status, apply, _, turn) = observe().await;
+        assert_eq!(turn, "official", "a pending review waits on its reviewer");
         assert_eq!(status["state"], "awaiting-review");
         assert!(status.get("reason").is_none() && status.get("recovery").is_none());
         assert_eq!(apply["reason"], "pending-review");
@@ -2167,7 +2172,7 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
             ("changes-requested", "review-changes-requested", "revise"),
             ("cancelled", "review-ended", "revise"),
             ("superseded", "review-ended", "revise"),
-            ("answered", "pending-review", "refresh"),
+            ("answered", "review-ended", "revise"),
         ] {
             fixture
                 .database
@@ -2178,7 +2183,8 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
                 )
                 .await
                 .unwrap();
-            let (status, apply, revise) = observe().await;
+            let (status, apply, revise, turn) = observe().await;
+            assert_eq!(turn, "party", "{outcome}");
             assert_eq!(status["state"], "awaiting-review", "{outcome}");
             assert!(
                 status.get("reason").is_none() && status.get("recovery").is_none(),
@@ -2193,19 +2199,312 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
             assert_eq!(apply["recovery"], recovery, "{outcome}");
             assert_eq!(revise, true, "{outcome}");
         }
+        // Automatic application commits its job with the approval, so only
+        // manual application observes an approval without one.
         if !automatic {
+            // An approval past its availability cannot be applied; the party
+            // revises to ask again.
             fixture
                 .database
                 .admin
                 .execute(
-                    "UPDATE registry_internal.registry_proposal_review_results SET status='approved'",
+                    "UPDATE registry_internal.registry_proposal_review_results
+                     SET status='approved',available_until=transaction_timestamp()-interval '1 second'",
                     &[],
                 )
                 .await
                 .unwrap();
-            let (status, apply, _) = observe().await;
+            let (_, apply, revise, turn) = observe().await;
+            assert_eq!(
+                (&apply["available"], &apply["reason"], &apply["recovery"]),
+                (&json!(false), &json!("review-ended"), &json!("revise"))
+            );
+            assert_eq!((revise, turn), (json!(true), json!("party")));
+            fixture
+                .database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_proposal_review_results
+                     SET status='approved',available_until=$1",
+                    &[&result.available_until],
+                )
+                .await
+                .unwrap();
+            let (status, apply, _, turn) = observe().await;
             assert_eq!(status["state"], "pending");
             assert_eq!(apply["available"], true);
+            assert_eq!(turn, "official", "a manual approval waits on its applier");
+        }
+        // Without a result, a submission the provider keeps refusing reads as
+        // a dependency outage the caller retries, and a failed one as ended.
+        fixture
+            .database
+            .admin
+            .execute(
+                "DELETE FROM registry_internal.registry_proposal_review_results",
+                &[],
+            )
+            .await
+            .unwrap();
+        fixture
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_proposal_review_submissions
+                 SET state='pending',lease_until=NULL,last_error_code='unavailable'",
+                &[],
+            )
+            .await
+            .unwrap();
+        let (_, apply, _, turn) = observe().await;
+        assert_eq!(
+            (&apply["reason"], &apply["recovery"], &turn),
+            (
+                &json!("dependency-outage"),
+                &json!("retry"),
+                &json!("official")
+            )
+        );
+        fixture
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_proposal_review_submissions SET state='failed'",
+                &[],
+            )
+            .await
+            .unwrap();
+        let (_, apply, revise, turn) = observe().await;
+        assert_eq!(
+            (&apply["reason"], &apply["recovery"], &turn),
+            (&json!("review-ended"), &json!("revise"), &json!("party"))
+        );
+        assert_eq!(revise, true);
+        fixture.finish().await;
+    }
+}
+
+/// A rejection ends the Proposal: it reaches `rejected`, records its own
+/// event, and refuses Revise. A request for changes keeps it submitted and
+/// revisable and records `review-returned`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party() {
+    for (outcome, state, transition, turn) in [
+        ("rejected", "rejected", "proposal.rejected", "nobody"),
+        (
+            "changes-requested",
+            "submitted",
+            "proposal.review-returned",
+            "party",
+        ),
+    ] {
+        let mut source = registry_source(false);
+        source["reviewAuthorities"] =
+            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+        source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+        let review = std::sync::Arc::new(LocalReview {
+            calls: 0.into(),
+            mode: 0.into(),
+            result_id: uuid::Uuid::new_v4(),
+        });
+        let injected = review.clone();
+        let fixture = client_http::ClientFixture::start_with_mutations(
+            compile(source),
+            claims("author", "zone-a"),
+            move |mutations| {
+                mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+            },
+        )
+        .await;
+        let client = &fixture.http.client;
+        let draft = start(&fixture, "Reviewed", &format!("{outcome}-start")).await;
+        let submit = client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &key(&format!("{outcome}-submit")),
+            )
+            .unwrap();
+        let submitted = client.execute_proposal(&submit).await.unwrap().value;
+        let row=fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions",&[]).await.unwrap();
+        let create: registry_review_client::ReviewCreateRequest =
+            serde_json::from_value(row.get(0)).unwrap();
+        let accepted = registry_review_client::ReviewRequestAccepted {
+            request_id: uuid::Uuid::new_v4(),
+            subject: create.subject,
+            policy: serde_json::from_value(policy).unwrap(),
+            submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+        };
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+            &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+        let mut result = review.result(&accepted);
+        result.status = serde_json::from_value(json!(outcome)).unwrap();
+        result.outcome = Some(outcome.to_owned());
+        result.public_reason = Some("Public reason canary".to_owned());
+        let (mut migration, task) = fixture.database.connect_migration().await;
+        let tx = migration.transaction().await.unwrap();
+        registry_breg::review_store::reconcile_result(
+            &tx,
+            "local-review",
+            &accepted,
+            &result,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(migration);
+        task.abort();
+
+        let before = fixture.audit_capture.entries().len();
+        let current =
+            serde_json::to_value(client.read_proposal(&submitted).await.unwrap().value).unwrap();
+        assert_eq!(current["state"], state, "{outcome}");
+        assert_eq!(current["turn"], turn, "{outcome}");
+        assert_eq!(current["decision"]["status"], outcome);
+        assert_eq!(current["decision"]["publicReason"], "Public reason canary");
+        let entries = fixture.audit_capture.entries();
+        assert!(entries[before..].iter().any(|entry| {
+            entry["record"]["phase"] == "terminal"
+                && entry["record"]["fieldSetReference"] == "proposal-review-public-reason"
+        }));
+        assert!(!entries[before..]
+            .iter()
+            .any(|entry| entry.to_string().contains("Public reason canary")));
+        // The turn is a list filter over the same derivation Get serves.
+        let collection = client
+            .registry_contract(Some("clerk"))
+            .await
+            .unwrap()
+            .value
+            .select_proposals("clerk")
+            .unwrap();
+        for filter in [
+            BRegProposalTurn::Party,
+            BRegProposalTurn::Official,
+            BRegProposalTurn::Nobody,
+        ] {
+            let page = client
+                .list_proposals(
+                    &collection,
+                    &BRegProposalQuery {
+                        turn: Some(filter),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .value;
+            let ids = page
+                .items
+                .iter()
+                .map(|item| item.id().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                ids.contains(&submitted.id().to_owned()),
+                json!(filter) == json!(turn),
+                "{outcome}: {filter:?}"
+            );
+            assert!(page.items.iter().all(|item| item.turn() == Some(filter)));
+        }
+        let revise = &current["links"]["revise"]["availability"];
+        assert_eq!(
+            revise["available"],
+            outcome != "rejected",
+            "{outcome}: {current}"
+        );
+
+        let events = fixture
+            .database
+            .admin
+            .query(
+                "SELECT event_type,payload FROM registry_internal.registry_outbox ORDER BY outbox_id",
+                &[],
+            )
+            .await
+            .unwrap();
+        let last = events.last().unwrap();
+        assert_eq!(last.get::<_, String>(0), transition, "{outcome}");
+        let envelope = registry_platform_hooks::HookEnvelope::from_canonical_bytes(
+            &last.get::<_, Vec<u8>>(1),
+            &registry_platform_hooks::EnvelopeLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(envelope.data["fromState"], "submitted");
+        assert_eq!(envelope.data["state"], state);
+        assert_eq!(envelope.data["authorityKind"], "review");
+        assert_eq!(envelope.data["turn"], turn);
+        assert!(
+            !String::from_utf8_lossy(&last.get::<_, Vec<u8>>(1)).contains("Public reason canary"),
+            "a lifecycle event never carries reviewer text"
+        );
+
+        // Reconciling the same result again records nothing new.
+        let (mut migration, task) = fixture.database.connect_migration().await;
+        let tx = migration.transaction().await.unwrap();
+        registry_breg::review_store::reconcile_result(
+            &tx,
+            "local-review",
+            &accepted,
+            &result,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(migration);
+        task.abort();
+        let after: i64 = fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_outbox",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(after, i64::try_from(events.len()).unwrap(), "{outcome}");
+
+        if outcome == "rejected" {
+            let fresh = client.read_proposal(&submitted).await.unwrap().value;
+            assert_eq!(fresh.state(), BRegProposalState::Rejected);
+            assert!(
+                client
+                    .prepare_proposal(&fresh, "revise", json!({}), &key("rejected-revise"))
+                    .is_err(),
+                "the client offers no Revise of a rejected Proposal"
+            );
+            // The server refuses the exact inert link too, naming the way to
+            // allow another attempt.
+            let wire = serde_json::to_value(fresh.link("revise").unwrap()).unwrap();
+            assert_eq!(wire["availability"]["reason"], "review-rejected");
+            assert_eq!(wire["availability"]["recovery"], "receipt-only");
+            let response = reqwest::Client::new()
+                .post(format!(
+                    "{}{}",
+                    fixture.http.base_url.trim_end_matches('/'),
+                    wire["path"].as_str().unwrap()
+                ))
+                .query(&[("accessProfile", wire["accessProfile"].as_str().unwrap())])
+                .header("content-type", "application/json")
+                .header("if-match", wire["ifMatch"].as_str().unwrap())
+                .header("idempotency-key", "rejected-revise")
+                .body("{}")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+            let problem: Value = response.json().await.unwrap();
+            assert_eq!(problem["code"], "proposal.rejected", "{problem}");
+            assert!(
+                problem["detail"]
+                    .as_str()
+                    .is_some_and(|detail| detail.contains("changes-requested")),
+                "{problem}"
+            );
         }
         fixture.finish().await;
     }
@@ -2275,7 +2574,12 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
     };
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
         &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
-    let result = review.result(&accepted);
+    let mut result = review.result(&accepted);
+    result.status = registry_review_client::ReviewResultStatus::Rejected;
+    result.outcome = Some("rejected".to_owned());
+    result.public_reason = Some("Historical public reason".to_owned());
+    result.result = Some(json!({"privateNote":"Reviewer-only canary"}));
+    result.completed_at = chrono::SubsecRound::trunc_subsecs(result.completed_at, 6);
     fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results
         (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until)
         VALUES ('correct-name',$1,1,'local-review',$2,$3,'rejected',$4,$5)",
@@ -2301,11 +2605,60 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
     assert_eq!(body["review"]["state"], "rejected");
     assert_eq!(body["review"]["resultId"], json!(result.result_id));
     assert!(body["application"].is_null(), "{body}");
+    // The decision names the outcome, its time and the public reason; the
+    // reviewer's private result is never served.
+    assert_eq!(
+        body["decision"],
+        json!({"status":"rejected",
+            "decidedAt":result.completed_at.to_rfc3339_opts(chrono::SecondsFormat::Micros,true),
+            "publicReason":"Historical public reason"})
+    );
+    assert!(!body.to_string().contains("Reviewer-only canary"), "{body}");
+    let before = fixture.audit_capture.entries().len();
+    let historical = client
+        .read_proposal_submission(&second, 1)
+        .await
+        .unwrap()
+        .value;
+    assert!(!historical.current);
+    let decision = historical.decision.as_ref().unwrap();
+    assert_eq!(decision.status, BRegProposalDecisionStatus::Rejected);
+    assert_eq!(
+        decision.public_reason.as_deref(),
+        Some("Historical public reason")
+    );
+    // The journal records that a public reason was served, never its text.
+    let entries = fixture.audit_capture.entries();
+    let terminal = entries[before..]
+        .iter()
+        .map(|entry| &entry["record"])
+        .find(|record| record["phase"] == "terminal")
+        .unwrap();
+    assert_eq!(terminal["resultCount"], 1);
+    assert_eq!(
+        terminal["fieldSetReference"],
+        "proposal-review-public-reason"
+    );
+    assert!(!entries[before..]
+        .iter()
+        .any(|entry| entry.to_string().contains("Historical public reason")));
     let (status, body) = read("2", "clerk").await;
     assert_eq!(status, reqwest::StatusCode::OK);
     assert_eq!(body["current"], true);
     assert_eq!(body["review"], json!({"state":"pending"}));
     assert_eq!(body["application"]["state"], "awaiting-review");
+    assert!(body.get("decision").is_none(), "{body}");
+    let before = fixture.audit_capture.entries().len();
+    let pending = client
+        .read_proposal_submission(&second, 2)
+        .await
+        .unwrap()
+        .value;
+    assert!(pending.current && pending.decision.is_none());
+    let entries = fixture.audit_capture.entries();
+    assert!(entries[before..]
+        .iter()
+        .all(|entry| entry["record"].get("fieldSetReference").is_none()));
 
     // A version never submitted, a malformed version and a profile without
     // Get authority are all concealed alike.
@@ -2337,9 +2690,27 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
         )
         .await
         .unwrap();
+    let before = fixture.audit_capture.entries().len();
     let (status, body) = read("1", "clerk").await;
     assert_eq!(status, reqwest::StatusCode::GONE);
     assert_eq!(body["code"], "proposal.submission_expired");
+    // The lapsed version returns nothing, so its read audits as empty.
+    let entries = fixture.audit_capture.entries();
+    let terminal = entries[before..]
+        .iter()
+        .map(|entry| &entry["record"])
+        .find(|record| record["phase"] == "terminal")
+        .unwrap();
+    assert_eq!(terminal["resultCount"], 0);
+    assert_eq!(terminal["outcome"], "empty");
+    assert_eq!(
+        client
+            .read_proposal_submission(&second, 1)
+            .await
+            .unwrap_err()
+            .problem_code(),
+        Some(BRegProblemCode::ProposalSubmissionExpired)
+    );
     let (status, _) = read("2", "clerk").await;
     assert_eq!(status, reqwest::StatusCode::OK);
     fixture.finish().await;
@@ -2448,6 +2819,7 @@ async fn required_review_automatic_requires_fresh_exact_approval_even_with_a_cac
             "local-review",
             &accepted,
             &review.result(&accepted),
+            &fixture.mutations,
         )
         .await
         .unwrap();
@@ -2661,6 +3033,7 @@ async fn replaced_automatic_worker_resumes_without_changing_successor_or_effects
         "local-review",
         &accepted,
         &review.review.result(&accepted),
+        &fixture.mutations,
     )
     .await
     .unwrap();
@@ -4397,7 +4770,8 @@ async fn compatible_old_review_closure_survives_successors_and_same_package_role
     assert!(
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
-            &authority.registry
+            &authority.registry,
+            &fixture.mutations,
         )
         .await
         .unwrap()
@@ -4405,7 +4779,8 @@ async fn compatible_old_review_closure_survives_successors_and_same_package_role
     assert!(
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
-            &authority.registry
+            &authority.registry,
+            &fixture.mutations,
         )
         .await
         .unwrap()
@@ -4638,7 +5013,8 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
     assert!(
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
-            &authority.registry
+            &authority.registry,
+            &fixture.mutations,
         )
         .await
         .unwrap()
@@ -4646,7 +5022,8 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
     assert!(
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
-            &authority.registry
+            &authority.registry,
+            &fixture.mutations,
         )
         .await
         .unwrap()
@@ -4889,7 +5266,8 @@ async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_a
         assert!(
             registry_breg::review_store::run_review_authority_once_for_test(
                 &fixture.pool,
-                &authority.registry
+                &authority.registry,
+                &fixture.mutations,
             )
             .await
             .unwrap()
@@ -4897,7 +5275,8 @@ async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_a
         assert!(
             registry_breg::review_store::run_review_authority_once_for_test(
                 &fixture.pool,
-                &authority.registry
+                &authority.registry,
+                &fixture.mutations,
             )
             .await
             .unwrap()

@@ -7463,11 +7463,11 @@ const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegProposalsExplanation",
 };
 const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha5",
+    api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha6",
     kind: "BRegEventsExplanation",
 };
 const LIFECYCLE_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5",
+    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha6",
     kind: "BRegLifecycleExplanation",
 };
 

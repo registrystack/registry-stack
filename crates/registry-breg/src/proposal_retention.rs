@@ -1173,7 +1173,7 @@ async fn load_erasure_plan(
         return Err(ProposalRetentionError::Unavailable);
     }
     let erase_draft_input = current_detail
-        && matches!(current_state.as_str(), "cancelled" | "applied")
+        && matches!(current_state.as_str(), "cancelled" | "applied" | "rejected")
         && !current_detail_already_erased;
     let erasure = count_request_detail_erasure(transaction, scope, erase_draft_input).await?;
     let proposal_erased = proposal

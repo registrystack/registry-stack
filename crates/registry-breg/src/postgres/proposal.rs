@@ -371,7 +371,7 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, Some(&document), 1, correlation)
+                .finish_proposal_read_audit(authority, Some(&document), 1, false, correlation)
                 .await?;
             Ok((attachment.metadata.content_type, bytes))
         })
@@ -645,7 +645,13 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, Some(&document), 1, correlation)
+                .finish_proposal_read_audit(
+                    authority,
+                    Some(&document),
+                    1,
+                    value.pointer("/decision/publicReason").is_some(),
+                    correlation,
+                )
                 .await?;
             Ok((value, etag))
         })
@@ -732,8 +738,18 @@ impl PostgresRecordMutationService {
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            // A lapsed submission (410) returns nothing, so it audits an
+            // empty read, not a one-record read.
             self.coordinator
-                .finish_proposal_read_audit(authority, Some(&document), 1, correlation)
+                .finish_proposal_read_audit(
+                    authority,
+                    Some(&document),
+                    usize::from(value.is_some()),
+                    value
+                        .as_ref()
+                        .is_some_and(|value| value.pointer("/decision/publicReason").is_some()),
+                    correlation,
+                )
                 .await?;
             Ok(value)
         })
@@ -827,7 +843,7 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, Some(&document), 1, correlation)
+                .finish_proposal_read_audit(authority, Some(&document), 1, false, correlation)
                 .await?;
             Ok((value, etag))
         })
@@ -1034,14 +1050,6 @@ impl PostgresRecordMutationService {
                         document.input_targets.iter().any(|(_, id)| *id == target)
                     });
                 if matches {
-                    if items.len() == query.limit {
-                        has_more = true;
-                        guarded
-                            .commit()
-                            .await
-                            .map_err(|_| MutationError::Unavailable)?;
-                        break 'pages;
-                    }
                     let value = self
                         .coordinator
                         .proposal_public_value(
@@ -1052,6 +1060,27 @@ impl PostgresRecordMutationService {
                             authority,
                         )
                         .await?;
+                    // The turn is derived from the projection, so the filter
+                    // applies to it before the page limit counts the item.
+                    if query
+                        .turn
+                        .as_ref()
+                        .is_some_and(|turn| value["turn"].as_str() != Some(turn.as_str()))
+                    {
+                        guarded
+                            .commit()
+                            .await
+                            .map_err(|_| MutationError::Unavailable)?;
+                        continue;
+                    }
+                    if items.len() == query.limit {
+                        has_more = true;
+                        guarded
+                            .commit()
+                            .await
+                            .map_err(|_| MutationError::Unavailable)?;
+                        break 'pages;
+                    }
                     let value_bytes = serde_json::to_vec(&value)
                         .map_err(|_| MutationError::Unavailable)?
                         .len();
@@ -1111,6 +1140,12 @@ impl PostgresRecordMutationService {
                                 item["actionId"].as_str() == Some(authority.common.action_id())
                             })
                             .count()
+                    }),
+                    value["items"].as_array().is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item["actionId"].as_str() == Some(authority.common.action_id())
+                                && item.pointer("/decision/publicReason").is_some()
+                        })
                     }),
                     correlation,
                 )

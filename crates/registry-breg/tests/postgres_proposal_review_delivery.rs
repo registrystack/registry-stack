@@ -549,7 +549,7 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
     // the real result transaction, not a test-written completion state.
     let mut runtime = fixture.pool.get_for_test().await.unwrap();
     let tx = runtime.transaction().await.unwrap();
-    reconcile_result(&tx, AUTHORITY, &accepted, &result)
+    reconcile_result(&tx, AUTHORITY, &accepted, &result, &fixture.mutations)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -586,11 +586,13 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
         .with_writer(logs.clone())
         .finish();
     let capture = tracing::subscriber::set_default(subscriber);
-    assert!(
-        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-            .await
-            .unwrap()
-    );
+    assert!(run_review_authority_once_for_test(
+        &fixture.pool,
+        &authority.registry,
+        &fixture.mutations
+    )
+    .await
+    .unwrap());
     drop(capture);
     let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
     assert!(output.contains("BReg review completion retention pass erased expired rows"));
@@ -733,6 +735,7 @@ async fn native_cancellation_reclaims_exact_work_and_rolls_back_stale_reconcilia
             }
             let mut client = fixture.pool.get_for_test().await.unwrap();
             let review = authority.client.clone();
+            let mutations = Arc::clone(&fixture.mutations);
             workers.push(tokio::spawn(async move {
                 run_one_cancellation(
                     &mut client,
@@ -741,6 +744,7 @@ async fn native_cancellation_reclaims_exact_work_and_rolls_back_stale_reconcilia
                     "producer",
                     &BearerToken::new(OUTGOING_TOKEN).unwrap(),
                     30,
+                    &mutations,
                 )
                 .await
             }));
@@ -779,11 +783,13 @@ async fn native_cancellation_reclaims_exact_work_and_rolls_back_stale_reconcilia
         );
         fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET recovery_deadline=transaction_timestamp()-interval '1 second' WHERE proposal_id=$1", &[&id]).await.unwrap();
         let expired = job(&fixture, id).await;
-        assert!(
-            !run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-                .await
-                .unwrap()
-        );
+        assert!(!run_review_authority_once_for_test(
+            &fixture.pool,
+            &authority.registry,
+            &fixture.mutations
+        )
+        .await
+        .unwrap());
         assert_eq!(
             job(&fixture, id).await,
             expired,
@@ -825,8 +831,10 @@ async fn completed_lookup_releases_claim(reply: ResultReply, expected_error: Opt
     accepted_due(&fixture, &authority, id).await;
     let pool = fixture.pool.clone();
     let registry = authority.registry.clone();
-    let first =
-        tokio::spawn(async move { run_review_authority_once_for_test(&pool, &registry).await });
+    let mutations = Arc::clone(&fixture.mutations);
+    let first = tokio::spawn(async move {
+        run_review_authority_once_for_test(&pool, &registry, &mutations).await
+    });
     authority.state.gates[0].reached().await;
     let original_lease: chrono::DateTime<chrono::Utc> = fixture.database.admin.query_one("SELECT lease_until FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]).await.unwrap().get(0);
     authority.state.gates[0].release.notify_one();
@@ -862,7 +870,7 @@ async fn completed_lookup_releases_claim(reply: ResultReply, expected_error: Opt
     );
     assert_eq!(result_count(&fixture).await, 0);
     assert!(
-        !run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+        !run_review_authority_once_for_test(&fixture.pool, &authority.registry, &fixture.mutations)
             .await
             .unwrap(),
         "backoff still excludes an immediate retry"
@@ -872,8 +880,10 @@ async fn completed_lookup_releases_claim(reply: ResultReply, expected_error: Opt
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET next_result_poll_at=transaction_timestamp()-interval '1 second' WHERE proposal_id=$1", &[&id]).await.unwrap();
     let pool = fixture.pool.clone();
     let registry = authority.registry.clone();
-    let second =
-        tokio::spawn(async move { run_review_authority_once_for_test(&pool, &registry).await });
+    let mutations = Arc::clone(&fixture.mutations);
+    let second = tokio::spawn(async move {
+        run_review_authority_once_for_test(&pool, &registry, &mutations).await
+    });
     authority.state.gates[1].reached().await;
     assert!(
         fixture
@@ -935,8 +945,9 @@ async fn native_stale_result_lookup_preserves_replacement_claim_and_schedule() {
             }
             let pool = fixture.pool.clone();
             let registry = authority.registry.clone();
+            let mutations = Arc::clone(&fixture.mutations);
             workers.push(tokio::spawn(async move {
-                run_review_authority_once_for_test(&pool, &registry).await
+                run_review_authority_once_for_test(&pool, &registry, &mutations).await
             }));
             authority.state.gates[index].reached().await;
         }
@@ -944,9 +955,13 @@ async fn native_stale_result_lookup_preserves_replacement_claim_and_schedule() {
         assert!(!replacement["lease"].is_null());
         assert_eq!(replacement["pollAttempts"], 0);
         assert!(
-            !run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-                .await
-                .unwrap(),
+            !run_review_authority_once_for_test(
+                &fixture.pool,
+                &authority.registry,
+                &fixture.mutations
+            )
+            .await
+            .unwrap(),
             "the replacement claim excludes a third worker"
         );
         authority.state.gates[0].release.notify_one();

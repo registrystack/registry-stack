@@ -157,28 +157,24 @@ pub(crate) fn sample(
             let transition = registry_breg::proposal_hooks::matching_transitions(&hook.transitions)
                 .next()
                 .ok_or(WebhookLifecycleError::Sample)?;
-            let (from, state) = match transition {
-                registry_breg::contract::ProposalEventTransition::Started => ("none", "draft"),
-                registry_breg::contract::ProposalEventTransition::Edited => ("draft", "draft"),
-                registry_breg::contract::ProposalEventTransition::Submitted => {
-                    ("draft", "submitted")
-                }
-                registry_breg::contract::ProposalEventTransition::Revised
-                | registry_breg::contract::ProposalEventTransition::Rebased => {
-                    ("submitted", "draft")
-                }
-                registry_breg::contract::ProposalEventTransition::Retried => {
-                    ("submitted", "submitted")
-                }
-                registry_breg::contract::ProposalEventTransition::Cancelled => {
-                    ("draft", "cancelled")
-                }
-                registry_breg::contract::ProposalEventTransition::Applied => {
-                    ("submitted", "applied")
-                }
+            use registry_breg::contract::ProposalEventTransition as Transition;
+            let (from, state, turn) = match transition {
+                Transition::Started => ("none", "draft", "party"),
+                Transition::Edited => ("draft", "draft", "party"),
+                Transition::Submitted => ("draft", "submitted", "official"),
+                Transition::Revised | Transition::Rebased => ("submitted", "draft", "party"),
+                Transition::Retried => ("submitted", "submitted", "official"),
+                Transition::Cancelled => ("draft", "cancelled", "nobody"),
+                Transition::Applied => ("submitted", "applied", "nobody"),
+                Transition::Rejected => ("submitted", "rejected", "nobody"),
+                Transition::ReviewReturned => ("submitted", "submitted", "party"),
+            };
+            let authority_kind = match transition {
+                Transition::Rejected | Transition::ReviewReturned => "review",
+                _ => "caller",
             };
             (
-                json!({"actionId":action.id,"actionRevision":action.definition_revision,"proposalId":SAMPLE_RECORD_ID,"submissionVersion":1,"revision":1,"fromState":from,"state":state,"transition":transition.as_str(),"effectDigest":null,"authorityKind":"caller","systemApplyGrantRevision":null}),
+                json!({"actionId":action.id,"actionRevision":action.definition_revision,"proposalId":SAMPLE_RECORD_ID,"submissionVersion":1,"revision":1,"fromState":from,"state":state,"transition":transition.as_str(),"effectDigest":null,"authorityKind":authority_kind,"systemApplyGrantRevision":null,"turn":turn}),
                 format!("proposal.{}", transition.as_str()),
             )
         }

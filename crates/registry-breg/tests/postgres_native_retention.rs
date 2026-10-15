@@ -543,16 +543,20 @@ async fn native_erasure_reports_sensitive_copies_and_preserves_only_bounded_revi
         .unwrap();
     let submitted = client.execute_proposal(&submit).await.unwrap().value;
     seed_retention_initiator(&fixture, &submitted).await;
-    assert!(
-        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-            .await
-            .unwrap()
-    );
-    assert!(
-        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-            .await
-            .unwrap()
-    );
+    assert!(run_review_authority_once_for_test(
+        &fixture.pool,
+        &authority.registry,
+        &fixture.mutations
+    )
+    .await
+    .unwrap());
+    assert!(run_review_authority_once_for_test(
+        &fixture.pool,
+        &authority.registry,
+        &fixture.mutations
+    )
+    .await
+    .unwrap());
     assert_eq!(
         authority.counts().0,
         1,
@@ -670,11 +674,13 @@ async fn native_erasure_reports_sensitive_copies_and_preserves_only_bounded_revi
     let submitted = client.execute_proposal(&submit).await.unwrap().value;
     seed_retention_initiator(&fixture, &submitted).await;
     let id = uuid::Uuid::parse_str(submitted.id()).unwrap();
-    assert!(
-        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-            .await
-            .unwrap()
-    );
+    assert!(run_review_authority_once_for_test(
+        &fixture.pool,
+        &authority.registry,
+        &fixture.mutations
+    )
+    .await
+    .unwrap());
     let recovery_sql = "SELECT create_request,accepted_binding,recovery_deadline-created_at FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1";
     let recovery = fixture
         .database
@@ -712,11 +718,13 @@ async fn native_erasure_reports_sensitive_copies_and_preserves_only_bounded_revi
     assert!(original_request.to_string().len() <= 98304);
     assert!(original_binding.to_string().len() <= 8192);
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET recovery_deadline=clock_timestamp()-interval '1 second',lease_until=NULL WHERE proposal_id=$1",&[&id]).await.unwrap();
-    assert!(
-        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
-            .await
-            .unwrap()
-    );
+    assert!(run_review_authority_once_for_test(
+        &fixture.pool,
+        &authority.registry,
+        &fixture.mutations
+    )
+    .await
+    .unwrap());
     let expired = fixture.database.admin.query_one("SELECT state,last_error_code FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1",&[&id]).await.unwrap();
     assert_eq!(expired.get::<_, String>(0), "failed");
     assert_eq!(expired.get::<_, String>(1), "cancellation-recovery-expired");

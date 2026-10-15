@@ -205,6 +205,31 @@ impl PostgresRecordMutationService {
         self
     }
 
+    /// Carry a review result recorded in `transaction` into the Proposal
+    /// lifecycle: a rejection ends the Proposal and a changes-requested
+    /// result records `review-returned`, each with its lifecycle event.
+    pub(crate) async fn record_review_result(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+        authority: &str,
+        action_id: &str,
+        proposal_id: Uuid,
+        version: i64,
+        status: &str,
+    ) -> Result<(), MutationError> {
+        self.coordinator
+            .record_review_result(
+                transaction,
+                &self.registry,
+                authority,
+                action_id,
+                proposal_id,
+                version,
+                status,
+            )
+            .await
+    }
+
     #[must_use]
     pub fn with_review_result_source(
         mut self,
@@ -1838,6 +1863,7 @@ impl PostgresRecordMutationService {
                     ),
                     MutationError::PreconditionFailed
                     | MutationError::Conflict
+                    | MutationError::ProposalRejected
                     | MutationError::AuthorizationRefused
                     | MutationError::FieldPatternViolation { .. } => (
                         IngestionAttemptOutcome::Refused,

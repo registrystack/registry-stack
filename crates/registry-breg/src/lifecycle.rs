@@ -129,6 +129,11 @@ fn proposal_enforcement() -> Vec<EnforcementLayer> {
             events: &["apply"],
             description: "The writer locks authorized current targets, enforces commit guards and PostgreSQL row policies, then commits the ordered effects, Record history, and exact application receipt atomically. A failed precondition produces no partial Record mutation.",
         },
+        EnforcementLayer {
+            id: "review-authority-result",
+            events: &["reject"],
+            description: "No caller operation rejects a Proposal. Only a verified result from the configured review authority for the exact current, not withdrawn submission does, in the same transaction that records the result and its lifecycle event.",
+        },
     ]
 }
 
@@ -138,7 +143,7 @@ pub fn proposal_lifecycle() -> LifecycleDescription {
         "proposal",
         "Proposal lifecycle",
         "draft",
-        &["draft", "submitted", "cancelled", "applied"],
+        &["draft", "submitted", "cancelled", "applied", "rejected"],
         vec![
             LifecycleTransition {
                 from: "draft",
@@ -194,6 +199,12 @@ pub fn proposal_lifecycle() -> LifecycleDescription {
                 to: "applied",
                 guard: "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
             },
+            LifecycleTransition {
+                from: "submitted",
+                event: "reject",
+                to: "rejected",
+                guard: "The configured review authority returned a rejected result for the exact current submission. A rejection is terminal; a changes-requested result leaves the Proposal submitted and revisable.",
+            },
         ],
         proposal_enforcement(),
     )
@@ -232,6 +243,7 @@ mod tests {
                 ProposalState::Submitted => "submitted",
                 ProposalState::Cancelled => "cancelled",
                 ProposalState::Applied => "applied",
+                ProposalState::Rejected => "rejected",
             }
         }
         let states = [
@@ -239,6 +251,7 @@ mod tests {
             ProposalState::Submitted,
             ProposalState::Cancelled,
             ProposalState::Applied,
+            ProposalState::Rejected,
         ]
         .map(name);
         let lifecycle = proposal_lifecycle();
@@ -258,7 +271,7 @@ mod tests {
                 .filter(|state| state.terminal)
                 .map(|state| state.id)
                 .collect::<Vec<_>>(),
-            ["cancelled", "applied"]
+            ["cancelled", "applied", "rejected"]
         );
     }
     #[test]
@@ -280,11 +293,12 @@ mod tests {
         assert!(cancelled.cancel(context()).is_err());
         assert!(draft().retry(context()).is_err());
         assert!(draft().revise(context()).is_err());
+        assert!(draft().reject(context()).is_err());
     }
     #[test]
     fn transition_counts_and_enforcement_events_are_derived_from_the_catalogue() {
         let lifecycle = proposal_lifecycle();
-        assert_eq!(lifecycle.transitions.len(), 9);
+        assert_eq!(lifecycle.transitions.len(), 10);
         for state in &lifecycle.states {
             assert_eq!(
                 state.incoming_transitions,

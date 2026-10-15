@@ -2176,6 +2176,9 @@ pub enum MutationError {
     PreconditionFailed,
     #[error("mutation conflicts with current state")]
     Conflict,
+    /// The review authority rejected the Proposal, and a rejection is terminal.
+    #[error("the review rejected this Proposal")]
+    ProposalRejected,
     #[error("idempotency key is already bound to another request")]
     IdempotencyConflict,
     /// The exact request already committed under this key and its held

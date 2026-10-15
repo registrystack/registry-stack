@@ -175,26 +175,83 @@ with its original prepared request and idempotency key.
 
 `applicationStatus` reports application progress only. Under required Review it
 reads `awaiting-review` until an approved result exists, then `pending`,
-`applying`, `blocked`, `applied` or `cancelled`. Its `application-refused`
-reason means an executor refused the frozen effects; a review outcome never
-appears there. The `apply` link's availability reports Review instead:
-`pending-review` with recovery `refresh` while no decision applies,
-`review-rejected` or `review-changes-requested` after that decision, and
-`review-ended` when the provider cancelled or superseded the review without a
-withdrawal by BReg. Each of the last three carries recovery `revise`.
+`applying`, `blocked`, `applied`, `cancelled` or `rejected`. Its
+`application-refused` reason means an executor refused the frozen effects; a
+review outcome never appears there. The `apply` link's availability reports
+Review instead:
+
+| Review of the current submission | Apply availability |
+|---|---|
+| Delivered and awaiting a decision | `pending-review`, recovery `refresh` |
+| Delivery or result lookup failing | `dependency-outage`, recovery `retry`; Retry resumes it |
+| `changes-requested` | `review-changes-requested`, recovery `revise` |
+| Approval past its `availableUntil` | `review-ended`, recovery `revise` |
+| Review submission failed for good | `review-ended`, recovery `revise` |
+| `answered`, or cancelled or superseded by the provider | `review-ended`, recovery `revise` |
+
+A cancel or supersession BReg caused by withdrawing is not an outcome and
+reads as pending until the withdrawal settles. When Revise is the recovery, the
+Retry link reports the same reason instead of `invalid-input`.
+
+### Whose turn it is
+
+Every Proposal document and lifecycle event carries a derived `turn`:
+
+- `party`: the caller who drives the Proposal acts next. A draft, a blocked
+  application that needs corrected input, and a submission whose Review ended
+  without an approval it can use (changes requested, an expired approval, a
+  failed review submission, a provider end) are the party's turn.
+- `official`: a reviewer or applier acts next. Review in progress or being
+  retried, an approved or review-free manual submission awaiting Apply, and an
+  automatic application blocked on a dependency outage are an official's turn.
+- `nobody`: no one needs to act. The Proposal is `applied`, `cancelled` or
+  `rejected`, or its automatic application is queued or running.
+
+`turn` is derived from the lifecycle state, the current submission's review
+progress and its application status when the Proposal is read; nothing stores
+it. It says whose move the work waits on, not who is authorized to make it:
+the links still decide what the current caller may do. List Proposals by turn
+with `GET /v1/proposals?turn=party` (or `official`, `nobody`).
 
 ### After a Review result
 
-A result settles only the submission version it was recorded for. The
-Proposal stays `submitted` until it is applied or cancelled.
+A result settles only the submission version it was recorded for. A
+rejection of the current submission ends the Proposal: it moves to `rejected`
+in the transaction that records the result, with a `rejected` lifecycle event.
+Any other result leaves the Proposal `submitted` until it is applied or
+cancelled; a changes-requested result records a `review-returned` event.
 
 | Result | What follows |
 |---|---|
 | `approved`, automatic application | The built-in executor applies the frozen effects. `applicationStatus` reads `applied`, or `blocked` with a recovery hint when an executor refuses them. |
 | `approved`, manual application | The `apply` link becomes available. An authorized caller applies before the approval's `availableUntil`. |
-| `rejected` | Apply reads `review-rejected` with recovery `revise`. Revise submits a new version for fresh Review, or Cancel ends the work. |
-| `changes-requested` | Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
-| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A cancel or supersession BReg caused by withdrawing is not an outcome and reads as none. |
+| `rejected` | The Proposal is `rejected`, a terminal state. Every command link reads `review-rejected` with recovery `receipt-only`: Revise, Rebase, Retry, Apply and Cancel answer 409 `proposal.rejected`. Start a new Proposal to propose the work again. |
+| `changes-requested` | The Proposal stays `submitted`. Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
+| `answered` | Apply reads `review-ended` with recovery `revise`. An answer is not a decision on a change. |
+| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A cancel or supersession BReg caused by withdrawing is not an outcome and reads as pending. |
+
+### The decision
+
+Proposal Get, each Proposal in a list, and the per-version submission read
+carry `decision` once the reviewer decided the submission:
+
+```json
+"decision": {
+  "status": "rejected",
+  "decidedAt": "2026-10-16T09:12:44.000000Z",
+  "publicReason": "The certificate on file expired."
+}
+```
+
+`status` is `approved`, `rejected`, `changes-requested` or `answered`.
+`publicReason` appears only when the reviewer wrote one for the subject; it is
+the only reviewer text BReg serves. Notes, internal reasons and the reviewer's
+identity stay with the review provider. A provider-side end (`cancelled`,
+`superseded`) is not a decision and has no `decision`; neither has a result
+whose content retention erased. A lifecycle command's response omits
+`decision`: read the Proposal to see it. Each read that serves a public reason
+records a fixed `proposal-review-public-reason` marker in its audit entry,
+never the text.
 
 Revise after an approved, not yet applied, manual submission discards the
 approval. The approval binds the earlier version only, and the revised version
@@ -209,11 +266,13 @@ The job reads `cancelled`; it never applies a superseded version.
 
 `GET /v1/proposals/{id}/submissions/{version}` reads one submitted version
 under Proposal Get authority. It returns that version's frozen `effectDigest`,
-its review result and its application status as separate members, and
-`current` says whether it is still the Proposal's latest version. An unknown
+its review result, its `decision` when one was made, and its application status
+as separate members, and `current` says whether it is still the Proposal's
+latest version. The Rust, Node.js and Python clients read it with
+`read_proposal_submission` (`readProposalSubmission` in Node.js). An unknown
 or non-canonical version is concealed like an unknown Proposal. Once neither
 the review result nor the application receipt is retained, the read answers
-410 `proposal.submission_expired`.
+410 `proposal.submission_expired`, and its audit entry records a result count of zero.
 
 Settle a followed Proposal only from this per-version read, or from the
 current Proposal Get for the current version. Never settle it from a Casework

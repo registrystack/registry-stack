@@ -189,9 +189,10 @@ pub async fn verify_retained_bindings(
 pub async fn run_review_authority_once_for_test(
     pool: &crate::postgres::RuntimePool,
     authorities: &ReviewAuthorityRegistry,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     let mut client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
-    authorities.run_one(&mut client).await
+    authorities.run_one(&mut client, mutations).await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -600,7 +601,11 @@ impl ReviewAuthorityRegistry {
         Ok(())
     }
 
-    async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
+    async fn run_one(
+        &self,
+        client: &mut tokio_postgres::Client,
+        mutations: &crate::postgres::PostgresRecordMutationService,
+    ) -> Result<bool, MutationError> {
         let erased_completions = erase_expired_review_completions(client).await?;
         if erased_completions > 0 {
             tracing::debug!(
@@ -763,6 +768,7 @@ impl ReviewAuthorityRegistry {
                 &authority.profile,
                 &token,
                 authority.lease_seconds,
+                mutations,
             )
             .await?
             {
@@ -816,6 +822,7 @@ impl ReviewAuthorityRegistry {
                         &authority.profile,
                         &token,
                         authority.lease_seconds,
+                        mutations,
                     )
                     .await,
                     None,
@@ -1133,13 +1140,15 @@ impl ReviewWorker {
                         false
                     } else {
                         match &self.authorities {
-                            Some(authorities) => match authorities.run_one(&mut client).await {
-                                Ok(worked) => worked,
-                                Err(_) => {
-                                    failed = true;
-                                    false
+                            Some(authorities) => {
+                                match authorities.run_one(&mut client, &self.mutations).await {
+                                    Ok(worked) => worked,
+                                    Err(_) => {
+                                        failed = true;
+                                        false
+                                    }
                                 }
-                            },
+                            }
                             None => false,
                         }
                     };
@@ -2043,6 +2052,7 @@ pub async fn run_one_cancellation(
     profile: &str,
     token: &BearerToken,
     lease_seconds: i64,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     let Some(row) = client
         .query_opt(
@@ -2097,7 +2107,7 @@ pub async fn run_one_cancellation(
                 .transaction()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            reconcile_result(&transaction, &authority, &accepted, &result).await?;
+            reconcile_result(&transaction, &authority, &accepted, &result, mutations).await?;
             let updated = transaction
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
@@ -2230,6 +2240,7 @@ pub async fn reconcile_result(
     authority: &str,
     accepted: &ReviewRequestAccepted,
     result: &ReviewResult,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<(), MutationError> {
     result
         .check()
@@ -2346,6 +2357,18 @@ pub async fn reconcile_result(
         }
         enqueue_automatic_application(transaction, &entity_id, proposal_id, frozen).await?;
     }
+    if !withdrawn {
+        mutations
+            .record_review_result(
+                transaction,
+                authority,
+                &entity_id,
+                proposal_id,
+                version,
+                status,
+            )
+            .await?;
+    }
     Ok(())
 }
 
@@ -2356,6 +2379,7 @@ pub async fn poll_one_result(
     profile: &str,
     token: &BearerToken,
     lease_seconds: i64,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     // The lookup is claimed with a lease before the outbound exchange so two
     // instances cannot both act on one submission's result at once. Among due
@@ -2439,7 +2463,14 @@ pub async fn poll_one_result(
                 .transaction()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            reconcile_result(&transaction, &authority, &accepted, &complete.value).await?;
+            reconcile_result(
+                &transaction,
+                &authority,
+                &accepted,
+                &complete.value,
+                mutations,
+            )
+            .await?;
             transaction
                 .commit()
                 .await

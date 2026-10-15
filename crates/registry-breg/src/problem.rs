@@ -37,6 +37,7 @@ pub enum ProblemCode {
     MutationConflict,
     PreconditionFailed,
     PreconditionRequired,
+    ProposalRejected,
     ProposalSubmissionExpired,
     QueryCursorInvalid,
     QueryInvalid,
@@ -72,6 +73,7 @@ impl ProblemCode {
         Self::MutationConflict,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
+        Self::ProposalRejected,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
@@ -108,6 +110,7 @@ impl ProblemCode {
         Self::MutationConflict,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
+        Self::ProposalRejected,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
@@ -142,6 +145,7 @@ impl ProblemCode {
             Self::MutationConflict => "mutation.conflict",
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
+            Self::ProposalRejected => "proposal.rejected",
             Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
@@ -173,6 +177,7 @@ impl ProblemCode {
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
             | Self::MutationConflict
+            | Self::ProposalRejected
             | Self::StatisticalDatasetVersionConflict => 409,
             Self::IdempotencyExpired
             | Self::IngestionReceiptErased
@@ -239,6 +244,9 @@ impl ProblemCode {
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",
             Self::PreconditionRequired => "The mutation precondition is required.",
+            Self::ProposalRejected => {
+                "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."
+            }
             Self::ProposalSubmissionExpired => {
                 "The review result and application receipt of the submission are no longer retained."
             }
