@@ -702,6 +702,93 @@ async fn proposal_review_reads_release_no_values_when_either_audit_append_fails(
 }
 
 #[tokio::test]
+async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals() {
+    let mut source = registry_source(false);
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"memo","type":"text","required":true,
+            "maximumLength":320_000,"classification":"internal"}));
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] = json!(["memo"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    // JSON encoding makes this legal text input nearly 2 MiB on the wire.
+    let large_value = "\u{0001}".repeat(320_000);
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
+            &key("large-list-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let mut created = BTreeSet::new();
+    for index in 0..4 {
+        let input = BRegActionInvocationRequest::new(
+            &action,
+            map(json!({"target":record.value.data.record_identifier,
+                "value":"After","memo":large_value})),
+            None,
+        )
+        .unwrap();
+        let draft = client
+            .start_proposal(&action, &input, &key(&format!("large-list-{index}")))
+            .await
+            .unwrap()
+            .value;
+        created.insert(draft.id().to_owned());
+    }
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let mut seen = BTreeSet::new();
+    let mut sizes = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = client
+            .list_proposals(
+                &collection,
+                &BRegProposalQuery {
+                    cursor,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        assert!(serde_json::to_vec(&page).unwrap().len() < 8 * 1024 * 1024);
+        sizes.push(page.items.len());
+        for item in page.items {
+            assert_eq!(
+                item.input().unwrap()["memo"].as_str(),
+                Some(large_value.as_str())
+            );
+            assert!(seen.insert(item.id().to_owned()));
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+        assert!(sizes.len() < 4, "pagination must make progress");
+    }
+    assert_eq!(sizes, [2, 2]);
+    assert_eq!(seen, created);
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn proposal_list_audit_counts_only_each_actions_returned_items() {
     let mut source = registry_source(false);
     for id in ["correct-alternate", "correct-empty"] {

@@ -436,11 +436,11 @@ seven tools:
 |---|---|---|
 | `describe_service` | None | The configured name, description, and disclosure |
 | `get_my_details` | None | The citizen's own record as labelled fields |
-| `start_application` | The editable application fields | A new draft's `applicationId`, `revision`, and `status` |
+| `start_application` | A non-nil `startAttemptId` UUID and the editable application fields | An application summary with `applicationId`, `revision`, and `status` |
 | `list_applications` | Optional continuation cursor | A bounded page of caller-owned applications, only with explicit Proposal List authority |
 | `update_application` | `applicationId`, `expectedRevision`, `patch` | The edited draft |
 | `prepare_review` | `applicationId` | The draft and its `reviewUrl` |
-| `get_application_status` | `applicationId` | The draft's `status` |
+| `get_application_status` | `applicationId` | The application's current `status` |
 
 Tool input schemas come from the registry's metadata for the agent access profile, so a field the
 profile cannot write is never offered, and the controlled target input never is. `patch` holds 1 to
@@ -448,19 +448,26 @@ profile cannot write is never offered, and the controlled target input never is.
 `expectedRevision` must match the draft's current revision. Registry text is returned as labelled
 data with a notice that it is data, never instructions.
 
-The application ID is the native Proposal ID. Tool status derives from current
-BReg state and permitted disclosure; the gateway remembers no independent workflow.
+The application ID is the native Proposal ID. Status observations use current BReg state and
+permitted disclosure; a Start-only call may return its initial receipt state. The gateway remembers
+no independent workflow.
 A later observation never authorizes a transition or silently follows a revised
 frozen submission. Use the citizen's separate review page to confirm submission.
 
-Writes use a keyed hash of the citizen, tool, and canonical request, including
-the resolved target. An exact retry recovers the retained answer. Changed binding
-or input conflicts. An expired or erased receipt keeps its key spent and cannot
-create another draft. Inspect current state before deciding on a distinct new
-operation. The gateway owns no alternate workflow or unbounded chain of fresh keys.
+For each intended new application, generate a new `startAttemptId` UUID and keep it for retries,
+including after an uncertain response or after the Proposal closes. The gateway excludes this ID
+from Action input. It derives the Start key from the verified citizen, tool, and normalized ID.
+The same ID replays the original Start; changed input under that ID conflicts. Use a new ID only
+when you intend another application, including one with identical input. An expired or erased
+receipt keeps its ID's key spent and cannot create another draft. A retry reports current state
+when the citizen has Get authority for that Proposal; otherwise it returns the initial Start
+summary. The issuer must also reissue the original immutable Start task grant for a retry. A new
+or expanded grant cannot replay an earlier authorized request under the same attempt ID. The
+gateway owns no alternate workflow or unbounded chain of fresh keys.
 
-{/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), update_input_schema();
-    crates/registry-breg-mcp/src/gateway.rs, application_summary(), REGISTRY_DATA_NOTICE;
+{/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), parse_start(), update_input_schema();
+    crates/registry-breg-mcp/src/gateway.rs, start(), application_summary(), REGISTRY_DATA_NOTICE;
+    crates/registry-breg-mcp/src/gateway/tests.rs, terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft();
     crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg/src/idempotency.rs. */}
 
 ### Tool errors

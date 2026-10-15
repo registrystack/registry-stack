@@ -15,6 +15,7 @@ use crate::contract::Contract;
 pub(crate) const DESCRIBE_SERVICE: &str = "describe_service";
 pub(crate) const GET_MY_DETAILS: &str = "get_my_details";
 pub(crate) const START_APPLICATION: &str = "start_application";
+pub(crate) const START_ATTEMPT_ID: &str = "startAttemptId";
 pub(crate) const UPDATE_APPLICATION: &str = "update_application";
 pub(crate) const PREPARE_REVIEW: &str = "prepare_review";
 pub(crate) const GET_APPLICATION_STATUS: &str = "get_application_status";
@@ -46,6 +47,8 @@ pub(crate) enum ArgumentError {
     WrongType,
     #[error("the application identifier is not a UUID")]
     InvalidApplicationIdentifier,
+    #[error("the start attempt identifier must be a non-nil UUID")]
+    InvalidStartAttemptIdentifier,
     #[error("an edit names a field the citizen may not change")]
     FieldNotEditable,
     #[error("an edit uses an operation the tool does not offer")]
@@ -69,6 +72,12 @@ pub(crate) struct UpdateArguments {
     pub(crate) edits: Vec<Edit>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StartArguments {
+    pub(crate) attempt_id: Uuid,
+    pub(crate) input: Map<String, Value>,
+}
+
 /// Input schema for tools that take no argument.
 pub(crate) fn empty_input_schema() -> Map<String, Value> {
     object_schema(Map::new(), &[])
@@ -81,10 +90,15 @@ pub(crate) fn application_input_schema() -> Map<String, Value> {
     object_schema(properties, &["applicationId"])
 }
 
-/// Input schema for `start_application`: the editable fields only.
+/// Input schema for `start_application`: the logical attempt and editable fields.
 pub(crate) fn start_input_schema(contract: &Contract) -> Map<String, Value> {
     let mut properties = Map::new();
-    let mut required = Vec::new();
+    properties.insert(
+        START_ATTEMPT_ID.to_owned(),
+        json!({"type":"string","format":"uuid",
+            "description":"Generate a new UUID for each new application. Reuse it when retrying that application."}),
+    );
+    let mut required = vec![START_ATTEMPT_ID];
     for field in &contract.editable {
         let mut schema = field.schema.as_object().cloned().unwrap_or_default();
         schema.insert("title".to_owned(), Value::String(field.label.clone()));
@@ -209,18 +223,26 @@ pub(crate) fn parse_application(
     application_identifier(arguments)
 }
 
-/// Parse `start_application`: every key must be an editable field.
+/// Parse `start_application`: the attempt ID never enters the Action input.
 pub(crate) fn parse_start(
     arguments: Option<&Map<String, Value>>,
     contract: &Contract,
-) -> Result<Map<String, Value>, ArgumentError> {
-    let arguments = arguments.cloned().unwrap_or_default();
-    for key in arguments.keys() {
+) -> Result<StartArguments, ArgumentError> {
+    let mut input = arguments.cloned().ok_or(ArgumentError::MissingArgument)?;
+    let attempt_id = match input.remove(START_ATTEMPT_ID) {
+        Some(Value::String(value)) => Uuid::parse_str(&value)
+            .ok()
+            .filter(|id| !id.is_nil())
+            .ok_or(ArgumentError::InvalidStartAttemptIdentifier)?,
+        Some(_) => return Err(ArgumentError::WrongType),
+        None => return Err(ArgumentError::MissingArgument),
+    };
+    for key in input.keys() {
         if !contract.editable.iter().any(|field| &field.api_name == key) {
             return Err(ArgumentError::UnknownArgument);
         }
     }
-    Ok(arguments)
+    Ok(StartArguments { attempt_id, input })
 }
 
 /// Parse `update_application`: every edit path must be exactly one editable
@@ -339,6 +361,7 @@ mod tests {
 
     const OTHER_ADDRESS: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
     const APPLICATION: &str = "25e4ef6d-80bd-4e88-8e83-59b17cd26a4f";
+    const START_ATTEMPT: &str = "53e14a1a-6e19-4b2e-af6e-b9c39a9a3250";
 
     fn object(value: Value) -> Map<String, Value> {
         value.as_object().expect("object").clone()
@@ -358,9 +381,24 @@ mod tests {
         let schema = start_input_schema(&fixture_contract());
         assert_eq!(
             property_names(&schema),
-            ["newAddressLine", "newLocality", "newPostalCode"]
+            [
+                "newAddressLine",
+                "newLocality",
+                "newPostalCode",
+                START_ATTEMPT_ID
+            ]
         );
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
+        assert_eq!(
+            schema["required"],
+            json!([
+                START_ATTEMPT_ID,
+                "newAddressLine",
+                "newLocality",
+                "newPostalCode"
+            ])
+        );
+        assert_eq!(schema["properties"][START_ATTEMPT_ID]["format"], "uuid");
         assert_eq!(schema["properties"]["newAddressLine"]["maxLength"], 200);
         assert_eq!(
             schema["properties"]["newAddressLine"]["title"],
@@ -387,6 +425,7 @@ mod tests {
         let contract = fixture_contract();
         for key in ["address", "owner", "recordIdentifier"] {
             let arguments = object(json!({
+                "startAttemptId": START_ATTEMPT,
                 "newAddressLine": "2 Quay",
                 "newLocality": "Port Selene",
                 "newPostalCode": "PS-200",
@@ -402,14 +441,39 @@ mod tests {
 
     #[test]
     fn start_accepts_the_editable_fields() {
-        let arguments = object(json!({
+        let mut arguments = object(json!({
+            "startAttemptId": START_ATTEMPT,
             "newAddressLine": "2 Quay",
             "newLocality": "Port Selene",
             "newPostalCode": "PS-200",
         }));
+        let attempt_id = Uuid::parse_str(START_ATTEMPT).unwrap();
+        arguments.remove(START_ATTEMPT_ID);
+        let mut supplied = arguments.clone();
+        supplied.insert(START_ATTEMPT_ID.into(), json!(START_ATTEMPT.to_uppercase()));
         assert_eq!(
-            parse_start(Some(&arguments), &fixture_contract()),
-            Ok(arguments.clone())
+            parse_start(Some(&supplied), &fixture_contract()),
+            Ok(StartArguments {
+                attempt_id,
+                input: arguments
+            })
+        );
+    }
+
+    #[test]
+    fn start_requires_a_non_nil_attempt_uuid() {
+        let contract = fixture_contract();
+        for value in [json!("not-a-uuid"), json!(Uuid::nil()), json!(42)] {
+            let arguments = object(json!({"startAttemptId":value}));
+            assert!(parse_start(Some(&arguments), &contract).is_err());
+        }
+        assert_eq!(
+            parse_start(None, &contract),
+            Err(ArgumentError::MissingArgument)
+        );
+        assert_eq!(
+            parse_start(Some(&object(json!({"newLocality":"Town"}))), &contract),
+            Err(ArgumentError::MissingArgument)
         );
     }
 
@@ -503,7 +567,8 @@ mod tests {
             ..spec()
         };
         let contract = Contract::derive(&metadata, &spec).expect("divergent contract");
-        let start = object(json!({"newLocality": "x", "address": OTHER_ADDRESS}));
+        let start = object(json!({"startAttemptId":START_ATTEMPT,
+            "newLocality": "x", "address": OTHER_ADDRESS}));
         assert_eq!(
             parse_start(Some(&start), &contract),
             Err(ArgumentError::UnknownArgument)

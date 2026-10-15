@@ -76,8 +76,11 @@ pub(crate) fn tool_definitions(service_name: &str, contract: &Contract) -> Vec<T
         .with_annotations(read_only()),
         Tool::new(
             START_APPLICATION,
-            "Start a draft application for the signed-in citizen's own record. The draft \
-             is not submitted; the citizen reviews and submits it on the service's own page.",
+            "Start a draft application for the signed-in citizen's own record. Generate a new \
+             startAttemptId UUID for each new application and reuse it for retries. A retry may \
+             return the initial state without Get authority; get_application_status reads the \
+             authorized current state. The draft is not submitted; the citizen reviews and \
+             submits it on the service's own page.",
             start_input_schema(contract),
         )
         .with_title("Start an application")

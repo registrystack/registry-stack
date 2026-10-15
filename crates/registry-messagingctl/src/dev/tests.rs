@@ -93,6 +93,10 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
 /// exact references the session pulls.
 #[test]
 fn dev_help_names_the_image_references_it_pulls() {
+    assert_eq!(
+        docker::POSTGRES_IMAGE,
+        "docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
+    );
     let cli = <Cli as clap::CommandFactory>::command();
     let help = cli
         .get_subcommands()

@@ -28,7 +28,7 @@ pub fn project() -> Value {
             "citizen-review",
             "human",
             "citizen-review-page",
-            vec!["get", "list", "submit"],
+            vec!["get", "list", "submit", "cancel"],
         ),
     ] {
         let mut profile = json!({"id":id,"principalClaim":"sub","actorKind":actor,

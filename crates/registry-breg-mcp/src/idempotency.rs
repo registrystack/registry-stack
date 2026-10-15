@@ -3,11 +3,11 @@
 //! Idempotency keys for registry writes.
 //!
 //! A chat host retries. The key for one write is a keyed hash of the citizen's
-//! pseudonym, the tool, and the canonical request the gateway will send,
-//! including the target it resolved itself, so a retried call replays the
-//! registry's first answer and a different request can never collide with it.
-//! A start adds its position in a chain of keys over the same values, so a
-//! citizen whose earlier identical application closed is not replayed onto it.
+//! pseudonym, the tool, and a canonical operation identity. A start uses only
+//! its caller-provided attempt ID as that identity, so retries retain their
+//! key even when the arguments change; the registry refuses a changed request
+//! under the spent key. A new attempt ID permits a distinct application with
+//! identical input.
 
 use registry_breg_client::BRegIdempotencyKey;
 use registry_platform_audit::AuditKeyHasher;

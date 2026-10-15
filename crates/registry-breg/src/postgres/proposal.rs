@@ -849,7 +849,10 @@ impl PostgresRecordMutationService {
         correlation: &crate::correlation::RequestCorrelation,
         deadline: tokio::time::Instant,
     ) -> Result<Value, MutationError> {
-        const MAXIMUM_PAGE_BYTES: usize = 1024 * 1024;
+        // A caller-visible input can approach the Action's 2 MiB snapshot
+        // ceiling. Leave room for the rest of the Proposal and keep pages
+        // below the maintained client's 8 MiB response ceiling.
+        const MAXIMUM_PAGE_BYTES: usize = 4 * 1024 * 1024;
         let mut page_bytes = 0usize;
         let action_ids = authorities
             .iter()
