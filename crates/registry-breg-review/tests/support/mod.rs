@@ -588,7 +588,7 @@ fn draft_record(identifier: &str, draft: &Draft) -> Value {
         "self":{"method":"GET","path":format!("/v1/proposals/{identifier}"),"operation":"get","accessProfile":PROFILE},
         "submit":{"method":"POST","path":format!("/v1/proposals/{identifier}/submit"),"operation":"submit","accessProfile":PROFILE,
             "ifMatch":action_etag(draft.action_generation),"availability":{"available":!draft.submitted,"observedRevision":draft.revision,
-                "reason":if draft.submitted {json!("pending-review")} else {Value::Null},
+                "reason":if draft.submitted {json!("stale-revision")} else {Value::Null},
                 "recovery":if draft.submitted {json!("receipt-only")} else {Value::Null}}}
     }});
     if draft.submitted {
