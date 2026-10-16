@@ -95,10 +95,10 @@ pub struct BRegProposalDecision {
 }
 fn valid_decision(decision: &BRegProposalDecision) -> bool {
     proposal_instant(&decision.decided_at).is_some()
-        && decision.public_reason.as_ref().is_none_or(|reason| {
-            !reason.is_empty()
-                && reason.len() <= registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES
-        })
+        && decision
+            .public_reason
+            .as_deref()
+            .is_none_or(|reason| registry_review_protocol::check_public_reason(reason).is_ok())
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

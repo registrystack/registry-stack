@@ -293,6 +293,65 @@ async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_rea
 }
 
 #[tokio::test]
+async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_reads() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let reads = |reason: &str| {
+        let decision = json!({"status":"rejected","decidedAt":"2026-10-01T10:00:00.000000Z",
+            "publicReason":reason});
+        let mut current = proposal("rejected");
+        current["decision"] = decision.clone();
+        let submission = json!({"id":ID,"actionId":"correct","submissionVersion":1,
+            "current":true,"effectDigest":DIGEST,"review":null,"decision":decision});
+        (current, submission)
+    };
+    for reason in ["Public reason", " Padded, with \u{e9}", &"x".repeat(2000)] {
+        let (current, submission) = reads(reason);
+        fixture.answer(current);
+        assert!(
+            fixture.client.get_proposal(&binding, ID).await.is_ok(),
+            "current {reason:?}"
+        );
+        fixture.answer(submission);
+        assert!(
+            fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok(),
+            "retained {reason:?}"
+        );
+    }
+    let mut accepted = vec![];
+    for reason in [
+        "",
+        "   ",
+        "\t\n",
+        "line\nbreak",
+        "bell\u{7}",
+        "next\u{85}line",
+        &"x".repeat(2001),
+    ] {
+        let (current, submission) = reads(reason);
+        fixture.answer(current);
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("current {reason:?}"));
+        }
+        fixture.answer(submission);
+        if fixture
+            .client
+            .read_proposal_submission(&held, 1)
+            .await
+            .is_ok()
+        {
+            accepted.push(format!("retained {reason:?}"));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
 async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_tombstones() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
