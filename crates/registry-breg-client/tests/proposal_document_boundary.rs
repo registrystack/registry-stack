@@ -226,6 +226,73 @@ async fn submission_read_refuses_an_incoherent_application() {
 }
 
 #[tokio::test]
+async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_reads() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let status = |reason: &str, recovery: &str| {
+        json!({"state":"blocked","mode":"automatic","reason":reason,"recovery":recovery,
+            "automaticRetry":{"scheduled":false,"attempts":3,"maximumAttempts":3}})
+    };
+    let reads = |application: Value| {
+        let mut current = proposal("submitted");
+        current["applicationStatus"] = application.clone();
+        let submission = json!({"id":ID,"actionId":"correct","submissionVersion":1,
+            "current":true,"effectDigest":DIGEST,"review":null,"application":application});
+        (current, submission)
+    };
+    // The only pairs BReg emits: a dependency outage or an expired lease can
+    // be retried; everything else needs corrected input.
+    for (reason, recovery) in [
+        ("contract-changed", "correct-input"),
+        ("attempts-exhausted", "correct-input"),
+        ("application-refused", "correct-input"),
+        ("dependency-outage", "retry"),
+        ("lease-expired", "retry"),
+    ] {
+        let (current, submission) = reads(status(reason, recovery));
+        fixture.answer(current);
+        assert!(
+            fixture.client.get_proposal(&binding, ID).await.is_ok(),
+            "current {reason}/{recovery}"
+        );
+        fixture.answer(submission);
+        assert!(
+            fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok(),
+            "retained {reason}/{recovery}"
+        );
+    }
+    let mut accepted = vec![];
+    for (reason, recovery) in [
+        ("contract-changed", "retry"),
+        ("attempts-exhausted", "retry"),
+        ("application-refused", "retry"),
+        ("dependency-outage", "correct-input"),
+        ("lease-expired", "correct-input"),
+    ] {
+        let (current, submission) = reads(status(reason, recovery));
+        fixture.answer(current);
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("current {reason}/{recovery}"));
+        }
+        fixture.answer(submission);
+        if fixture
+            .client
+            .read_proposal_submission(&held, 1)
+            .await
+            .is_ok()
+        {
+            accepted.push(format!("retained {reason}/{recovery}"));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
 async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_tombstones() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
