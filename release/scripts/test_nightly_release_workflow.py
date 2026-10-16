@@ -1,5 +1,7 @@
 """Hold the nightly source, publication and recipe trust boundaries."""
 
+import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -145,6 +147,24 @@ class NightlyWorkflowTest(unittest.TestCase):
             if step.get("name") == "Build locked native binaries"
         )
         self.assertIn("bash release/scripts/build-nightly-linux-arm64.sh", build)
+
+    def test_arm64_build_selects_the_installed_toolchain_before_cargo(self):
+        # Without an explicit selection, the first Cargo call makes rustup
+        # reconcile rust-toolchain.toml's developer-only components, which
+        # conflict with component shims already on the hosted ARM image.
+        channel = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())[
+            "toolchain"
+        ]["channel"]
+        recipe = (ROOT / "release/scripts/build-nightly-linux-arm64.sh").read_text()
+        install = recipe.index(
+            f"rustup toolchain install {channel} --profile minimal "
+            '--target "${target}"\n'
+        )
+        select = recipe.index(f"\nexport RUSTUP_TOOLCHAIN={channel}\n")
+        first_cargo = re.search(r"^cargo ", recipe, re.MULTILINE)
+        self.assertIsNotNone(first_cargo)
+        self.assertLess(install, select)
+        self.assertLess(select, first_cargo.start())
 
     def test_no_numbered_release_promotion_or_mutable_image_alias(self):
         self.assertNotIn("REGISTRY_RELEASE_TAG:", self.text)
