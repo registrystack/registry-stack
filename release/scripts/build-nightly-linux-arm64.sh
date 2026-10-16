@@ -23,6 +23,11 @@ export REGISTRY_NIGHTLY_TAG="${tag}"
 export AWS_LC_FIPS_SYS_STATIC=1
 target=aarch64-unknown-linux-gnu
 rustup toolchain install 1.95.0 --profile minimal --target "${target}"
+# Select the already installed toolchain directly. This prevents rustup from
+# trying to reconcile the workspace's developer-only rustfmt and Clippy
+# components on the first Cargo call on hosted ARM runners, where those
+# component shims may already exist.
+export RUSTUP_TOOLCHAIN=1.95.0
 
 # The runner's glibc is newer than the release floor. Compile and link through
 # the same pinned Zig toolchain as the canonical Linux recipe, so the floor is
