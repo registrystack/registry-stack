@@ -1166,6 +1166,7 @@ pub fn proposal_decision_schema() -> Value {
         "status":{"enum":["approved","rejected","changes-requested","answered"]},
         "decidedAt":{"type":"string","format":"date-time"},
         "publicReason":{"type":"string","minLength":1,
+            "pattern":r"^[^\u0000-\u001F\u007F-\u009F]*[^\u0000-\u0020\u007F-\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000][^\u0000-\u001F\u007F-\u009F]*$",
             "x-maximum-utf8-bytes":registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES}
     }})
 }
@@ -4119,6 +4120,39 @@ mod problem_contract_tests {
         proposal.as_object_mut().unwrap().remove("request");
         proposal["state"] = json!("approved");
         assert!(!validator.is_valid(&proposal));
+    }
+
+    #[test]
+    fn proposal_public_reason_schema_matches_client_text_rules() {
+        let schema = proposal_decision_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let decision = |public_reason: &str| {
+            json!({
+                "status": "approved",
+                "decidedAt": "2025-01-01T00:00:00Z",
+                "publicReason": public_reason,
+            })
+        };
+
+        for valid in ["accepted", " accepted ", "เหตุผล 🙂"] {
+            assert!(validator.is_valid(&decision(valid)), "{valid:?}");
+        }
+        for invalid in [
+            "",
+            " \t\n",
+            "\u{00a0}",
+            "\u{1680}",
+            "\u{2003}",
+            "\u{202f}",
+            "\u{3000}",
+            "contains\0control",
+            "contains\u{0085}control",
+        ] {
+            assert!(!validator.is_valid(&decision(invalid)), "{invalid:?}");
+        }
     }
 
     #[test]

@@ -1777,6 +1777,10 @@ def check_environment(bin_dir: Path) -> dict[str, str]:
     env["NO_COLOR"] = "1"
     env[VARIABLE] = MARKER
     env.pop(UNSET_VARIABLE, None)
+    runtime = env.get("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
+    if sys.platform == "darwin" and runtime:
+        previous = env.get("DYLD_LIBRARY_PATH")
+        env["DYLD_LIBRARY_PATH"] = runtime + (os.pathsep + previous if previous else "")
     return env
 
 

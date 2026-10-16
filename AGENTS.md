@@ -427,6 +427,20 @@ products/discovery/scripts/test-http.sh
 (cd docs/site && npm run check:tutorial:discovery)
 ```
 
+On macOS, prepare the Cargo-built binding's FIPS runtime path in the same
+shell before entering any Node.js or Python binding crate. Set
+`binding_package` to the package being built:
+
+```bash
+binding_package=registry-discovery-client-node
+. scripts/cargo-runtime-library-path.sh
+registry_prepare_cargo_runtime "$PWD" --locked -p "$binding_package"
+```
+
+The Node test scripts and Python bootstraps restore the loader path from this
+helper's `REGISTRY_CARGO_RUNTIME_LIBRARY_PATH` after protected launchers strip
+`DYLD_*` variables.
+
 Registry Discovery language bindings, from their respective crate directories:
 
 ```bash

@@ -116,6 +116,14 @@ fn expected(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Serializes tests that change the process-wide development port variables.
+fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// One client bound to the standalone staff profile, then `rest`.
 fn one_staff(rest: &str) -> String {
     format!("{CLIENTS_ENVELOPE}clients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n{rest}")
@@ -1060,6 +1068,7 @@ fn ports_must_be_three_distinct_loopback_ports() {
 
 #[test]
 fn start_ports_fall_back_to_named_environment_variables() {
+    let _guard = environment_lock();
     let casework_var = "CASEWORKCTL_DEV_CASEWORK_PORT";
     let issuer_var = "CASEWORKCTL_DEV_ISSUER_PORT";
     let database_var = "CASEWORKCTL_DEV_DATABASE_PORT";
@@ -1091,6 +1100,7 @@ fn start_ports_fall_back_to_named_environment_variables() {
 
 #[test]
 fn start_ports_prefer_an_explicit_flag_over_the_environment() {
+    let _guard = environment_lock();
     let casework_var = "CASEWORKCTL_DEV_CASEWORK_PORT";
     std::env::set_var(casework_var, "19092");
 
@@ -1120,6 +1130,7 @@ fn start_ports_prefer_an_explicit_flag_over_the_environment() {
 
 #[test]
 fn bare_dev_alias_ports_also_fall_back_to_the_environment() {
+    let _guard = environment_lock();
     let database_var = "CASEWORKCTL_DEV_DATABASE_PORT";
     std::env::set_var(database_var, "19099");
 

@@ -132,7 +132,7 @@ async fn restored_pre_command_pending_work_requires_explicit_retry_or_cancel() {
                 assert!(!worker.tick().await.unwrap());
                 assert_eq!(
                     h.store
-                        .retain_terminal(Utc::now(), 100, &operator)
+                        .retain_terminal(h.retention_cutoff().await, 100, &operator)
                         .await
                         .unwrap(),
                     1
@@ -324,7 +324,7 @@ async fn restored_pre_command_calls_and_waits_keep_the_original_deadline() {
             .unwrap();
         assert_eq!(
             h.store
-                .retain_terminal(Utc::now(), 100, &operator)
+                .retain_terminal(h.retention_cutoff().await, 100, &operator)
                 .await
                 .unwrap(),
             1

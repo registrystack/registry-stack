@@ -41,6 +41,10 @@ CONTRACTS = {
     ),
     "products/evidence/scripts/check-authoring-no-io.sh": ("CLIPPY_DRIVER_BIN",),
     "products/platform/scripts/check-yaml-reader-boundary.sh": ("CLIPPY_DRIVER_BIN",),
+    "products/platform/scripts/run-config-conformance.sh": (
+        "REGISTRY_CARGO_RUNTIME_LIBRARY_PATH",
+        "run-config-conformance.py",
+    ),
     "products/breg/loadtest/up.sh": (
         "cargo-runtime-library-path.sh",
         "registry_cargo_build",
@@ -67,12 +71,69 @@ CONTRACTS = {
 
 class CargoRuntimeScriptContractTests(unittest.TestCase):
     def test_every_reported_gate_keeps_its_runtime_and_override_contract(self):
-        self.assertEqual(len(CONTRACTS), 16)
+        self.assertEqual(len(CONTRACTS), 17)
         for relative, markers in CONTRACTS.items():
             with self.subTest(script=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8")
                 for marker in markers:
                     self.assertIn(marker, source)
+
+
+class ConfigConformanceRuntimeTests(unittest.TestCase):
+    def test_relative_bin_directory_exports_an_absolute_runtime_path(self):
+        temporary = tempfile.TemporaryDirectory(prefix="config conformance runtime ")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        artifacts = (
+            root
+            / "relative-target/debug/build/aws-lc-fips-sys-exact/out/build/artifacts"
+        )
+        artifacts.mkdir(parents=True)
+        (artifacts / "libaws_lc_fips_0_14_2_crypto.dylib").touch()
+        executable_directory = root / "bin"
+        executable_directory.mkdir()
+        environment_log = root / "environment.json"
+        uv = executable_directory / "uv"
+        uv.write_text(
+            "#!" + sys.executable + "\n" + """import json
+import os
+from pathlib import Path
+Path(os.environ["TEST_ENVIRONMENT_LOG"]).write_text(json.dumps({
+    "fallback": os.environ.get("DYLD_FALLBACK_LIBRARY_PATH"),
+    "runtime": os.environ.get("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH"),
+}))
+""",
+            encoding="utf-8",
+        )
+        uv.chmod(0o755)
+        environment = {
+            **os.environ,
+            "PATH": f"{executable_directory}{os.pathsep}{os.environ['PATH']}",
+            "TEST_ENVIRONMENT_LOG": str(environment_log),
+            "DYLD_FALLBACK_LIBRARY_PATH": "/caller/runtime",
+        }
+        environment.pop("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH", None)
+        completed = subprocess.run(
+            [
+                str(ROOT / "products/platform/scripts/run-config-conformance.sh"),
+                "--bin-dir",
+                "relative-target/debug",
+            ],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        invocation = json.loads(environment_log.read_text())
+        self.assertEqual(invocation["runtime"], str(artifacts.resolve()))
+        expected_fallback = str(artifacts.resolve())
+        # macOS's protected /usr/bin/env launcher strips the caller's DYLD_*
+        # variables; other platforms preserve the existing fallback path.
+        if sys.platform != "darwin":
+            expected_fallback += os.pathsep + environment["DYLD_FALLBACK_LIBRARY_PATH"]
+        self.assertEqual(invocation["fallback"], expected_fallback)
 
 
 class CaseworkCheckpointRuntimeTests(unittest.TestCase):

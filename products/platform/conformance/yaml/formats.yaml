@@ -309,11 +309,16 @@ formats:
     retiredApiVersions:
       - registry.registrystack.org/breg-runtime/v1alpha1
     removedKeys:
+      - /database/url
+      - /database/password
+      - /database/plaintext
       - /database/pool/maxSize
       - /authentication/oidc/maxTokenLifetimeSeconds
       - /authentication/oidc/jwksCache/maxDocumentBytes
       - /authentication/oidc/jwksCache/requestTimeoutMilliseconds
       - /audit/retainDays
+      - /eventDelivery
+      - /idempotency
       - /cursor/maxAgeSeconds
       - /wasmExecution/maxModuleBytes
       - /wasmExecution/maxGuestMemoryBytes

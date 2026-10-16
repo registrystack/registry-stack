@@ -23,19 +23,20 @@ for argument in "$@"; do
 	previous="$argument"
 done
 
-# A debug build that links aws-lc-fips-sys dynamically on macOS finds its
-# library through this path; elsewhere the variable has no effect.
-# The maintained Cargo helper also exports a non-DYLD variable, which survives
-# protected macOS launchers that strip DYLD_* before this script starts.
-if [[ -n "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
-	export DYLD_FALLBACK_LIBRARY_PATH="${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH}${DYLD_FALLBACK_LIBRARY_PATH:+:${DYLD_FALLBACK_LIBRARY_PATH}}"
-elif [[ -z "${DYLD_FALLBACK_LIBRARY_PATH:-}" ]]; then
+# A debug build that links aws-lc-fips-sys dynamically on macOS needs its
+# library at each check-command launch. Keep the directory in the non-DYLD
+# carrier that survives uv's protected /usr/bin/env launcher; the Python runner
+# restores DYLD_LIBRARY_PATH on the check child itself.
+if [[ -z "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
 	for artifacts in "${bin_dir}"/build/aws-lc-fips-sys-*/out/build/artifacts; do
 		if [[ -d "$artifacts" ]]; then
-			export DYLD_FALLBACK_LIBRARY_PATH="$artifacts"
+			export REGISTRY_CARGO_RUNTIME_LIBRARY_PATH="$(cd "$artifacts" && pwd -P)"
 			break
 		fi
 	done
+fi
+if [[ -n "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
+	export DYLD_FALLBACK_LIBRARY_PATH="${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH}${DYLD_FALLBACK_LIBRARY_PATH:+:${DYLD_FALLBACK_LIBRARY_PATH}}"
 fi
 
 exec uv run --no-project --with PyYAML==6.0.2 python "${script_dir}/run-config-conformance.py" "$@"

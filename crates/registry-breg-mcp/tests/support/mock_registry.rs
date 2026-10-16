@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, RawQuery, State};
@@ -73,6 +74,7 @@ struct Registry {
     allowed_operations: Option<BTreeSet<String>>,
     seen: Vec<Seen>,
     next_problem: Option<(Method, String, BRegProblemCode)>,
+    next_response_delay: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -225,6 +227,10 @@ impl MockRegistry {
         self.state.lock().next_problem = Some((method, path_prefix.to_owned(), code));
     }
 
+    pub fn delay_next_response(&self, delay: Duration) {
+        self.state.lock().next_response_delay = Some(delay);
+    }
+
     pub fn stop(self) {
         self.task.abort();
     }
@@ -270,6 +276,13 @@ fn record(
         registry.next_problem.take().map(|(_, _, code)| code)
     } else {
         None
+    }
+}
+
+async fn wait_for_response_delay(state: &Shared) {
+    let delay = state.lock().next_response_delay.take();
+    if let Some(delay) = delay {
+        tokio::time::sleep(delay).await;
     }
 }
 
@@ -445,6 +458,7 @@ async fn list_addresses(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
+    wait_for_response_delay(&state).await;
     if let Some(code) = record(
         &state,
         Method::GET,

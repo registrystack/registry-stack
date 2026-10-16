@@ -20,7 +20,7 @@
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform --no-js --dts index.d.ts.check && rm -f index.d.ts.check",
-    "test": "node --test __test__/*.test.js",
+    "test": "node ../../scripts/run-node-tests.mjs __test__/*.test.js",
     "check:types": "napi build --platform --js index.js.check --dts index.d.ts.check && cmp index.js index.js.check && cmp index.d.ts index.d.ts.check && rm -f index.js.check index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts __test__/facade.test-d.ts"
   },
   "devDependencies": {
