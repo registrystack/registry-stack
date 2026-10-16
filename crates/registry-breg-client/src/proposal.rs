@@ -446,25 +446,13 @@ impl BRegProposal {
             self.effect_digest.is_none()
                 || self.submission_version == 0
                 || self.state == BRegProposalState::Draft
-                || status.reason.is_some() != status.recovery.is_some()
-                || status.state == BRegProposalApplicationState::Blocked && status.reason.is_none()
-                || status.state == BRegProposalApplicationState::AwaitingReview
-                    && status.reason.is_some()
-                || matches!(
+                || !valid_application_shape(
                     status.state,
-                    BRegProposalApplicationState::Applied
-                        | BRegProposalApplicationState::Cancelled
-                        | BRegProposalApplicationState::Rejected
-                ) && (status.reason.is_some() || status.automatic_retry.is_some())
-                || status.mode == BRegProposalApplicationMode::Automatic
-                    && matches!(
-                        status.state,
-                        BRegProposalApplicationState::AwaitingReview
-                            | BRegProposalApplicationState::Pending
-                            | BRegProposalApplicationState::Applying
-                            | BRegProposalApplicationState::Blocked
-                    )
-                    && status.automatic_retry.is_none()
+                    status.mode,
+                    status.reason.is_some(),
+                    status.recovery.is_some(),
+                    status.automatic_retry.as_ref(),
+                )
                 || match status.state {
                     BRegProposalApplicationState::Applied => {
                         self.state != BRegProposalState::Applied || self.application.is_none()
@@ -477,18 +465,6 @@ impl BRegProposal {
                     }
                     _ => self.state != BRegProposalState::Submitted,
                 }
-                || status.automatic_retry.as_ref().is_some_and(|retry| {
-                    status.mode != BRegProposalApplicationMode::Automatic
-                        || !(1..=1000).contains(&retry.maximum_attempts)
-                        || retry.attempts > retry.maximum_attempts
-                        || retry.scheduled
-                            && (retry.attempts == retry.maximum_attempts
-                                || !matches!(
-                                    status.state,
-                                    BRegProposalApplicationState::Pending
-                                        | BRegProposalApplicationState::Applying
-                                ))
-                })
         }) {
             return Err(refusal());
         }
@@ -1435,12 +1411,10 @@ impl BaseRegistryClient {
                 .review
                 .as_ref()
                 .is_some_and(|review| !valid_review_result(review))
-            || submission.application.as_ref().is_some_and(|application| {
-                application
-                    .application_id
-                    .as_deref()
-                    .is_some_and(|id| !canonical_proposal_id(id))
-            })
+            || submission
+                .application
+                .as_ref()
+                .is_some_and(|application| !valid_submission_application(application))
             || submission
                 .decision
                 .as_ref()
@@ -1591,6 +1565,60 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
             })
     }
 }
+/// The rules an application status follows whichever document carries it:
+/// a reason always comes with its recovery, only a blocked application has
+/// one, and automatic retry progress belongs to automatic mode alone.
+fn valid_application_shape(
+    state: BRegProposalApplicationState,
+    mode: BRegProposalApplicationMode,
+    reason: bool,
+    recovery: bool,
+    automatic_retry: Option<&BRegProposalAutomaticRetry>,
+) -> bool {
+    use BRegProposalApplicationState::{
+        Applied, Applying, AwaitingReview, Blocked, Cancelled, Pending, Rejected,
+    };
+    let open = matches!(state, AwaitingReview | Pending | Applying | Blocked);
+    reason == recovery
+        && (state != Blocked || reason)
+        && !(state == AwaitingReview && reason)
+        && !(matches!(state, Applied | Cancelled | Rejected)
+            && (reason || automatic_retry.is_some()))
+        && !(mode == BRegProposalApplicationMode::Automatic && open && automatic_retry.is_none())
+        && automatic_retry.is_none_or(|retry| {
+            mode == BRegProposalApplicationMode::Automatic
+                && (1..=1000).contains(&retry.maximum_attempts)
+                && retry.attempts <= retry.maximum_attempts
+                && !(retry.scheduled
+                    && (retry.attempts == retry.maximum_attempts
+                        || !matches!(state, Pending | Applying)))
+        })
+}
+
+/// An applied submission names its receipt and nothing else; any other
+/// submission has a mode and no receipt, as an ordinary application status.
+fn valid_submission_application(application: &BRegProposalSubmissionApplication) -> bool {
+    match (application.state, application.application_id.as_deref()) {
+        (BRegProposalApplicationState::Applied, Some(id)) => {
+            canonical_proposal_id(id)
+                && application.mode.is_none()
+                && application.reason.is_none()
+                && application.recovery.is_none()
+                && application.automatic_retry.is_none()
+        }
+        (BRegProposalApplicationState::Applied, None) | (_, Some(_)) => false,
+        (state, None) => application.mode.is_some_and(|mode| {
+            valid_application_shape(
+                state,
+                mode,
+                application.reason.is_some(),
+                application.recovery.is_some(),
+                application.automatic_retry.as_ref(),
+            )
+        }),
+    }
+}
+
 fn valid_review_result(result: &BRegProposalReviewResult) -> bool {
     if result.state == "pending" {
         return result.result_id.is_none()

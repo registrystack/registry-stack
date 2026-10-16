@@ -148,6 +148,84 @@ fn terminal(state: &str) -> Value {
 }
 
 #[tokio::test]
+async fn submission_read_refuses_an_incoherent_application() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let submission = |application: Value| {
+        json!({"id":ID,"actionId":"correct","submissionVersion":1,"current":true,
+            "effectDigest":DIGEST,"review":null,"application":application})
+    };
+    let retry = json!({"scheduled":true,"attempts":1,"maximumAttempts":3});
+    for (name, application) in [
+        ("applied", json!({"state":"applied","applicationId":ID})),
+        ("pending", json!({"state":"pending","mode":"manual"})),
+        (
+            "blocked",
+            json!({"state":"blocked","mode":"manual","reason":"contract-changed","recovery":"correct-input"}),
+        ),
+        (
+            "automatic",
+            json!({"state":"pending","mode":"automatic","automaticRetry":retry}),
+        ),
+        ("none", Value::Null),
+    ] {
+        fixture.answer(submission(application));
+        assert!(
+            fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok(),
+            "{name}"
+        );
+    }
+    let mut accepted = vec![];
+    for (name, application) in [
+        ("applied-without-receipt", json!({"state":"applied"})),
+        (
+            "applied-with-mode",
+            json!({"state":"applied","applicationId":ID,"mode":"manual"}),
+        ),
+        (
+            "applied-with-retry",
+            json!({"state":"applied","applicationId":ID,"automaticRetry":retry}),
+        ),
+        (
+            "pending-with-receipt",
+            json!({"state":"pending","mode":"manual","applicationId":ID}),
+        ),
+        ("pending-without-mode", json!({"state":"pending"})),
+        (
+            "blocked-without-reason",
+            json!({"state":"blocked","mode":"manual"}),
+        ),
+        (
+            "reason-without-recovery",
+            json!({"state":"blocked","mode":"manual","reason":"contract-changed"}),
+        ),
+        (
+            "automatic-without-retry",
+            json!({"state":"pending","mode":"automatic"}),
+        ),
+        (
+            "manual-with-retry",
+            json!({"state":"pending","mode":"manual","automaticRetry":retry}),
+        ),
+    ] {
+        fixture.answer(submission(application));
+        if fixture
+            .client
+            .read_proposal_submission(&held, 1)
+            .await
+            .is_ok()
+        {
+            accepted.push(name);
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
 async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_tombstones() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
