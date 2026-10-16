@@ -111,12 +111,14 @@ Action with `coordinator.operation.proposal-action`, and preparation refuses one
 committed BReg product event or a later `breg.read-record/v1` read. Any later Messaging notice
 needs Messaging's own current authority. `onDeclaredRefusal` routes only
 a validated declared no-effect refusal as `{refusalCode}`. Operational failures and previous uncertain effects cannot
-enter that branch.
+enter that branch. Omit `onDeclaredRefusal` and a declared refusal fails the run with
+`product-refused`, like any other refusal.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;
     crates/registry-coordinator/src/breg_action.rs;
     crates/registry-coordinator/src/contracts.rs, resolve_operation;
-    crates/registry-coordinator/tests/breg_action_adapter.rs. */}
+    crates/registry-coordinator/tests/breg_action_adapter.rs;
+    crates/registry-coordinator/tests/catalog_scenarios.rs, declared_refusal_without_an_authored_edge_preserves_refused_behavior. */}
 
 ## Durable waits and observation budgets
 
