@@ -314,6 +314,22 @@ jobs:
             test "$(dist/image-bin/messagingctl --version)" = \
               "messagingctl ${REHEARSAL_VERSION}"
           fi
+          coordinator_in_release="$(python3 release/scripts/release_roster.py \
+            coordinator-in-release "${REHEARSAL_VERSION}")"
+          if [[ "${coordinator_in_release}" == true ]]; then
+            test "$("dist/bin/coordinator-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+              "coordinator ${REHEARSAL_VERSION}"
+            test "$("dist/bin/coordinatorctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+              "coordinatorctl ${REHEARSAL_VERSION}"
+            test "$(dist/image-bin/coordinator --version)" = \
+              "coordinator ${REHEARSAL_VERSION}"
+            test "$(dist/image-bin/coordinatorctl --version)" = \
+              "coordinatorctl ${REHEARSAL_VERSION}"
+            coordinatorctl_binary="${GITHUB_WORKSPACE}/dist/bin/coordinatorctl-v${REHEARSAL_VERSION}-linux-amd64"
+            coordinator_project="${RUNNER_TEMP}/release-coordinator-project"
+            "${coordinatorctl_binary}" init --directory "${coordinator_project}"
+            "${coordinatorctl_binary}" check --project "${coordinator_project}"
+          fi
 
           render_in_release="$(python3 release/scripts/release_roster.py \
             render-in-release "${REHEARSAL_VERSION}")"
@@ -485,6 +501,7 @@ jobs:
             crates/registry-casework-client-node/package-lock.json
             crates/registry-messaging-client-node/package-lock.json
             crates/registry-scheduling-client-node/package-lock.json
+            crates/registry-coordinator-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install exact Zig toolchain
@@ -520,6 +537,11 @@ jobs:
             scheduling-client-in-release "${CLIENT_VERSION}")"
           if [[ "${scheduling_in_release}" == true ]]; then
             clients+=(scheduling)
+          fi
+          coordinator_in_release="$(python3 release/scripts/release_roster.py \
+            coordinator-client-in-release "${CLIENT_VERSION}")"
+          if [[ "${coordinator_in_release}" == true ]]; then
+            clients+=(coordinator)
           fi
           for client in "${clients[@]}"; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"

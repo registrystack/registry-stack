@@ -77,7 +77,7 @@ fn assert_guard(detail: &AccessChangeDetail, reason: &str) {
 }
 
 fn food_targeting_person(value: &mut Value) -> &mut Value {
-    &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][PERSON_PERMISSION]
+    &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][PERSON_PERMISSION]
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn adding_a_lookup_to_a_gated_profile_asks_for_a_new_scope() {
 #[test]
 fn widening_an_ungated_profile_keeps_its_plain_direction() {
     let mut widened = source();
-    widened["accessProfiles"][STEWARD]["permissions"]["entities"][0]["filterableFields"] =
+    widened["accessProfiles"][STEWARD]["permissions"]["records"][0]["filterableFields"] =
         json!(["district"]);
     let diff = classify(&source(), &widened);
     let steward = profile_change(&diff, "person", "steward");
@@ -182,7 +182,7 @@ fn changing_group_membership_changes_who_holds_its_consents() {
 #[test]
 fn raising_the_maximum_duration_outlasts_the_notice() {
     let mut raised = source();
-    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
+    raised["recordTypes"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
         json!(730);
     let diff = classify(&source(), &raised);
     let record = change(&diff, Code::ConsentRecordChanged, None);
@@ -276,7 +276,7 @@ fn a_steward_issuer_creates_consent_without_the_subject() {
 }
 
 #[test]
-fn widened_action_codes_stay_additive_and_say_what_they_accept() {
+fn widened_action_codes_require_review_while_record_vocabulary_stays_additive() {
     let mut added = source();
     added["recipients"]["organizations"]
         .as_array_mut()
@@ -286,17 +286,10 @@ fn widened_action_codes_stay_additive_and_say_what_they_accept() {
             "contact": "privacy@ngo-gamma.example.test", "clients": []
         }));
     let diff = classify(&source(), &added);
-    let action = change(
-        &diff,
-        Code::ActionVocabularyCodesAdded,
-        Some("record-consent"),
-    );
-    assert_eq!(
-        action.classification,
-        DiffClassification::CompatibleAdditive
-    );
+    let action = change(&diff, Code::ActionChanged, Some("record-consent"));
+    assert_eq!(action.classification, DiffClassification::AccessChange);
     let codes = detail(action, "inputCodes");
-    assert_guard(codes, "without review");
+    assert_guard(codes, "review the revised frozen execution contract");
     assert_eq!(
         codes.after["recipient"],
         json!([
@@ -308,6 +301,12 @@ fn widened_action_codes_stay_additive_and_say_what_they_accept() {
         ])
     );
     assert!(codes.before.get("purpose").is_none(), "{codes:?}");
+    let field = change(&diff, Code::FieldVocabularyCodesAdded, Some("recipient"));
+    assert_eq!(
+        field.change.class,
+        registry_breg::package::CompiledRegistryChangeClass::CompatibleAdditive
+    );
+    assert_eq!(field.classification, DiffClassification::LockOrRewriteRisk);
     let organization = change(&diff, Code::RecipientOrganizationAdded, Some("ngo-gamma"));
     assert_eq!(
         organization.classification,
@@ -324,7 +323,7 @@ fn a_consent_change_never_classifies_as_unsupported() {
     let mut changed = source();
     changed["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
     changed["recipients"]["groups"][0]["members"] = json!(["wfp"]);
-    changed["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
+    changed["recordTypes"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
         json!(30);
     let diff = classify(&source(), &changed);
     assert!(
@@ -353,7 +352,7 @@ fn food_targeting_scenario(claims: Value) -> Value {
         .unwrap()
         .extend(claims.as_object().unwrap().clone());
     json!({
-        "entity": "person",
+        "recordType": "person",
         "accessProfile": "food-targeting",
         "operation": "get",
         "claims": base,
@@ -399,7 +398,7 @@ fn a_preview_admits_a_gated_profile_and_names_the_client_recipients() {
 fn a_preview_fills_the_recipient_feed_boundary_from_the_requester_client() {
     let feed = |claims: Value| {
         preview(json!({
-            "entity": "consent-decision",
+            "recordType": "consent-decision",
             "accessProfile": "recipient-feed",
             "operation": "list",
             "claims": claims,
@@ -470,7 +469,7 @@ fn a_changed_revoke_set_says_it_rebuilds_the_consent_indexes() {
     let mut changed = source();
     changed["vocabularies"][1]["values"] =
         json!(["given", "refused", "withdrawn", "invalidated", "lapsed"]);
-    changed["entities"][CONSENT_RECORD]["consentRecord"]["decision"]["revokes"] =
+    changed["recordTypes"][CONSENT_RECORD]["consentRecord"]["decision"]["revokes"] =
         json!(["refused", "withdrawn", "invalidated", "lapsed"]);
     let diff = classify(&source(), &changed);
     let record = change(&diff, Code::ConsentRecordChanged, None);
@@ -488,7 +487,7 @@ fn a_changed_revoke_set_says_it_rebuilds_the_consent_indexes() {
 
     // A longer validity leaves both indexes as they were.
     let mut raised = source();
-    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
+    raised["recordTypes"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
         json!(730);
     let diff = classify(&source(), &raised);
     let record = change(&diff, Code::ConsentRecordChanged, None);

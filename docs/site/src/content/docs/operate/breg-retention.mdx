@@ -1,6 +1,6 @@
 ---
 title: Retain, erase, and audit
-description: Erase retained record history and change-request detail under an approved retention request, restore snapshot coverage after an erasure, and retain the audit stream of a Base Registry Engine registry.
+description: Erase retained record history and Proposal detail under an approved retention request, restore snapshot coverage after an erasure, and retain the audit stream of a Base Registry Engine registry.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,7 +14,7 @@ standards_referenced: []
 ---
 
 You operate an active registry under an institutional retention policy, hold the migration
-credential, and need to erase retained history or change-request detail, restore snapshot coverage
+credential, and need to erase retained history or Proposal detail, restore snapshot coverage
 after an erasure, or retain the audit stream. Maintenance uses the migration interlock and writes
 minimized audit entries separately from the database transaction. Reports carry counts rather than
 values. The erasure and attachment cleanup commands remove bytes that nothing restores. The next section says
@@ -25,12 +25,12 @@ exactly what each one destroys.
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
 | `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
-| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, the held idempotency responses, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, record history, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
-| `request-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, request detail, and durable deletion tombstones. |
+| `proposal-retention erase` | Eligible payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held idempotency responses, and attachment references. Unresolved remote recovery keeps the exact request and acceptance it still needs; external content deletion can remain pending. | The value-free lifecycle rows of that Proposal, record history, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
+| `proposal-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, Proposal detail, and durable deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
 | `idempotency-retention erase-expired` | The held responses of spent idempotency keys whose receipt horizon has passed, and the raw issuer, principal value, and key each was sent under. | Every spent key, as a digest of its caller and key with its request binding and times, kept indefinitely, so a retry is still refused rather than executed. |
 
-`history rebaseline`, `request-retention list`, and `request-retention dry-run` remove nothing:
+`history rebaseline`, `proposal-retention list`, and `proposal-retention dry-run` remove nothing:
 the rebaseline writes one baseline commit, and the others only read. A saved export or a snapshot
 reference is not a way back either:
 an erased revision is gone from the registry, and a snapshot reference that named it can no longer
@@ -49,9 +49,9 @@ uses a private certificate authority, set
 `--request-file`, and `--output` must be absolute.
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
-    crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/proposal_retention.rs;
     crates/registry-breg/src/idempotency.rs, tombstone_erased_cached_responses and lock_and_load();
-    crates/registry-bregctl/src/lib.rs, HistoryCommand and RequestRetentionCommand;
+    crates/registry-bregctl/src/lib.rs, HistoryCommand and ProposalRetentionCommand;
     products/breg/quickstart/run.sh. */}
 
 ## Erase retained history
@@ -192,105 +192,62 @@ that changed outside the server's write path, so the journal never recorded the 
     crates/registry-bregctl/src/lib.rs, HistoryRebaselineArgs;
     crates/registry-breg/tests/postgres_history_rebaseline.rs. */}
 
-## Erase change-request detail
+## Erase Proposal detail
 
-Change-request proposals and application receipts keep their own retention. A request entity
-whose `changeRequest.retention.mode` is `operator-erase` allows the operator to erase the payload
-detail of one proposal version while keeping its value-free lifecycle rows; the default `retain`
-mode refuses erasure. List the retained rows, then count what one erasure would remove:
+Proposal detail and application receipts have separate retention from record
+history. An Action whose `execution.proposal.retention.mode` is `operator-erase`
+permits eligible terminal detail erasure. `retain` refuses it. List retained
+work, then count the exact submission's proposed erasure:
 
 ```sh
-bregctl --format json request-retention list \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-entity placement-correction-request --limit 50
-
-bregctl --format json request-retention dry-run \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-entity placement-correction-request \
-  --request-id "<requestId>" --proposal-version 3
+bregctl --format json proposal-retention list \
+  --runtime-config /etc/breg/runtime.yaml --action-id correct-address --limit 50
+bregctl --format json proposal-retention dry-run \
+  --runtime-config /etc/breg/runtime.yaml --action-id correct-address \
+  --proposal-id '<proposal-uuid>' --submission-version '<version>'
 ```
 
-Each list row reports the request state, whether the version is current or pinned, its retention
-mode, `eligibleForErasure`, and whether detail is already erased; a listing longer than `--limit`
-continues from the cursor it returns, passed as `--after-cursor`. The dry run reports the counts of
-proposal snapshots, target snapshots, idempotency results, request revision snapshots, outbox
-payloads, intake rows, and `attachmentReferences` that the erasure would remove,
-and changes nothing. Canceled drafts are eligible under the same policy even when
-no proposal was submitted.
+Inspect eligibility, current/pinned state, retention mode, and payload counts.
+Use the returned cursor with `--after-cursor` for a bounded continuation.
+A refused or pinned submission remains intact; resolve its current lifecycle
+under its ordinary authority before considering erasure again.
 
-:::danger[Erased request detail cannot be restored]
-Erase only a version the dry run counted and the retention request approves. The erasure keeps the
-lifecycle rows, so the request stays visible with its state, but the proposal and target values are
-gone from the registry. Attachment access for that version is also revoked.
+:::danger[Erasure cannot be undone]
+Erasure removes the selected submission's retained payload detail and attachment
+access. It preserves value-free lifecycle and spent-key evidence. Review the
+exact dry run and your retention decision before erasing. Expired or erased
+receipts cannot execute the command again.
 :::
 
 ```sh
-bregctl --format json request-retention erase \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-entity placement-correction-request \
-  --request-id "<requestId>" --proposal-version 3
+bregctl --format json proposal-retention erase \
+  --runtime-config /etc/breg/runtime.yaml --action-id correct-address \
+  --proposal-id '<proposal-uuid>' --submission-version '<version>'
 ```
 
-The erasure reports the same counts as the dry run. A refusal, `request-retention.operation.refused`,
-names the cause without values: the entity's retention mode is `retain`, or the version is pinned.
-Erasing record history does not erase these rows, and erasing these rows does not touch record
-history.
-
-Attachment bytes are removed after their final retained reference is erased.
-Other requests or proposal versions that legitimately retain identical content
-keep their bytes and access. Erased slot metadata keeps filled state, size, and
-hash while dropping content type, verification status, and upload actor/time.
-S3 deletion failures remain in a durable retry queue; `pendingExternalDeletions` reports the registry-wide
-outstanding count. Use [attachment cleanup](#retry-external-attachment-cleanup) to
-retry these deletions independently of request erasure. A nonzero
-count means physical deletion is still pending, even though scoped download
-access has been revoked. `externalDeletionTombstones` counts confirmed S3 deletions
-retained for future absence checks. Continue periodic cleanup runs to recheck these
-keys and remove any orphan bytes from a delayed remote write. Confirmed tombstones
-also remain subject to the first-upload storage and verification binding.
-Configure backup and replication expiry separately, and keep the bucket versioning
-rules in [Attachment storage](../../reference/breg-configuration/#attachment-storage).
-An external verifier may retain its own copies or logs; registry erasure does not
-remove them. Set that service's retention policy as part of [External attachment
-verification](../../reference/breg-configuration/#external-attachment-verification).
-
-{/* Evidence: crates/registry-breg/src/request_retention.rs;
-    crates/registry-breg/src/attachment_store.rs;
-    crates/registry-bregctl/src/request_retention.rs;
-    crates/registry-bregctl/src/lib.rs, RequestRetentionCommand, RequestRetentionListArgs,
-    and RequestRetentionExactArgs. */}
+Record history and other retained submissions have separate scopes. Identical
+attachment bytes remain while another authorized retained reference needs them.
+Configure backup, replication, and external verifier retention independently.
+Registry erasure cannot remove another service's copy.
 
 ## Retry external attachment cleanup
 
-Use `request-retention cleanup-attachments` when S3 deletions remain pending or
-when an interrupted upload left unreferenced content. Cleanup works even when all
-requests use `retain` mode or the registry has only active drafts. It uses the
-migration credential and verified runtime configuration, including the pinned
-storage and verification bindings.
-
-:::caution[Cleanup permanently removes unreferenced content]
-Check that the runtime configuration identifies the intended registry. Cleanup
-preserves live attachment references and request detail; it permanently removes
-unreferenced external bytes selected by the bounded cleanup pass.
-:::
+External deletion failure leaves durable cleanup work. A revoked scoped download
+can coexist with physical deletion still pending. Inspect and retry cleanup:
 
 ```sh
-bregctl --format json request-retention cleanup-attachments \
+bregctl --format json proposal-retention cleanup-attachments \
   --runtime-config /etc/breg/runtime.yaml
 ```
 
-The report contains the registry-wide `pendingExternalDeletions` and
-`externalDeletionTombstones` counts. Repeat cleanup while deletions remain pending,
-and continue periodic runs to recheck confirmed tombstones for delayed remote
-writes. A backend failure leaves work durable for a later run. A configuration or
-identity refusal requires restoring the matching runtime binding before retrying.
-This command does not make an active draft or a retained request eligible for
-detail erasure.
+Repeat while deletions remain pending, and retain periodic absence checks for
+external deletion tombstones. Restore a refused backend or identity binding
+before retrying. Cleanup does not make active or retained work eligible for detail
+erasure. Review the separately configured storage and bucket retention policy.
 
-{/* Evidence: crates/registry-breg/src/request_retention.rs, cleanup_attachments();
+{/* Evidence: crates/registry-breg/src/proposal_retention.rs;
     crates/registry-breg/src/attachment_store.rs;
-    crates/registry-bregctl/src/request_retention.rs;
-    crates/registry-bregctl/src/lib.rs, AttachmentCleanupArgs. */}
+    crates/registry-bregctl/src/lib.rs, ProposalRetentionCommand and ProposalRetentionExactArgs. */}
 
 ## Erase expired Evidence uses
 
@@ -325,7 +282,7 @@ inside its window: a cutoff later than the database transaction time reaches onl
 and a cutoff in the future is refused. Both paths must be absolute. The report carries a count and
 no values. The run verifies the expected registry identity, catalog, and readiness while it holds
 the registry transaction lock through the deletion, and the configured runtime credential cannot
-perform the deletion at all. Unlike `request-retention erase`, which erases one exact proposal
+perform the deletion at all. Unlike `proposal-retention erase`, which erases one exact proposal
 version, this erasure works from the time boundary alone.
 
 {/* Evidence: crates/registry-breg/src/action_evidence_client.rs,
@@ -342,13 +299,13 @@ instead of writing again. A key is spent per caller across every write: the conf
 principal value, and the key find it, so the same key on another write answers
 `409 idempotency.conflict`, and nothing about it depends on `audit.hashKeyRef`. Only
 successes are held; a refused or failed attempt spends nothing. The held response stays available
-for `idempotency.receiptRetentionDays` after the write commits, 7 days unless the runtime
+for `retention.receiptRetentionDays` after the write commits, 7 days unless the runtime
 configuration chooses another value between 1 and 365. A horizon is fixed when the write commits,
 so changing the setting applies to later writes only.
 
 Past the horizon an exact retry answers `410 idempotency.expired` and never executes, whether or not
 the held response is still stored. A key whose held response `history erase` or
-`request-retention erase` removed answers `409 idempotency.conflict` to every retry instead, on
+`proposal-retention erase` removed answers `409 idempotency.conflict` to every retry instead, on
 either side of the horizon. The key itself stays spent for good. The drop removes the held response
 and the raw issuer, principal value, and key, and keeps a digest of them with the request binding
 and times, so every key answers as it did before the drop: the same caller's exact retry of a key
@@ -365,7 +322,7 @@ bregctl idempotency-retention erase-expired \
 
 The command drops every receipt whose horizon passed at or before the cutoff, and none still
 inside its horizon: a cutoff later than the database transaction time reaches only expired
-receipts, and a cutoff in the future is refused. A receipt whose held response `request-retention
+receipts, and a cutoff in the future is refused. A receipt whose held response `proposal-retention
 erase` already removed is dropped the same way, so its raw caller and key are cleared too. The runtime configuration path must be absolute.
 The report carries a count and no values, and a second run with the same cutoff drops nothing. The
 run verifies the expected registry identity, catalog, and readiness while it holds the registry
@@ -373,7 +330,7 @@ transaction lock, and the configured runtime credential cannot perform it.
 
 Until its receipt is dropped, a spent key keeps the raw issuer, principal value, and key it was sent
 under, beside the record history it produced. Nothing clears them earlier, so schedule the drop to
-match `idempotency.receiptRetentionDays`. The digest row that keeps the key spent is never deleted:
+match `retention.receiptRetentionDays`. The digest row that keeps the key spent is never deleted:
 an immediate action's results and application hang off it, and revision history reads their
 provenance from them. `history erase` replaces the held responses that could replay erased
 revisions with refusal tombstones; it does not forget that the key was spent.
@@ -381,9 +338,9 @@ revisions with refusal tombstones; it does not forget that the key was spent.
 {/* Evidence: crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, lock_and_load(), and
     drop_expired_receipts();
     crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and resolve_binding();
-    crates/registry-breg/src/request_retention.rs, idempotency_results;
+    crates/registry-breg/src/proposal_retention.rs, idempotency_results;
     crates/registry-breg/src/idempotency_retention.rs, erase_expired;
-    crates/registry-breg/src/runtime_config.rs, IdempotencyConfig;
+    crates/registry-breg/src/runtime_config.rs, RetentionConfig;
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
     crates/registry-breg/tests/postgres_mutation.rs,
     real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent and
@@ -445,10 +402,10 @@ Operator commands follow the same rule. `evidence-retention erase-expired` recor
 was given in its request entry and the number of assertions it erased in its response;
 `idempotency-retention erase-expired` records its cutoff and the number of receipts it dropped
 the same way.
-`request-retention erase` deletes the external attachment objects before it records its response,
+`proposal-retention erase` deletes the external attachment objects before it records its response,
 which states how many objects still wait for deletion; when that deletion pass itself fails, the
 count is `null` and the command reports the failure. If the erasure committed but its response
-entry could not be written, the command reports `request-retention.erasure.unaudited`: the detail is
+entry could not be written, the command reports `proposal-retention.erasure.unaudited`: the detail is
 gone, so restore the audit destination and reconcile the erased request against the database. An
 event delivery's attempt is recorded inside the transaction that leases it, before its request
 leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
@@ -511,7 +468,7 @@ outside the new writer's retention directory.
 {/* Evidence: crates/registry-breg/src/audit.rs, unfinished_record;
     crates/registry-breg/src/runtime_config.rs, AuditConfig;
     crates/registry-platform-audit/src/writer.rs, AuditRequest;
-    crates/registry-breg/src/request_retention.rs, ErasureUnaudited, retention_outcome_record,
+    crates/registry-breg/src/proposal_retention.rs, ErasureUnaudited, retention_outcome_record,
     and pendingExternalDeletions;
     crates/registry-platform-hooks/src/delivery/service.rs, WorkerInterrupted;
     crates/registry-breg/src/action_evidence_maintenance.rs, EVIDENCE_RETENTION_AUDIT_SCHEMA;
@@ -529,9 +486,9 @@ outside the new writer's retention directory.
 | `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
 | `history.erase.request-file.refused` or `history.rebaseline.request-file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
 | `history erase`, `history rebaseline`, or `field-encryption erase-history` reports `history.erase.in-progress`, `history.rebaseline.in-progress`, or `field-encryption.erase-history.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An erasure or a rebaseline changed nothing; `erase-history` keeps the records it already erased and can be run again. |
-| `request-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `request-retention.in-progress`, `evidence-retention.in-progress`, or `idempotency-retention.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An Evidence erasure erased nothing, and an idempotency drop dropped nothing. A request-detail erasure that committed before its external-deletion retry waited stays erased; `request-retention dry-run` shows whether it did. |
-| `request-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `request-retention.package.refused`, `evidence-retention.package.refused`, or `idempotency-retention.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. Nothing was erased. |
-| `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
+| `proposal-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `proposal-retention.in-progress`, `evidence-retention.in-progress`, or `idempotency-retention.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An Evidence erasure erased nothing, and an idempotency drop dropped nothing. A Proposal-detail erasure that committed before its external-deletion retry waited stays erased; `proposal-retention dry-run` shows whether it did. |
+| `proposal-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `proposal-retention.package.refused`, `evidence-retention.package.refused`, or `idempotency-retention.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. Nothing was erased. |
+| `proposal-retention erase` is refused | The Action's Proposal retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
 | A retry answers `410 idempotency.expired` | The key was spent by a successful write whose receipt horizon has passed. The write committed; read the record or its history instead of retrying, and send a fresh key only for a new write. |
 | Readiness or an operation reports audit unavailable | Check destination permissions, free space, and the single-writer lock. Repair the destination and restart a stopped writer. With a `stdout` destination, check that its collector is reading the stream: a stalled writer resumes with no restart once it is, and until then a request or probe can go unanswered instead of refused. For a mutation whose response failed after commit, inspect its receipt or domain history before retrying. |
@@ -542,16 +499,15 @@ outside the new writer's retention directory.
     erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing;
     crates/registry-bregctl/src/lib.rs,
     history_maintenance_reports_a_held_migration_lock_as_in_progress;
-    crates/registry-breg/src/request_retention.rs, begin_verified_transaction();
+    crates/registry-breg/src/proposal_retention.rs, begin_verified_transaction();
     crates/registry-breg/src/action_evidence_maintenance.rs, erase_in_transaction();
-    crates/registry-breg/tests/postgres_request_read_retention.rs,
-    request_detail_erasure_reports_a_held_migration_lock_and_erases_nothing;
+    crates/registry-breg/tests/postgres_native_retention.rs;
     crates/registry-breg/tests/postgres_action_evidence_retention.rs,
     retention_reports_a_held_migration_lock_and_erases_nothing;
     crates/registry-bregctl/src/lib.rs,
     operator_maintenance_reports_a_held_migration_lock_as_in_progress;
     crates/registry-bregctl/tests/cli.rs,
-    request_retention_names_both_digests_when_the_active_package_misses_its_pin,
+    proposal_retention_names_both_digests_when_the_active_package_misses_its_pin,
     evidence_retention_names_both_digests_when_the_active_package_misses_its_pin, and
     idempotency_retention_names_both_digests_when_the_active_package_misses_its_pin. */}
 

@@ -63,14 +63,15 @@ async fn ordinary_profile_removal_tolerates_missing_predecessor_policy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn automatic_successor_adds_optional_field_and_change_request_policy() {
-    let baseline_bytes = change_request_policy_module(false, false);
-    let baseline = compile_profile_module(&baseline_bytes);
+async fn reviewed_successor_adds_optional_field_and_proposal_submitter_grant() {
+    let (baseline_project, baseline_bytes) = proposal_policy_sources(false, false);
+    let baseline = compile_proposal_policy(&baseline_project, &baseline_bytes);
     let baseline_fingerprint = fresh_fingerprint(&baseline).await;
     let database = TestDatabase::create(1).await;
-    let first = publish_temporal_policy_package(
+    let first = publish_proposal_policy_package(
         None,
         baseline_fingerprint,
+        baseline_project,
         baseline_bytes,
         PackageMigrationPlanInput::InitialCompiledDdl,
     );
@@ -85,8 +86,8 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     .await
     .unwrap();
 
-    let candidate_bytes = change_request_policy_module(true, true);
-    let candidate = compile_profile_module(&candidate_bytes);
+    let (candidate_project, candidate_bytes) = proposal_policy_sources(true, true);
+    let candidate = compile_proposal_policy(&candidate_project, &candidate_bytes);
     let candidate_fingerprint = fresh_fingerprint(&candidate).await;
     let changes =
         compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_digest);
@@ -96,7 +97,7 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     }));
     assert!(changes.changes.iter().any(|change| {
         change.code == CompiledRegistryChangeCode::AccessProfileAdded
-            && change.target.entity_id.as_deref() == Some("asset-request")
+            && change.target.entity_id.as_deref() == Some("asset")
     }));
     let baseline_policies = predecessor
         .registry()
@@ -110,19 +111,30 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
         .tables
         .iter()
         .flat_map(|table| &table.policies)
-        .any(|policy| {
-            policy.name.starts_with("registry_cr_")
-                && !baseline_policies.contains(policy.name.as_str())
-        }));
-    change_set_to_applicable_migration_plan(&changes)
-        .expect("the optional field and additive request profile are compiler-applicable");
+        .any(|policy| { !baseline_policies.contains(policy.name.as_str()) }));
+    assert!(changes.changes.iter().any(|change| {
+        change.code == CompiledRegistryChangeCode::ActionChanged
+            && change.target.member_id.as_deref() == Some("correct-label")
+    }));
+    assert!(
+        change_set_to_applicable_migration_plan(&changes).is_err(),
+        "native Proposal grant changes require reviewed authorization"
+    );
 
-    let next = publish_temporal_policy_package(
+    let next = publish_proposal_policy_package(
         Some(&active.package_digest),
         candidate_fingerprint.clone(),
+        candidate_project,
         candidate_bytes,
-        PackageMigrationPlanInput::Successor {
+        PackageMigrationPlanInput::ReviewedSuccessor {
             prior_registry: Box::new(predecessor.registry().clone()),
+            prior_schema_fingerprint: active.schema_fingerprint.clone(),
+            migrations: vec![metadata_only_review_source(
+                &changes.changes,
+                &active.package_digest,
+                &active.schema_fingerprint,
+                &candidate_fingerprint,
+            )],
         },
     );
     let successor = load_package(next.path(), &local_context()).unwrap();
@@ -134,7 +146,21 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
         Duration::from_secs(5),
     )
     .await
-    .expect("automatic successor applies after ACL reconciliation probes the candidate");
+    .expect("reviewed Proposal grant successor applies after ACL reconciliation");
+    let registry_breg::model::CompiledActionExecution::Proposal { proposal } =
+        &successor.registry().actions().actions[0].execution
+    else {
+        panic!("the active Action retains native Proposal execution");
+    };
+    assert!(
+        proposal.permissions.iter().any(|permission| {
+            permission.profile_id == "backup-submitter"
+                && permission
+                    .operations
+                    .contains(&registry_breg::contract::ProposalOperation::Submit)
+        }),
+        "the activated package retains the exact additive Proposal submit grant"
+    );
     assert_eq!(upgraded.schema_fingerprint, candidate_fingerprint);
     assert_eq!(
         ledger_apply_order(&database, &upgraded.activation_id).await,
@@ -161,70 +187,105 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
     database.cleanup().await;
 }
 
-fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -> Vec<u8> {
+fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Vec<u8>, Vec<u8>) {
     let mut module = json!({
-        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
-        "id": "core", "version": "1", "entities": [{
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1", "kind":"BRegModule",
+        "id": "core", "version": "1", "recordTypes": [{
             "id": "asset", "primaryDataset": "neutral-registry", "route": "assets",
-            "mutationMode": "mutable", "changeControl": {"requiredFor": ["patch"]},
-            "fields": [{
-                "id": "label", "type": "string", "maximumLength": 40,
-                "required": true, "classification": "internal"
-            }]
-        }, {
-            "id": "asset-request", "primaryDataset": "neutral-registry",
-            "route": "asset-requests", "mutationMode": "mutable",
-            "fields": [{
-                "id": "asset", "type": "reference", "target": "asset",
-                "required": true, "classification": "internal"
-            }, {
-                "id": "label", "type": "string", "maximumLength": 40,
-                "required": true, "classification": "internal"
-            }],
-            "changeRequest": {
-                "effects": [{
-                    "id": "apply-label", "target": {"fromField": "asset"},
-                    "operation": "patch", "set": {"label": {"fromField": "label"}}
-                }],
-                "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"},
-                "onApproved": {"mode": "manual"}
-            },
-            "accessProfiles": [{
-                "id": "reader", "default": true, "principalClaim": "principal",
-                "operations": ["create", "patch", "get", "list", "submit-request",
-                    "revise-request", "cancel-request", "apply-request"],
-                "readableFields": ["asset", "label"],
-                "writableFields": ["asset", "label"],
-                "applyTargets": [{"entity": "asset", "rowBoundaries":"unrestricted"}],
-                "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"
-            }]
+            "mutationMode": "mutable", "mutationPolicy": {"patch": "proposal-required"},
+            "fields": [{"id": "label", "type": "string", "maximumLength": 40,
+                "required": true, "classification": "internal"}]
+        }],
+        "actions": [{
+            "id": "correct-label",
+            "execution": {"mode": "proposal", "proposal": {
+                "review": {"type": "required", "authority": "casework-main",
+                    "source": "neutral-registry", "policy": {"id": "request-review"}},
+                "application": {"mode": "manual"}, "retention": {"mode": "retain"}
+            }},
+            "inputs": [
+                {"id": "asset", "type": "reference", "target": "asset", "required": true, "classification": "internal"},
+                {"id": "label", "type": "string", "maximumLength": 40, "required": true, "classification": "internal"}
+            ],
+            "commitGuards": {"targets": [{"input": "asset", "revision": "unchanged"}]},
+            "plan": {"type": "fixed", "effects": [{"id": "apply-label",
+                "target": {"fromInput": "asset"}, "operation": "patch",
+                "set": {"label": {"fromInput": "label"}}
+            }]}
         }]
     });
     if add_optional_field {
-        module["entities"][0]["fields"]
+        module["recordTypes"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id": "note", "type": "string", "maximumLength": 80,
-                "classification": "internal"
+                "id": "note", "type": "string", "maximumLength": 80, "classification": "internal"
             }));
     }
+    let actions = module.as_object_mut().unwrap().remove("actions").unwrap();
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let module = parse_module_yaml(&module_bytes).unwrap();
+    let mut project: Value =
+        serde_json::from_slice(&project_bytes(&module_digest(&module))).unwrap();
+    project["actions"] = actions;
+    project["reviewAuthorities"] =
+        json!([{"id": "casework-main", "protocol": "id.registrystack.org/protocols/review/v1"}]);
+    let profile = |id: &str, default: bool| {
+        json!({
+            "id": id, "default": default, "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "permissions": {
+                "records": [{"recordType": "asset", "operations": ["get", "list"],
+                    "readableFields": ["label"], "rowBoundaries": "unrestricted"}],
+                "actions": [{"action": "correct-label", "operations": ["start"],
+                    "targets": [{"recordType": "asset", "rowBoundaries": "unrestricted"}]}],
+                "proposals": [{"action": "correct-label", "operations": ["get", "list", "submit"],
+                    "readableInputs": ["asset", "label"], "ownership": "caller",
+                    "targets": [{"recordType": "asset", "rowBoundaries": "unrestricted"}]}]
+            }
+        })
+    };
+    let mut profiles = vec![profile("reader", true)];
     if add_submitter {
-        module["entities"][1]["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({
-                "id": "backup-submitter", "principalClaim": "principal",
-                "operations": ["get", "list", "submit-request"],
-                "readableFields": ["asset", "label"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"
-            }));
+        profiles.push(profile("backup-submitter", false));
     }
-    serde_json::to_vec(&module).unwrap()
+    project["accessProfiles"] = json!(profiles);
+    (serde_json::to_vec(&project).unwrap(), module_bytes)
+}
+
+fn compile_proposal_policy(project: &[u8], module: &[u8]) -> registry_breg::CompiledRegistry {
+    compile_project(
+        &parse_project_yaml(project).unwrap(),
+        &[parse_module_yaml(module).unwrap()],
+        CompileProfile::Production,
+    )
+    .unwrap()
+}
+
+fn publish_proposal_policy_package(
+    prior_revision: Option<&str>,
+    schema_fingerprint: String,
+    project_bytes: Vec<u8>,
+    module_bytes: Vec<u8>,
+    migration_plan: PackageMigrationPlanInput,
+) -> TempRoot {
+    let root = TempRoot::create();
+    let prepared = prepare_package(build_request(BuildRequestParts {
+        prior_revision,
+        schema_fingerprint,
+        project_bytes,
+        module_bytes,
+        migration_plan,
+    }))
+    .expect("native Proposal policy package prepares");
+    prepared
+        .publish_to_directory(root.path())
+        .expect("native Proposal policy package publishes");
+    root
 }
 
 fn profile_module(auditor: Option<Value>) -> Vec<u8> {
     let mut module: Value = serde_json::from_slice(&module_bytes(PlanChoice::Schema)).unwrap();
-    let entity = &mut module["entities"][0];
+    let entity = &mut module["recordTypes"][0];
     entity["fields"].as_array_mut().unwrap().push(json!({
         "id": "note", "type": "string", "maximumLength": 80, "classification": "internal"
     }));

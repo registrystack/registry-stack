@@ -174,6 +174,11 @@ impl TokenError {
 
 /// The OAuth 2.0 error code an authorization server returned.
 ///
+/// The closed variants cover the token-endpoint errors from RFC 6749 section
+/// 5.2 and RFC 8707 section 2's `invalid_target` response. Other spellings
+/// collapse to [`OAuthErrorCode::Other`] rather than carrying server-authored
+/// text across the token-exchange boundary.
+///
 /// This code is all a refused token request reports. The accompanying
 /// `error_description` is server-authored text about a failed authentication
 /// attempt, so it is dropped where the body is parsed rather than carried into a
@@ -188,15 +193,17 @@ pub enum OAuthErrorCode {
     UnauthorizedClient,
     UnsupportedGrantType,
     InvalidScope,
-    /// A code outside RFC 6749 section 5.2. The server's own spelling is
-    /// deliberately not kept: it is unbounded text from the failed exchange, and
-    /// the extension registry is open, so no closed variant could hold it.
+    InvalidTarget,
+    /// A code outside the supported RFC 6749 and RFC 8707 sets. The server's
+    /// own spelling is deliberately not kept: it is unbounded text from the
+    /// failed exchange, and the extension registry is open, so no closed variant
+    /// could hold it.
     Other,
 }
 
 impl OAuthErrorCode {
-    /// The registered spelling, or a fixed name for a code from outside the
-    /// section 5.2 set. The registered words are RFC 6749's and keep its
+    /// The registered spelling, or a fixed name for a code outside the supported
+    /// RFC 6749 and RFC 8707 sets. Registered words keep the specifications'
     /// spelling; the fixed name is this crate's own and is kebab-case.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
@@ -207,6 +214,7 @@ impl OAuthErrorCode {
             Self::UnauthorizedClient => "unauthorized_client",
             Self::UnsupportedGrantType => "unsupported_grant_type",
             Self::InvalidScope => "invalid_scope",
+            Self::InvalidTarget => "invalid_target",
             Self::Other => "unregistered-error-code",
         }
     }
@@ -220,6 +228,7 @@ impl OAuthErrorCode {
             "unauthorized_client" => Self::UnauthorizedClient,
             "unsupported_grant_type" => Self::UnsupportedGrantType,
             "invalid_scope" => Self::InvalidScope,
+            "invalid_target" => Self::InvalidTarget,
             _ => Self::Other,
         }
     }
@@ -396,8 +405,8 @@ mod tests {
         assert_eq!(OAuthErrorCode::Other.as_str(), "unregistered-error-code");
     }
 
-    /// The registered codes are RFC 6749 section 5.2 words and keep the
-    /// spelling the specification gives them.
+    /// Supported RFC 6749 section 5.2 and RFC 8707 section 2 codes keep the
+    /// spelling the specifications give them.
     #[test]
     fn registered_error_codes_keep_the_specification_spelling() {
         for (code, word) in [
@@ -410,6 +419,7 @@ mod tests {
                 "unsupported_grant_type",
             ),
             (OAuthErrorCode::InvalidScope, "invalid_scope"),
+            (OAuthErrorCode::InvalidTarget, "invalid_target"),
         ] {
             assert_eq!(code.as_str(), word);
             assert_eq!(OAuthErrorCode::from_wire(word), code);

@@ -387,11 +387,11 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
             },
         )
         .collect::<Vec<Value>>();
-    let project = json!({
+    let project = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "entities": [{
+        "recordTypes": [{
             "id": "case",
             "primaryDataset": "test-dataset",
             "route": "cases",
@@ -451,7 +451,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         "registry_migration"
     );
     assert_eq!(
-        config.event_delivery().payload_retention(),
+        config.retention().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
     assert_eq!(config.identity().database_id(), "registry-db");
@@ -896,7 +896,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
     assert_eq!(jwks.outage_tolerance, Duration::from_secs(900));
     assert_eq!(config.cursor().max_age(), Duration::from_secs(300));
     assert_eq!(
-        config.event_delivery().payload_retention(),
+        config.retention().payload_retention(),
         Duration::from_secs(7 * 24 * 60 * 60)
     );
     assert_eq!(
@@ -1071,32 +1071,38 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for days in [1_u8, 30_u8] {
         let config = parse_runtime_config(&format!(
-            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
         ))
         .expect("bounded deployment retention parses");
         assert_eq!(
-            config.event_delivery().payload_retention(),
+            config.retention().payload_retention(),
             Duration::from_secs(u64::from(days) * 24 * 60 * 60)
         );
     }
     for days in [0_u8, 31_u8] {
         let error = parse_runtime_config(&format!(
-            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/eventDelivery/payloadRetentionDays")
+            ("config.out-of-range", "/retention/hookPayloadRetentionDays")
         );
     }
+    let error = parse_runtime_config(&format!("{base}\nretention:\n  payloadRetentionDays: 7\n"))
+        .expect_err("the hook payload window has one name");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.unknown-key", "/retention/payloadRetentionDays")
+    );
 }
 
 #[test]
 fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config = parse_runtime_config(&base).expect("the idempotency section is optional");
-    assert_eq!(config.idempotency().receipt_retention_days(), 7);
+    let config = parse_runtime_config(&base).expect("the retention section is optional");
+    assert_eq!(config.retention().receipt_retention_days(), 7);
     let policy = config
         .idempotency_policy()
         .expect("the configured issuer scopes caller keys");
@@ -1107,20 +1113,56 @@ fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() 
     assert_eq!(policy.receipt_retention_days(), 7);
     for days in [1_u16, 365_u16] {
         let config = parse_runtime_config(&format!(
-            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
         ))
         .expect("a bounded receipt horizon parses");
-        assert_eq!(config.idempotency().receipt_retention_days(), days);
+        assert_eq!(config.retention().receipt_retention_days(), days);
     }
     for days in [0_u16, 366_u16] {
         let error = parse_runtime_config(&format!(
-            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
         ))
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
-            ("config.out-of-range", "/idempotency/receiptRetentionDays")
+            ("config.out-of-range", "/retention/receiptRetentionDays")
         );
+    }
+}
+
+#[test]
+fn retention_windows_outside_the_retention_block_are_refused_naming_the_new_path() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (document, pointer, replacement) in [
+        (
+            "eventDelivery:\n  payloadRetentionDays: 7\n",
+            "/eventDelivery",
+            "retention.hookPayloadRetentionDays",
+        ),
+        (
+            "eventDelivery: {}\n",
+            "/eventDelivery",
+            "retention.hookPayloadRetentionDays",
+        ),
+        (
+            "idempotency:\n  receiptRetentionDays: 7\n",
+            "/idempotency",
+            "retention.receiptRetentionDays",
+        ),
+        (
+            "idempotency: {}\n",
+            "/idempotency",
+            "retention.receiptRetentionDays",
+        ),
+    ] {
+        let error = parse_runtime_config(&format!("{base}\n{document}"))
+            .expect_err("the old retention location is refused");
+        let (code, path) = reader_refusal(&error);
+        assert_eq!(code, "config.removed-key", "{document}");
+        assert!(path.starts_with(pointer), "{document}: {path}");
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
     }
 }
 
@@ -1332,7 +1374,7 @@ fn unknown_keys_inside_a_task_grant_status_entry_are_reported_with_positions() {
          clientAssertionAudience: urn:identity:test\n    \
          clientId: breg-task-status\n    \
          privateKeyRef: secret:file/task-status-key\n    \
-         caseworkResource: urn:casework:test\n    \
+         statusResource: urn:casework:test\n    \
          statusScopes: canary-a\n    \
          scopes: canary-b\n",
         valid_runtime(&fixture.secret_root, &fixture.package_root)
@@ -1565,77 +1607,6 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
     raw.push_str("entities: []\n");
     let error = parse_runtime_config_with_env(&raw, env_lookup).expect_err("governed key refused");
     assert_eq!(reader_refusal(&error), ("config.unknown-key", "/entities"));
-}
-
-#[test]
-fn review_executors_are_strict_ordinary_self_http_bindings() {
-    let fixture = RuntimeFixture::new();
-    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let valid = format!(
-        "{base}reviewExecutors:\n  registry-automatic:\n    endpoint: https://registry.example/registry-a/\n    tokenRef: secret:file/automatic-executor-token\n    registryId: registry-a\n    accessProfile: automatic-applier\n"
-    );
-    parse_runtime_config_with_env(&valid, env_lookup).expect("strict HTTPS executor binding");
-    parse_runtime_config_with_env(
-        &valid.replace(
-            "https://registry.example/registry-a/",
-            "http://127.0.0.1:8080/registry-a/",
-        ),
-        env_lookup,
-    )
-    .expect("loopback executor binding");
-
-    for (invalid, expected) in [
-        (
-            valid.replace(
-                "https://registry.example/registry-a/",
-                "http://registry.example/registry-a/",
-            ),
-            Refusal::Runtime(RuntimeConfigError::InvalidBinding),
-        ),
-        (
-            valid.replace("    accessProfile: automatic-applier\n", ""),
-            READER,
-        ),
-        (
-            valid.replace(
-                "    accessProfile: automatic-applier\n",
-                "    accessProfile: automatic-applier\n    authority: internal\n",
-            ),
-            READER,
-        ),
-    ] {
-        assert_eq!(
-            refusal(
-                parse_runtime_config_with_env(&invalid, env_lookup)
-                    .expect_err("unsafe executor binding refused")
-            ),
-            expected
-        );
-    }
-}
-
-#[test]
-fn review_executors_accept_exactly_one_refreshing_or_static_credential() {
-    let fixture = RuntimeFixture::new();
-    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let credential = "    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/executor-client-id\n      clientAssertionKeyRef: secret:file/executor-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:registry:primary\n      scopes: [requests:apply]\n";
-    let refreshing = format!("{base}reviewExecutors:\n  applier:\n    endpoint: https://registry.example/\n    registryId: registry-a\n    accessProfile: automatic-applier\n{credential}");
-    parse_runtime_config_with_env(&refreshing, env_lookup).expect("renewable executor binding");
-    for invalid in [
-        refreshing.replace(credential, ""),
-        refreshing.replace(
-            "    privateKeyJwt:",
-            "    tokenRef: secret:file/opaque-token\n    privateKeyJwt:",
-        ),
-        refreshing.replace("scopes: [requests:apply]", "scopes: []"),
-        refreshing.replace("resource: urn:registry:primary", "resource: not-a-resource"),
-    ] {
-        assert_eq!(
-            parse_runtime_config_with_env(&invalid, env_lookup)
-                .expect_err("ambiguous or invalid executor auth"),
-            RuntimeConfigError::InvalidBinding
-        );
-    }
 }
 
 #[test]
@@ -4457,7 +4428,9 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
             .unwrap(),
         AttachmentStorage::Database
     ));
-    let invalid = format!("{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
+    let invalid = format!(
+        "{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
+    );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
     assert_eq!(path_of(&error), "/attachmentStorage");
@@ -4488,7 +4461,9 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
         .unwrap(),
         AttachmentVerification::Disabled
     ));
-    let invalid = format!("{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
+    let invalid = format!(
+        "{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+    );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
     assert_eq!(path_of(&error), "/attachmentVerification");
@@ -4517,7 +4492,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         "field encryption is unconfigured by default"
     );
 
-    let transit = format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n");
+    let transit = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n"
+    );
     let config = parse_runtime_config(&transit).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
@@ -4530,7 +4507,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     );
     assert!(!rendered.contains("breg-field-dek"), "no key name in debug");
 
-    let local = format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n");
+    let local = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n"
+    );
     let config = parse_runtime_config(&local).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
@@ -4539,9 +4518,13 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
 
     for invalid in [
         // A relative socket path never reaches a provider.
-        format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
+        format!(
+            "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"
+        ),
         // The local data key must come from a secret file.
-        format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
+        format!(
+            "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/BREG_FIELD_DEK\n"
+        ),
     ] {
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
@@ -4551,7 +4534,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     // The request timeout stays above zero and at or below the provider
     // maximum, refused at decode where the member is.
     for timeout in ["0", "30001"] {
-        let invalid = format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: {timeout}\n");
+        let invalid = format!(
+            "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: {timeout}\n"
+        );
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(
             reader_refusal(&error),
@@ -4589,6 +4574,34 @@ fn an_audit_key_that_is_not_a_secret_reference_is_refused_at_the_reference() {
     }
 }
 
+/// CFG-CHANGE-2: the status resource member is named for what it binds, and
+/// the Casework-named spelling it replaced is refused with the key to write.
+#[test]
+fn a_task_status_casework_resource_is_refused_naming_status_resource() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let status = json!({
+        "sourceIssuer":"urn:casework:source",
+        "baseUrl":"https://unreachable-status.invalid",
+        "tokenEndpoint":"https://identity.example/token",
+        "clientAssertionAudience":"urn:identity:test",
+        "clientId":"breg-task-status",
+        "privateKeyRef":"secret:file/missing-task-status-key",
+        "caseworkResource":"urn:casework:test"
+    });
+    let error = parse_runtime_config_with_env(
+        &format!("{base}\ntaskGrantStatus: {}\n", json!([status])),
+        env_lookup,
+    )
+    .expect_err("the Casework-named spelling is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.removed-key", "/taskGrantStatus/0/caseworkResource")
+    );
+    let rendered = format!("{error} {}", error.render_human(None));
+    assert!(rendered.contains("statusResource"), "{rendered}");
+}
+
 #[test]
 fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     let fixture = RuntimeFixture::new();
@@ -4600,7 +4613,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         "clientAssertionAudience":"urn:identity:test",
         "clientId":"breg-task-status",
         "privateKeyRef":"secret:file/missing-task-status-key",
-        "caseworkResource":"urn:casework:test",
+        "statusResource":"urn:casework:test",
         "caBundleRef":"secret:file/missing-task-status-ca"
     });
     parse_runtime_config(&format!(
@@ -4614,7 +4627,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         ("tokenEndpoint", "https://user@identity.test/token"),
         ("clientId", ""),
         ("clientAssertionAudience", ""),
-        ("caseworkResource", "not-an-absolute-resource"),
+        ("statusResource", "not-an-absolute-resource"),
         ("statusScope", "two scopes"),
         ("statusPath", "/v1/task-grants/status"),
     ] {
@@ -4648,7 +4661,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         );
     }
     let mut invalid = status.clone();
-    invalid["caseworkResource"] = json!("not-an-absolute-resource");
+    invalid["statusResource"] = json!("not-an-absolute-resource");
     let error = parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
         .unwrap_err();
     let diagnostic = &error.diagnostics(None)[0];

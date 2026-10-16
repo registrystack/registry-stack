@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "MessageLinks": {
+      "additionalProperties": false,
+      "description": "The links a message answer carries.",
+      "properties": {
+        "cancel": {
+          "type": "string"
+        },
+        "self": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "self",
+        "cancel"
+      ],
+      "type": "object"
+    },
+    "MessageStatus": {
+      "description": "The public status of one message, derived from its dispatch state and\nits delivery report by [`derive_status`].",
+      "enum": [
+        "queued",
+        "sending",
+        "submitted",
+        "delivered",
+        "failed",
+        "expired",
+        "cancelled",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The `202` answer to an accepted submission, and what a replayed key\nanswers again.",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "links": {
+      "$ref": "#/$defs/MessageLinks"
+    },
+    "status": {
+      "$ref": "#/$defs/MessageStatus"
+    }
+  },
+  "required": [
+    "id",
+    "status",
+    "links"
+  ],
+  "title": "messaging.submit-message/v1 output",
+  "type": "object"
+}

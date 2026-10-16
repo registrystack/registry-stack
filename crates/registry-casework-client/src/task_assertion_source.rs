@@ -354,7 +354,6 @@ mod tests {
                 code: CaseworkProblemCode::Unknown("remote-private-canary".into()),
                 detail: Some("remote-private-canary".into()),
                 trace_id: Some("remote-private-canary".into()),
-                original_attempt_id: None,
                 validation: None,
             });
             assert_eq!(

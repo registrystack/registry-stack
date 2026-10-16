@@ -35,7 +35,7 @@ const TOKEN_SECONDS: i64 = 3600;
 const ACTOR_KIND_CLAIM: &str = "registry_actor_kind";
 /// The claim the runtime reads scopes from when the configuration names
 /// none.
-const SCOPE_CLAIM: &str = "registry_scopes";
+const SCOPE_CLAIM: &str = "scope";
 
 fn random_hex(bytes: usize) -> DevResult<Zeroizing<String>> {
     let mut buffer = Zeroizing::new(vec![0_u8; bytes]);

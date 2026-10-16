@@ -4,7 +4,7 @@ journeys:
   - id: action-only-household-contact-registration
     steps:
       - id: create-household
-        entity: household
+        recordType: household
         accessProfile: household-operator
         claims:
           principal: synthetic-household-operator
@@ -27,7 +27,7 @@ journeys:
             district: north-district
         capture: household
       - id: create-service-center
-        entity: service-center
+        recordType: service-center
         accessProfile: household-operator
         claims:
           principal: synthetic-household-operator
@@ -68,7 +68,7 @@ journeys:
           status: 200
         capture: household-condition
       - id: read-household-for-maintenance
-        entity: household
+        recordType: household
         accessProfile: household-maintainer
         claims:
           principal: synthetic-household-maintainer
@@ -88,7 +88,7 @@ journeys:
             district: north-district
         capture: household-for-maintenance
       - id: stale-household-after-user-selection
-        entity: household
+        recordType: household
         accessProfile: household-maintainer
         claims:
           principal: synthetic-household-maintainer
@@ -245,7 +245,7 @@ journeys:
   - id: link-only-target-authority-is-still-enforced
     steps:
       - id: create-household
-        entity: household
+        recordType: household
         accessProfile: household-operator
         claims:
           principal: synthetic-household-operator
@@ -264,7 +264,7 @@ journeys:
           status: 201
         capture: north-household
       - id: create-south-service-center
-        entity: service-center
+        recordType: service-center
         accessProfile: household-operator
         claims:
           principal: synthetic-household-operator

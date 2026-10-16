@@ -8,8 +8,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -23,12 +21,13 @@ PRODUCT_FILES = {
     "breg-mcp": "runtime.yaml",
     "breg-review": "runtime.yaml",
     "casework": "casework.yaml",
+    "coordinator": "workflow.yaml",
     "scheduling": "scheduling.yaml",
     "messaging": "messaging.yaml",
     "discovery": "origins.yaml",
     "manifest": "metadata.yaml",
     "render": "manifest.yaml",
-    "evidence": "evidence-project.yaml",
+    "evidence": "evidence.yaml",
     "platform": "task-connection.yaml",
     "evidence-deployment": "runtime.yaml",
 }
@@ -59,21 +58,26 @@ SCHEMAS = {
     ),
     "breg-mcp": (("products/breg/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),),
     "breg-review": (("products/breg/generated/review-runtime/review-runtime.schema.json", "runtime.yaml"),),
+    "coordinator": (
+        ("products/coordinator/generated/project/project.schema.json", "workflow.yaml"),
+        ("products/coordinator/generated/runtime/runtime.schema.json", "runtime.yaml"),
+        ("products/coordinator/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+        ("products/coordinator/generated/runtime/runtime.schema.json", "*-runtime.yaml"),
+        ("products/coordinator/generated/scenarios/scenarios.schema.json", "scenarios.yaml"),
+    ),
     "casework": (
         ("products/casework/generated/project/project.schema.json", "casework.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
         ("products/casework/generated/fixture/fixture.schema.json", "fixtures/*.yaml"),
         ("products/casework/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
-        ("products/casework/generated/simulation/simulation.schema.json", "simulations/*.yaml"),
-        ("products/casework/generated/simulation/simulation.schema.json", "simulations/*.yml"),
         (
             "products/casework/generated/holiday-set/holiday-set.schema.json",
-            "simulations/holiday-sets/*.yaml",
+            "holiday-sets/*.yaml",
         ),
         (
             "products/casework/generated/holiday-set/holiday-set.schema.json",
-            "simulations/holiday-sets/*.yml",
+            "holiday-sets/*.yml",
         ),
         ("products/casework/generated/dev-clients/dev-clients.schema.json", "dev-clients.yaml"),
     ),
@@ -115,6 +119,46 @@ SCHEMAS = {
     ),
     "evidence": (
         (
+            "crates/registry-evidencectl/schemas/authoring/project.schema.json",
+            "evidence.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+            "*-target.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+            "target.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+            "targets/*/target.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+            "*-authority.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+            "authority.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+            "targets/*/authority.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/access-client.schema.json",
+            "access/clients/*.yaml",
+        ),
+        (
+            "products/evidence/generated/fixture/fixture.schema.json",
+            "fixtures/*.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json",
+            "mocks/source.yaml",
+        ),
+        (
             "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
             "*.resolutions.json",
         ),
@@ -122,26 +166,10 @@ SCHEMAS = {
             "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
             "source-resolutions.json",
         ),
-        (
-            "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
-            "selectors/*.yaml",
-        ),
-        (
-            "crates/registry-evidencectl/schemas/authoring/source.schema.json",
-            "sources/*.yaml",
-        ),
-        (
-            "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
-            "targets/*/settings.yaml",
-        ),
         ("products/evidence/generated/client-profile/client-profile.schema.json", "client-profile.json"),
         ("products/evidence/generated/client-profile/client-profile.schema.json", "*.profile.json"),
     ),
     "evidence-deployment": (
-        (
-            "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
-            "governance.yaml",
-        ),
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
         ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
         ("products/evidence/contracts/holder-bound-verification-policy.schema.yaml", "holder-bound*.policy.yaml"),
@@ -155,6 +183,7 @@ CHECKS = {
     "breg-mcp": ("breg-mcp", "--runtime-config", "{entry}", "check"),
     "breg-review": ("breg-review", "--runtime-config", "{entry}", "check"),
     "casework": ("caseworkctl", "check", "{project}"),
+    "coordinator": ("coordinatorctl", "check", "--project", "{project}"),
     "scheduling": ("schedulingctl", "check", "{project}"),
     "messaging": ("messagingctl", "check", "--project", "{project}"),
     "discovery": ("discoveryctl", "check", "--project", "{project}"),
@@ -231,25 +260,6 @@ def workspace_version() -> str:
     return match.group(1)
 
 
-def matching_cli(name: str) -> str:
-    command = shutil.which(name)
-    if command is None:
-        raise SetupError(f"{name} is required for this product's editor schemas")
-    result = subprocess.run(
-        [command, "--version"], capture_output=True, text=True, timeout=5, check=False
-    )
-    expected = workspace_version()
-    version = result.stdout.strip().split()
-    if (
-        result.returncode != 0
-        or len(version) < 2
-        or version[0] != name
-        or version[1] not in (expected, f"{expected}-dev")
-    ):
-        raise SetupError(f"{name} must report Registry Stack {expected} or {expected}-dev")
-    return command
-
-
 def check_project(product: str, project: Path, document_arg: str | None) -> tuple[str | None, Path | None]:
     if not project.is_dir() or project.is_symlink():
         raise SetupError(f"project must be a real directory: {project}")
@@ -260,9 +270,6 @@ def check_project(product: str, project: Path, document_arg: str | None) -> tupl
     if product == "manifest" or product == "evidence-oid4vci":
         return safe_document(project, document_arg or PRODUCT_FILES["manifest"])
     marker = PRODUCT_FILES[product]
-    if product == "evidence" and not (project / marker).is_file():
-        if (project / "source.openapi.yaml").is_file() and (project / "questions").is_dir():
-            return None, None
     if not (project / marker).is_file() or (project / marker).is_symlink():
         raise SetupError(f"{product} project needs {marker}: {project}")
     return None, None
@@ -528,17 +535,6 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
     }
     prepare_file(state_path, json_bytes(state), writes, project)
 
-    # The two established authoring CLIs own their schema snapshots and editor mappings.
-    # Run them only after validating our settings and task files.
-    if product == "evidence":
-        name = "evidencectl"
-        command = matching_cli(name)
-        args = [command, "tooling", "editor", str(project)]
-        if product == "evidence" and workspace != project:
-            args.extend(["--workspace", str(workspace)])
-        result = subprocess.run(args, check=False)
-        if result.returncode != 0:
-            raise SetupError(f"{name} tooling editor failed; no Registry Stack tasks were changed")
     publish(writes, project, workspace)
 
 
@@ -551,7 +547,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         configure(args.product, args.project, args.workspace or args.project, args.document)
-    except (OSError, SetupError, subprocess.TimeoutExpired) as error:
+    except (OSError, SetupError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"Configured Registry Stack {args.product} editor support for {args.project.absolute()}")

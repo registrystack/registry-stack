@@ -11,27 +11,31 @@ mod performance;
 use std::time::{Duration, Instant};
 
 use postgres_harness::TestDatabase;
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::parse_project_json;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_kernel_registry_state_for_test, install_kernel_schema,
-    test_activation_id, test_package_digest, verify_btree_gist, verify_catalog_identity,
-    verify_migration_role, verify_runtime_role, ClaimContext, DedicatedApplyConnection,
-    ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey, RegistryStateTestIdentity,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    test_activation_id, test_package_digest, verify_btree_gist,
+    verify_catalog_identity_for_catalog, verify_migration_role, ClaimContext,
+    DedicatedApplyConnection, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    PostgresKernelError, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000001";
-const PACKAGE_ID: &str = "kernel-registry";
-const DATABASE_ID: &str = "kernel-database";
+const PACKAGE_ID: &str = "catalog-proof";
+const DATABASE_ID: &str = "catalog-proof-database";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
+    let registry = compiled_registry();
     let database = TestDatabase::create(1).await;
     database
         .admin
         .execute("CREATE EXTENSION btree_gist", &[])
         .await
-        .expect("kernel prerequisite installs");
+        .expect("compiled temporal prerequisite installs");
     let (migration, migration_task) = database.connect_migration().await;
-    install_kernel_schema(&migration, &database.runtime_role)
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration role installs field-encryption catalog objects");
 
@@ -116,8 +120,8 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
                      entity_id, field_id, boundary_package_revision, history_choice,
                      history_commit_position,
                      sealed_row_count, sealed_journal_row_count,
-                     accepted_plaintext_journal_row_count, accepted_request_target_row_count,
-                     accepted_request_proposal_row_count, accepted_idempotency_row_count,
+                     accepted_plaintext_journal_row_count, accepted_proposal_target_row_count,
+                     accepted_proposal_submission_row_count, accepted_idempotency_row_count,
                      accepted_outbox_row_count
                  ) VALUES ('asset', 'secret', 'package-1', 'retain-plaintext-history',
                            1, 0, 0, 0, 0, 0, 0, 0)"
@@ -138,6 +142,7 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "opt-in PostgreSQL performance measurement"]
 async fn benchmark_record_transaction() {
+    let registry = compiled_registry();
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -145,12 +150,13 @@ async fn benchmark_record_transaction() {
         .await
         .expect("benchmark prerequisite installs");
     let (migration, migration_task) = database.connect_migration().await;
-    install_kernel_schema(&migration, &database.runtime_role)
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
-        .expect("benchmark kernel installs");
-    let identity = initialize_kernel_registry_state_for_test(
+        .expect("benchmark compiled registry installs");
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             database_id: DATABASE_ID,
@@ -162,7 +168,7 @@ async fn benchmark_record_transaction() {
     migration_task.abort();
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
-    let contexts = [claims("alpha"), claims("beta")];
+    let contexts = [claims(&registry, "alpha"), claims(&registry, "beta")];
     // Include pool checkout and alternate authority on the same connection.
     // Setup and the first 100 transactions are excluded from the measurements.
     for sample in 0..=5 {
@@ -198,14 +204,34 @@ async fn benchmark_record_transaction() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
+    let registry = compiled_registry();
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+    let entity = &registry.entities()["entry"];
+    let table = format!("registry_data.{}", quote(&entity.physical_table));
+    let authority = quote(&entity.fields["authority"].physical_name);
+    let payload = quote(&entity.fields["payload"].physical_name);
+    let valid_from = quote(&entity.fields["valid-from"].physical_name);
     let database = TestDatabase::create(1).await;
     let (migration, migration_task) = database.connect_migration().await;
 
-    let missing_extension = verify_btree_gist(&migration).await;
+    let missing_extension =
+        install_compiled_schema(&migration, &registry, &database.runtime_role).await;
     assert!(matches!(
         missing_extension,
         Err(PostgresKernelError::CatalogInvariant(_))
     ));
+    let state: Option<String> = migration
+        .query_one(
+            "SELECT pg_catalog.to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("catalog remains inspectable after prerequisite refusal")
+        .get(0);
+    assert!(
+        state.is_none(),
+        "missing prerequisite is refused before managed state is installed"
+    );
     database
         .admin
         .batch_execute("CREATE EXTENSION btree_gist")
@@ -217,12 +243,13 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     verify_migration_role(&migration, &database.migration_role)
         .await
         .expect("migration role owns schemas without administrative database authority");
-    install_kernel_schema(&migration, &database.runtime_role)
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
-        .expect("migration role installs managed kernel objects");
-    let initial = initialize_kernel_registry_state_for_test(
+        .expect("migration role installs the compiled registry");
+    let initial = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             database_id: DATABASE_ID,
@@ -256,9 +283,6 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .get_for_test()
         .await
         .expect("runtime connection is available");
-    verify_runtime_role(&**runtime, &database.migration_role)
-        .await
-        .expect("runtime role has no ownership, bypass, or DDL authority");
     assert!(runtime
         .batch_execute("CREATE TABLE registry_data.forbidden (id integer)")
         .await
@@ -271,9 +295,10 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .batch_execute("UPDATE registry_internal.registry_state SET maintenance_status = 'failed'")
         .await
         .is_err());
-    verify_catalog_identity(
+    verify_catalog_identity_for_catalog(
         &**runtime,
         &initial,
+        &catalog,
         &database.migration_role,
         &database.runtime_role,
     )
@@ -283,15 +308,16 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .admin
         .batch_execute(&format!(
             "GRANT USAGE ON SCHEMA registry_data TO \"{}\";\n\
-             GRANT SELECT ON registry_data.kernel_records TO \"{}\";",
+             GRANT SELECT ON {table} TO \"{}\";",
             database.intruder_role.as_str(),
             database.intruder_role.as_str(),
         ))
         .await
         .expect("test administrator can seed unexpected ACL drift");
-    let acl_drift = verify_catalog_identity(
+    let acl_drift = verify_catalog_identity_for_catalog(
         &**runtime,
         &initial,
+        &catalog,
         &database.migration_role,
         &database.runtime_role,
     )
@@ -304,43 +330,106 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     database
         .admin
         .batch_execute(&format!(
-            "REVOKE SELECT ON registry_data.kernel_records FROM \"{}\";\n\
+            "REVOKE SELECT ON {table} FROM \"{}\";\n\
              REVOKE USAGE ON SCHEMA registry_data FROM \"{}\";",
             database.intruder_role.as_str(),
             database.intruder_role.as_str(),
         ))
         .await
         .expect("test administrator can remove seeded ACL drift");
-    verify_catalog_identity(
+    verify_catalog_identity_for_catalog(
         &**runtime,
         &initial,
+        &catalog,
         &database.migration_role,
         &database.runtime_role,
     )
     .await
     .expect("exact ACL restoration returns the catalog to its package identity");
 
+    for (reason, drift, restore) in [
+        (
+            "excess runtime table privilege",
+            format!(
+                "GRANT TRUNCATE ON {table} TO {}",
+                quote(database.runtime_role.as_str())
+            ),
+            format!(
+                "REVOKE TRUNCATE ON {table} FROM {}",
+                quote(database.runtime_role.as_str())
+            ),
+        ),
+        (
+            "disabled row security",
+            format!("ALTER TABLE {table} DISABLE ROW LEVEL SECURITY"),
+            format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"),
+        ),
+        (
+            "schema fingerprint drift",
+            format!("ALTER TABLE {table} ADD COLUMN unexpected_value text"),
+            format!("ALTER TABLE {table} DROP COLUMN unexpected_value"),
+        ),
+    ] {
+        database
+            .admin
+            .batch_execute(&drift)
+            .await
+            .expect("administrator seeds catalog drift");
+        let refusal = verify_catalog_identity_for_catalog(
+            &**runtime,
+            &initial,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await;
+        assert!(
+            matches!(
+                refusal,
+                Err(PostgresKernelError::CatalogInvariant(_))
+                    | Err(PostgresKernelError::RegistryUnavailable)
+            ),
+            "{reason} must refuse exact catalog verification"
+        );
+        database
+            .admin
+            .batch_execute(&restore)
+            .await
+            .expect("administrator removes catalog drift");
+        verify_catalog_identity_for_catalog(
+            &**runtime,
+            &initial,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .expect("restored compiled catalog verifies");
+    }
+
     let invisible: i64 = runtime
-        .query_one("SELECT count(*) FROM registry_data.kernel_records", &[])
+        .query_one(&format!("SELECT count(*) FROM {table}"), &[])
         .await
         .expect("missing context remains a valid empty RLS view")
         .get(0);
     assert_eq!(invisible, 0);
     assert!(runtime
         .execute(
-            "INSERT INTO registry_data.kernel_records
-             (record_id, authority, payload, package_revision)
-             VALUES (CAST($1::text AS uuid), 'alpha', 'secret', 'package-1')",
-            &[&RECORD_ALPHA],
+            &format!(
+                "INSERT INTO {table}
+             (record_id, {authority}, {payload}, {valid_from}, active_package_revision)
+             VALUES (CAST($1::text AS uuid), 'alpha', 'secret', DATE '2026-01-01', $2)"
+            ),
+            &[&RECORD_ALPHA, &initial.package_digest],
         )
         .await
         .is_err());
     drop(runtime);
 
-    let lock_key = RegistryLockKey::derive("registry-under-test")
-        .expect("bounded Registry id derives a lock key");
-    let alpha = claims("alpha");
-    let beta = claims("beta");
+    let lock_key =
+        RegistryLockKey::derive(PACKAGE_ID).expect("bounded Registry id derives a lock key");
+    let alpha = claims(&registry, "alpha");
+    let beta = claims(&registry, "beta");
 
     let mut client = pool
         .get_for_test()
@@ -358,18 +447,22 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     transaction
         .transaction_for_test()
         .execute(
-            "INSERT INTO registry_data.kernel_records
-             (record_id, authority, payload, package_revision)
-             VALUES (CAST($1::text AS uuid), 'alpha', 'secret', 'package-1')",
-            &[&RECORD_ALPHA],
+            &format!(
+                "INSERT INTO {table}
+             (record_id, {authority}, {payload}, {valid_from}, active_package_revision)
+             VALUES (CAST($1::text AS uuid), 'alpha', 'secret', DATE '2026-01-01', $2)"
+            ),
+            &[&RECORD_ALPHA, &initial.package_digest],
         )
         .await
         .expect("RLS permits the matching authority");
     let dynamic = transaction
         .transaction_for_test()
         .query_one(
-            "SELECT record_id::text, authority, payload
-             FROM registry_data.kernel_records WHERE record_id = CAST($1::text AS uuid)",
+            &format!(
+                "SELECT record_id::text, {authority} AS authority, {payload} AS payload
+             FROM {table} WHERE record_id = CAST($1::text AS uuid)"
+            ),
             &[&RECORD_ALPHA],
         )
         .await
@@ -406,7 +499,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     .expect("a second authority obtains a fresh transaction");
     let count: i64 = transaction
         .transaction_for_test()
-        .query_one("SELECT count(*) FROM registry_data.kernel_records", &[])
+        .query_one(&format!("SELECT count(*) FROM {table}"), &[])
         .await
         .expect("RLS query succeeds")
         .get(0);
@@ -444,6 +537,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .expect("maintenance is durably committed while lock remains held");
     let pool_for_blocked_record = pool.clone();
     let old_for_blocked_record = initial.clone();
+    let blocked_context = alpha.clone();
     let blocked = tokio::spawn(async move {
         let mut client = pool_for_blocked_record
             .get_for_test()
@@ -454,7 +548,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
             lock_key,
             Duration::from_millis(100),
             &old_for_blocked_record,
-            &claims("alpha"),
+            &blocked_context,
         )
         .await
         .map(|_| ())
@@ -468,7 +562,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     database
         .admin
         .batch_execute(&format!(
-            "ALTER TABLE registry_data.kernel_records OWNER TO \"{}\";\n\
+            "ALTER TABLE {table} OWNER TO \"{}\";\n\
              ALTER TABLE registry_internal.registry_state OWNER TO \"{}\";\n\
              ALTER SCHEMA registry_data OWNER TO \"{}\";\n\
              ALTER SCHEMA registry_internal OWNER TO \"{}\";",
@@ -480,7 +574,12 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .await
         .expect("test administrator can seed coherent ownership drift");
     let owner_drift = apply
-        .activate(&target, &database.migration_role, &database.runtime_role)
+        .activate_for_catalog(
+            &target,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
         .await;
     assert!(matches!(
         owner_drift,
@@ -499,7 +598,7 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     database
         .admin
         .batch_execute(&format!(
-            "ALTER TABLE registry_data.kernel_records OWNER TO \"{}\";\n\
+            "ALTER TABLE {table} OWNER TO \"{}\";\n\
              ALTER TABLE registry_internal.registry_state OWNER TO \"{}\";\n\
              ALTER SCHEMA registry_data OWNER TO \"{}\";\n\
              ALTER SCHEMA registry_internal OWNER TO \"{}\";",
@@ -511,7 +610,12 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .await
         .expect("test administrator restores exact migration ownership");
     apply
-        .activate(&target, &database.migration_role, &database.runtime_role)
+        .activate_for_catalog(
+            &target,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
         .await
         .expect("target activates atomically");
     apply
@@ -604,8 +708,9 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     .await
     .expect("recovery obtains the exclusive Registry lock");
     recovery
-        .activate(
+        .activate_for_catalog(
             &failed_target,
+            &catalog,
             &database.migration_role,
             &database.runtime_role,
         )
@@ -656,14 +761,53 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     database.cleanup().await;
 }
 
-fn claims(authority: &str) -> ClaimContext {
-    ClaimContext::kernel_for_test(
-        format!("principal-{authority}"),
-        "operator".to_owned(),
+fn compiled_registry() -> registry_breg::CompiledRegistry {
+    let source = parse_project_json(br#"{
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"catalog-proof","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://catalog-proof.example.test"},
+        "datasets":[{"id":"entries"}],
+        "recordTypes":[{"id":"entry","primaryDataset":"entries","route":"entries",
+            "mutationMode":"mutable","classification":"internal",
+            "fields":[
+                {"id":"authority","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"payload","type":"string","maximumLength":128,"required":true,"classification":"internal"},
+                {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+                {"id":"valid-to","type":"date","classification":"internal"}
+            ],
+            "temporal":{"startField":"valid-from","endField":"valid-to"},
+            "constraints":[{"type":"temporal-non-overlap","scopeFields":["authority"]}]
+        }],
+        "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal",
+            "requiredScopes":"unrestricted","requiredPurposes":["registry-administration"],
+            "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch"],
+                "readableFields":["authority","payload","valid-from","valid-to"],
+                "writableFields":["authority","payload","valid-from","valid-to"],
+                "rowBoundaries":[{"field":"authority","claim":"authority","operator":"equals"}]}]}
+        }]
+    }"#).expect("native catalog proof fixture parses");
+    compile_project(&source, &[], CompileProfile::Authoring)
+        .expect("native catalog proof fixture compiles")
+}
+
+fn quote(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn claims(registry: &registry_breg::CompiledRegistry, authority: &str) -> ClaimContext {
+    ClaimContext::for_compiled(
+        registry,
+        "entry",
+        Some(format!("principal-{authority}")),
+        "operator",
         Some("registry-administration".to_owned()),
-        authority.to_owned(),
+        vec![RowBoundaryContext::Equals {
+            field: "authority".to_owned(),
+            value: authority.to_owned(),
+        }],
     )
-    .expect("kernel test claims are bounded")
+    .expect("test claims match the compiled native profile")
 }
 
 async fn assert_pool_context_clean(pool: &registry_breg::postgres::RuntimePool) {

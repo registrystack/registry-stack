@@ -97,6 +97,8 @@ pub struct ReconcileRequest<'a> {
     /// that transition is recorded through.
     pub audit: ReconcileAudit<'a>,
     pub operator_reference: &'a str,
+    pub proposal_activation_compatibility_inventory:
+        Option<&'a crate::proposal_retention::ProposalActivationCompatibilityInventory>,
 }
 
 /// What a reconciliation holds of the audit journal, which also decides
@@ -206,7 +208,7 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::FieldPatternSyntax { .. }
             | PostgresKernelError::FieldPatternExistingRows { .. }
             | PostgresKernelError::FieldEncryptionBlindCollision { .. }
-            | PostgresKernelError::FieldEncryptionRetainedRequestSnapshots { .. } => {
+            | PostgresKernelError::FieldEncryptionRetainedProposalSnapshots { .. } => {
                 Self::InvalidInput
             }
             PostgresKernelError::Connection
@@ -235,8 +237,8 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::FieldEncryptionLookupCollision { .. }
-            | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
-            | MigrationError::ActiveRequestProposals
+            | MigrationError::FieldEncryptionRetainedProposalSnapshots { .. }
+            | MigrationError::ActiveProposalRecoveryUnavailable
             | MigrationError::BackupEvidence
             | MigrationError::BackupBindingDocument(_)
             | MigrationError::ActivationAuditIncomplete
@@ -406,6 +408,8 @@ async fn reconcile_under_lock(
             let mut attempt = begin_request(audit, request, target, ledger, "completed").await?;
             let transition = connection
                 .activate_verified_package(
+                    request.target_package.registry(),
+                    request.proposal_activation_compatibility_inventory,
                     Some(request.current),
                     target,
                     MaintenanceTransition {

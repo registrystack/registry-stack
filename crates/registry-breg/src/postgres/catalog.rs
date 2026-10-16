@@ -13,8 +13,8 @@ use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use super::schema::install_empty_history_baseline_for_compiled_registry;
 use super::{
-    migration_ledger::install_migration_ledger, spatial_bbox_role, verify_btree_gist,
-    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
+    migration_ledger::install_migration_ledger, spatial_bbox_role, PostgresKernelError, Result,
+    RuntimeRevoke, SqlIdentifier,
 };
 
 pub(super) const MANAGED_SCHEMAS: &[&str] = &[
@@ -117,9 +117,9 @@ const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access
 
 /// Exact managed PostgreSQL inventory accepted by catalog verification.
 ///
-/// Construction is deliberately closed to either the explicit feasibility
-/// kernel or one compiler-produced Registry plus the current product-owned
-/// mutation tables. There is no wildcard or ambient-catalog mode.
+/// Construction is deliberately closed to one compiler-produced Registry plus
+/// the current product-owned mutation tables. There is no wildcard or
+/// ambient-catalog mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExpectedManagedCatalog {
     objects: BTreeSet<ManagedObject>,
@@ -142,27 +142,6 @@ impl ExpectedManagedCatalog {
             Some("EXECUTE"),
             None,
         );
-    }
-
-    /// Explicit compatibility inventory for the W2 feasibility kernel.
-    #[must_use]
-    pub fn kernel() -> Self {
-        let mut catalog = Self::base();
-        catalog.table(
-            "registry_data.kernel_records",
-            ["DELETE", "INSERT", "SELECT", "UPDATE"],
-            std::iter::empty::<&str>(),
-            Some((true, true)),
-        );
-        catalog.policies.insert(ManagedPolicy {
-            table: "registry_data.kernel_records".to_owned(),
-            name: "registry_authority_policy".to_owned(),
-            command: "*".to_owned(),
-            role: ManagedPolicyRole::Public,
-            has_using: true,
-            has_check: true,
-        });
-        catalog
     }
 
     /// Exact product inventory for one compiled Registry.
@@ -261,7 +240,7 @@ impl ExpectedManagedCatalog {
             "UPDATE",
         );
         catalog.sequence(DELIVERY_SEQUENCE, ["SELECT", "USAGE"]);
-        for (table, privileges) in crate::request_store::REQUEST_TABLES {
+        for (table, privileges) in crate::proposal_store::PROPOSAL_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),
                 privileges.iter().copied(),
@@ -349,6 +328,9 @@ impl ExpectedManagedCatalog {
                     .map(TablePrivilege::as_sql),
                 Some((true, true)),
             );
+            if table.runtime_lock_column {
+                catalog.column_privilege(&name, "record_id", "runtime", "UPDATE");
+            }
             for policy in &table.policies {
                 catalog.policies.insert(ManagedPolicy {
                     table: name.clone(),
@@ -407,12 +389,6 @@ impl ExpectedManagedCatalog {
         );
         catalog.table(
             "registry_internal.registry_migration_steps",
-            std::iter::empty::<&str>(),
-            std::iter::empty::<&str>(),
-            Some((false, false)),
-        );
-        catalog.table(
-            "registry_internal.registry_pre_ledger_package_positions",
             std::iter::empty::<&str>(),
             std::iter::empty::<&str>(),
             Some((false, false)),
@@ -708,66 +684,6 @@ pub fn test_activation_id(label: &str) -> String {
         .to_string()
 }
 
-/// Installs the minimal internal state and RLS-protected data surface used by
-/// the feasibility proof. The caller must already be the verified migration role.
-pub async fn install_kernel_schema(
-    migration: &impl GenericClient,
-    runtime_role: &SqlIdentifier,
-) -> Result<()> {
-    verify_btree_gist(migration).await?;
-    install_registry_state_schema(migration, runtime_role).await?;
-    migration
-        .batch_execute(
-            "CREATE TABLE IF NOT EXISTS registry_data.kernel_records (
-                 record_id uuid PRIMARY KEY,
-                 authority text NOT NULL
-                     CONSTRAINT kernel_records_authority_nonempty CHECK (authority <> ''),
-                 payload text NOT NULL,
-                 package_revision text NOT NULL
-                     CONSTRAINT kernel_records_package_revision_nonempty CHECK (package_revision <> '')
-             );
-             ALTER TABLE registry_data.kernel_records ENABLE ROW LEVEL SECURITY;
-             ALTER TABLE registry_data.kernel_records FORCE ROW LEVEL SECURITY;
-             DROP POLICY IF EXISTS registry_authority_policy ON registry_data.kernel_records;
-             CREATE POLICY registry_authority_policy ON registry_data.kernel_records
-                 USING (
-                     NULLIF(current_setting('registry.access_profile', true), '') = 'operator'
-                     AND NULLIF(current_setting('registry.principal', true), '') IS NOT NULL
-                     AND NULLIF(current_setting('registry.purpose', true), '') = 'registry-administration'
-                     AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 'array'
-                     AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 1
-                     AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0) = 'object'
-                     AND ((NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0) - 'field' - 'operator' - 'values') = '{}'::jsonb
-                     AND NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 ->> 'field' = 'authority'
-                     AND NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 ->> 'operator' = 'equals'
-                     AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 -> 'values') = 1
-                     AND authority = (NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 -> 'values' ->> 0)
-                 )
-                 WITH CHECK (
-                     NULLIF(current_setting('registry.access_profile', true), '') = 'operator'
-                     AND NULLIF(current_setting('registry.principal', true), '') IS NOT NULL
-                     AND NULLIF(current_setting('registry.purpose', true), '') = 'registry-administration'
-                     AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 'array'
-                     AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 1
-                     AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0) = 'object'
-                     AND ((NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0) - 'field' - 'operator' - 'values') = '{}'::jsonb
-                     AND NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 ->> 'field' = 'authority'
-                     AND NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 ->> 'operator' = 'equals'
-                     AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 -> 'values') = 1
-                     AND authority = (NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb -> 0 -> 'values' ->> 0)
-                 );",
-        )
-        .await?;
-    migration
-        .batch_execute(&format!(
-            "REVOKE ALL ON ALL TABLES IN SCHEMA registry_data FROM PUBLIC;\n\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON registry_data.kernel_records TO {};",
-            runtime_role.quoted(),
-        ))
-        .await?;
-    Ok(())
-}
-
 /// The kernel state a database holds, read from the system catalogs alone so
 /// a role without privileges on the managed schemas can still tell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -911,12 +827,12 @@ pub(crate) async fn install_registry_state_schema(
                  accepted_plaintext_journal_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_journal_nonnegative
                      CHECK (accepted_plaintext_journal_row_count >= 0),
-                 accepted_request_target_row_count bigint NOT NULL
+                 accepted_proposal_target_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_targets_nonnegative
-                     CHECK (accepted_request_target_row_count >= 0),
-                 accepted_request_proposal_row_count bigint NOT NULL
+                     CHECK (accepted_proposal_target_row_count >= 0),
+                 accepted_proposal_submission_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_proposals_nonnegative
-                     CHECK (accepted_request_proposal_row_count >= 0),
+                     CHECK (accepted_proposal_submission_row_count >= 0),
                  accepted_idempotency_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_idempotency_nonnegative
                      CHECK (accepted_idempotency_row_count >= 0),
@@ -1037,8 +953,8 @@ pub async fn initialize_registry_state_for_catalog_test(
 /// Test-only helper for integration fixtures that install a compiled Registry
 /// directly and need the same empty history boundary a verified initial package
 /// would create. It refuses if any compiled live table or revision journal is
-/// already nonempty, so fixtures with existing history must use an explicit
-/// predecessor-baseline path instead.
+/// already nonempty. Fixtures seed and index current revisions after this
+/// empty boundary has been installed.
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub async fn initialize_compiled_registry_state_for_test(
@@ -1061,23 +977,6 @@ pub async fn initialize_compiled_registry_state_for_test(
     )
     .await?;
     Ok(expected)
-}
-
-/// Test-only helper for the W2 feasibility kernel catalog.
-#[cfg(feature = "postgres-test")]
-#[doc(hidden)]
-pub async fn initialize_kernel_registry_state_for_test(
-    migration: &impl GenericClient,
-    runtime_role: &SqlIdentifier,
-    identity: RegistryStateTestIdentity<'_>,
-) -> Result<ExpectedRegistryIdentity> {
-    initialize_registry_state_for_catalog_test(
-        migration,
-        runtime_role,
-        &ExpectedManagedCatalog::kernel(),
-        identity,
-    )
-    .await
 }
 
 pub async fn verify_catalog_identity_for_catalog(
@@ -1123,24 +1022,6 @@ pub async fn verify_catalog_identity_for_catalog(
     )
     .await?;
     Ok(actual)
-}
-
-/// Explicit W2 compatibility wrapper. New product startup paths must pass a
-/// compiled expected catalog to [`verify_catalog_identity_for_catalog`].
-pub async fn verify_catalog_identity(
-    client: &impl GenericClient,
-    expected: &ExpectedRegistryIdentity,
-    migration_role: &SqlIdentifier,
-    runtime_role: &SqlIdentifier,
-) -> Result<CatalogIdentity> {
-    verify_catalog_identity_for_catalog(
-        client,
-        expected,
-        &ExpectedManagedCatalog::kernel(),
-        migration_role,
-        runtime_role,
-    )
-    .await
 }
 
 pub(crate) async fn verify_managed_catalog(
@@ -1954,14 +1835,6 @@ async fn fingerprint_catalog(
         write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
     }
     Ok(fingerprint)
-}
-
-/// Explicit W2 compatibility wrapper.
-pub async fn kernel_schema_fingerprint(
-    client: &impl GenericClient,
-    runtime_role: &SqlIdentifier,
-) -> Result<String> {
-    managed_schema_fingerprint(client, runtime_role, &ExpectedManagedCatalog::kernel()).await
 }
 
 async fn current_role(client: &impl GenericClient) -> Result<SqlIdentifier> {

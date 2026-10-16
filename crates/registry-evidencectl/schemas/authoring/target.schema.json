@@ -1,0 +1,1232 @@
+{
+  "$defs": {
+    "AcquisitionCapability": {
+      "enum": [
+        "search-then-fetch-set",
+        "source-batch"
+      ],
+      "type": "string"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "TargetAccessTokenAlgorithm": {
+      "enum": [
+        "EdDSA",
+        "ES256",
+        "RS256"
+      ],
+      "type": "string"
+    },
+    "TargetAccessTokenType": {
+      "enum": [
+        "at+jwt",
+        "application/at+jwt"
+      ],
+      "type": "string"
+    },
+    "TargetAdmissionGate": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ]
+    },
+    "TargetAssuranceProfile": {
+      "enum": [
+        "local",
+        "production",
+        "evidence-grade"
+      ],
+      "type": "string"
+    },
+    "TargetAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetAuditDestination"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "hashKeyVersion": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retentionDays": {
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rotateBytes": {
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hashKeyRef",
+        "hashKeyVersion"
+      ],
+      "type": "object"
+    },
+    "TargetAuditDestination": {
+      "enum": [
+        "file",
+        "stdout"
+      ],
+      "type": "string"
+    },
+    "TargetAuthentication": {
+      "additionalProperties": false,
+      "properties": {
+        "oidc": {
+          "$ref": "#/$defs/TargetOidcAuthentication"
+        }
+      },
+      "required": [
+        "oidc"
+      ],
+      "type": "object"
+    },
+    "TargetClaimName": {
+      "description": "The name of one direct JWT claim, within 128 ASCII bytes. Dots are literal characters. Omit to retain the governed runtime's default claim name; claim-role uniqueness and reserved names are revalidated with the complete authentication configuration.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$",
+      "type": "string"
+    },
+    "TargetClaimNames": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approver": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantBounds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantClient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantExp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantResource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantSourceIssuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TargetConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "admissionTimeoutMilliseconds": {
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "authentication": {
+          "$ref": "#/$defs/TargetConnectionAuthentication"
+        },
+        "maximumConcurrency": {
+          "format": "uint32",
+          "maximum": 256,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/Url"
+        },
+        "tlsTrustProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenTimeoutMilliseconds": {
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "origin",
+        "authentication"
+      ],
+      "type": "object"
+    },
+    "TargetConnectionAuthentication": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "passwordRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "basic",
+              "type": "string"
+            },
+            "usernameRef": {
+              "$ref": "#/$defs/SecretReference"
+            }
+          },
+          "required": [
+            "type",
+            "usernameRef",
+            "passwordRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scheme": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "bearer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scheme": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "static-authorization",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "headerName": {
+              "type": "string"
+            },
+            "type": {
+              "const": "static-api-key",
+              "type": "string"
+            },
+            "valueRef": {
+              "$ref": "#/$defs/SecretReference"
+            }
+          },
+          "required": [
+            "type",
+            "headerName",
+            "valueRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assumedLifetimeSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "audience": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clientIdRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "clientSecretRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "credentialPlacement": {
+              "$ref": "#/$defs/TargetCredentialPlacement"
+            },
+            "maximumCacheSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenEndpoint": {
+              "type": "string"
+            },
+            "type": {
+              "const": "oauth2-client-credentials",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenEndpoint",
+            "clientIdRef",
+            "clientSecretRef",
+            "credentialPlacement",
+            "maximumCacheSeconds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assumedLifetimeSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "audience": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clientAssertionAudience": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clientAssertionKeyRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "clientIdRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "maximumCacheSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenEndpoint": {
+              "type": "string"
+            },
+            "type": {
+              "const": "oauth2-private-key-jwt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenEndpoint",
+            "clientIdRef",
+            "clientAssertionKeyRef",
+            "maximumCacheSeconds"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TargetCredentialPlacement": {
+      "enum": [
+        "basic-header",
+        "form-body"
+      ],
+      "type": "string"
+    },
+    "TargetEnvironmentSecretProvider": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "TargetExtractBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "TargetFileSecretProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "TargetIssuerId": {
+      "description": "An absolute Evidence issuer URI identifier, including URNs, within 512 Unicode characters and without whitespace or control characters. It names the signer and is never fetched; it is not an OIDC issuer or a network origin.",
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+      "type": "string"
+    },
+    "TargetJwksSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "$ref": "#/$defs/Url"
+            }
+          },
+          "required": [
+            "type",
+            "uri"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TargetListener": {
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "type": "string"
+        },
+        "maximumConcurrentRequests": {
+          "format": "uint32",
+          "maximum": 4096,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximumRequestBytes": {
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1024,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "networkExposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetNetworkExposure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestTimeoutMilliseconds": {
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "shutdownGraceMilliseconds": {
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tlsTermination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetTlsTermination"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trustProxyIdentityHeaders": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "bind",
+        "trustProxyIdentityHeaders"
+      ],
+      "type": "object"
+    },
+    "TargetNetworkExposure": {
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "TargetOidcAuthentication": {
+      "additionalProperties": false,
+      "properties": {
+        "actorClaim": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "algorithms": {
+          "items": {
+            "$ref": "#/$defs/TargetAccessTokenAlgorithm"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowedClients": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetAdmissionGate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "External client identifiers mapped to the exact issuer strings they may assert. Omit to apply no assertion-issuer rule. A present map has one to 32 clients, each within 128 bytes, with one to eight distinct nonempty issuers within 512 bytes.",
+          "maxProperties": 32,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "claims": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimNames"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceAudienceClaim": {
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/TargetJwksSource"
+        },
+        "maximumTokenLifetimeSeconds": {
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "principalClaim": {
+          "type": "string"
+        },
+        "requesterTagsClaim": {
+          "type": "string"
+        },
+        "requiredScopes": {
+          "$ref": "#/$defs/TargetAdmissionGate"
+        },
+        "revokedKeyIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "tlsTrustProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenTypes": {
+          "items": {
+            "$ref": "#/$defs/TargetAccessTokenType"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "jwksSource",
+        "tokenTypes",
+        "algorithms",
+        "principalClaim",
+        "requesterTagsClaim",
+        "evidenceAudienceClaim",
+        "maximumTokenLifetimeSeconds",
+        "requiredScopes"
+      ],
+      "type": "object"
+    },
+    "TargetOutboundTls": {
+      "additionalProperties": false,
+      "properties": {
+        "systemRoots": {
+          "type": "boolean"
+        },
+        "trustProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TargetTrustProfile"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "systemRoots",
+        "trustProfiles"
+      ],
+      "type": "object"
+    },
+    "TargetPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "TargetPublication": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "endpointUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "jurisdictions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "operatorId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publisherId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serviceId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "serviceId",
+        "title",
+        "description",
+        "endpointUrl",
+        "jurisdictions"
+      ],
+      "type": "object"
+    },
+    "TargetRateLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "burstPerPrincipal": {
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "failedSelectorAttemptsPerPrincipalAuthorityPerMinute": {
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requestsPerPrincipalPerMinute": {
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestsPerPrincipalPerMinute",
+        "failedSelectorAttemptsPerPrincipalAuthorityPerMinute"
+      ],
+      "type": "object"
+    },
+    "TargetResponseFormat": {
+      "enum": [
+        "signed-jws",
+        "unsigned-json",
+        "sd-jwt-vc",
+        "sd-jwt-vc-batch"
+      ],
+      "type": "string"
+    },
+    "TargetSecretProviders": {
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetEnvironmentSecretProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetFileSecretProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TargetService": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer": {
+          "$ref": "#/$defs/TargetIssuerId"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "publicOrigin": {
+          "$ref": "#/$defs/Url"
+        },
+        "trustDomain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "providerId",
+        "issuer",
+        "publicOrigin",
+        "trustDomain"
+      ],
+      "type": "object"
+    },
+    "TargetSigner": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/TargetSigningAlgorithm"
+            },
+            "privateKeyRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "publicJwkFile": {
+              "type": "string"
+            },
+            "type": {
+              "const": "local-jwk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "algorithm",
+            "privateKeyRef",
+            "publicJwkFile"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/TargetSigningAlgorithm"
+            },
+            "attemptTimeoutMilliseconds": {
+              "format": "uint64",
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "keyName": {
+              "type": "string"
+            },
+            "keyVersion": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "mount": {
+              "type": "string"
+            },
+            "publicJwkFile": {
+              "type": "string"
+            },
+            "type": {
+              "const": "transit",
+              "type": "string"
+            },
+            "unixSocketPath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "algorithm",
+            "publicJwkFile",
+            "unixSocketPath",
+            "mount",
+            "keyName",
+            "keyVersion",
+            "attemptTimeoutMilliseconds"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TargetSigningAlgorithm": {
+      "enum": [
+        "ES256"
+      ],
+      "type": "string"
+    },
+    "TargetSubjectBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "keyVersion": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "secretRef": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      },
+      "required": [
+        "secretRef",
+        "keyVersion"
+      ],
+      "type": "object"
+    },
+    "TargetTlsTermination": {
+      "enum": [
+        "operator-controlled-upstream"
+      ],
+      "type": "string"
+    },
+    "TargetTrustProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "caBundleFile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "caBundleFile"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/target/target.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acquisitionCapabilities": {
+      "description": "Operator opt-ins, intersected with the package's acquisition capabilities.",
+      "items": {
+        "$ref": "#/$defs/AcquisitionCapability"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/target/v1alpha1",
+      "type": "string"
+    },
+    "assuranceProfile": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetAssuranceProfile"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "audit": {
+      "$ref": "#/$defs/TargetAudit"
+    },
+    "authentication": {
+      "$ref": "#/$defs/TargetAuthentication"
+    },
+    "authority": {
+      "type": "string"
+    },
+    "connections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TargetConnection"
+      },
+      "description": "Explicit HTTP source bindings. An empty mapping grants no HTTP bindings;\nit is valid for extract-only projects. Every declared HTTP Source must\nstill resolve its named connection when the project is checked.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "extracts": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TargetExtractBinding"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "EvidenceTarget",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/TargetListener"
+    },
+    "outboundTls": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetOutboundTls"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "package": {
+      "$ref": "#/$defs/TargetPackage"
+    },
+    "project": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "publication": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetPublication"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rateLimits": {
+      "$ref": "#/$defs/TargetRateLimits"
+    },
+    "responseFormats": {
+      "items": {
+        "$ref": "#/$defs/TargetResponseFormat"
+      },
+      "type": [
+        "array",
+        "null"
+      ],
+      "uniqueItems": true
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/TargetSecretProviders"
+    },
+    "service": {
+      "$ref": "#/$defs/TargetService"
+    },
+    "signer": {
+      "$ref": "#/$defs/TargetSigner"
+    },
+    "subjectBinding": {
+      "$ref": "#/$defs/TargetSubjectBinding"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "project",
+    "package",
+    "authority",
+    "service",
+    "listener",
+    "authentication",
+    "connections",
+    "secretProviders",
+    "signer",
+    "subjectBinding",
+    "audit",
+    "rateLimits"
+  ],
+  "title": "Evidence target",
+  "type": "object"
+}

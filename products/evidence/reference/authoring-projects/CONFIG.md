@@ -1,779 +1,309 @@
-# Evidence authoring form reference
-
-Status: Adopter tooling, outside the frozen Version 1 contract set
-
-The authoring form is what an adopter writes before a deployment project
-exists: one marker document that names the project root, and one YAML document
-per question. `evidencectl` compiles those documents into the
-`bundle/evidence.yaml` grammar that
-[the deployment configuration reference](../request-adapter/deployment-projects/CONFIG.md)
-describes. A local compile synthesizes a loopback `runtime.yaml` beside that
-bundle so the project can be run on the author's machine, while a production
-build writes the bundle alone and copies the `runtime.yaml` of the deployment
-target it is given, so nothing on this page reaches a deployed process's
-runtime. This page documents the input, not the output.
-
-The two are not the same promise. The deployment grammar is the frozen Version
-1 configuration contract. The authoring form is adopter tooling:
-`crates/registry-evidence-authoring/src/model.rs` holds its model,
-`crates/registry-evidence-authoring/src/validate.rs` holds its checks, and
-`crates/registry-evidencectl/schemas/authoring/` holds the JSON Schemas
-generated from that model for an adopter's editor. All three may change with
-the tooling that generates them. A document this page accepts must still
-compile, and compiling is where the frozen contract applies.
-
-Every authored document is closed. Each type in `model.rs` and `marker.rs`
-carries `#[serde(deny_unknown_fields)]`, so a key the form does not know is a
-rejection rather than something carried along. All names in this reference are
-exact and case-sensitive.
-
-## What an authoring project holds
-
-`crates/registry-evidence-authoring/src/layout.rs` names the parts of a project
-and the ceiling each is read under.
-
-| Path | Holds | Ceiling |
-|---|---|---|
-| `evidence-project.yaml` | The project marker | 1 MiB |
-| `source.openapi.yaml` | OpenAPI description required by inline operations | 16 MiB |
-| `questions/` | Authored questions, one YAML document each | 1 MiB per document, 1 to 128 when compiled |
-| `sources/` | Source definitions a question may name instead of an inline operation, each under the header `apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1` and `kind: EvidenceSource` | 1 MiB |
-| `selectors/` | Selector definitions, each under the header `apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1` and `kind: EvidenceSelector` | 1 MiB |
-| `derivations/` | Authored derivation programs, one Rhai file each | 64 KiB |
-| `schemas/` | Schemas a structured answer may name | 1 MiB |
-| `fixtures/` | Recorded request and response pairs a project is replayed against | 1 MiB |
-| `secrets/` | Key material a project needs to run locally | n/a |
-| `access/policies/` | Access policy documents | 1 MiB |
-
-An inline operation requires `source.openapi.yaml`. A project whose questions
-all name a `source.ref` may omit it. When present, it declares
-`openapi: 3.0.x` or `3.1.x`; any other version is rejected.
-
-Run `evidencectl check <project>` to parse and compile these authored inputs
-offline. The command can succeed with `status: incomplete`; each gap remains a
-visible diagnostic with `severity: warning`, `code`, `artifact`, `path`,
-`message`, `suggestedAction`, and the `source` file, line, and column it names.
-Add `--deny-warnings` when any warning must refuse the command. The command
-exits 0 when it passes, 1 when it refuses the project, 2 for a usage error, and
-3 when it could not finish. `evidencectl explain <project>` applies the same authoring validation
-and reports its status, findings, revision, and complete inventory without
-reading secrets, contacting a dependency, or running a fixture.
-
-Add `--target <target>` to either command when you need that explicit target's
-governance. Check then validates the target's runtime structure, public keys,
-source connections, and governed bundle. It does not require target-host paths
-or secrets to exist. `--production` requires the same target and accepts only a
-target whose own `assuranceProfile` is `production` or `evidence-grade`; it
-does not select or upgrade a profile. Fixture execution remains a separate
-`evidencectl test <project> [--target <target>]` step, and live dependency
-readiness remains `evidencectl doctor --runtime-config <absolute-file>`.
-
-As soon as one question names an `operation`, that description is read under a
-closed profile. Its top-level keys are `openapi`, `info`, `servers`, `paths`,
-and `components`, so anything else, `tags` and a top-level `security`
-included, is refused as an unsupported key. `servers` holds exactly one entry,
-whose object carries the single field `url`, spelled as a canonical loopback
-HTTP origin with an explicit non-zero port: `http://127.0.0.1:8080` or
-`http://[::1]:8080`. HTTPS, a hostname such as `localhost`, a trailing slash, a
-`description` beside the `url`, and a second server are each refused. A project
-whose questions all name a `source.ref` is held to the version alone.
-
-`evidencectl dev --target <local-target> start .` reuses that local target's
-`sourceConnections` and outbound TLS settings in the generated local caller
-rehearsal. It requires `assuranceProfile: local`. Evidence and pinned stock ThunderID use
-the generated local authentication, keys, and caller governance, and source
-secret references resolve through the project's existing `secrets/` directory.
-Use `evidencectl package <project> --target <target> --output <new-candidate>`
-for a candidate carrying the target's complete governance and runtime
-configuration. Existing `dev --detach` needs no target or connection map.
-
-Only the marker and a question have a Rust type behind them, so only those two
-carry a generated schema. `crates/registry-evidence-authoring/src/schema.rs`
-states the reason: a schema written by hand for one of the other parts would be
-the drift the generated pair exists to prevent. The key-path inventory at the
-end of this page is therefore the marker and the question, and nothing else.
-
-`evidencectl tooling editor` maps those two schemas onto
-`evidence-project.yaml` and `questions/*.yaml`, and maps nothing else. No
-schema artifact exists for a
-source, a selector, a derivation, an answer schema, a fixture, or an access
-policy, so an editor draws no schema diagnostics while an author writes one, and
-that silence is expected rather than a broken editor setup.
-`evidencectl tooling language-server` resolves the references between those
-parts and reports an unknown or duplicated one, and their content is checked
-when `evidencectl` compiles the project.
-
-### Parsing, form validation, and compilation
-
-The generated schemas describe the JSON-compatible shape that can be parsed
-into the marker and question models. They do not describe every condition for
-an accepted authoring project. After parsing, the shared authoring library
-checks field bounds and relationships within one question. `evidencectl` then
-checks filenames, referenced files, cross-question relationships, local
-artifacts, and the compiled deployment grammar. The real `evidence` binary
-performs the final bundle check before a local generation or production
-candidate is published.
-
-For example, the question schema describes `subjects` as an array but does not
-state its item-count bound. A document with nine structurally valid subjects
-can pass JSON Schema validation, then the shared form validator rejects it
-because one question accepts only 1 through 8 subjects. Treat schema success as
-editor and parse-shape feedback, not as a successful compile.
-
-### Local secrets and signing identity
-
-`evidencectl init` creates `secrets/`, adds it to `.gitignore`, and generates
-disposable local key material. A local compile requires that directory to be a
-plain, non-symlink directory owned by the current user with exact mode `0700`.
-The generated signing private JWK and the two independent HMAC masters remain
-inside that directory. They are not bundle artifacts.
-
-The compiler reads `secrets/signing-p256-public.jwk.json` as a bounded regular
-file. The shared JWK parser limits the JSON document to 64 KiB, rejects private
-members, and requires an `ES256` key with `kty: EC` and `crv: P-256`. Its `kid`
-must equal the 43-character RFC 7638 thumbprint of that exact public key. The
-compiler copies only this public half to
-`bundle/public-keys/<kid>.jwk.json` and uses that path as
-`signing.activePublicJwkFile`.
-
-The generated local `runtime.yaml` records the canonical secret-directory path
-and synthesizes `signer.privateKeyRef` as
-`secret:file/signing-p256-private-jwk`. The generated runtime contains the
-reference, not the private JWK, HMAC masters, or another secret value. The
-runtime validates the referenced owner-only files before serving.
-
-## Envelopes
-
-Every authored YAML document except a source and a selector opens with two
-keys that name its format: `apiVersion`, which carries the format version, and
-`kind`. A document without them is refused as `config.missing-envelope`, and a
-`version` or `formatVersion` key the format no longer takes is refused as
-`config.removed-key` with the line to delete.
-
-| File | `apiVersion` | `kind` |
-|---|---|---|
-| `evidence-project.yaml` | `id.registrystack.org/formats/evidence/authoring-project/v1alpha1` | `EvidenceAuthoringProject` |
-| `questions/<id>.yaml` | `id.registrystack.org/formats/evidence/question/v1alpha1` | `EvidenceQuestion` |
-| `access/policies/<id>.yaml` | `id.registrystack.org/formats/evidence/access-policy/v1alpha1` | `EvidenceAccessPolicy` |
-| `access/clients/<id>.yaml` | `id.registrystack.org/formats/evidence/access-client/v1alpha1` | `EvidenceAccessClient` |
-| a target's `governance.yaml` | `id.registrystack.org/formats/evidence/target-governance/v1alpha1` | `EvidenceTargetGovernance` |
-| the `settings.yaml` that `target new --settings` reads | `id.registrystack.org/formats/evidence/target-settings/v1alpha1` | `EvidenceTargetSettings` |
-| `mocks/source.yaml` | `id.registrystack.org/formats/evidence/mock-plan/v1alpha1` | `EvidenceMockPlan` |
-
-Every one of these documents is read by the shared configuration reader under
-the same rules: at most 1 MiB, one document, no anchors, aliases, tags, or
-duplicate keys, and no `${...}` expression, which is refused as
-`config.substitution-not-allowed` because nothing in an authoring project is
-substituted.
-
-## The project marker
-
-`evidence-project.yaml` confirms that a directory holding authoring parts is
-the project a caller thinks it read. A directory without one is not an error.
-The marker is its envelope and nothing else.
-
-`evidencectl init` writes exactly these lines, held to that text by
-`crates/registry-evidence-authoring/src/marker.rs`:
-
-```yaml
-# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
-apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
-kind: EvidenceAuthoringProject
-```
-
-## An authored question
-
-One document under `questions/` states what is asked, of which subjects, from
-which source, and which governed concepts the answer carries. This is a
-complete question, from the fixtures in `crates/registry-evidencectl/src/authoring.rs`:
-
-```yaml
-apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: adult-status
-question: Is the person at least 18 years old?
-purpose: age-check
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: is_adult
-    type: boolean
-derivation: derivations/adult-status.rhai
-disclosure:
-  allow: [is_adult]
-```
-
-### Identity and text
-
-| Key | Required | Meaning |
-|---|---|---|
-| `id` | yes | The question's local name, which must equal the stem of the document's own filename, so `id: adult-status` is read from `questions/adult-status.yaml`. Lowercase local identifier. |
-| `purpose` | yes | The purpose a caller must state to receive this answer. Lowercase local identifier. |
-| `question` | yes | The question in words, for a human reviewing the project. Non-empty, at most 512 bytes, no control characters. |
-
-A lowercase local identifier starts with `a` through `z`, is at most 64 bytes,
-and continues with lowercase letters, digits, `.`, `_`, or `-`. That spelling
-is the one the form accepts wherever an author names something: question `id`
-and `purpose`, subject `role`, `selector`, and `profile`, fact `name`, answer
-`concept`, and a `source.ref`.
-
-A question's names are narrower where they name something in the compiled
-bundle. The bundle holds the key of every id-keyed map, `selectorProfiles` and
-`sources` included, and every selector field name, to the shared local
-identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`,
-or `-`, so no dot and at most 64 characters (`validate_named_map` and
-`SelectorProfile::validate` in `crates/registry-evidence/src/config.rs`). A
-question that reads an `operation` compiles a selector profile named
-`local-subject-{id}-v1`, or `local-subject-{id}-{role}-v1` when it has more
-than one subject, and a source named `local-source-{id}`. The form refuses,
-at the member that carries it, each name the bundle would refuse:
-
-| Member | Refused | Code |
-|---|---|---|
-| `id` of a question that reads an `operation` and has one subject | over 47 bytes | `evidence.question.compiled-name-length` |
-| `role` of a question that reads an `operation` and has several subjects | `id` and `role` over 46 bytes together | `evidence.question.compiled-name-length` |
-| `role` of a question that reads an `operation` and has several subjects | a dot | `evidence.question.compiled-name-dot` |
-| `selector` | a dot | `evidence.question.compiled-name-dot` |
-| `profile`, and each entry of `profiles` | a dot | `evidence.question.compiled-name-dot` |
-| `source.ref` | a dot | `evidence.question.compiled-name-dot` |
-
-The bounds are measured on the name the compiler writes
-(`crates/registry-evidence-authoring/src/names.rs`), and each is checked after
-every other rule of the form. A question that names its source with
-`source.ref` compiles no name from its `id`, which keeps the whole 64 bytes,
-and a `role` that enters no compiled name keeps the dot: the one subject of a
-question, and every subject of a question with a `source.ref`. `purpose`, a
-fact `name`, and an answer `concept` keep the dot everywhere.
-
-### Subjects
-
-A question is asked about one party or about several. Write `subject` for one,
-or `subjects` for a list of 1 to 8. Declaring both, or neither, is rejected.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `subject` | one of the two | A single party. |
-| `subjects` | one of the two | 1 to 8 parties. |
-| `subject.role` | yes | What this party is to the question. Unique across the question's subjects. |
-| `subject.selector` | unless `profiles` is used | The request field carrying this party's identifier. |
-| `subject.profile` | no | The selector profile the field belongs to. A question that names an `operation` must omit it, because `evidencectl` derives the profile from the operation. A question that names a `source.ref` may omit it only when exactly one alternative of that source's selector input for this role lists this field; no match and two matches are refused alike, so a field two profiles expose has to name its profile. |
-| `subject.profiles` | no | Source references only. Explicitly allow 1 to 16 unique named profiles from `selectors/`, including composite profiles. Mutually exclusive with `selector` and `profile`; each profile supplies its complete field set. |
-| `subject.source` | no | Inline `operation` only. `true` selects this role to supply a path selector and `false` excludes it. Omit it when the field names one role unambiguously. When several roles use the same path field, exactly one must be `true`. A question that names a `source.ref` must omit it. |
-| `subject.derivation` | no | Whether this party's selector value is offered to the derivation program. Defaults to `false`. |
-
-`subjects[]` carries the same keys as `subject`.
-
-A question that names a `source.ref` has to use every subject alternative in
-that source or declare the subject for derivation. A source role must support
-every selected profile with exactly the selected fields. The existing
-`selector` shorthand retains its single-field behavior. `profiles` reads each
-named profile's complete field set, so it supports composite keys without
-repeating their field declarations in the question:
-
-```yaml
-subject:
-  role: record
-  profiles: [by-code, by-code-and-region]
-source:
-  ref: record-status
-```
-
-This compiles one question whose record role permits either explicit profile.
-Each request chooses one, makes one lookup, and has no fallback. Overlapping
-field sets never choose the profile implicitly. Local request preparation uses
-`--subject record@by-code-and-region:code=A` and
-`--subject record@by-code-and-region:region=7`, or an owner-only subjects file
-whose entries include `role`, `profile`, `field` and typed `value`. Existing
-single-profile `role:field=value` shorthand remains lexical and unchanged.
-
-Local development grants enumerate complete combinations of profiles, with the
-runtime's limit of 128 grants per authority profile. An operated target still
-supplies its own complete grants. `derivation: true` exposes the selected
-profile's declared fields to that question's derivation. An optional
-source-owned `extract/3` can check returned identity once for all questions that
-reuse the source; question derivations then consume only its fixed facts.
-
-A two-party question declares both roles and lets the source consume both
-selectors:
-
-```yaml
-subjects:
-  - role: child
-    selector: child_id
-  - role: candidate-parent
-    selector: candidate_id
-```
-
-### Source
-
-A question reads either from a source the project already defines, or from one
-operation of the project's own OpenAPI description together with the facts it
-projects out of the response.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `source.ref` | one of the two | The name of a definition under `sources/`. A question using `ref` declares no `facts` and no `collectionBounds`. |
-| `source.operation` | one of the two | One `operationId` from `source.openapi.yaml`. Non-empty, at most 256 bytes, no control characters. Compiles for a local run only. |
-| `source.facts` | with `operation` | 1 to 16 values projected out of the response. |
-| `source.collectionBounds` | with a collection | Up to 16 pointers, each bounding one array the facts walk into. |
-
-Declaring both forms, or neither, is rejected. The two do not reach the same
-destination. A question a deployment build can compile names a `source.ref`; an
-inline `operation` serves a local run and stops there. `compile_plan` in
-`crates/registry-evidencectl/src/authoring.rs` takes the inline branch as soon
-as one question omits `source.ref`, and that branch compiles each inline
-question's source against the loopback HTTP origin `exact_loopback_server`
-reads out of the description, with an authentication kind of `none` written
-beside it. `render_production_bundle` then replaces the bundle's whole
-`sources` object with what those plans produced, so the governance a deployment
-build is given cannot substitute an authenticated source, and
-`validate_production_sources` refuses a production source that is not
-authenticated HTTPS. A `source.openapi.yaml` that declares the HTTPS server
-such a source would need never reaches that check: `exact_loopback_server`
-refuses it while the plan is still being compiled.
-
-An `operationId` must resolve to exactly one operation, and that operation must
-be a GET; a match on any other method is refused with the same finality as a
-match on none. What it resolves to is read under the same closed profile the
-document is: the selected path item carries only `get` and `parameters`, and
-the operation itself only `operationId`, `parameters`, and `responses`, so an
-ordinary `summary` or `description` beside them is refused, and so are an
-operation-level `security`, a request body, and `servers` on either the path
-item or the operation.
-
-The selector fields named by that operation's path and the operation's
-parameters are then required to be the same set. A field used by one subject
-selects that role by default. When several roles use the same path field,
-exactly one must declare `source: true`; the others are derivation-only. A
-subject not selected for the path is accepted only when it declares
-`derivation: true`; that subject remains available to the reviewed derivation
-but is omitted from the source selector inputs and path bindings.
-`exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs` reads
-the path item's `parameters` and the operation's own as one list and compares
-its length to the number of distinct path selector fields before it reads any of them, so
-an extra parameter of any kind, a query filter beside the selector included,
-is refused for the count alone. Each parameter is closed to `name`, `in`,
-`required`, and `schema`, so an ordinary `description` beside them, and a
-`$ref` to a shared parameter component, are unsupported keys; its `schema` is
-closed to `type`, so a `format`, a `pattern`, or a `minLength` is refused the
-same way. What is left must read `in: path`, `required: true`, and
-`schema.type: string`, and the parameter names must equal the path-bound
-subject selector names exactly, each named once. A path-bound subject may also
-declare `derivation: true`; it then participates in both the fixed source read
-and the derivation.
-
-The path that operation is written under is held to the same shape. It starts
-with `/` and not `//`, holds no `?`, `#`, or `\`, and no segment of it is
-empty, `.`, or `..`. Each selector appears as `{selector}` occupying one
-complete segment exactly once, and the path's own count of `{` and of `}` each
-equal the number of selectors, so `/people/{person_id}` is accepted and
-`/people/id-{person_id}` is not. A question that names a `source.ref` is held
-to none of this: its selectors are read against that source's declared selector
-inputs instead.
-
-### Facts
-
-One fact names a value and the place it is read from.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `facts[].name` | yes | The name the derivation reads the value under. Lowercase local identifier, unique within the question. |
-| `facts[].path` | yes | An extended JSON Pointer into the response. Unique within the question, starts with `/`, at most 256 bytes, no control characters, and naming a scalar leaf the response schema offers. |
-| `facts[].combine` | yes | `exactly-one` or `collect`. |
-
-A path walks into an array by writing `*` for the element, so
-`/events/*/status` reads the `status` of every element of `/events`. A path
-that visits a collection must say `combine: collect`; a path that visits none
-must say `combine: exactly-one`. Either mismatch is rejected by name, so a
-finding says which fact disagrees with its own path.
-
-A well-formed path still has to land on a value the response offers. The leaves
-are read from the selected operation's exact `200` `application/json` response
-schema, with no `default` or wildcard response standing in for it, and a
-container is never one of them.
-`crates/registry-evidence-authoring/src/openapi/flatten.rs` produces no leaf
-under a `oneOf` or `anyOf`, an `allOf` merging more than one schema, an untyped
-or genuinely multi-type node (only `[T, "null"]` is admitted), the unnamed
-members of `additionalProperties` or `patternProperties`, an object with no
-`properties`, an array with no `items`, a repeated `$ref` in a cycle, or past
-16 pointer segments.
-
-A selected scalar also carries its own closed bounds, and the compile stops
-where it does not: an integer needs both `minimum` and `maximum`, or an `enum`
-or a `const`; a string needs `minLength` and `maxLength`, or a `format`, an
-`enum`, or a `const`. The finding names the pointer and asks for those bounds
-in the retained OpenAPI document, because that is the one place a fact's shape
-is stated.
-
-### Bounding collections
-
-`source.collectionBounds` maps a pointer to the largest number of elements the
-project will read from the array at that pointer. Each `*` in a fact path
-contributes the pointer that stands before it, so `/events/*/status` needs a
-bound at `/events`. A pointer is bounded the same way a fact path is, and its
-value is an integer in 1 to 256.
-
-One fact is bounded by the product of every bound its own path walks through,
-and that product may not exceed 256 either. Two nested bounds of 17 are each
-inside the range and together are not, so a path that visits more than one
-collection has to be read as a multiplication.
-
-```yaml
-source:
-  operation: listRecordEvents
-  facts:
-    - name: event_statuses
-      path: /events/*/status
-      combine: collect
-    - name: event_times
-      path: /events/*/occurredAt
-      combine: collect
-  collectionBounds:
-    /events: 4
-```
-
-The declared pointers and the collections the facts reach are compared as sets,
-so a bound that is missing and a bound nothing reaches are both rejected, and
-both are named. A question whose facts visit no collection therefore writes
-`collectionBounds: {}` or leaves the key out.
-
-### Answers
-
-`answers` lists 1 to 16 governed concepts, each with a unique `concept` name.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `answers[].concept` | yes | The concept's local name. Lowercase local identifier, unique within the question. |
-| `answers[].uri` | for production | The stable URI a relying party matches on, an identifier of 1 to 512 characters with no control characters. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. The bundle check then requires it to parse as a URI. The key was `answers[].id`; a file that still writes `id` under an answer is refused with `config.removed-key`. |
-| `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-identifier`, `bounded-integer`, or `reviewed-structured-value`. |
-| `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters, and each spelled as a codelist code. |
-| `answers[].prefix` | for `bounded-identifier` | Exact ASCII namespace prefix, 1 to 512 bytes, using letters, digits, `.`, `_`, `-`, `:`, `/`, or `#`, and ending in one of those six separators. |
-| `answers[].minimumBytes`, `answers[].maximumBytes` | for `bounded-identifier` | Both required, in 1 to 1024, with `minimumBytes` no greater than `maximumBytes` and room for a nonempty suffix after the prefix. They bound the entire disclosed string. |
-| `answers[].minimum`, `answers[].maximum` | for `bounded-integer` | Both required together, both within plus or minus 9007199254740991, and `minimum` no greater than `maximum`. |
-| `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. The file must exist, and its own top-level `$id` must be an absolute URI, which becomes the concept's `schema` constraint under the same deferred bound. |
-| `answers[].maximumSerializedBytes` | for `reviewed-structured-value` | The serialized ceiling for the value, in 1 to 65536. |
-| `answers[].sdJwtVc` | optional with `reviewed-structured-value` | How this answer appears in the SD-JWT VC serialization. No other answer type accepts it. |
-
-Each type accepts only the keys its own row lists. A `boolean` answer declares
-no `values`, no bounds, no `schema`, no `maximumSerializedBytes`, and no
-`sdJwtVc`. A `controlled-category` answer declares no numeric bounds and no
-`sdJwtVc`. A `bounded-identifier` answer declares no `values`, numeric bounds,
-schema, or `sdJwtVc`. A `bounded-integer` answer declares no `values` and no `sdJwtVc`. A
-`reviewed-structured-value` answer declares no scalar constraints.
-
-A `controlled-category` answer's `values` are held to a second grammar the form
-does not state. `compile_concept` writes them into a generated codelist as its
-codes, and `validate_code` in `crates/registry-evidence/src/bundle.rs` requires
-each code to begin with an ASCII alphanumeric and to continue with ASCII
-alphanumerics, `.`, `_`, `:`, or `-`. A value such as `New York` satisfies
-every rule in the Answers table and is then refused as an invalid codelist code.
-The other forms carry no codelist grammar: a `boolean` compiles to an empty
-constraint object, a `bounded-integer` states the same bound in both layers,
-and a `reviewed-structured-value`'s named schema is the only authority on its
-value's shape. A `bounded-identifier` has its own output grammar: after the
-exact prefix, a nonempty suffix begins with an ASCII letter or digit, then uses
-only ASCII letters, digits, `.`, `_`, or `-`. The runtime checks it before
-constructing or signing Evidence.
-
-Four URIs an authoring project writes are bounded only after the form has
-accepted them. `validate_uri` in `crates/registry-evidence/src/config.rs` holds
-a URI to 1 through 512 characters and then requires it to parse, and it is what
-reads an answer `uri`, the `$id` of the file `answers[].schema` names,
-`governance.requirement`, and `governance.evidenceType`. The form reads none of
-the four: `validate_answer` never looks at `answer.uri`, and `validate_question`
-never opens `governance` at all. A `controlled-category` answer's `uri` is
-measured twice over, because the compile derives that concept's category scheme
-as `{uri}:categories` and holds the derived URI to the same 512 characters. Code list versions
-use 1 through 128 Unicode characters without control characters.
-
-### Disclosure
-
-| Key | Required | Meaning |
-|---|---|---|
-| `disclosure.allow` | yes | Exactly the concepts the question declares, each once. |
-
-The list is checked against the declared concepts as a set and by length, so a
-missing concept, an unknown one, and a repeated one are all rejected. Writing
-it out is the point: a concept reaches a response because an author named it
-here, never because it appeared under `answers`.
-
-### Response formats and the SD-JWT VC projection
-
-| Key | Required | Meaning |
-|---|---|---|
-| `responseFormats` | no | Defaults to `[signed-jws]`. Must contain `signed-jws` exactly once, and may add `sd-jwt-vc` once. |
-| `answers[].sdJwtVc.claim` | with `sdJwtVc` | The claim name the answer is projected under. At most 64 bytes, starts with an ASCII letter, continues with ASCII letters, digits, or `_`, unique within the question, and not one of the 24 names the response format has already given a meaning. |
-| `answers[].sdJwtVc.disclosure` | with `sdJwtVc` | `top-level` is the only value. |
-
-An `sdJwtVc` projection without `sd-jwt-vc` in `responseFormats` is rejected.
-The reserved claim names are listed in `validate.rs`: the registered JWT and
-SD-JWT VC claims, and the Evidence payload's own names.
-
-```yaml
-answers:
-  - concept: birth_certificate
-    type: reviewed-structured-value
-    schema: schemas/birth-certificate.yaml
-    maximumSerializedBytes: 2048
-    sdJwtVc:
-      claim: birthCertificate
-      disclosure: top-level
-responseFormats: [signed-jws, sd-jwt-vc]
-```
-
-### The derivation program
-
-| Key | Required | Meaning |
-|---|---|---|
-| `derivation` | yes | The Rhai program that turns facts into concepts, under `derivations/`. Each question names its own file; two questions pointing at one program is rejected. |
-
-`crates/registry-evidence-authoring/src/derivation.rs` compiles the program
-without running it and holds it to three rules: function names are unique, the
-name `derive` is reserved for the generated concept binding, and the program
-declares exactly one `answer(facts, selectors, context)` with those three
-parameters. Function discovery reads the parsed syntax tree, so a name inside
-a string or a comment is not an entry point.
-
-The same syntax tree holds the facts `answer` reads. A read of its first
-parameter with a literal key, `facts["status"]` or `facts.status` (the first key
-of a longer chain), must name a fact the question's source declares: a
-`source.facts[].name` for an inline operation, or a property of a referenced
-source's `factSchema` when that schema is a closed object
-(`additionalProperties: false`). A read of any other name is refused as
-`evidence.derivation.fact-undeclared` against the derivation file, by
-`check`, fixture runs, `package`, and the structural check `source
-diff` and `source update` run. That is what turns a source rename, such as a
-regenerated export whose fact changed name, into an authoring refusal rather
-than a failure of every request. The operands of one `??` fallback are read
-together: when any of them names a declared fact, none of them is refused, so
-`facts.new ?? facts.old` stays valid while a source moves from one name to the
-other. The check reads only what it can read without running the program: a
-computed key, a read inside another function the facts are passed to, an
-`answer` that rebinds or writes its first parameter (through `let`, `const`, an
-assignment to it or to one of its keys, a `for` loop variable, or a `catch`
-variable), and a referenced source whose fact schema is open are left to the
-fixtures. A computed key such as `facts[key]` is therefore how a derivation
-reads a fact this check should not see. The check reads the project, not the
-running source: a candidate already deployed against a source whose fact is
-then renamed still fails every request that reads it.
-
-```text
-fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    let adult_on = add_calendar_years(born, 18);
-    #{is_adult: compare_dates(context.legal_local_date, adult_on) >= 0}
-}
-```
-
-### Governance
-
-`governance` is optional for a local compile and required for a production one.
-Omitting it lets `evidencectl` invent disposable
-`urn:registrystack:evidence:local:` identifiers, a UTC observation timezone,
-and a 300 second validity, which are usable for a fixture run and refused for a
-deployment. Six of these keys become the `requirements[]` key of the same name
-in `bundle/evidence.yaml`. The other two are renamed: `governance.requirement`
-becomes `requirements[].uri`, and `governance.disclosureFamilies` becomes
-`requirements[].disclosureGuard.families`.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `governance.requirement` | with `governance` | The requirement URI this question answers. Under the deferred URI bound the Answers section states. |
-| `governance.kind` | with `governance` | `criterion`, `information-requirement`, or `constraint`. Without `governance`, a question with one boolean concept compiles as `criterion` and anything else as `information-requirement`. |
-| `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. The form itself accepts any list, an empty one included; `RequirementConfig::validate` in `crates/registry-evidence/src/config.rs` requires 1 to 16 unique entries, each an absolute URI of at most 512 characters, so an empty list, a repeated framework, and a seventeenth entry are refused by the bundle check instead. |
-| `governance.evidenceType` | with `governance` | The exact Evidence Type URI. Under the same deferred URI bound. |
-| `governance.validitySeconds` | with `governance` | The assertion lifetime, in seconds. The form itself accepts any whole number; the bundle grammar bounds it to 1 through 31536000, and a deployment caps it again at its own `signing.maximumAssertionValiditySeconds`. |
-| `governance.observationTimezone` | with `governance` | The IANA timezone the derivation's legal local date and time are computed in. |
-| `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. Its content is a contract the compile never reads. |
-| `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. `DisclosureGuard::validate` bounds this list exactly as `RequirementConfig::validate` bounds `referenceFrameworks`. |
-
-A production compile also requires a stable `uri` on every answer, and refuses a
-disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
-`evidenceType`, `disclosureFamilies`, or an answer `uri`.
-
-`governance.fixtures` is the widest deferral on this table.
-`validate_production_inputs` confirms the two path components, the `yaml`
-extension, and that the file is there, and never opens it.
-`read_fixture` in `crates/registry-evidence/src/fixture.rs`, which
-`Bundle::load` reaches for every requirement naming a fixture, is what states
-the contract: the file declares `synthetic_only: true` and a `cases` sequence
-of 1 to 256 entries, each carrying a unique string `id` of 1 to 128 bytes, and
-those ids have to cover all eight categories. Four are exact ids, `positive`,
-`no-match`, `source-failure`, and `anti-reconstruction`, and four are prefixes,
-`negative`, `boundary`, `missing`, and `ambiguous`. A fixture missing one of
-them compiles and is refused by the bundle check.
-[The fixture reference](../request-adapter/deployment-projects/FIXTURES.md)
-describes what a case holds.
-
-Authored `governance` is also where two questions can collide, and the compile
-is not what catches it. It reads one question at a time; `BundleConfig::validate`
-in `crates/registry-evidence/src/config.rs` then requires that requirement
-identifiers, Evidence Type identifiers, and answer concept identifiers each be
-unique across the whole bundle, and that no two requirements share a disclosure
-family. Two questions that each satisfy every rule on this page therefore
-compile, and the `evidence` binary's bundle check refuses what they produced.
-That check is reached either way, and this is where the bundle grammar's bounds
-on an authored list are applied as well: a local compile asks the `evidence`
-binary to check the staged generation, and a deployment build asks it to check
-the staged bundle, each before anything is published, so neither path publishes
-what the grammar refuses. Without `governance` there is nothing to collide:
-`evidencectl` derives `requirement:{id}`, `evidence-type:{id}`,
-`disclosure-family:{id}`, and
-`concept:{question_id}:{concept}` from the question's own id.
-
-### Local access policies
-
-An optional document under `access/policies/<id>.yaml` groups authored
-questions for one local requester policy. Access policy documents affect the
-local development authority profiles that `evidencectl` compiles. They are not
-part of the production authoring form or copied into a production target.
-
-The document is closed and has exactly these keys:
-
-```yaml
-apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
-kind: EvidenceAccessPolicy
-id: age-checks
-questions: [adult-status, age-bracket]
-```
-
-`id` follows the lowercase local-identifier grammar and
-must equal the filename stem. `questions` contains 1 through 128 existing
-question ids in strictly increasing lexical order, which also makes the list
-unique. The project may contain 1 through 128 policy files, and every entry in
-`access/policies/` must be an `<id>.yaml` regular file no larger than 1 MiB.
-
-Use the command when adding a policy so it validates question ids and writes
-the sorted closed document without replacing an existing file:
-
-```sh
-evidencectl access policy add age-checks \
-  --question adult-status \
-  --question age-bracket
-```
-
-When at least one explicit policy exists, local compilation replaces the
-single implicit all-question caller profile with one authority profile per
-policy. A project that has `access/clients/` but no access policy is rejected.
-The compiled profile is named after the policy's requester tag, `policy-v1-`
-or `policy-v2-` and the first 32 hexadecimal digits of the tag's digest, 42
-characters, which fits the bundle's 64; the profile's `requesterTags` carries
-the tag whole, and the tag is what a caller is matched on.
-
-## Rules that block a build
-
-Five refusals stop a project every rule above has accepted, because each comes
-from a check that runs after the form: the compiler, the bundle check, or the
-fixture runner. Each is stated once here, in the sentence the tool prints, with
-the change that clears it.
-
-**An `http-json` source declares a parameters schema.** A source under
-`sources/` that reads over HTTP declares both `request.prepareScript` and
-`request.adapterParametersSchema`; a `sqlite-extract` source declares
-`request.statement` and may declare either of the other two. A compile that
-cannot find the second stops with the pointer it looked for:
-
-```text
-referenced source is missing `/request/adapterParametersSchema`
-```
-
-The bundle check then validates `request.adapterParameters` against that schema,
-and the schema is held to the bounded-properties rule below, so a source that
-takes no reviewed parameter at all cannot be written down. Declare the one
-parameter the source really takes, require it, and give it a value. The empty
-stub `evidencectl` generates beside `adapterParameters: {}` is refused until it
-carries a parameter.
-
-**Every schema object declares bounded properties.** A schema the project owns
-under `schemas/` is read as a closed subset of JSON Schema, and an object node
-that offers nothing to bound is refused:
-
-```text
-schema objects must declare bounded properties
-```
-
-The refusal names the artifact it was reading, so the failing file is in the
-message. Each object node, the root included, writes
-`additionalProperties: false`, 1 to 64 entries under `properties`, and a
-`required` list naming exactly those properties. A source response schema is the
-one place a declared property may be left out of `required`, because projection
-drops a leaf the source did not send.
-
-**A question hands off its governance before the first fixture run.** The
-fixture runner compiles the editable project the way a production build compiles
-it, so a fixture run is already held to the production rules
-[Governance](#governance) states:
-
-```text
-every production question requires governance
-every production answer requires one stable concept uri
-deployment governance must not use disposable local identifiers
-```
-
-Give every question a `governance` block and every answer a stable `uri`, and
-replace the disposable `urn:registrystack:evidence:local:` identifiers a local
-generation issues. A project that only ever ran locally satisfies none of this.
-
-**A fixture declares the fixture envelope.** A fixture opens with
-`apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
-`kind: EvidenceFixture`. A document without them is refused with
-`config.missing-envelope` before any case runs, and one that still carries the
-retired `fixture` identifier key is refused with `config.removed-key`.
-
-The envelope `evidencectl init` writes is already correct. Replace the example
-requirement, concepts, schema, and rows around it and leave those two keys as
-generated. A document that does not declare `synthetic_only: true` is refused
-for that alone.
-
-**A SQLite project is not served locally.** `evidencectl dev` binds an HTTP
-source and refuses a project whose source reads a published extract:
-
-```text
-local serving does not bind SQLite extracts; prove this editable project with `evidencectl test <dir>`
-```
-
-Fixtures are the proof loop for that transport. The first time such an answer
-travels over HTTP is after `evidencectl package` against a deployment target, so a
-project on this transport reaches HTTP a step later than an authored HTTP source
-does.
-
-## Bounds at a glance
-
-Every ceiling the authoring form applies, with the file that states it.
-
-| Limit | Value | Stated in |
-|---|---|---|
-| Questions per project | 128 | `layout.rs` |
-| Question document size | 1 MiB | `layout.rs` |
-| Project marker size | 1 MiB | `layout.rs` |
-| OpenAPI description size | 16 MiB | `layout.rs` |
-| Derivation program size | 64 KiB | `layout.rs` |
-| Subjects per question | 1 to 8 | `validate.rs` |
-| Question text | 512 bytes | `validate.rs` |
-| Concepts per question | 1 to 16 | `validate.rs` |
-| Facts per question | 1 to 16 | `validate.rs` |
-| Fact path and collection pointer | 256 bytes | `validate.rs` |
-| Selectable leaf depth | 16 pointer segments | `openapi/flatten.rs` |
-| Collection bounds per question | 16 | `validate.rs` |
-| Collection bound value | 1 to 256 | `validate.rs` |
-| Controlled-category values | 2 to 32, each 64 bytes | `validate.rs` |
-| Bounded-integer bounds | plus or minus 9007199254740991 | `validate.rs` |
-| Structured answer serialized size | 1 to 65536 bytes | `validate.rs` |
-| Local identifier | 64 bytes | `validate.rs` |
-| SD-JWT VC claim name | 64 bytes | `validate.rs` |
-| Operation identifier | 256 bytes | `validate.rs` |
-| Local public signing JWK | 64 KiB | `registry-platform-crypto` |
-| Access policies per project | 1 to 128 | `authoring.rs` |
-| Questions per access policy | 1 to 128 | `authoring.rs` |
-| Access policy document size | 1 MiB | `layout.rs` |
+# Evidence authoring reference
+
+Author one `EvidenceProject` in `evidence.yaml`, with named Sources and Functions.
+A separate `EvidenceTarget` binds that project to one environment, and an
+`EvidenceTargetAuthority` supplies complete grants for that target. These closed
+v1alpha1 formats are adopter tooling, generated from the same pure Rust model
+used by `evidencectl` and the language server. They may change before 1.0.
+
+Use the runnable [standalone example](../../examples/standalone/README.md) for
+setup through independent verification. The [generated authoring schemas](../../../../crates/registry-evidencectl/schemas/authoring/)
+provide exact key shapes and editor completion. The [compiled deployment reference](../request-adapter/deployment-projects/CONFIG.md)
+owns the runtime contracts these inputs compile into.
+
+## Documents and ownership
+
+Every authored YAML document requires its exact `apiVersion` and `kind`.
+Keys are case-sensitive, and unknown keys are refused. The current formats are:
+
+| Input | `kind` | Owns |
+| --- | --- | --- |
+| `evidence.yaml` | `EvidenceProject` | Definitions, named Sources and Functions, selectors, Outputs and package ceilings |
+| `<target>.yaml` | `EvidenceTarget` | Project selection, target authority reference, connections and process bindings |
+| `<target>-authority.yaml` | `EvidenceTargetAuthority` | Identity profiles and complete target grants |
+| `access/clients/<id>.yaml` | `EvidenceAccessClient` | Local caller registration and access-profile membership |
+| `mocks/source.yaml` | `EvidenceMockPlan` | Synthetic source cases for a reviewed OpenAPI description |
+| Source import resolution file | `EvidenceSourceResolution` | Explicit keep/adopt/file decisions for an imported source update |
+
+The schemas state each format's complete envelope. There are no separate
+question, source, selector or access-policy document formats. Sources,
+selector profiles and Functions are members of `evidence.yaml`.
+
+Keep reviewed Function programs under `functions/`, fixture documents under
+`fixtures/`, and referenced codelists, JSON Schemas and SQL statements as plain
+project assets. Function programs are bounded to 64 KiB. Referenced assets stay
+inside the project and cannot traverse symbolic links. `.generated/` and
+`.evidence/` hold disposable local runtime material and request artifacts;
+keep generated credentials, keys, responses and private source data out of
+version control. A project contains no deployment credential values.
+
+## Project and definition identity
+
+`id` is the stable local project identifier. Stable identifiers connect
+`assertionDefinitions`, `sources`, `selectorProfiles` and named `functions`.
+Optional `label` and `description` fields are presentation metadata. They do
+not change a definition's behavior revision; presentation bytes included in a
+package remain covered by its integrity digest.
+
+Each AssertionDefinition declares its human-readable `question`, `semantics`,
+`purpose`, `subjects`, `acquisition`, `derive`, `outputs`, `validitySeconds`,
+`subjectBinding`, `representations` and `grantCeiling`. `semantics` supplies the
+Requirement URI, assertion kind, Evidence Type URI and reference-framework
+URIs. Public requests select the Requirement URI; the local definition ID is
+for authoring, inspection and generated code. `expectedConfigurationRevision`
+is an optional public pin and refuses stale requests before authority resolution,
+credentials or source calls. URI-only requests still carry the resolved
+revision in their signed assertion.
+
+The revision covers this definition's behavior and transitive Source,
+Function, selector, Output, asset and package-ceiling dependencies. Unrelated
+definitions, presentation and target bindings do not churn it. Existing issued
+assertions keep their original revision and trust bindings.
+
+`subjects` names each role and its permitted selector profiles. `grantCeiling`
+bounds authority kinds, actor kinds, value origins and audiences. Definition
+purpose, subject profiles, representations and binding supply the remaining
+grant ceilings. A target may narrow these ceilings, never widen them.
+`observationTimezone` defaults to `UTC`; it interprets the runtime's observation
+instant and does not let a caller supply a clock. `existenceDisclosure`
+defaults to `collapse-unresolved`. An optional `disclosureGuard` governs
+combinations of Outputs under the retained disclosure contract.
+
+## Sources, acquisition and Functions
+
+Every Source has one named transport boundary: `http-json` or `sqlite-extract`.
+The Source owns its fixed request, minimized selector inputs, response
+projection and bounded shape, private fact schema, extraction Function and
+resource limits. HTTP `connection` selects a target binding without embedding
+an origin or credential in the project. SQLite selects a governed extract
+profile and a reviewed read-only statement; the target binds the local extract.
+
+`request` carries the transport's reviewed request fields. `response` declares
+`projection`, `shape` and `maximumBytes`. `facts` declares the private values
+an extraction may return after a unique match. Optional `prepare`,
+`adapterParameters`, `adapterParametersSchema` and `preparationLimits` shape
+bounded request parts without granting I/O. `limits.attemptTimeoutMilliseconds`
+bounds one source attempt; `limits.maximumConcurrency` remains independent of
+the target connection's concurrency bound. `batch` declares bounded slotted
+preparation/extraction and its response shape when source batching is enabled.
+Source `behaviorRevision`, signed-Evidence protocol metadata and unresolved
+problem handling retain their compiled source-contract meaning.
+
+An acquisition is explicitly tagged with `type`:
+
+- `single` names one `source`.
+- `search-then-fetch` names `search` and `fetch`. Search facts are visible to
+  fetch preparation; only fetched facts reach assertion derivation.
+- `search-then-fetch-set` names `search`, two through four distinct fetch
+  members, each member's `factInputs`, and
+  `maximumAcquisitionMilliseconds`. The package and target must opt into this
+  acquisition capability. Each member sees only its declared search-fact
+  projection; fetched fact names must not collide.
+
+The optional project `acquisitionCapabilities` also governs source batching.
+`maximumHolderBoundBatchSize` defaults to one and cannot exceed 16. These are
+package ceilings; operator opt-ins and complete grants remain independently
+necessary.
+
+Each `functions` entry has a stable `id`, reviewed `source` asset and one
+`interface`: `source-prepare/v1`, `source-extract/v1` or `assertion-derive/v1`.
+Source calls reference named prepare/extract Functions; `derive.function`
+references a derive Function. `derive.parameters` contains reviewed literal
+parameters. The compiler checks each call site's inputs and Outputs rather
+than giving a reused Function every fact in the project. Preparation shapes
+bounded request parts, extraction returns `match`, `no_match` or `ambiguous`,
+and only `match` carries private facts. Derivation returns exactly the declared
+Outputs. Functions cannot authorize, choose a Source, read credentials,
+perform I/O, sign, audit or construct an assertion.
+
+An authored `assertion-derive/v1` Function returns an array whose entries each
+have exactly `output` and `value`. `output` names a local Output declared by the
+calling definition, for example `#{output: "region", value: facts["residence-region"]}`.
+The compiler maps those names to the declared public concept identifiers in the
+compiled runtime ABI. Do not return runtime `concept_id` entries from an authored
+Function. Unknown, duplicate, missing or malformed outputs are refused.
+
+`explain` exposes Function interfaces, typed call sites, capabilities, digests
+and the Source-to-Fact-to-Output flow without source values or secrets. `types`
+generates TypeScript or Python declarations from that same model. A scalar
+FactSet value does not become public merely because its type is visible.
+
+## Selector and Output fields
+
+### Selector fields and derivation references
+
+Each `selectorProfiles.<id>.fields.<field>` declares a closed `type` and only
+its applicable constraints:
+
+| `type` | Required constraints |
+|---|---|
+| `string` | `minimumBytes`, `maximumBytes`, each 1 through 8192, with minimum no greater than maximum |
+| `date` | None; values use canonical calendar dates |
+| `integer` | Inclusive `minimum` and `maximum`, within the JSON-safe integer range |
+| `boolean` | None |
+| `controlled-code` | Reviewed `codelist` asset, exact `codelistVersion`, and `maximumBytes` from 1 through 8192 |
+
+Each field may also have `label` and `description`. A profile has 1 through 16
+fields and a `maximumAggregateBytes` ceiling; each string or code field must
+fit that ceiling. Codelist paths name plain YAML or JSON assets under
+`codelists/`, and the declared version must match the reviewed asset.
+
+An assertion's `derive.selectorInputs` explicitly exposes selector fields to
+its named derive Function. Each entry names a subject `role` and an
+`alternatives` list. Each alternative names a declared selector `profile` and
+a nonempty unique `fields` list from that profile. The role and profile must
+also belong to the definition's subjects. This reference grants the Function
+access to those fields during derivation; it does not grant a caller access
+or include those private fields in the public assertion.
+
+### Output constraints
+
+A definition declares 1 through 16 Outputs.
+Each `assertionDefinitions.<id>.outputs.<id>` names a public `concept` URI and
+one of the following exact `type` values. Supply all constraints listed for
+that type and omit constraints belonging to other types.
+
+| `type` | Required constraints |
+|---|---|
+| `boolean` | None |
+| `controlled-code` | `codelist`, `codelistVersion`, `maximumBytes` |
+| `controlled-category` | Inline nonempty unique `values`, or `codelist`, `categoryScheme`, `schemeVersion`, `maximumBytes` |
+| `bounded-identifier` | `prefix`, `minimumBytes`, `maximumBytes`; the maximum is at most 1024 bytes and exceeds the prefix length |
+| `bounded-integer` | Inclusive JSON-safe integer `minimum` and `maximum` |
+| `bounded-decimal` | Quoted canonical decimal `minimum` and `maximum`, plus `maximumScale` from 0 through 9 |
+| `date-bucket` | `bucketScheme`, `schemeVersion`, `codelist` |
+| `time-bucket` | `bucketScheme`, `schemeVersion`, `codelist` |
+| `audience-scoped-entity-reference` | `maximumBytes` |
+| `controlled-code-list` | `codelist`, `codelistVersion`, `minimumItems`, `maximumItems`, `unique: true` |
+| `entity-reference-list` | `minimumItems`, `maximumItems`, `unique: true` |
+| `reviewed-structured-value` | Reviewed `schema` asset and `maximumSerializedBytes` |
+
+Numeric minima cannot exceed maxima. JSON-safe integers range from
+-9007199254740991 through 9007199254740991. Decimal bounds are strings rather
+than floating-point numbers, with at most 28 digits and 9 fractional digits;
+canonical text has no leading plus, redundant leading zero, or trailing
+fractional zero. List bounds are 1 through 64
+items, byte maxima are 1 through 8192 unless the type specifies a smaller
+ceiling, and structured values have a serialized ceiling of 1 through 65536
+bytes.
+
+Explicit codelists are reviewed project assets. `codelistVersion` identifies a
+code vocabulary; `categoryScheme` or `bucketScheme` identifies the scheme URI,
+and `schemeVersion` its version. The compiler checks those identities against
+the asset and includes it in the package. Inline category values are compiled
+to a deterministic codelist. A structured Output's `schema` supplies its closed
+field shape to validation and generated TypeScript/Python declarations.
+
+Only `reviewed-structured-value` may declare `sdJwtVc`. Its `claim` is a unique,
+non-reserved ASCII claim name of at most 64 characters within the definition, and
+`disclosure` must be `top-level`. This projection does not authorize holder
+delivery: the definition ceiling, complete target grant, and selected
+representation must permit it.
+
+### Local client actor choice and target authority
+
+An `EvidenceAccessClient` may declare `actorKind` as `human`, `agent`, or
+`service`. When omitted, local tooling infers an actor only if the assigned
+access profiles and exchange mode admit one compatible choice. An ambiguous
+choice requires `evidencectl access client add --actor-kind`. Selecting an
+actor never widens a definition's ceiling or the target's complete grants;
+each request remains subject to its own definition and authority checks.
+
+The target's `authority` reference selects a separate
+`EvidenceTargetAuthority` for the same target and project. Its `accessProfiles`
+contain complete grants, including purpose, subject selectors and value
+origins, binding, and representations. Client registration and selector
+references grant no authority themselves. Private selector values, source
+responses, credentials, and secret values remain outside public inspection
+and generated declarations, which describe their types.
+
+## Target bindings and complete grants
+
+A target names its own `id`, the exact `project`, a package installation `root`
+and an `authority` file. `service` supplies provider, issuer, public origin and
+trust-domain identity. `authentication.oidc` supplies issuer verification,
+resource audience, allowed token types/algorithms, JWKS URI, identity claim
+mapping and scope/client constraints. The target's `connections` map each
+project connection name to its origin, authentication references, TLS profile
+and operational concurrency ceiling. Write `connections: {}` explicitly when
+there are no HTTP bindings, as in an extract-only project. This grants no HTTP
+connection; every HTTP Source must still resolve its named binding.
+
+`service.issuer` is an absolute Evidence issuer identifier, including a URN,
+within 512 Unicode characters and without whitespace or control characters. It
+names the signer and is never fetched. The OIDC issuer and connection origins
+use their separate network URL rules. Members under `authentication.oidc.claims`
+name direct JWT claims: dots are literal characters, and `grantSourceIssuer`
+there names a claim rather than holding an issuer URL.
+
+Optional `assertionIssuers` maps external client identifiers, preserved exactly,
+to the issuer strings they may assert. A present map has one to 32 clients,
+each within 128 bytes, with one to eight distinct nonempty issuer strings per
+client, each within 512 bytes. Omit the map to add no assertion-issuer rule.
+
+`listener`, `secretProviders`, `signer`, `subjectBinding`, `audit`, `rateLimits`,
+optional `outboundTls` and `extracts` bind the process. They do not change a
+Source's meaning or grant access. Secret references identify externally
+provisioned material using exact `secret:env/NAME` or `secret:file/name` syntax.
+An optional `package.expectedDigest` is `sha256:` followed by 64 lowercase hex
+digits. Target reading checks these scalar forms before runtime delegation.
+`signer.publicJwkFile` supplies the reviewed public key
+asset; the private key is never a portable project input. Local authoring may
+use a disposable JWK signer. Production and evidence-grade targets require
+the retained pinned non-exportable Transit signer and transport guarantees.
+Optional `publication`, `responseFormats` and `acquisitionCapabilities` retain
+their compiled governance and runtime ceilings. Governed fields are revalidated during bundle and package compilation.
+Process-local paths and secret readiness are validated by `doctor` or process start.
+
+The target authority's `project` and `target` must match the selected project
+and target. Each `accessProfiles` entry matches authenticated requester tags,
+an authority kind and optional actor narrowing, then carries one or more
+complete grants. A grant declares its definition, purpose,
+`audienceFrom: authenticated-requester`, representations, subject binding and
+every subject's role, selector profile and value origin. `valueClaims` is
+required for authenticated-context or authenticated-grant values and forbidden
+for request-origin values. Task profiles additionally bind requester clients
+and their grant-source issuer. Partial grants are never combined to authorize
+a request, and overlapping complete grants refuse.
+
+Compiled target authority has its own derived revision and digest; authors do
+not provide a hash specimen. Activation records durable history atomically.
+Requests retain one active authority snapshot, while live task-grant validity
+and exact durable release audit remain mandatory. Authority updates do not
+rewrite the immutable package or existing assertions and take effect through
+the documented process restart.
+
+## Check, test and package
+
+`evidencectl check <project>` and `explain <project>` read the normalized model
+offline. Add `--target <target>` for the selected target's complete grants and
+bindings. A target may be a YAML file or a directory containing `target.yaml`.
+An ordinary target check may report missing local deployment inputs; a
+production check requires complete public inputs and an explicit target whose
+assurance is `production` or `evidence-grade`. Neither check resolves secrets,
+contacts Sources or initializes a deployed signer/audit destination.
+
+Fixture execution is explicit: `evidencectl test <project> --target <target>`
+delegates to the actual Evidence fixture kernel. The SQLite starter supports
+this offline lane; `dev start` refuses SQLite serving rather than pretending
+to provide a live SQLite source. Use `evidencectl dev start` for the local HTTP
+journey and `doctor --runtime-config <absolute-file>` for live dependencies.
+
+`evidencectl package <project> --target <target> --output <new-directory>`
+creates one immutable candidate containing `bundle/`, `runtime.yaml` and
+`compiled-authority.yaml`. Keep the output outside the authored project.
+One captured project snapshot supplies every candidate artifact. Runtime-owned
+bundle and authority validation runs even without fixtures. Install the bundle,
+provision referenced secrets, activate the compiled authority and run doctor
+before starting the intended process. The standalone walkthrough exercises
+that sequence and cleanup with synthetic data.
+
+A schema validates document shape; pure checks add reference and cross-field
+rules; compilation and runtime bundle checks establish the retained security
+and execution contracts. A successful shape check alone is not evidence of a
+working deployment. A refused command identifies the file/field with a
+value-free diagnostic. Preserve that distinction when inspecting machine
+reports or using an editor.
 
 ## Complete key-path inventory
 
@@ -781,7 +311,7 @@ Every key path the generated authoring schemas define, in one machine-checked
 list. A property is written `name`, an array item `name[]`, and a map value
 `name.*`.
 
-`products/evidence/scripts/check-config-key-paths.sh` fails when either block
+`products/evidence/scripts/check-config-key-paths.sh` fails when a block
 and its schema disagree in either direction, so a key added to the authoring
 model cannot ship without a line here, and a line here cannot outlive its key.
 The blocks are generated. After regenerating the schemas with
@@ -794,94 +324,182 @@ same promise. These schemas are adopter tooling. A key path leaving this
 inventory is a tooling change, not a break in the Version 1 configuration
 contract.
 
-### `questions/<name>.yaml`
+### `evidence.yaml`
 
-<!-- evidence-authoring-question-key-paths:start -->
+The normalized project document owns stable source, selector-profile, function,
+assertion-definition, and output identifiers. Presentation labels and
+descriptions remain optional metadata.
+
+<!-- evidence-authoring-project-key-paths:start -->
 ```text
-answers
-answers[]
-answers[].concept
-answers[].maximum
-answers[].maximumBytes
-answers[].maximumSerializedBytes
-answers[].minimum
-answers[].minimumBytes
-answers[].prefix
-answers[].schema
-answers[].sdJwtVc
-answers[].sdJwtVc.claim
-answers[].sdJwtVc.disclosure
-answers[].type
-answers[].uri
-answers[].values
-answers[].values[]
+acquisitionCapabilities
+acquisitionCapabilities[]
 apiVersion
-derivation
-disclosure
-disclosure.allow
-disclosure.allow[]
-governance
-governance.disclosureFamilies
-governance.disclosureFamilies[]
-governance.evidenceType
-governance.fixtures
-governance.kind
-governance.observationTimezone
-governance.referenceFrameworks
-governance.referenceFrameworks[]
-governance.requirement
-governance.validitySeconds
+assertionDefinitions
+assertionDefinitions.*
+assertionDefinitions.*.acquisition
+assertionDefinitions.*.acquisition.fetch
+assertionDefinitions.*.acquisition.fetch[]
+assertionDefinitions.*.acquisition.fetch[].factInputs
+assertionDefinitions.*.acquisition.fetch[].factInputs[]
+assertionDefinitions.*.acquisition.fetch[].source
+assertionDefinitions.*.acquisition.maximumAcquisitionMilliseconds
+assertionDefinitions.*.acquisition.search
+assertionDefinitions.*.acquisition.source
+assertionDefinitions.*.acquisition.type
+assertionDefinitions.*.derive
+assertionDefinitions.*.derive.function
+assertionDefinitions.*.derive.parameters
+assertionDefinitions.*.derive.selectorInputs
+assertionDefinitions.*.derive.selectorInputs[]
+assertionDefinitions.*.derive.selectorInputs[].alternatives
+assertionDefinitions.*.derive.selectorInputs[].alternatives[]
+assertionDefinitions.*.derive.selectorInputs[].alternatives[].fields
+assertionDefinitions.*.derive.selectorInputs[].alternatives[].fields[]
+assertionDefinitions.*.derive.selectorInputs[].alternatives[].profile
+assertionDefinitions.*.derive.selectorInputs[].role
+assertionDefinitions.*.description
+assertionDefinitions.*.disclosureGuard
+assertionDefinitions.*.existenceDisclosure
+assertionDefinitions.*.fixtures
+assertionDefinitions.*.grantCeiling
+assertionDefinitions.*.grantCeiling.actorKinds
+assertionDefinitions.*.grantCeiling.actorKinds[]
+assertionDefinitions.*.grantCeiling.audiences
+assertionDefinitions.*.grantCeiling.audiences[]
+assertionDefinitions.*.grantCeiling.authorities
+assertionDefinitions.*.grantCeiling.authorities[]
+assertionDefinitions.*.grantCeiling.valueOrigins
+assertionDefinitions.*.grantCeiling.valueOrigins[]
+assertionDefinitions.*.label
+assertionDefinitions.*.observationTimezone
+assertionDefinitions.*.outputs
+assertionDefinitions.*.outputs.*
+assertionDefinitions.*.outputs.*.bucketScheme
+assertionDefinitions.*.outputs.*.categoryScheme
+assertionDefinitions.*.outputs.*.codelist
+assertionDefinitions.*.outputs.*.codelistVersion
+assertionDefinitions.*.outputs.*.concept
+assertionDefinitions.*.outputs.*.description
+assertionDefinitions.*.outputs.*.label
+assertionDefinitions.*.outputs.*.maximum
+assertionDefinitions.*.outputs.*.maximumBytes
+assertionDefinitions.*.outputs.*.maximumItems
+assertionDefinitions.*.outputs.*.maximumScale
+assertionDefinitions.*.outputs.*.maximumSerializedBytes
+assertionDefinitions.*.outputs.*.minimum
+assertionDefinitions.*.outputs.*.minimumBytes
+assertionDefinitions.*.outputs.*.minimumItems
+assertionDefinitions.*.outputs.*.prefix
+assertionDefinitions.*.outputs.*.schema
+assertionDefinitions.*.outputs.*.schemeVersion
+assertionDefinitions.*.outputs.*.sdJwtVc
+assertionDefinitions.*.outputs.*.sdJwtVc.claim
+assertionDefinitions.*.outputs.*.sdJwtVc.disclosure
+assertionDefinitions.*.outputs.*.type
+assertionDefinitions.*.outputs.*.unique
+assertionDefinitions.*.outputs.*.values
+assertionDefinitions.*.outputs.*.values[]
+assertionDefinitions.*.purpose
+assertionDefinitions.*.question
+assertionDefinitions.*.representations
+assertionDefinitions.*.representations[]
+assertionDefinitions.*.semantics
+assertionDefinitions.*.semantics.evidenceType
+assertionDefinitions.*.semantics.kind
+assertionDefinitions.*.semantics.referenceFrameworks
+assertionDefinitions.*.semantics.referenceFrameworks[]
+assertionDefinitions.*.semantics.requirement
+assertionDefinitions.*.subjectBinding
+assertionDefinitions.*.subjects
+assertionDefinitions.*.subjects[]
+assertionDefinitions.*.subjects[].role
+assertionDefinitions.*.subjects[].selectors
+assertionDefinitions.*.subjects[].selectors[]
+assertionDefinitions.*.validitySeconds
+description
+functions
+functions[]
+functions[].description
+functions[].id
+functions[].interface
+functions[].label
+functions[].source
 id
 kind
-purpose
-question
-responseFormats
-responseFormats[]
-source
-source.collectionBounds
-source.collectionBounds.*
-source.facts
-source.facts[]
-source.facts[].combine
-source.facts[].name
-source.facts[].path
-source.operation
-source.ref
-subject
-subject.derivation
-subject.profile
-subject.profiles
-subject.profiles[]
-subject.role
-subject.selector
-subject.source
-subjects
-subjects[]
-subjects[].derivation
-subjects[].profile
-subjects[].profiles
-subjects[].profiles[]
-subjects[].role
-subjects[].selector
-subjects[].source
+label
+maximumHolderBoundBatchSize
+selectorProfiles
+selectorProfiles.*
+selectorProfiles.*.description
+selectorProfiles.*.fields
+selectorProfiles.*.fields.*
+selectorProfiles.*.fields.*.codelist
+selectorProfiles.*.fields.*.codelistVersion
+selectorProfiles.*.fields.*.description
+selectorProfiles.*.fields.*.label
+selectorProfiles.*.fields.*.maximum
+selectorProfiles.*.fields.*.maximumBytes
+selectorProfiles.*.fields.*.minimum
+selectorProfiles.*.fields.*.minimumBytes
+selectorProfiles.*.fields.*.type
+selectorProfiles.*.label
+selectorProfiles.*.maximumAggregateBytes
+sources
+sources.*
+sources.*.acquisitionPosture
+sources.*.adapterParameters
+sources.*.adapterParametersSchema
+sources.*.batch
+sources.*.batch.extract
+sources.*.batch.extract.function
+sources.*.batch.maximumItems
+sources.*.batch.prepare
+sources.*.batch.prepare.function
+sources.*.batch.response
+sources.*.batch.response.projection
+sources.*.batch.response.projection[]
+sources.*.batch.response.shape
+sources.*.behaviorRevision
+sources.*.connection
+sources.*.description
+sources.*.evidence
+sources.*.extract
+sources.*.extract.function
+sources.*.extractProfile
+sources.*.facts
+sources.*.forwardAccessAttribution
+sources.*.label
+sources.*.limits
+sources.*.limits.attemptTimeoutMilliseconds
+sources.*.limits.maximumConcurrency
+sources.*.maximumExtractAgeSeconds
+sources.*.preparationLimits
+sources.*.prepare
+sources.*.prepare.function
+sources.*.request
+sources.*.response
+sources.*.response.maximumBytes
+sources.*.response.projection
+sources.*.response.projection[]
+sources.*.response.shape
+sources.*.selectors
+sources.*.selectors[]
+sources.*.selectors[].profiles
+sources.*.selectors[].profiles[]
+sources.*.selectors[].role
+sources.*.type
+sources.*.unresolvedProblem
 ```
-<!-- evidence-authoring-question-key-paths:end -->
-
-### `evidence-project.yaml`
-
-<!-- evidence-authoring-project-marker-key-paths:start -->
-```text
-apiVersion
-kind
-```
-<!-- evidence-authoring-project-marker-key-paths:end -->
+<!-- evidence-authoring-project-key-paths:end -->
 
 ### `access/clients/<id>.yaml`
 
 A local access client document names one caller of a development Evidence
 runtime. `apiVersion` and `kind` are the envelope in the table above.
 `clientId` is the lowercase client identifier, `status` is `active` or
-`revoked`, and `policies` lists the access policies the client is assigned.
+`revoked`, and `accessProfiles` lists the target authority profiles assigned to
+the client.
 `principal` and `evidenceAudience` must both equal the local URI derived from
 `clientId`. `keys` holds exactly one public JWK for the client. `exchange` is
 optional local issuer wiring for a client whose authority comes from a task
@@ -896,6 +514,9 @@ governed task policy. A `first-party` exchange also requires
 
 <!-- evidence-authoring-access-client-key-paths:start -->
 ```text
+accessProfiles
+accessProfiles[]
+actorKind
 apiVersion
 clientId
 evidenceAudience
@@ -906,46 +527,10 @@ exchange.kind
 exchange.sourceIssuer
 keys
 kind
-policies
-policies[]
 principal
 status
 ```
 <!-- evidence-authoring-access-client-key-paths:end -->
-
-### `access/policies/<id>.yaml`
-
-The policy document is described in "Local access policies" above: `id` is the
-policy identifier and `questions` lists the question ids it covers.
-`taskGrant` is optional and names the trusted task-grant origin for every
-question in the policy. Its `kind` names the grant kind, `sourceIssuer` is the
-issuer URL, and `requesterClients` lists the client identifiers allowed to
-request under it. Each entry of `bindings` ties one authored selector field to
-a verified-token claim path: `question` is the question id, `selectorProfile`
-the selector profile, `role` the role within it, and `valueClaims` maps each
-local identifier of the selector's fields to the claim path that supplies it.
-
-<!-- evidence-authoring-access-policy-key-paths:start -->
-```text
-apiVersion
-id
-kind
-questions
-questions[]
-taskGrant
-taskGrant.bindings
-taskGrant.bindings[]
-taskGrant.bindings[].question
-taskGrant.bindings[].role
-taskGrant.bindings[].selectorProfile
-taskGrant.bindings[].valueClaims
-taskGrant.bindings[].valueClaims.*
-taskGrant.kind
-taskGrant.requesterClients
-taskGrant.requesterClients[]
-taskGrant.sourceIssuer
-```
-<!-- evidence-authoring-access-policy-key-paths:end -->
 
 ### `mocks/source.yaml`
 
@@ -991,34 +576,6 @@ operations[].response.status
 ```
 <!-- evidence-authoring-mock-plan-key-paths:end -->
 
-### `selectors/<name>.yaml`
-
-A selector profile is a member of the Evidence bundle grammar. Only the
-envelope is checked when the file is read; `evidencectl check` validates every
-other key against `bundle.schema.yaml` after the compile, so the keys a profile
-may carry are those of that grammar and are not listed here.
-
-<!-- evidence-authoring-selector-key-paths:start -->
-```text
-apiVersion
-kind
-```
-<!-- evidence-authoring-selector-key-paths:end -->
-
-### `sources/<name>.yaml`
-
-A source definition is a member of the Evidence bundle grammar. Only the
-envelope is checked when the file is read; `evidencectl check` validates every
-other key against `bundle.schema.yaml` after the compile, so the keys a source
-may carry are those of that grammar and are not listed here.
-
-<!-- evidence-authoring-source-key-paths:start -->
-```text
-apiVersion
-kind
-```
-<!-- evidence-authoring-source-key-paths:end -->
-
 ### Source import resolution file
 
 A resolution file records what to do with each artifact a source import could
@@ -1039,53 +596,187 @@ kind
 ```
 <!-- evidence-authoring-source-resolution-key-paths:end -->
 
-### A target's `governance.yaml`
+### `<target>.yaml`
 
-A target's governance document carries the governance members of the bundle
-grammar into the bundle as written. `assuranceProfile` is `local`,
-`production`, or `evidence-grade`. Every other member (`service`, `issuer`,
-`authentication`, `audit`, `subjectBinding`, `rateLimits`, `signing`,
-`authorityProfiles`, and the optional `publication`, `responseFormats`, and
-`sourceConnections`) is a passthrough node: the reader does not look inside
-it, and `evidencectl check` validates it against `bundle.schema.yaml` after the
-compile. Every member except the last three is required.
+The normalized target document selects one project and declares the target's
+acquisition capabilities. Its authority reference points to a separate
+operator-owned target authority document.
 
-<!-- evidence-authoring-target-governance-key-paths:start -->
+<!-- evidence-authoring-target-key-paths:start -->
 ```text
+acquisitionCapabilities
+acquisitionCapabilities[]
 apiVersion
 assuranceProfile
 audit
+audit.destination
+audit.hashKeyRef
+audit.hashKeyVersion
+audit.path
+audit.retentionDays
+audit.rotateBytes
 authentication
-authorityProfiles
-issuer
+authentication.oidc
+authentication.oidc.actorClaim
+authentication.oidc.algorithms
+authentication.oidc.algorithms[]
+authentication.oidc.allowedClients
+authentication.oidc.allowedClients[]
+authentication.oidc.assertionIssuers
+authentication.oidc.assertionIssuers.*
+authentication.oidc.assertionIssuers.*[]
+authentication.oidc.audience
+authentication.oidc.claims
+authentication.oidc.claims.actorKind
+authentication.oidc.claims.approver
+authentication.oidc.claims.grantBounds
+authentication.oidc.claims.grantClient
+authentication.oidc.claims.grantExp
+authentication.oidc.claims.grantId
+authentication.oidc.claims.grantResource
+authentication.oidc.claims.grantSourceIssuer
+authentication.oidc.claims.purpose
+authentication.oidc.evidenceAudienceClaim
+authentication.oidc.issuer
+authentication.oidc.jwksSource
+authentication.oidc.jwksSource.type
+authentication.oidc.jwksSource.uri
+authentication.oidc.maximumTokenLifetimeSeconds
+authentication.oidc.principalClaim
+authentication.oidc.requesterTagsClaim
+authentication.oidc.requiredScopes
+authentication.oidc.requiredScopes[]
+authentication.oidc.revokedKeyIds
+authentication.oidc.revokedKeyIds[]
+authentication.oidc.tlsTrustProfile
+authentication.oidc.tokenTypes
+authentication.oidc.tokenTypes[]
+authority
+connections
+connections.*
+connections.*.admissionTimeoutMilliseconds
+connections.*.authentication
+connections.*.authentication.assumedLifetimeSeconds
+connections.*.authentication.audience
+connections.*.authentication.clientAssertionAudience
+connections.*.authentication.clientAssertionKeyRef
+connections.*.authentication.clientIdRef
+connections.*.authentication.clientSecretRef
+connections.*.authentication.credentialPlacement
+connections.*.authentication.headerName
+connections.*.authentication.maximumCacheSeconds
+connections.*.authentication.passwordRef
+connections.*.authentication.resource
+connections.*.authentication.scheme
+connections.*.authentication.scope
+connections.*.authentication.tokenEndpoint
+connections.*.authentication.tokenRef
+connections.*.authentication.type
+connections.*.authentication.usernameRef
+connections.*.authentication.valueRef
+connections.*.maximumConcurrency
+connections.*.origin
+connections.*.tlsTrustProfile
+connections.*.tokenTimeoutMilliseconds
+extracts
+extracts.*
+extracts.*.path
+id
 kind
+listener
+listener.bind
+listener.maximumConcurrentRequests
+listener.maximumRequestBytes
+listener.networkExposure
+listener.requestTimeoutMilliseconds
+listener.shutdownGraceMilliseconds
+listener.tlsTermination
+listener.trustProxyIdentityHeaders
+outboundTls
+outboundTls.systemRoots
+outboundTls.trustProfiles
+outboundTls.trustProfiles.*
+outboundTls.trustProfiles.*.caBundleFile
+package
+package.expectedDigest
+package.root
+project
 publication
+publication.description
+publication.endpointUrl
+publication.jurisdictions
+publication.jurisdictions[]
+publication.operatorId
+publication.publisherId
+publication.serviceId
+publication.title
 rateLimits
+rateLimits.burstPerPrincipal
+rateLimits.failedSelectorAttemptsPerPrincipalAuthorityPerMinute
+rateLimits.requestsPerPrincipalPerMinute
 responseFormats
+responseFormats[]
+secretProviders
+secretProviders.environment
+secretProviders.file
+secretProviders.file.root
 service
-signing
-sourceConnections
+service.issuer
+service.providerId
+service.publicOrigin
+service.trustDomain
+signer
+signer.algorithm
+signer.attemptTimeoutMilliseconds
+signer.keyName
+signer.keyVersion
+signer.mount
+signer.privateKeyRef
+signer.publicJwkFile
+signer.type
+signer.unixSocketPath
 subjectBinding
+subjectBinding.keyVersion
+subjectBinding.secretRef
 ```
-<!-- evidence-authoring-target-governance-key-paths:end -->
+<!-- evidence-authoring-target-key-paths:end -->
 
-### `settings.yaml` for `target new`
+### `<target>-authority.yaml`
 
-The settings file is what `target new --settings` writes a target from.
-`publicKeys` maps the name of each public key file the target carries to the path of the file that supplies it, read relative to the settings file. `governance` is a
-passthrough node holding the governance members of the bundle grammar;
-`evidencectl check` validates it against `bundle.schema.yaml` after the
-compile. `runtime` is a passthrough node holding the runtime document of the
-runtime grammar; `target new` validates it against `runtime.schema.yaml` before
-it writes the target.
+The normalized target authority document selects one target and project and
+owns its complete `accessProfiles` grants. Operational settings remain in the
+target document. Authority is compiled and activated separately from the
+immutable governed package.
 
-<!-- evidence-authoring-target-settings-key-paths:start -->
+<!-- evidence-authoring-target-authority-key-paths:start -->
 ```text
+accessProfiles
+accessProfiles.*
+accessProfiles.*.actorKind
+accessProfiles.*.authority
+accessProfiles.*.grantSourceIssuer
+accessProfiles.*.grants
+accessProfiles.*.grants[]
+accessProfiles.*.grants[].audienceFrom
+accessProfiles.*.grants[].definition
+accessProfiles.*.grants[].purpose
+accessProfiles.*.grants[].representations
+accessProfiles.*.grants[].representations[]
+accessProfiles.*.grants[].subjectBinding
+accessProfiles.*.grants[].subjects
+accessProfiles.*.grants[].subjects[]
+accessProfiles.*.grants[].subjects[].role
+accessProfiles.*.grants[].subjects[].selectorProfile
+accessProfiles.*.grants[].subjects[].valueClaims
+accessProfiles.*.grants[].subjects[].valueClaims.*
+accessProfiles.*.grants[].subjects[].valueOrigin
+accessProfiles.*.requesterClients
+accessProfiles.*.requesterClients[]
+accessProfiles.*.requesterTags
+accessProfiles.*.requesterTags[]
 apiVersion
-governance
 kind
-publicKeys
-publicKeys.*
-runtime
+project
+target
 ```
-<!-- evidence-authoring-target-settings-key-paths:end -->
+<!-- evidence-authoring-target-authority-key-paths:end -->

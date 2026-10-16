@@ -92,48 +92,13 @@ class SourceNeutralityTests(unittest.TestCase):
             )
             self.assertEqual([], CHECKER.find_violations(root))
 
-    def test_only_backed_shipped_starter_catalog_literals_are_allowed(self) -> None:
+    def test_embedded_catalog_cannot_exempt_domain_identifiers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            starter = root / "products/breg/starters/agricultural-holdings/core"
-            starter.mkdir(parents=True)
-            (starter / "registry.yaml").write_text("registry: {}\n", encoding="utf-8")
             source = root / "crates/registry-bregctl/src/starters.rs"
             source.parent.mkdir(parents=True)
             source.write_text(
-                'const STARTERS: &[Starter] = &[Starter {\n'
-                '    id: "agricultural-holdings",\n'
-                '    files: &[("registry.yaml", include_bytes!(\n'
-                '        "../../../products/breg/starters/agricultural-holdings/core/registry.yaml"\n'
-                '    ))],\n'
-                '}];\n',
-                encoding="utf-8",
-            )
-            self.assertEqual([], CHECKER.find_violations(root))
-
-            source.write_text(
-                source.read_text(encoding="utf-8")
-                + 'const IS_AGRICULTURAL: bool = id == "agricultural-holdings";\n',
-                encoding="utf-8",
-            )
-            violations = CHECKER.find_violations(root)
-            self.assertTrue(any("holdings" in item for item in violations), violations)
-
-            source.write_text(
-                source.read_text(encoding="utf-8").replace(
-                    'const IS_AGRICULTURAL: bool = id == "agricultural-holdings";\n', ""
-                )
-                + 'const ERROR: &str = "init.holdings.failed";\n',
-                encoding="utf-8",
-            )
-            violations = CHECKER.find_violations(root)
-            self.assertTrue(any("holdings" in item for item in violations), violations)
-
-            source.write_text(
-                'const STARTERS: &[Starter] = &[Starter {\n'
-                '    id: "farmer-pilot",\n'
-                '    files: &[],\n'
-                '}];\n',
+                'const STARTERS: &[Starter] = &[Starter {id: "farmer-pilot", files: &[]}];\n',
                 encoding="utf-8",
             )
             violations = CHECKER.find_violations(root)
@@ -209,7 +174,7 @@ class SourceNeutralityTests(unittest.TestCase):
             )
 
     def test_domain_metric_and_error_identifiers_are_rejected(self) -> None:
-        for value in ("registry.farmer.requests", "person.not_found"):
+        for value in ("registry.farmer.requests", "person.not_found", "inspection.failure"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root / "crates/registry-breg/src/lib.rs"

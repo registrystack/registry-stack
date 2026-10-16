@@ -318,19 +318,22 @@ published release artifacts.
 
 ### Pull pinned prerequisite images
 
-Maintained CI services and local dev tools use the Docker Official Images
-published through `public.ecr.aws/docker/library/postgres`. Debian recipe roots
-use `public.ecr.aws/docker/library/debian`, and Mailpit uses its upstream
-`ghcr.io/axllent/mailpit` mirror. Each reference retains the exact upstream
-manifest digest; the registry endpoint changes, not the selected image bytes.
+Root CI's PostgreSQL services, nightly platform coverage, the release upgrade
+rehearsal, and the BReg, Casework and Messaging dev tools pull canonical
+`docker.io/library/postgres`. Debian recipe roots use canonical
+`docker.io/library/debian`, and Mailpit uses its
+upstream `ghcr.io/axllent/mailpit` mirror. Each reference retains the exact
+upstream manifest digest; the registry endpoint changes, not the selected image
+bytes.
 The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
-`messagingctl` name the exact mirror references they pull. A `bregctl`
+`messagingctl` name the exact image references they pull. A `bregctl`
 session whose schema requires PostGIS still pulls `postgis/postgis` from
 Docker Hub.
 
-[Docker Official Images on ECR Public](https://aws.amazon.com/blogs/containers/docker-official-images-now-available-on-amazon-elastic-container-registry-public/)
-and [Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
-document these upstream alternatives. When updating a pin, verify the returned
+[Debian's Docker Official Image](https://hub.docker.com/_/debian),
+[PostgreSQL's Docker Official Image](https://hub.docker.com/_/postgres), and
+[Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
+document these upstream image sources. When updating a pin, verify the returned
 manifest's SHA256 at the selected endpoint before changing its immutable digest.
 The strict recipe and gate checks continue to require the recorded repository
 and digest. No registry account is required for these public image pulls.
@@ -747,32 +750,46 @@ published historical exception and must not be modified after publication.
 
 ### Rehearse the upgrade from the previous release
 
-Before 1.0, a release reads only the state its immediate predecessor wrote, and
-promises a forward state path from that predecessor alone. An operator on an
-older release upgrades one release at a time.
+BReg starts from the native Record, Dataset, Action, and Proposal model. State
+and packages from the retired entity/Request model have no in-place upgrade
+path; pilot operators start a new native registry. Native package successors,
+history, activation recovery, and backup/restore remain covered by the BReg
+operator workflow gates. The previous-release rehearsal does not select BReg;
+a named `--product breg` request refuses with this guidance before any network
+lookup, asset download, or PostgreSQL start.
+
+Evidence's normalized model starts at `v0.42.0`. Earlier releases wrote split
+question/source projects and targets containing `governance.yaml` and
+`runtime.yaml`; current tooling requires `evidence.yaml`, `target.yaml`, and
+separate complete target authority. There is no in-place conversion. Retain the
+previous deployment and audit, author and package the current model, and verify
+a fresh synthetic assertion before cutover. The default rehearsal omits Evidence
+for earlier starting releases with this reason; a focused `--product evidence`
+request refuses. A current-source lifecycle run proves the normalized model,
+not compatibility with an earlier release.
+
+For retained Evidence and Messaging contracts before 1.0, a release reads only
+the state its immediate predecessor wrote and promises a forward state path
+from that predecessor alone. An operator on an older release upgrades one
+release at a time.
 A patch release does not move the floor of its minor line, so its rehearsal
 may still start from the release before that line. The workflow does not do
 that by itself: it starts from the newest published release, which for a patch
 release is the previous release of the same line. To rehearse a patch release
 from the floor, dispatch the workflow with `-f from_tag=<floor tag>`.
 The release PR adds its manifest under `release/manifests/`, which starts
-`release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
-Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
-script downloads the previous published release's binaries for those products,
+`release-upgrade-rehearsal.yml` on that PR. The workflow builds Evidence and
+Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The script
+downloads the previous published release's binaries for eligible products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
-each asset against it as `release/VERIFY.md` describes. It writes a
-registry package with records and revisions, a Casework queue with answered
-and in-flight work, and an Evidence audit stream with the old binaries, using a
-disposable loopback PostgreSQL container. It then points the PR's binaries at
+each asset against it as `release/VERIFY.md` describes. Eligible legs write an
+Evidence audit stream or a Messaging package ledger with scheduled and cancelled
+messages using the old binaries, with a disposable loopback PostgreSQL container
+for Messaging. It then points the PR's binaries at
 that state and the same files, runs the upgrade an operator runs, and fails
 when any captured view is served differently or any retained table holds fewer
-rows. BReg rebuilds its package
-with the current compiler and applies it as a successor when the rebuilt digest
-changes, serves, then applies an additive successor and serves again; its
-package-bound ETags may change, while record data and stored revisions must
-remain identical. Require
-that run to succeed before
-merging the release PR. To rehearse without a release PR, dispatch it by hand:
+rows. Require that run to succeed before merging the release PR. To rehearse
+without a release PR, dispatch it by hand:
 
 ```sh
 gh workflow run release-upgrade-rehearsal.yml \
@@ -782,10 +799,12 @@ gh workflow run release-upgrade-rehearsal.yml \
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
 earliest release this source reads state from, `v0.41.0`, and the script
-refuses to start from any earlier release rather than skipping the check. The
-forward state path starts at `v0.40.0`: it does not upgrade `v0.39.0` state in
-place. The script also refuses to run when the floor is older than the newest
-release manifest recorded as `status: released` below the first release of the
+refuses to start from any earlier release rather than skipping the check.
+`EVIDENCE_FORWARD_PATH_FLOOR` separately holds Evidence to its normalized
+`v0.42.0` baseline. The earlier `v0.40.0` fresh-install boundary still excludes
+`v0.39.0` state. The script also refuses to run when the floor is older than
+the newest release manifest recorded as `status: released` below the first
+release of the
 workspace version's minor line, or newer than the workspace version.
 While no release from the floor onward is published there is no predecessor to
 download. A run that names neither `--from-tag` nor `--from-bin-dir` then says
@@ -793,13 +812,17 @@ so and rehearses every leg with the binaries under test on both sides, so the
 legs stay exercised; `--fetch-only` says so and stops. Once the floor's release
 is published the same run downloads it, with no change to the script or the
 workflow.
-Scheduling state is not rehearsed: `PRODUCTS` in the script names no
-Scheduling leg.
-
-v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
-Fresh installations create the current verified-creator and caller-scoped
-replay structures directly, without conversion or discard of earlier rows.
-The rehearsal keeps its row comparison active for every populated BReg table.
+Casework and Scheduling state are not rehearsed: `PRODUCTS` in the script
+names no leg for either product. Casework's current review-only contract starts
+with a fresh database and intentionally refuses the retired schema before
+mutation, so an in-place preservation rehearsal would contradict the supported
+transition. Drain or reconcile legacy review work under the release that wrote
+it, retain that database, and provision the current contract on a fresh
+database. Use the maintained Casework fresh-install and logical backup/restore
+checks, `products/casework/scripts/check-review-journeys.sh` and
+`products/casework/scripts/test-backup-restore.sh`, for the current schema. A
+named `--product casework` request refuses with this guidance before
+any network lookup, asset download, or PostgreSQL start.
 
 Messaging joins the rehearsal from `v0.38.0`, which is earlier than the floor.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
@@ -828,14 +851,15 @@ naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-The upgraded Casework, Evidence, and Messaging runtimes continue the audit files the
+The upgraded Evidence and Messaging runtimes continue the audit files the
 previous release wrote, as the upgrade runbook has an operator do. The
 rehearsal counts the records in each stream before and after the upgrade. It
 fails when the stream was empty before the upgrade, or holds fewer records
 after it than before plus the number the upgraded binaries must write. That is a
-count, not a comparison of the earlier records. Every record in the Evidence
-stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
-its configuration is carried forward unchanged.
+count, not a comparison of the earlier records. Every record in an eligible Evidence
+stream must also be a valid current envelope. From the normalized baseline,
+the Evidence target is packaged again with the new `evidencectl` and its
+configuration is carried forward unchanged.
 
 Every table remains subject to the row-preservation rule, with no empty-table
 allowance. When the rehearsal reports row loss, fix the migration so that it

@@ -169,7 +169,10 @@ fn a_refused_configuration_reports_every_finding_by_code() {
     // Decoding stops at the first refused value; once the file decodes,
     // every semantic finding is reported together.
     project.rewrite("bind: 127.0.0.1:8110", "bind: 203.0.113.9:8110");
-    project.rewrite("ownerField: owner", "ownerField: address");
+    project.rewrite(
+        "reviewBaseUrl: https://review.example.test",
+        "reviewBaseUrl: https://review.example.test/path",
+    );
     let (code, report) = project.report();
     assert_eq!(code, Some(1), "{report}");
     assert_eq!(report["status"], "domain-refusal");
@@ -179,8 +182,8 @@ fn a_refused_configuration_reports_every_finding_by_code() {
         [
             ("breg.mcp-runtime.public-bind", "/listener/bind"),
             (
-                "breg.mcp-runtime.owner-field-is-target",
-                "/service/application/ownerField"
+                "breg.mcp-runtime.review-base-url-not-origin",
+                "/service/reviewBaseUrl"
             ),
         ]
     );

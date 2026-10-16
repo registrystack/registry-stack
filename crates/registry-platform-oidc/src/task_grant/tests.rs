@@ -284,6 +284,56 @@ fn binding_debug_and_scalar_validation_preserve_privacy_and_exact_subjects() {
     }
 }
 
+#[tokio::test]
+async fn fixed_bounds_without_disclosed_claims_still_require_exact_fresh_status() {
+    let mut binding = binding();
+    binding.subjects.clear();
+    binding.validate().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let issuer = format!("http://{}", listener.local_addr().unwrap());
+    let state = state(
+        serde_json::json!({"active":true,"grant":binding}),
+        issuer.clone(),
+    );
+    let app = Router::new()
+        .route("/token", post(token))
+        .route("/v1/task-grants/{id}/status", get(status))
+        .with_state(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let secrets = status_key_secrets(root.path());
+    let client =
+        TaskGrantStatusRegistry::activate(&[endpoint(&issuer)], "urn:resource:test", &secrets)
+            .unwrap();
+    client.check(&binding).await.unwrap();
+    let mut changed = serde_json::to_value(&binding).unwrap();
+    changed["subjects"] = serde_json::json!({"unexpected":"claim"});
+    *state.response.lock().unwrap() = serde_json::json!({"active":true,"grant":changed});
+    assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));
+    for field in ["principal", "bounds"] {
+        let mut changed = serde_json::to_value(&binding).unwrap();
+        changed[field] = if field == "principal" {
+            serde_json::json!("another-agent")
+        } else {
+            serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get"]}]})
+        };
+        *state.response.lock().unwrap() = serde_json::json!({"active":true,"grant":changed});
+        assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));
+    }
+    *state.response.lock().unwrap() = serde_json::json!({"active":false});
+    assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));
+    assert_eq!(state.status_calls.load(Ordering::SeqCst), 5);
+    binding.subjects = (0..32)
+        .map(|index| (format!("claim-{index}"), Value::Bool(true)))
+        .collect();
+    binding.validate().unwrap();
+    binding
+        .subjects
+        .insert("claim-32".into(), Value::Bool(true));
+    assert_eq!(binding.validate(), Err(TaskGrantError::Refused));
+    server.abort();
+}
+
 #[test]
 fn the_shared_status_block_maps_onto_one_endpoint_member_for_member() {
     let block: registry_platform_config::TaskGrantStatusConfig =
@@ -294,7 +344,7 @@ fn the_shared_status_block_maps_onto_one_endpoint_member_for_member() {
             "clientAssertionAudience":"https://authority.test",
             "clientId":"status-client",
             "privateKeyRef":"secret:file/status-key",
-            "caseworkResource":"urn:authority:test",
+            "statusResource":"urn:authority:test",
             "statusScope":"grants:status",
             "caBundleRef":"secret:file/status-ca"
         }))

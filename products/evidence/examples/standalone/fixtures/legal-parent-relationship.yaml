@@ -1,0 +1,124 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+syntheticOnly: true
+common:
+  observedAt: '2026-10-14T00:00:00Z'
+  selectors:
+    child:
+      profile: record-by-id
+      values:
+        record-id: child
+    candidate-parent:
+      profile: record-by-id
+      values:
+        record-id: parent
+  derivationSelectorInputs:
+    candidate-parent:
+      profile: record-by-id
+      values:
+        record-id: parent
+cases:
+- id: positive
+  source:
+    total: 1
+    record:
+      record_id: child
+      complete: true
+      parents:
+      - parent
+      - second-parent
+  expectedValue: true
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: negative-nonmember
+  source:
+    total: 1
+    record:
+      record_id: child
+      complete: true
+      parents:
+      - parent
+      - second-parent
+  expectedValue: false
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+  derivationSelectorInputs:
+    candidate-parent:
+      profile: record-by-id
+      values:
+        record-id: unlisted
+  selectors:
+    child:
+      profile: record-by-id
+      values:
+        record-id: child
+    candidate-parent:
+      profile: record-by-id
+      values:
+        record-id: unlisted
+- id: no-match
+  source:
+    total: 0
+  expectedLookup: no_match
+  expectedPublicProblem: evidence.unavailable
+  derivationRuns: false
+  signedSuccess: false
+- id: ambiguous
+  source:
+    total: 2
+  expectedLookup: ambiguous
+  expectedPublicProblem: evidence.unavailable
+  derivationRuns: false
+  signedSuccess: false
+- id: source-failure
+  sourceFailure: timeout
+  expectedPublicProblem: source.unavailable
+  signedSuccess: false
+- id: incomplete-set
+  source:
+    total: 1
+    record:
+      record_id: child
+      complete: false
+      parents:
+      - parent
+  expectedPublicProblem: source.unavailable
+  derivationRuns: false
+  signedSuccess: false
+- id: boundary-declared-value
+  source:
+    total: 1
+    record:
+      record_id: child
+      complete: true
+      parents: []
+  expectedValue: false
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: missing-required-fact
+  source:
+    total: 1
+    record:
+      record_id: child
+      complete: true
+  derivationRuns: false
+  signedSuccess: false
+  expectedPublicProblem: source.unavailable
+- id: anti-reconstruction
+  companionBundle: relationship-graph
+  expected: bundle-rejection
+privacyExpectation:
+  diagnosticsExclude:
+  - second-parent
+  - unlisted
+  - synthetic-address-private-canary
+  evidenceExcludes:
+  - second-parent
+  - unlisted
+  - synthetic-address-private-canary
+  evidenceContains:
+  - urn:example:concept:legal-parent-relationship:v1
+coequalAcceptanceDefinition: true

@@ -238,3 +238,297 @@ async fn stock_and_keycloak_preserve_authority_and_cutover_rejects_the_old_issue
         json!({"stockIssuer": "passed", "keycloakService": "passed", "keycloakAuthorizationCodePkce": "passed", "issuerCutover": "passed", "databaseEnforcement": "separate-gate"})
     );
 }
+
+#[cfg(feature = "postgres-test")]
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
+#[cfg(feature = "postgres-test")]
+#[path = "support/postgres_harness.rs"]
+#[allow(dead_code)]
+mod postgres_harness;
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires disposable issuers and PostgreSQL; run test-issuer-portability.py --with-postgres"]
+async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
+    use registry_breg::contract::parse_project_json;
+    use registry_breg_client::{
+        BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
+        BRegPreparedProposal, BRegProposal, BRegProposalState, BRegRecordFormat,
+    };
+
+    // Reconstructed fixtures have different loopback origins. Send the retained
+    // wire request explicitly so these assertions exercise server issuer scope,
+    // rather than the SDK's earlier refusal to move a capability to another origin.
+    async fn request(
+        base: &str,
+        link: &serde_json::Value,
+        body: Option<&str>,
+        key: Option<&str>,
+    ) -> reqwest::Response {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let url = reqwest::Url::parse(base)
+            .unwrap()
+            .join(link["path"].as_str().unwrap())
+            .unwrap();
+        let mut request = client
+            .request(
+                reqwest::Method::from_bytes(link["method"].as_str().unwrap().as_bytes()).unwrap(),
+                url,
+            )
+            .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+            .header("accept", "application/json");
+        if let Some(etag) = link["ifMatch"].as_str() {
+            request = request.header("if-match", etag);
+        }
+        if let Some(body) = body {
+            request = request
+                .header("content-type", "application/json")
+                .body(body.to_owned());
+        }
+        if let Some(key) = key {
+            request = request.header("idempotency-key", key);
+        }
+        request.send().await.unwrap()
+    }
+
+    async fn replay(base: &str, attempt: &BRegPreparedProposal) -> reqwest::Response {
+        let retained: serde_json::Value = serde_json::from_slice(attempt.as_bytes()).unwrap();
+        request(
+            base,
+            &retained["link"],
+            Some(retained["body"].as_str().unwrap()),
+            Some(retained["key"].as_str().unwrap()),
+        )
+        .await
+    }
+    let root = std::env::var_os("BREG_ISSUER_JOURNEY_DIR").expect("runner material directory");
+    let root = Path::new(&root);
+    let journey: Journey =
+        serde_json::from_slice(&std::fs::read(root.join("journey.json")).unwrap()).unwrap();
+    // A native governed Action replaces the retired Request-as-Record approval fixture.
+    let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"issuer-proposal","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://issuer-proposal.example.test"},
+        "datasets":[{"id":"records"}],"recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable",
+        "fields":[{"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
+        {"id":"district","type":"string","required":true,"maximumLength":100,"classification":"internal"}]}],
+        "actions":[{"id":"correct-label","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
+        "inputs":[{"id":"target","type":"reference","target":"record","required":true,"classification":"internal"},
+        {"id":"value","type":"string","required":true,"maximumLength":100,"classification":"internal"}],
+        "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
+        "plan":{"type":"fixed","effects":[{"id":"label","target":{"fromInput":"target"},"operation":"patch","set":{"label":{"fromInput":"value"}}}]}}],
+        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"registry_principal","requiredScopes":["registry:read"],"requiredPurposes":["registry-administration"],
+        "permissions":{"records":[{"recordType":"record","operations":["create","get"],"readableFields":["label","district"],"writableFields":["label","district"],
+        "rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}],
+        "actions":[{"action":"correct-label","operations":["start"],"targets":[{"recordType":"record","rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}]}],
+        "proposals":[{"action":"correct-label","operations":["get","submit","apply"],"ownership":"caller","targets":[{"recordType":"record","rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}]}]}}]});
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let stock = authenticator(&registry, root, &journey.stock, &journey.audience);
+    let cutover = authenticator(&registry, root, &journey.keycloak, &journey.audience);
+    let stock_token = Zeroizing::new(std::fs::read_to_string(root.join("stock.token")).unwrap());
+    let service_token =
+        Zeroizing::new(std::fs::read_to_string(root.join("service.token")).unwrap());
+    let human_token = Zeroizing::new(std::fs::read_to_string(root.join("human.token")).unwrap());
+    let before = stock.authenticate(&stock_token).await.unwrap();
+    let after = cutover.authenticate(&service_token).await.unwrap();
+    assert!(
+        cutover.authenticate(&stock_token).await.is_err(),
+        "cutover rejects the old issuer before Proposal access"
+    );
+    let stock_policy =
+        registry_breg::idempotency::IdempotencyPolicy::new(journey.stock.issuer.clone(), 7)
+            .unwrap();
+    let fixture =
+        client_http::ClientFixture::start_with_mutations(registry, before, move |mutations| {
+            mutations.with_idempotency_policy(stock_policy)
+        })
+        .await;
+    let old = &fixture.http.client;
+    let metadata = old.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.record.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create")
+    };
+    let key = |value| BRegIdempotencyKey::parse(value).unwrap();
+    let record = old
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(
+                json!({"label":"Before","district":"district-a"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+            &key("issuer-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-label", "clerk")
+        .unwrap();
+    let input = BRegActionInvocationRequest::new(
+        &action,
+        json!({"target":record.value.data.record_identifier,"value":"After"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        None,
+    )
+    .unwrap();
+    let draft = old
+        .start_proposal(&action, &input, &key("issuer-proposal"))
+        .await
+        .unwrap()
+        .value;
+    let submitted = old
+        .execute_proposal(
+            &old.prepare_proposal(&draft, "submit", json!({}), &key("issuer-submit"))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let apply = old.prepare_proposal(&submitted,"apply",json!({"submissionVersion":1,"effectDigest":submitted.effect_digest().unwrap(),"reason":"synthetic issuer cutover"}),&key("issuer-apply")).unwrap();
+    let applied = old.execute_proposal(&apply).await.unwrap().value;
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    let pending = old
+        .start_proposal(&action, &input, &key("issuer-pending"))
+        .await
+        .unwrap()
+        .value;
+    let mutations_for = |issuer: &str| {
+        registry_breg::postgres::PostgresRecordMutationService::new(
+            fixture.pool.clone(),
+            fixture.registry.clone(),
+            fixture.identity.clone(),
+            "client-capability-test",
+            registry_breg::postgres::RegistryLockKey::derive(fixture.registry.registry_id())
+                .unwrap(),
+            Duration::from_secs(2),
+            fixture.audit_capture.audit(
+                registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                    vec![0x61; 32].into(),
+                )
+                .unwrap(),
+            ),
+        )
+        .with_idempotency_policy(
+            registry_breg::idempotency::IdempotencyPolicy::new(issuer, 7).unwrap(),
+        )
+    };
+    let same_issuer = fixture
+        .client_with_mutations(
+            stock.authenticate(&stock_token).await.unwrap(),
+            mutations_for(&journey.stock.issuer),
+        )
+        .await;
+    let response = replay(&same_issuer.base_url, &apply).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let recovered = BRegProposal::from_slice(&response.bytes().await.unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(recovered).unwrap(),
+        serde_json::to_value(&applied).unwrap(),
+        "a reconstructed runtime under the same issuer recovers the exact receipt"
+    );
+    let applied_document = serde_json::to_value(&applied).unwrap();
+    assert_eq!(
+        request(
+            &same_issuer.base_url,
+            &applied_document["links"]["self"],
+            None,
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::OK,
+        "the retained self link still reads the rightful issuer's Proposal"
+    );
+    let new = fixture
+        .client_with_mutations(after, mutations_for(&journey.keycloak.issuer))
+        .await;
+    new.client.registry_contract(Some("clerk")).await.unwrap();
+    assert_eq!(
+        request(
+            &new.base_url,
+            &applied_document["links"]["self"],
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
+        "the same textual principal from another issuer cannot inherit Proposal ownership"
+    );
+    assert_eq!(
+        replay(&new.base_url, &apply).await.status(),
+        StatusCode::NOT_FOUND,
+        "another issuer cannot replay a committed Proposal receipt"
+    );
+    let continue_pending = old
+        .prepare_proposal(&pending, "submit", json!({}), &key("issuer-continued"))
+        .unwrap();
+    assert_eq!(
+        replay(&new.base_url, &continue_pending).await.status(),
+        StatusCode::NOT_FOUND,
+        "another issuer cannot continue an old pending Proposal"
+    );
+    let human = fixture
+        .client_with_mutations(
+            cutover.authenticate(&human_token).await.unwrap(),
+            mutations_for(&journey.keycloak.issuer),
+        )
+        .await;
+    human.client.registry_contract(Some("clerk")).await.unwrap();
+    assert_eq!(
+        request(
+            &human.base_url,
+            &applied_document["links"]["self"],
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
+        "another institutional principal cannot inherit Proposal ownership"
+    );
+    assert_eq!(
+        replay(&human.base_url, &apply).await.status(),
+        StatusCode::NOT_FOUND,
+        "another principal cannot replay the committed receipt"
+    );
+    let unchanged = old.read_proposal(&pending).await.unwrap().value;
+    assert_eq!(
+        serde_json::to_value(unchanged).unwrap(),
+        serde_json::to_value(&pending).unwrap(),
+        "refused issuer changes leave the pending Proposal unchanged"
+    );
+    let revisions: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*)::bigint FROM registry_internal.registry_revisions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        revisions, 2,
+        "receipt replay did not apply the effect again"
+    );
+    drop(same_issuer);
+    drop(human);
+    drop(new);
+    fixture.finish().await;
+}

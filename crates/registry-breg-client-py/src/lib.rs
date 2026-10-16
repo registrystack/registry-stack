@@ -3,41 +3,33 @@
 
 #![deny(unsafe_code)]
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use breg_client_sdk::{
+    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionBinding,
     BRegActionInvocationRequest, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
-    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
-    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
-    BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete,
-    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
-    BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
-    BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
-    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegIdempotencyKey, BRegImmediateActionBinding,
-    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
-    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
-    BRegIngestionRunRequest, BRegLifecycleAction as CoreLifecycleAction,
-    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
-    BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
-    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
-    BRegPreparedAction as CorePreparedAction, BRegPreparedCreate as CorePreparedCreate,
-    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
+    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
+    BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation,
+    BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk,
+    BRegIngestionError, BRegIngestionPrefixDigest as CoreIngestionPrefixDigest,
+    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
+    BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
+    BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
-    BRegReleaseStatus, BRegRequestMetadata, BRegRequestProposal,
-    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReviewRequirement,
-    BRegRequestState, BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
-    BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
-    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegStatisticsFormat,
-    BRegTombstoneBinding, BRegWithdrawalReason, BaseRegistryClient as RustClient,
-    BaseRegistryClientError as RustClientError, RegistryRecordRepresentation,
-    RegistryRecordResponse, TokenError,
+    BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
+    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding,
+    BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError, BRegWithdrawalReason,
+    BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError, TokenError,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
-    types::{PyBool, PyBytes, PyDict},
+    types::{PyBool, PyBytes, PyDict, PyString},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -61,7 +53,6 @@ struct MappedError {
     kind: &'static str,
     message: String,
     code: Option<String>,
-    plan_refusal: Option<String>,
     refusal_code: Option<String>,
     reason_code: Option<String>,
     field_path: Option<String>,
@@ -90,9 +81,6 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("code", mapped.code)
-        .expect("fresh exception accepts attributes");
-    instance
-        .setattr("plan_refusal", mapped.plan_refusal)
         .expect("fresh exception accepts attributes");
     instance
         .setattr("refusal_code", mapped.refusal_code)
@@ -179,9 +167,6 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             mapped.status = Some(status);
             mapped.code = Some(code.code().to_owned());
             mapped.trace_id = Some(trace_id.as_str().to_owned());
-            if let BRegProblemCode::RequestPlanRefused(value) = code {
-                mapped.plan_refusal = Some(value.kind().to_owned());
-            }
             // Problem detail codes travel as bounded strings after their
             // operation-specific vocabulary has been checked by the Rust client.
             mapped.refusal_code = refusal_code.map(|value| value.as_str().to_owned());
@@ -850,7 +835,7 @@ fn ingestion_run_request(
 fn ingestion_run_list_query(
     py: Python<'_>,
     limit: Option<u32>,
-    after: Option<String>,
+    cursor: Option<String>,
     status: Option<String>,
     input_digest: Option<String>,
     access_profile: Option<String>,
@@ -866,9 +851,9 @@ fn ingestion_run_list_query(
             .limit(limit)
             .map_err(|error| ingestion_error(py, error))?;
     }
-    if let Some(after) = after {
+    if let Some(cursor) = cursor {
         query = query
-            .after(after)
+            .cursor(cursor)
             .map_err(|error| ingestion_error(py, error))?;
     }
     if let Some(status) = status {
@@ -949,6 +934,98 @@ fn encode_ingestion_chunk(
         .map_err(|error| ingestion_error(py, error))
 }
 
+fn webhook_text(py: Python<'_>, value: &Bound<'_, PyAny>, field: &str) -> PyResult<String> {
+    value
+        .cast::<PyString>()
+        .ok()
+        .and_then(|text| text.to_str().ok().map(str::to_owned))
+        .ok_or_else(|| invalid(py, format!("webhook {field} must be a string")))
+}
+
+fn webhook_bytes<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+    field: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    value
+        .cast::<PyBytes>()
+        .cloned()
+        .map_err(|_| invalid(py, format!("webhook {field} must be bytes")))
+}
+
+fn webhook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, String>> {
+    let refused = || invalid(py, "webhook headers must map string names to string values");
+    let headers = value.cast::<PyDict>().map_err(|_| refused())?;
+    let mut result = BTreeMap::new();
+    for (name, value) in headers.iter() {
+        let name = name
+            .cast::<PyString>()
+            .ok()
+            .and_then(|text| text.to_str().ok().map(str::to_owned))
+            .ok_or_else(refused)?;
+        let value = value
+            .cast::<PyString>()
+            .ok()
+            .and_then(|text| text.to_str().ok().map(str::to_owned))
+            .ok_or_else(refused)?;
+        result.insert(name, value);
+    }
+    Ok(result)
+}
+
+fn webhook_verification_error(py: Python<'_>, error: BRegWebhookVerificationError) -> PyErr {
+    let mut mapped = MappedError::binding("webhook-verification", error.to_string());
+    mapped.code = Some(error.code().to_owned());
+    to_py_err(py, mapped)
+}
+
+/// Verify one exact Base Registry Engine Version 1 webhook delivery with the
+/// shared Rust verifier and return its authenticated attributes and body.
+///
+/// `path` is the request target the receiver was called on, `headers` maps
+/// header names (matched without regard to ASCII case) to values, `body` is
+/// the exact request body, and `key` is the destination's HMAC key. Receiver
+/// policy is the caller's: bound `delivery_time` against the receiver clock
+/// and deduplicate before acting on `body`. Refusal raises
+/// `BaseRegistryClientError` with kind `webhook-verification` and a value-free
+/// `code`; input of the wrong shape raises kind `invalid-request`.
+#[pyfunction]
+#[pyo3(signature = (*, method, path, headers, body, key))]
+fn verify_webhook_delivery<'py>(
+    py: Python<'py>,
+    method: &Bound<'py, PyAny>,
+    path: &Bound<'py, PyAny>,
+    headers: &Bound<'py, PyAny>,
+    body: &Bound<'py, PyAny>,
+    key: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let method = webhook_text(py, method, "method")?;
+    let path = webhook_text(py, path, "path")?;
+    let headers = webhook_headers(py, headers)?;
+    let body = webhook_bytes(py, body, "body")?;
+    let key = webhook_bytes(py, key, "key")?;
+    let verified = verify_core_webhook_delivery(CoreWebhookDelivery {
+        method: &method,
+        path: &path,
+        headers: &headers,
+        body: body.as_bytes(),
+        key: key.as_bytes(),
+    })
+    .map_err(|error| webhook_verification_error(py, error))?;
+    let result = PyDict::new(py);
+    result.set_item("id", verified.id)?;
+    result.set_item("source", verified.source)?;
+    result.set_item("type", verified.event_type)?;
+    result.set_item("time", verified.time)?;
+    result.set_item("dataschema", verified.data_schema)?;
+    result.set_item("generation", verified.generation)?;
+    result.set_item("attempt", verified.attempt)?;
+    result.set_item("delivery_time", verified.delivery_time)?;
+    result.set_item("idempotency_key", verified.idempotency_key)?;
+    result.set_item("body", PyBytes::new(py, &verified.body))?;
+    Ok(result)
+}
+
 /// Accumulate the raw source bytes of one ingestion input and derive the
 /// prefix digest the run binds: the lowercase SHA-256 of everything absorbed
 /// through the end of the current chunk. The digest of an empty accumulation
@@ -984,98 +1061,12 @@ impl IngestionPrefixDigest {
     }
 }
 
-fn record_value(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    format: BRegRecordFormat,
-) -> PyResult<breg_client_sdk::RegistryRecordSingleResponse> {
-    let value =
-        python_to_json(value).map_err(|error| conversion_error(py, "invalid-request", error))?;
-    let representation = match format {
-        BRegRecordFormat::Json => RegistryRecordRepresentation::Json,
-        BRegRecordFormat::JsonLd => RegistryRecordRepresentation::JsonLdSharedContext,
-    };
-    match RegistryRecordResponse::from_value(value, representation) {
-        Ok(RegistryRecordResponse::Single(value)) => Ok(value),
-        _ => Err(invalid(py, "record must be one Registry Record response")),
-    }
-}
-
-fn state_name(value: BRegRequestState) -> &'static str {
-    match value {
-        BRegRequestState::Draft => "draft",
-        BRegRequestState::Submitted => "submitted",
-        BRegRequestState::Cancelled => "cancelled",
-        BRegRequestState::Applied => "applied",
-    }
-}
-
-fn proposal_value(value: &BRegRequestProposal) -> Value {
-    json!({"review": match value.review() {
-        BRegRequestReviewRequirement::None => json!({"type":"none"}),
-        BRegRequestReviewRequirement::External(requirement) => {
-            json!({"type":"required","authority":requirement.authority(),"policy_id":requirement.policy_id()})
-        }
-    }})
-}
-
-fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
-    let request = value.request();
-    let mut receipt = json!({
-        "id": value.record_identifier(),
-        "revision": value.revision(),
-        "snapshot": value.snapshot(),
-        "request": {
-            "breg_state": state_name(request.breg_state()),
-            "proposal_version": request.proposal_version().map(|value| value.get()),
-            "effect_digest": request.effect_digest().map(|value| value.as_str()),
-            "proposal": request.proposal().map(proposal_value),
-            "application": request.application().map(|value| json!({
-                "id": value.application_identifier(),
-                "proposal_version": value.proposal_version().get(),
-                "effect_digest": value.effect_digest().as_str(),
-                "applied_at": value.applied_at(),
-            })),
-        },
-    });
-    if let Some(actor_reference) = value.actor_reference() {
-        receipt["actor_reference"] = Value::String(actor_reference.to_owned());
-    }
-    receipt
-}
-
-fn attachment_state_value(value: &BRegAttachmentState) -> Value {
-    json!({
-        "slot_identifier": value.slot_identifier(),
-        "proposal_version": value.proposal_version(),
-        "erased": value.erased(),
-        "byte_size": value.byte_size(),
-        "sha256": value.sha256(),
-        "content_type": value.content_type(),
-        "uploaded_at": value.uploaded_at(),
-        "uploaded_by": value.uploaded_by(),
-        "verification_status": value
-            .verification_status()
-            .map(BRegAttachmentVerificationStatus::as_str),
-    })
-}
-
-fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
-    match value {
-        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not-selected", "value": null}),
-        BRegAttachmentSlotValue::Empty => json!({"kind": "empty", "value": null}),
-        BRegAttachmentSlotValue::Filled(state) => json!({
-            "kind": "filled",
-            "value": attachment_state_value(state),
-        }),
-    }
-}
-
 fn metadata_field_value(value: &breg_client_sdk::BRegMetadataField) -> Value {
     let reference = value.reference().map(|reference| {
         json!({
             "manual_entry": reference.manual_entry(),
-            "target_entity": reference.target_entity(),
+            "name":reference.name(),"cardinality":reference.cardinality(),"inverse_name":reference.inverse_name(),
+            "target_record_type": reference.target_record_type(),
             "operations": reference.operations().iter().map(|operation| json!({
                 "operation_id": operation.operation_identifier(),
                 "access_profile": operation.access_profile(),
@@ -1092,7 +1083,7 @@ fn metadata_field_value(value: &breg_client_sdk::BRegMetadataField) -> Value {
         "nullable": value.nullable(),
         "read_only": value.read_only(),
         "removable": value.removable(),
-        "reference_target_entity": value.reference_target_entity(),
+        "reference_target_record_type": value.reference_target_record_type(),
         "reference": reference,
         "code_labels": value.code_labels(),
         "storage_validation": value.storage_validation().map(|validation| json!({
@@ -1125,14 +1116,13 @@ fn metadata_operation_value(value: &breg_client_sdk::BRegMetadataOperation) -> V
         "method": value.method(),
         "path": value.path(),
         "kind": value.kind().as_str(),
-        "source_entity": value.source_entity(),
-        "response_entity": value.response_entity(),
+        "source_record_type": value.source_record_type(),
+        "response_record_type": value.response_record_type(),
         "access_profile": value.access_profile(),
-        "entity_label": value.entity_label(),
+        "record_type_label": value.record_type_label(),
         "title_fields": value.title_fields(),
         "required_capabilities": value.required_capabilities(),
         "readable_fields": value.readable_fields(),
-        "readable_request_fields": value.readable_request_fields(),
         "create_writable_fields": value.create_writable_fields(),
         "patch_writable_fields": value.patch_writable_fields(),
         "query": value.query(),
@@ -1162,16 +1152,22 @@ fn metadata_operation_value(value: &breg_client_sdk::BRegMetadataOperation) -> V
     })
 }
 
-fn immediate_action_value(value: &breg_client_sdk::BRegImmediateActionDescriptor) -> Value {
+fn action_value(value: &breg_client_sdk::BRegActionDescriptor) -> Value {
     let bounds = value.bounds();
     json!({
-        "id": value.identifier(),
-        "contract_fingerprint": value.contract_fingerprint(),
+        "id": value.identifier(), "api_name": value.api_name(), "revision": value.definition_revision(), "display": value.display(), "mode": value.mode(),
         "input_mode": value.input_mode(),
         "maximum_input_string_bytes": value.maximum_input_string_bytes(),
+        "attachments": value.attachments().iter().map(|slot| json!({
+            "id": slot.identifier(), "required": slot.required(),
+            "content_types": slot.content_types(), "maximum_bytes": slot.maximum_bytes(),
+        })).collect::<Vec<_>>(),
         "inputs": value.inputs().iter().map(|input| json!({
             "id": input.identifier(),
             "api_name": input.api_name(),
+            "label": input.label(),
+            "description": input.description(),
+            "schema": input.schema(),
             "field_type": input.field_type(),
             "required": input.required(),
             "nullable": input.nullable(),
@@ -1180,12 +1176,12 @@ fn immediate_action_value(value: &breg_client_sdk::BRegImmediateActionDescriptor
         "reference_inputs": value.reference_inputs().iter().map(|input| json!({
             "input": input.input_identifier(),
             "api_name": input.api_name(),
-            "target_entity": input.target_entity(),
+            "target_record_type": input.target_record_type(),
         })).collect::<Vec<_>>(),
         "required_condition_keys": value.required_condition_keys(),
         "result_effects": value.result_effects().iter().map(|effect| json!({
             "effect": effect.effect_identifier(),
-            "entity": effect.entity_identifier(),
+            "record_type": effect.record_type_identifier(),
             "operation": effect.operation().as_str(),
         })).collect::<Vec<_>>(),
         "access_profile": value.access_profile(),
@@ -1199,220 +1195,6 @@ fn immediate_action_value(value: &breg_client_sdk::BRegImmediateActionDescriptor
     })
 }
 
-fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCapability) -> Value {
-    use breg_client_sdk::{
-        BRegChangeRequestOnApprovedMode as OnApprovedMode,
-        BRegChangeRequestPlannerKind as PlannerKind,
-        BRegChangeRequestReviewRequirement as ReviewRequirement,
-    };
-
-    let planner = value.planner();
-    let limits = planner.limits().map(|limits| {
-        json!({
-            "maximum_targets": limits.maximum_targets(),
-            "maximum_field_mutations": limits.maximum_field_mutations(),
-            "maximum_snapshot_bytes": limits.maximum_snapshot_bytes(),
-            "maximum_source_bytes": limits.maximum_source_bytes(),
-            "maximum_operations": limits.maximum_operations(),
-            "maximum_call_depth": limits.maximum_call_depth(),
-            "maximum_expression_depth": limits.maximum_expression_depth(),
-            "maximum_string_bytes": limits.maximum_string_bytes(),
-            "maximum_array_items": limits.maximum_array_items(),
-            "maximum_map_entries": limits.maximum_map_entries(),
-            "maximum_modules": limits.maximum_modules(),
-        })
-    });
-    json!({
-        "planner": {
-            "kind": match planner.kind() {
-                PlannerKind::Declarative => "declarative",
-                PlannerKind::Rhai => "rhai",
-            },
-            "abi": planner.abi(),
-            "limits": limits,
-            "possible_write_count": planner.possible_write_count(),
-            "possible_write_operations": planner
-                .possible_write_operations()
-                .iter()
-                .map(|value| value.as_str())
-                .collect::<Vec<_>>(),
-            "writes": planner
-                .writes()
-                .iter()
-                .map(|write| {
-                    json!({
-                        "target": change_request_target_value(write.target()),
-                        "operation": write.operation().as_str(),
-                        "fields": write.fields(),
-                    })
-                })
-                .collect::<Vec<_>>(),
-        },
-        "effects": value
-            .effects()
-            .iter()
-            .map(|effect| {
-                json!({
-                    "id": effect.id(),
-                    "operation": effect.operation().as_str(),
-                    "target": change_request_target_value(effect.target()),
-                    "set": effect
-                        .set()
-                        .iter()
-                        .map(|entry| {
-                            let mut value = json!({"field": entry.field()});
-                            change_request_binding_value(&mut value, entry.value());
-                            value
-                        })
-                        .collect::<Vec<_>>(),
-                    "clear": effect.clear(),
-                })
-            })
-            .collect::<Vec<_>>(),
-        "review": match value.review() {
-            ReviewRequirement::None => json!({"type":"none"}),
-            ReviewRequirement::External(requirement) => {
-                json!({"type":"required","authority":requirement.authority(),"policy_id":requirement.policy_id()})
-            }
-        },
-        "on_approved": {
-            "mode": match value.on_approved().mode() {
-                OnApprovedMode::Manual => "manual",
-                OnApprovedMode::Automatic => "automatic",
-            },
-            "executor": value.on_approved().executor(),
-        },
-        "application": {
-            "preconditions": value.application().preconditions(),
-        },
-    })
-}
-
-fn change_request_binding_value(
-    target: &mut Value,
-    binding: Option<&breg_client_sdk::BRegChangeRequestBinding>,
-) {
-    match binding {
-        Some(breg_client_sdk::BRegChangeRequestBinding::FromField(field)) => {
-            target["from_field"] = json!(field);
-        }
-        Some(breg_client_sdk::BRegChangeRequestBinding::FromEffect(effect)) => {
-            target["from_effect"] = json!(effect);
-        }
-        None => {}
-    }
-}
-
-fn change_request_target_value(target: &breg_client_sdk::BRegChangeRequestTarget) -> Value {
-    let mut value = json!({"entity": target.entity()});
-    change_request_binding_value(&mut value, target.binding());
-    value
-}
-
-fn attachment_error(py: Python<'_>, error: breg_client_sdk::BRegAttachmentError) -> PyErr {
-    to_py_err(py, MappedError::binding("invalid-request", error.reason()))
-}
-
-#[pyclass(name = "BRegAttachmentSlot", module = "registry_breg_client", frozen)]
-struct AttachmentSlot {
-    inner: CoreAttachmentSlot,
-}
-
-#[pyclass(name = "BRegAttachmentUpload", module = "registry_breg_client", frozen)]
-struct AttachmentUpload {
-    inner: CoreAttachmentUpload,
-}
-
-#[pymethods]
-impl AttachmentSlot {
-    #[getter]
-    fn slot_identifier(&self) -> String {
-        self.inner.slot_identifier().to_owned()
-    }
-    #[getter]
-    fn entity_identifier(&self) -> String {
-        self.inner.entity_identifier().to_owned()
-    }
-    #[getter]
-    fn access_profile(&self) -> String {
-        self.inner.access_profile().to_owned()
-    }
-    #[getter]
-    fn required_for_submit(&self) -> bool {
-        self.inner.required_for_submit()
-    }
-    /// Largest body the served slot policy accepts, in bytes.
-    #[getter]
-    fn maximum_bytes(&self) -> u64 {
-        self.inner.maximum_bytes()
-    }
-    #[getter]
-    fn content_types(&self) -> Vec<String> {
-        self.inner.content_types().to_vec()
-    }
-    /// Authored sensitivity of this slot's content.
-    #[getter]
-    fn classification(&self) -> &'static str {
-        self.inner.classification().as_str()
-    }
-    #[getter]
-    fn can_download(&self) -> bool {
-        self.inner.can_download()
-    }
-    #[getter]
-    fn can_upload(&self) -> bool {
-        self.inner.can_upload()
-    }
-    #[getter]
-    fn can_remove(&self) -> bool {
-        self.inner.can_remove()
-    }
-
-    fn accepts_content_type(&self, content_type: &str) -> bool {
-        self.inner.accepts_content_type(content_type)
-    }
-
-    /// Bind exact bytes to this slot. Refusals happen here, before any request.
-    fn prepare_upload(
-        &self,
-        py: Python<'_>,
-        content_type: &str,
-        body: Vec<u8>,
-    ) -> PyResult<AttachmentUpload> {
-        CoreAttachmentUpload::new(&self.inner, content_type, body)
-            .map(|inner| AttachmentUpload { inner })
-            .map_err(|error| attachment_error(py, error))
-    }
-
-    /// Read this slot's engine-owned state out of one Registry Record mapping.
-    #[pyo3(signature = (record, *, format="json"))]
-    fn value_in<'py>(
-        &self,
-        py: Python<'py>,
-        record: &Bound<'_, PyAny>,
-        format: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let record = record_value(py, record, record_format(py, format)?)?;
-        let value = self
-            .inner
-            .value_in(&record.data)
-            .map_err(|error| attachment_error(py, error))?;
-        json_to_python(py, &attachment_slot_value(&value))
-    }
-}
-
-#[pymethods]
-impl AttachmentUpload {
-    #[getter]
-    fn content_type(&self) -> String {
-        self.inner.content_type().to_owned()
-    }
-    #[getter]
-    fn byte_size(&self) -> usize {
-        self.inner.byte_size()
-    }
-}
-
 #[pyclass(name = "BRegCreateBinding", module = "registry_breg_client", frozen)]
 struct CreateBinding {
     inner: BRegCreateBinding,
@@ -1423,13 +1205,9 @@ struct PatchBinding {
     inner: BRegPatchBinding,
 }
 
-#[pyclass(
-    name = "BRegImmediateActionBinding",
-    module = "registry_breg_client",
-    frozen
-)]
-struct ImmediateActionBinding {
-    inner: BRegImmediateActionBinding,
+#[pyclass(name = "BRegActionBinding", module = "registry_breg_client", frozen)]
+struct ActionBinding {
+    inner: BRegActionBinding,
 }
 
 #[pyclass(name = "BRegTombstoneBinding", module = "registry_breg_client", frozen)]
@@ -1469,200 +1247,6 @@ impl ActionTargetConditions {
     }
 }
 
-#[pyclass(
-    name = "BRegLifecycleAuthority",
-    module = "registry_breg_client",
-    frozen
-)]
-struct LifecycleAuthority {
-    inner: BRegLifecycleAuthority,
-}
-
-#[pyclass(name = "BRegLifecycleAction", module = "registry_breg_client", frozen)]
-struct LifecycleAction {
-    inner: CoreLifecycleAction,
-}
-
-#[pyclass(
-    name = "BRegRequestResultReference",
-    module = "registry_breg_client",
-    frozen
-)]
-struct RequestResultReference {
-    inner: CoreRequestResultReference,
-}
-
-#[pymethods]
-impl RequestResultReference {
-    #[getter]
-    fn target_entity_identifier(&self) -> String {
-        self.inner.target_entity_identifier().to_owned()
-    }
-
-    #[getter]
-    fn target_record_identifier(&self) -> String {
-        self.inner.target_record_identifier().to_string()
-    }
-
-    #[getter]
-    fn target_revision(&self) -> u64 {
-        self.inner.target_revision()
-    }
-
-    fn __repr__(&self) -> &'static str {
-        "BRegRequestResultReference(<redacted>)"
-    }
-}
-
-#[pyclass(
-    name = "BRegRetainedRequestProposal",
-    module = "registry_breg_client",
-    frozen
-)]
-struct RetainedRequestProposal {
-    inner: CoreRetainedRequestProposal,
-}
-
-#[pymethods]
-impl RetainedRequestProposal {
-    #[getter]
-    fn request_entity_identifier(&self) -> String {
-        self.inner.request_entity_identifier().to_owned()
-    }
-
-    #[getter]
-    fn request_identifier(&self) -> String {
-        self.inner.request_identifier().to_string()
-    }
-
-    #[getter]
-    fn proposal_version(&self) -> u32 {
-        self.inner.proposal_version().get()
-    }
-
-    #[getter]
-    fn breg_state(&self) -> &'static str {
-        state_name(self.inner.breg_state())
-    }
-
-    #[getter]
-    fn current(&self) -> bool {
-        self.inner.current()
-    }
-
-    #[getter]
-    fn detail_erased(&self) -> bool {
-        self.inner.detail_erased()
-    }
-
-    #[getter]
-    fn application_identifier(&self) -> Option<String> {
-        self.inner
-            .application_identifier()
-            .map(|value| value.to_string())
-    }
-
-    #[getter]
-    fn result_link_count(&self) -> u16 {
-        self.inner.result_link_count()
-    }
-
-    #[getter]
-    fn result_references(&self) -> Vec<RequestResultReference> {
-        self.inner
-            .result_references()
-            .iter()
-            .cloned()
-            .map(|inner| RequestResultReference { inner })
-            .collect()
-    }
-
-    fn __repr__(&self) -> &'static str {
-        "BRegRetainedRequestProposal(<redacted>)"
-    }
-}
-
-#[pyclass(
-    name = "BRegRetainedRequestHistoryPage",
-    module = "registry_breg_client",
-    frozen
-)]
-struct RetainedRequestHistoryPage {
-    inner: CoreRetainedRequestHistoryPage,
-}
-
-#[pymethods]
-impl RetainedRequestHistoryPage {
-    #[getter]
-    fn proposals(&self) -> Vec<RetainedRequestProposal> {
-        self.inner
-            .proposals()
-            .iter()
-            .cloned()
-            .map(|inner| RetainedRequestProposal { inner })
-            .collect()
-    }
-
-    #[getter]
-    fn next_after_proposal_version(&self) -> Option<u32> {
-        self.inner
-            .next_after_proposal_version()
-            .map(|value| value.get())
-    }
-
-    fn find_proposal(
-        &self,
-        py: Python<'_>,
-        request_entity_identifier: &str,
-        request_identifier: &str,
-        proposal_version: u64,
-    ) -> PyResult<Option<RetainedRequestProposal>> {
-        let request_identifier = uuid::Uuid::parse_str(request_identifier)
-            .map_err(|_| invalid(py, "request_identifier must be a UUID"))?;
-        let proposal_version = u32::try_from(proposal_version)
-            .ok()
-            .filter(|value| *value > 0)
-            .ok_or_else(|| invalid(py, "proposal_version must be 1 through 4294967295"))?;
-        Ok(self
-            .inner
-            .proposals()
-            .iter()
-            .find(|proposal| {
-                proposal.request_entity_identifier() == request_entity_identifier
-                    && proposal.request_identifier() == request_identifier
-                    && proposal.proposal_version().get() == proposal_version
-            })
-            .cloned()
-            .map(|inner| RetainedRequestProposal { inner }))
-    }
-
-    fn find_application(
-        &self,
-        py: Python<'_>,
-        request_entity_identifier: &str,
-        request_identifier: &str,
-        proposal_version: u64,
-        application_identifier: &str,
-    ) -> PyResult<Option<RetainedRequestProposal>> {
-        let application_identifier = uuid::Uuid::parse_str(application_identifier)
-            .map_err(|_| invalid(py, "application_identifier must be a UUID"))?;
-        Ok(self
-            .find_proposal(
-                py,
-                request_entity_identifier,
-                request_identifier,
-                proposal_version,
-            )?
-            .filter(|proposal| {
-                proposal.inner.application_identifier() == Some(application_identifier)
-            }))
-    }
-
-    fn __repr__(&self) -> &'static str {
-        "BRegRetainedRequestHistoryPage(<redacted>)"
-    }
-}
-
 #[pyclass(name = "BRegPreparedCreate", module = "registry_breg_client", frozen)]
 struct PreparedCreate {
     inner: CorePreparedCreate,
@@ -1673,13 +1257,104 @@ struct PreparedAction {
     inner: CorePreparedAction,
 }
 
+#[pyclass(name = "BRegProposal", module = "registry_breg_client", frozen)]
+struct Proposal {
+    inner: breg_client_sdk::BRegProposal,
+}
+
 #[pyclass(
-    name = "BRegPreparedLifecycle",
+    name = "BRegProposalCollection",
     module = "registry_breg_client",
     frozen
 )]
-struct PreparedLifecycle {
-    inner: CorePreparedLifecycle,
+struct ProposalCollection {
+    inner: breg_client_sdk::BRegProposalCollection,
+}
+#[pyclass(
+    name = "BRegProposalGetBinding",
+    module = "registry_breg_client",
+    frozen
+)]
+struct ProposalGetBinding {
+    inner: breg_client_sdk::BRegProposalGetBinding,
+}
+
+#[pyclass(
+    name = "BRegProposalReviewBinding",
+    module = "registry_breg_client",
+    frozen
+)]
+struct ProposalReviewBinding {
+    inner: breg_client_sdk::BRegProposalReviewBinding,
+}
+
+#[pyclass(name = "BRegProposalPage", module = "registry_breg_client", frozen)]
+struct ProposalPage {
+    inner: breg_client_sdk::BRegProposalPage,
+}
+
+#[pymethods]
+impl ProposalPage {
+    #[getter]
+    fn items(&self) -> Vec<Proposal> {
+        self.inner
+            .items
+            .iter()
+            .cloned()
+            .map(|inner| Proposal { inner })
+            .collect()
+    }
+    #[getter]
+    fn next_cursor(&self) -> Option<&str> {
+        self.inner.next_cursor.as_deref()
+    }
+}
+
+#[pymethods]
+impl Proposal {
+    #[getter]
+    fn input<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.inner
+            .input()
+            .map(|value| serialize_to_python(py, value))
+            .transpose()
+    }
+    #[getter]
+    fn identifier(&self) -> &str {
+        self.inner.id()
+    }
+    #[getter]
+    fn action_identifier(&self) -> &str {
+        self.inner.action_id()
+    }
+    #[getter]
+    fn document<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        serialize_to_python(py, &self.inner)
+    }
+    fn __repr__(&self) -> &'static str {
+        "BRegProposal(<redacted>)"
+    }
+}
+
+#[pyclass(name = "BRegPreparedProposal", module = "registry_breg_client", frozen)]
+struct PreparedProposal {
+    inner: breg_client_sdk::BRegPreparedProposal,
+}
+
+#[pymethods]
+impl PreparedProposal {
+    #[staticmethod]
+    fn from_bytes(py: Python<'_>, bytes: Vec<u8>) -> PyResult<Self> {
+        breg_client_sdk::BRegPreparedProposal::from_slice(&bytes)
+            .map(|inner| Self { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.as_bytes())
+    }
+    fn __repr__(&self) -> &'static str {
+        "BRegPreparedProposal(<redacted>)"
+    }
 }
 
 #[pyclass(name = "BRegRecoveredCreate", module = "registry_breg_client", frozen)]
@@ -1687,16 +1362,6 @@ struct RecoveredCreate {
     request: Arc<BRegCreateRequest>,
     key: BRegIdempotencyKey,
     format: BRegRecordFormat,
-}
-
-#[pyclass(
-    name = "BRegRecoveredLifecycle",
-    module = "registry_breg_client",
-    frozen
-)]
-struct RecoveredLifecycle {
-    action: CoreLifecycleAction,
-    key: BRegIdempotencyKey,
 }
 
 #[pyclass(name = "BRegRecoveredAction", module = "registry_breg_client", frozen)]
@@ -1720,24 +1385,6 @@ impl PreparedCreate {
 
     fn __repr__(&self) -> &'static str {
         "BRegPreparedCreate(<redacted>)"
-    }
-}
-
-#[pymethods]
-impl PreparedLifecycle {
-    #[staticmethod]
-    fn from_bytes(py: Python<'_>, bytes: Vec<u8>) -> PyResult<Self> {
-        CorePreparedLifecycle::from_slice(&bytes)
-            .map(|inner| Self { inner })
-            .map_err(|error| sdk_error(py, error))
-    }
-
-    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, self.inner.as_bytes())
-    }
-
-    fn __repr__(&self) -> &'static str {
-        "BRegPreparedLifecycle(<redacted>)"
     }
 }
 
@@ -1773,41 +1420,6 @@ impl RecoveredAction {
     }
 }
 
-#[pymethods]
-impl RecoveredLifecycle {
-    fn __repr__(&self) -> &'static str {
-        "BRegRecoveredLifecycle(<redacted>)"
-    }
-}
-
-#[pymethods]
-impl LifecycleAction {
-    fn with_reason(&self, py: Python<'_>, reason: String) -> PyResult<Self> {
-        self.inner
-            .with_reason(reason)
-            .map(|inner| Self { inner })
-            .map_err(|error| {
-                to_py_err(
-                    py,
-                    MappedError::binding("invalid-request", error.to_string()),
-                )
-            })
-    }
-
-    #[getter]
-    fn operation(&self) -> String {
-        self.inner.operation().identifier().to_owned()
-    }
-    #[getter]
-    fn href(&self) -> String {
-        self.inner.href().to_owned()
-    }
-    #[getter]
-    fn body<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        json_to_python(py, &self.inner.body().to_value())
-    }
-}
-
 #[pyclass(name = "BRegMetadata", module = "registry_breg_client", frozen)]
 struct Metadata {
     inner: CoreMetadata,
@@ -1817,6 +1429,51 @@ struct Metadata {
 
 #[pymethods]
 impl Metadata {
+    /// Read-only capability inventory for each exact Action/profile pair.
+    #[getter]
+    fn proposal_actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        json_to_python(py, &Value::Array(self.inner.proposal_actions().iter().map(|entry| json!({
+            "action_id": entry.action_identifier(), "access_profile": entry.access_profile(),
+            "operations": entry.operations(), "readable_inputs": entry.readable_inputs(),
+        })).collect()))
+    }
+
+    fn select_proposals(&self, py: Python<'_>, profile: &str) -> PyResult<ProposalCollection> {
+        self.inner
+            .select_proposals(profile)
+            .map(|inner| ProposalCollection { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+    fn select_proposal_get(&self, py: Python<'_>, profile: &str) -> PyResult<ProposalGetBinding> {
+        self.inner
+            .select_proposal_get(profile)
+            .map(|inner| ProposalGetBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+
+    fn select_proposal_review_context(
+        &self,
+        py: Python<'_>,
+        profile: &str,
+        action: &str,
+    ) -> PyResult<ProposalReviewBinding> {
+        self.inner
+            .select_proposal_review_context(profile, action)
+            .map(|inner| ProposalReviewBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+
+    fn select_proposal_review_status(
+        &self,
+        py: Python<'_>,
+        profile: &str,
+        action: &str,
+    ) -> PyResult<ProposalReviewBinding> {
+        self.inner
+            .select_proposal_review_status(profile, action)
+            .map(|inner| ProposalReviewBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
     #[getter]
     fn operations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         json_to_python(
@@ -1832,9 +1489,9 @@ impl Metadata {
     }
 
     #[getter]
-    fn actions<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    fn action_metadata<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
         self.inner
-            .actions()
+            .action_metadata()
             .map(|value| json_to_python(py, value))
             .transpose()
     }
@@ -1849,28 +1506,11 @@ impl Metadata {
     }
 
     #[getter]
-    fn immediate_actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         json_to_python(
             py,
-            &Value::Array(
-                self.inner
-                    .immediate_actions()
-                    .iter()
-                    .map(immediate_action_value)
-                    .collect(),
-            ),
+            &Value::Array(self.inner.actions().iter().map(action_value).collect()),
         )
-    }
-
-    fn change_request_capability<'py>(
-        &self,
-        py: Python<'py>,
-        entity_identifier: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        self.inner
-            .change_request_capability(entity_identifier)
-            .map(|value| json_to_python(py, &change_request_capability_value(value)))
-            .transpose()
     }
 
     #[getter]
@@ -1926,26 +1566,26 @@ impl Metadata {
         }
     }
 
-    fn select_immediate_action(
+    fn select_action(
         &self,
         py: Python<'_>,
         action_identifier: &str,
         expected_profile: &str,
-    ) -> PyResult<ImmediateActionBinding> {
+    ) -> PyResult<ActionBinding> {
         self.inner
-            .select_immediate_action(action_identifier, expected_profile)
-            .map(|inner| ImmediateActionBinding { inner })
+            .select_action(action_identifier, expected_profile)
+            .map(|inner| ActionBinding { inner })
             .map_err(|error| selection_error(py, error))
     }
 
     fn select_tombstone(
         &self,
         py: Python<'_>,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         expected_profile: &str,
     ) -> PyResult<TombstoneBinding> {
         self.inner
-            .select_tombstone(entity_identifier, expected_profile)
+            .select_tombstone(record_type_identifier, expected_profile)
             .map(|inner| TombstoneBinding { inner })
             .map_err(|error| selection_error(py, error))
     }
@@ -1953,59 +1593,14 @@ impl Metadata {
     fn select_batch(
         &self,
         py: Python<'_>,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         expected_profile: &str,
     ) -> PyResult<BatchBinding> {
         self.inner
-            .select_batch(entity_identifier, expected_profile)
+            .select_batch(record_type_identifier, expected_profile)
             .map(|inner| BatchBinding { inner })
             .map_err(|error| selection_error(py, error))
     }
-
-    fn select_lifecycle(
-        &self,
-        py: Python<'_>,
-        entity_identifier: &str,
-        expected_profile: &str,
-    ) -> PyResult<LifecycleAuthority> {
-        self.inner
-            .select_lifecycle(entity_identifier, expected_profile)
-            .map(|inner| LifecycleAuthority { inner })
-            .map_err(|error| selection_error(py, error))
-    }
-
-    fn select_attachments(
-        &self,
-        py: Python<'_>,
-        entity_identifier: &str,
-        expected_profile: &str,
-    ) -> PyResult<Vec<AttachmentSlot>> {
-        self.inner
-            .select_attachments(entity_identifier, expected_profile)
-            .map(|slots| {
-                slots
-                    .into_iter()
-                    .map(|inner| AttachmentSlot { inner })
-                    .collect()
-            })
-            .map_err(|error| selection_error(py, error))
-    }
-}
-
-/// Preconditions every attachment mutation shares, parsed before any request.
-fn attachment_preconditions(
-    py: Python<'_>,
-    record_identifier: &str,
-    etag: &str,
-    idempotency_key: &str,
-) -> PyResult<(uuid::Uuid, BRegEtag, breg_client_sdk::BRegIdempotencyKey)> {
-    let record_identifier = uuid::Uuid::parse_str(record_identifier)
-        .map_err(|_| invalid(py, "record_identifier must be a UUID"))?;
-    let etag = BRegEtag::parse(etag)
-        .map_err(|_| invalid(py, "etag must be a strong Base Registry Engine entity tag"))?;
-    let key = breg_client_sdk::BRegIdempotencyKey::parse(idempotency_key)
-        .map_err(|error| invalid(py, error.to_string()))?;
-    Ok((record_identifier, etag, key))
 }
 
 fn selection_error(py: Python<'_>, error: BRegMetadataSelectionError) -> PyErr {
@@ -2317,23 +1912,25 @@ impl BaseRegistryClient {
         })
     }
 
-    #[pyo3(signature = (entity_identifier, access_profile=None))]
+    #[pyo3(signature = (record_type_identifier, access_profile=None))]
     fn entity_schema<'py>(
         &self,
         py: Python<'py>,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         access_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = py
             .detach(|| {
-                self.runtime
-                    .block_on(self.inner.entity_schema(entity_identifier, access_profile))
+                self.runtime.block_on(
+                    self.inner
+                        .entity_schema(record_type_identifier, access_profile),
+                )
             })
             .map_err(|error| sdk_error(py, error))?;
         raw_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None, format="json", request_history_after_proposal_version=None))]
+    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None, format="json"))]
     #[allow(clippy::too_many_arguments)]
     fn get_record<'py>(
         &self,
@@ -2343,14 +1940,8 @@ impl BaseRegistryClient {
         select: Option<Vec<String>>,
         access_profile: Option<String>,
         format: &str,
-        request_history_after_proposal_version: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let mut options = record_options(py, select, access_profile, format)?;
-        if let Some(value) = request_history_after_proposal_version {
-            options = options
-                .request_history_after_proposal_version(value)
-                .map_err(|error| invalid(py, error.to_string()))?;
-        }
+        let options = record_options(py, select, access_profile, format)?;
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.get_record(
@@ -3016,11 +2607,259 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
+    fn start_proposal(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, ActionBinding>,
+        inputs: &Bound<'_, PyAny>,
+        key: &str,
+    ) -> PyResult<Proposal> {
+        let inputs = json_object(py, inputs, "inputs")?;
+        let request = BRegActionInvocationRequest::new(&binding.inner, inputs, None)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let key = BRegIdempotencyKey::parse(key).map_err(|error| invalid(py, error.to_string()))?;
+        let binding = binding.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.start_proposal(&binding, &request, &key))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
+    }
+    fn read_proposal(&self, py: Python<'_>, proposal: PyRef<'_, Proposal>) -> PyResult<Proposal> {
+        let current = proposal.inner.clone();
+        let response = py
+            .detach(|| self.runtime.block_on(self.inner.read_proposal(&current)))
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
+    }
+    fn get_proposal(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, ProposalGetBinding>,
+        id: &str,
+    ) -> PyResult<Proposal> {
+        let binding = binding.inner.clone();
+        let response = py
+            .detach(|| self.runtime.block_on(self.inner.get_proposal(&binding, id)))
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
+    }
+    fn download_proposal_attachment<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+        slot: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.download_proposal_attachment(&proposal, slot))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &response.value, &response.metadata)
+    }
+    fn read_proposal_review_by_id<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ProposalReviewBinding>,
+        id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_proposal_review_by_id(&binding, id))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
+
+    fn download_proposal_review_document<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ProposalReviewBinding>,
+        context: &Bound<'_, PyAny>,
+        field: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let context = projection_from_python(py, context, "Proposal review context")?;
+        let response = py
+            .detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .download_proposal_review_document(&binding, &context, field),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &response.value, &response.metadata)
+    }
+
+    fn read_proposal_submission<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+        version: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_proposal_submission(&proposal, version))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
+
+    fn read_proposal_review_status<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_proposal_review_status(&proposal))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
+    fn read_proposal_review_context<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_proposal_review_context(&proposal))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
+    fn upload_proposal_attachment(
+        &self,
+        py: Python<'_>,
+        proposal: PyRef<'_, Proposal>,
+        slot: &str,
+        content_type: &str,
+        bytes: &[u8],
+        key: &str,
+    ) -> PyResult<Proposal> {
+        let proposal = proposal.inner.clone();
+        let bytes = bytes.to_vec();
+        let key = BRegIdempotencyKey::parse(key).map_err(|error| invalid(py, error.to_string()))?;
+        let response = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.upload_proposal_attachment(
+                    &proposal,
+                    slot,
+                    content_type,
+                    &bytes,
+                    &key,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
+    }
+    fn delete_proposal_attachment(
+        &self,
+        py: Python<'_>,
+        proposal: PyRef<'_, Proposal>,
+        slot: &str,
+        key: &str,
+    ) -> PyResult<Proposal> {
+        let proposal = proposal.inner.clone();
+        let key = BRegIdempotencyKey::parse(key).map_err(|error| invalid(py, error.to_string()))?;
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.delete_proposal_attachment(&proposal, slot, &key))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
+    }
+    fn list_proposals(
+        &self,
+        py: Python<'_>,
+        collection: PyRef<'_, ProposalCollection>,
+        query: &Bound<'_, PyAny>,
+    ) -> PyResult<ProposalPage> {
+        let query =
+            python_to_json(query).map_err(|_| invalid(py, "Proposal query must be exact JSON"))?;
+        let query = serde_json::from_value(query)
+            .map_err(|_| invalid(py, "Proposal query does not conform"))?;
+        let collection = collection.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.list_proposals(&collection, &query))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(ProposalPage {
+            inner: response.value,
+        })
+    }
+    fn prepare_proposal(
+        &self,
+        py: Python<'_>,
+        proposal: PyRef<'_, Proposal>,
+        operation: &str,
+        body: &Bound<'_, PyAny>,
+        key: &str,
+    ) -> PyResult<PreparedProposal> {
+        let key = BRegIdempotencyKey::parse(key).map_err(|error| invalid(py, error.to_string()))?;
+        let body =
+            python_to_json(body).map_err(|_| invalid(py, "Proposal body must be exact JSON"))?;
+        self.inner
+            .prepare_proposal(&proposal.inner, operation, body, &key)
+            .map(|inner| PreparedProposal { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+    fn recover_proposal(
+        &self,
+        py: Python<'_>,
+        proposal: PyRef<'_, Proposal>,
+        attempt: PyRef<'_, PreparedProposal>,
+    ) -> PyResult<PreparedProposal> {
+        self.inner
+            .recover_proposal(&proposal.inner, &attempt.inner)
+            .map(|inner| PreparedProposal { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+    fn execute_proposal(
+        &self,
+        py: Python<'_>,
+        attempt: PyRef<'_, PreparedProposal>,
+    ) -> PyResult<Proposal> {
+        let attempt = attempt.inner.clone();
+        let response = py
+            .detach(|| self.runtime.block_on(self.inner.execute_proposal(&attempt)))
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
+    }
+
     #[pyo3(signature = (binding, inputs))]
     fn action_target_conditions(
         &self,
         py: Python<'_>,
-        binding: PyRef<'_, ImmediateActionBinding>,
+        binding: PyRef<'_, ActionBinding>,
         inputs: &Bound<'_, PyAny>,
     ) -> PyResult<ActionTargetConditions> {
         let inputs = json_object(py, inputs, "inputs")?;
@@ -3046,7 +2885,7 @@ impl BaseRegistryClient {
     fn invoke_action<'py>(
         &self,
         py: Python<'py>,
-        binding: PyRef<'_, ImmediateActionBinding>,
+        binding: PyRef<'_, ActionBinding>,
         inputs: &Bound<'_, PyAny>,
         idempotency_key: &str,
         conditions: Option<PyRef<'_, ActionTargetConditions>>,
@@ -3075,7 +2914,7 @@ impl BaseRegistryClient {
     fn prepare_action(
         &self,
         py: Python<'_>,
-        binding: PyRef<'_, ImmediateActionBinding>,
+        binding: PyRef<'_, ActionBinding>,
         inputs: &Bound<'_, PyAny>,
         idempotency_key: &str,
         conditions: Option<PyRef<'_, ActionTargetConditions>>,
@@ -3098,7 +2937,7 @@ impl BaseRegistryClient {
     fn recover_action(
         &self,
         py: Python<'_>,
-        binding: PyRef<'_, ImmediateActionBinding>,
+        binding: PyRef<'_, ActionBinding>,
         prepared: PyRef<'_, PreparedAction>,
         inputs: &Bound<'_, PyAny>,
         idempotency_key: &str,
@@ -3118,7 +2957,7 @@ impl BaseRegistryClient {
     fn execute_recovered_action<'py>(
         &self,
         py: Python<'py>,
-        binding: PyRef<'_, ImmediateActionBinding>,
+        binding: PyRef<'_, ActionBinding>,
         recovered: PyRef<'_, RecoveredAction>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let binding = binding.inner.clone();
@@ -3131,6 +2970,26 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
+    }
+
+    fn execute_recovered_proposal_start(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, ActionBinding>,
+        recovered: PyRef<'_, RecoveredAction>,
+    ) -> PyResult<Proposal> {
+        let binding = binding.inner.clone();
+        let request = Arc::clone(&recovered.request);
+        let key = recovered.key.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.start_proposal(&binding, request.as_ref(), &key))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            inner: response.value,
+        })
     }
 
     #[pyo3(signature = (binding, record_identifier, etag, idempotency_key, *, format="json"))]
@@ -3210,20 +3069,20 @@ impl BaseRegistryClient {
     }
 
     /// Read one bounded page of ingestion runs for one entity route.
-    #[pyo3(signature = (entity_route, *, limit=None, after=None, status=None, input_digest=None, access_profile=None))]
+    #[pyo3(signature = (entity_route, *, limit=None, cursor=None, status=None, input_digest=None, access_profile=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_ingestion_runs<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         limit: Option<u32>,
-        after: Option<String>,
+        cursor: Option<String>,
         status: Option<String>,
         input_digest: Option<String>,
         access_profile: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query =
-            ingestion_run_list_query(py, limit, after, status, input_digest, access_profile)?;
+            ingestion_run_list_query(py, limit, cursor, status, input_digest, access_profile)?;
         let value = py
             .detach(|| {
                 self.runtime
@@ -3328,214 +3187,6 @@ impl BaseRegistryClient {
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
     }
-
-    /// Replace one governed attachment slot with exact bytes. The prepared
-    /// upload already satisfies the slot's served size and content-type policy.
-    #[pyo3(signature = (slot, record_identifier, etag, upload, idempotency_key, *, format="json"))]
-    #[allow(clippy::too_many_arguments)]
-    fn upload_attachment<'py>(
-        &self,
-        py: Python<'py>,
-        slot: PyRef<'_, AttachmentSlot>,
-        record_identifier: &str,
-        etag: &str,
-        upload: PyRef<'_, AttachmentUpload>,
-        idempotency_key: &str,
-        format: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let (record_identifier, etag, key) =
-            attachment_preconditions(py, record_identifier, etag, idempotency_key)?;
-        let (slot, upload) = (slot.inner.clone(), upload.inner.clone());
-        let format = record_format(py, format)?;
-        let value = py
-            .detach(|| {
-                self.runtime.block_on(self.inner.upload_attachment(
-                    &slot,
-                    record_identifier,
-                    &etag,
-                    &upload,
-                    &key,
-                    format,
-                ))
-            })
-            .map_err(|error| sdk_error(py, error))?;
-        complete_value(py, &value.value, &value.metadata)
-    }
-
-    /// Read the exact bytes one governed slot holds for one proposal version.
-    fn download_attachment<'py>(
-        &self,
-        py: Python<'py>,
-        slot: PyRef<'_, AttachmentSlot>,
-        record_identifier: &str,
-        proposal_version: u32,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let record_identifier = uuid::Uuid::parse_str(record_identifier)
-            .map_err(|_| invalid(py, "record_identifier must be a UUID"))?;
-        let slot = slot.inner.clone();
-        let value = py
-            .detach(|| {
-                self.runtime.block_on(self.inner.download_attachment(
-                    &slot,
-                    record_identifier,
-                    proposal_version,
-                ))
-            })
-            .map_err(|error| sdk_error(py, error))?;
-        raw_value(py, &value.value, &value.metadata)
-    }
-
-    /// Empty one governed attachment slot.
-    #[pyo3(signature = (slot, record_identifier, etag, idempotency_key, *, format="json"))]
-    fn delete_attachment<'py>(
-        &self,
-        py: Python<'py>,
-        slot: PyRef<'_, AttachmentSlot>,
-        record_identifier: &str,
-        etag: &str,
-        idempotency_key: &str,
-        format: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let (record_identifier, etag, key) =
-            attachment_preconditions(py, record_identifier, etag, idempotency_key)?;
-        let slot = slot.inner.clone();
-        let format = record_format(py, format)?;
-        let value = py
-            .detach(|| {
-                self.runtime.block_on(self.inner.delete_attachment(
-                    &slot,
-                    record_identifier,
-                    &etag,
-                    &key,
-                    format,
-                ))
-            })
-            .map_err(|error| sdk_error(py, error))?;
-        complete_value(py, &value.value, &value.metadata)
-    }
-
-    #[pyo3(signature = (authority, record, *, format="json"))]
-    fn lifecycle_actions(
-        &self,
-        py: Python<'_>,
-        authority: PyRef<'_, LifecycleAuthority>,
-        record: &Bound<'_, PyAny>,
-        format: &str,
-    ) -> PyResult<Vec<LifecycleAction>> {
-        let record = record_value(py, record, record_format(py, format)?)?;
-        self.inner
-            .lifecycle_actions(&authority.inner, &record)
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|inner| LifecycleAction { inner })
-                    .collect()
-            })
-            .map_err(|error| {
-                let mut mapped = MappedError::binding("lifecycle-promotion", error.to_string());
-                mapped.code = Some(
-                    match error {
-                        BRegLifecyclePromotionError::Authority => "authority",
-                        BRegLifecyclePromotionError::Binding => "binding",
-                    }
-                    .to_owned(),
-                );
-                to_py_err(py, mapped)
-            })
-    }
-
-    /// Decode one already loaded record's retained request-history page.
-    /// This performs no I/O and never advances the continuation.
-    #[pyo3(signature = (record, *, format="json"))]
-    fn request_history(
-        &self,
-        py: Python<'_>,
-        record: &Bound<'_, PyAny>,
-        format: &str,
-    ) -> PyResult<Option<RetainedRequestHistoryPage>> {
-        let record = record_value(py, record, record_format(py, format)?)?;
-        let metadata = BRegRequestMetadata::from_record(&record.data)
-            .map_err(|_| invalid(py, "record request history does not conform"))?;
-        let Some(metadata) = metadata else {
-            return Ok(None);
-        };
-        if metadata.retained_history().is_some_and(|history| {
-            history.proposals().iter().any(|proposal| {
-                proposal.request_entity_identifier() != record.meta.entity_type_identifier
-            })
-        }) {
-            return Err(invalid(py, "record request history does not conform"));
-        }
-        Ok(metadata
-            .retained_history()
-            .cloned()
-            .map(|inner| RetainedRequestHistoryPage { inner }))
-    }
-
-    #[pyo3(signature = (authority, record, action, idempotency_key, *, format="json"))]
-    fn prepare_lifecycle_action(
-        &self,
-        py: Python<'_>,
-        authority: PyRef<'_, LifecycleAuthority>,
-        record: &Bound<'_, PyAny>,
-        action: PyRef<'_, LifecycleAction>,
-        idempotency_key: &str,
-        format: &str,
-    ) -> PyResult<PreparedLifecycle> {
-        let record = record_value(py, record, record_format(py, format)?)?;
-        let key = BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| invalid(py, error.to_string()))?;
-        self.inner
-            .prepare_lifecycle_action(&authority.inner, &record, &action.inner, &key)
-            .map(|inner| PreparedLifecycle { inner })
-            .map_err(|error| sdk_error(py, error))
-    }
-
-    fn recover_lifecycle_action(
-        &self,
-        py: Python<'_>,
-        authority: PyRef<'_, LifecycleAuthority>,
-        prepared: PyRef<'_, PreparedLifecycle>,
-    ) -> PyResult<RecoveredLifecycle> {
-        self.inner
-            .recover_lifecycle_action(&authority.inner, &prepared.inner)
-            .map(|(action, key)| RecoveredLifecycle { action, key })
-            .map_err(|error| sdk_error(py, error))
-    }
-
-    fn execute_recovered_lifecycle_action<'py>(
-        &self,
-        py: Python<'py>,
-        recovered: PyRef<'_, RecoveredLifecycle>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action = recovered.action.clone();
-        let key = recovered.key.clone();
-        let value = py
-            .detach(|| {
-                self.runtime
-                    .block_on(self.inner.execute_lifecycle_action(&action, &key))
-            })
-            .map_err(|error| sdk_error(py, error))?;
-        complete_value(py, &receipt_value(&value.value), &value.metadata)
-    }
-
-    fn execute_lifecycle_action<'py>(
-        &self,
-        py: Python<'py>,
-        action: PyRef<'_, LifecycleAction>,
-        idempotency_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let key = breg_client_sdk::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| invalid(py, error.to_string()))?;
-        let action = action.inner.clone();
-        let value = py
-            .detach(|| {
-                self.runtime
-                    .block_on(self.inner.execute_lifecycle_action(&action, &key))
-            })
-            .map_err(|error| sdk_error(py, error))?;
-        complete_value(py, &receipt_value(&value.value), &value.metadata)
-    }
 }
 
 /// Synchronous wrapper over the canonical shared OAuth provider.
@@ -3597,30 +3248,28 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Metadata>()?;
     module.add_class::<CreateBinding>()?;
     module.add_class::<PatchBinding>()?;
-    module.add_class::<ImmediateActionBinding>()?;
+    module.add_class::<ActionBinding>()?;
     module.add_class::<IngestionChunk>()?;
     module.add_class::<IngestionPrefixDigest>()?;
     module.add_class::<TombstoneBinding>()?;
     module.add_class::<BatchBinding>()?;
     module.add_class::<ActionTargetConditions>()?;
-    module.add_class::<LifecycleAuthority>()?;
-    module.add_class::<LifecycleAction>()?;
-    module.add_class::<RequestResultReference>()?;
-    module.add_class::<RetainedRequestProposal>()?;
-    module.add_class::<RetainedRequestHistoryPage>()?;
     module.add_class::<PreparedCreate>()?;
     module.add_class::<PreparedAction>()?;
-    module.add_class::<PreparedLifecycle>()?;
+    module.add_class::<Proposal>()?;
+    module.add_class::<PreparedProposal>()?;
+    module.add_class::<ProposalCollection>()?;
+    module.add_class::<ProposalGetBinding>()?;
+    module.add_class::<ProposalReviewBinding>()?;
+    module.add_class::<ProposalPage>()?;
     module.add_class::<RecoveredCreate>()?;
     module.add_class::<RecoveredAction>()?;
-    module.add_class::<RecoveredLifecycle>()?;
-    module.add_class::<AttachmentSlot>()?;
-    module.add_class::<AttachmentUpload>()?;
     module.add(
         "BaseRegistryClientError",
         module.py().get_type::<BaseRegistryClientError>(),
     )?;
     module.add_function(pyo3::wrap_pyfunction!(encode_ingestion_chunk, module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(verify_webhook_delivery, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

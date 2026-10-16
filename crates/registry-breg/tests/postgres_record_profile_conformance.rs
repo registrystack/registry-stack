@@ -225,7 +225,7 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn breg_client_executes_metadata_bound_direct_writes_against_real_postgres() {
-    let harness = PilotHarness::start("asset-site-placement-change-requests").await;
+    let harness = PilotHarness::start("asset-site-placement").await;
     let token = harness.token("asset-management", &[]);
     let http_server = harness.serve_http().await;
     let client = BaseRegistryClient::new(
@@ -245,10 +245,7 @@ async fn breg_client_executes_metadata_bound_direct_writes_against_real_postgres
         .registry_contract(Some("asset-operator"))
         .await
         .expect("authorized caller receives strict caller-filtered runtime metadata");
-    assert_eq!(
-        metadata.value.registry_identifier(),
-        "asset-site-placement-change-requests"
-    );
+    assert_eq!(metadata.value.registry_identifier(), "asset-site-placement");
     assert_eq!(
         metadata.value.registry_revision(),
         harness.registry.revision()
@@ -274,8 +271,11 @@ async fn breg_client_executes_metadata_bound_direct_writes_against_real_postgres
         panic!("selected operation must be PATCH")
     };
     assert_eq!(create.path(), "/v1/records/assets");
-    assert_eq!(create.entity_identifier(), "asset-item");
-    assert_eq!(patch.entity_identifier(), create.entity_identifier());
+    assert_eq!(create.record_type_identifier(), "asset-item");
+    assert_eq!(
+        patch.record_type_identifier(),
+        create.record_type_identifier()
+    );
     assert_eq!(patch.registry_revision(), create.registry_revision());
 
     let create_request = BRegCreateRequest::new(
@@ -450,14 +450,8 @@ fn assert_registry_record(
     domain_data: &Value,
 ) {
     assert!(response.json_ld_context.is_none());
-    assert_eq!(
-        response.meta.registry_identifier,
-        "asset-site-placement-change-requests"
-    );
-    assert_eq!(
-        response.meta.dataset_identifier,
-        "asset-site-placement-change-requests"
-    );
+    assert_eq!(response.meta.registry_identifier, "asset-site-placement");
+    assert_eq!(response.meta.dataset_identifier, "asset-site-placement");
     assert_eq!(response.meta.entity_type_identifier, entity_identifier);
     assert_eq!(response.data.revision_identifier, revision_identifier);
     assert_eq!(

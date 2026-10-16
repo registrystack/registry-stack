@@ -19,12 +19,10 @@ use registry_platform_yaml::{shape_union, Invalid};
 use serde::{de::IgnoredAny, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
-    AccessProfileSource, AccessRequirementsSource, ActorKindSource, ApplyTargetPermissionSource,
-    CompiledTaskGrantSource, ConsentRequirementSource, EntityPermissionSource,
-    LookupPermissionSource, MembershipBoundarySource, Operation, PermissionsSource,
-    ProvenanceFieldSource, ReadPathPermissionSource, RequestMetadataFieldSource,
-    RequestPresencePermissionSource, RequestVisibilitySource, RowBoundarySource,
-    SpatialQueryPermissionSource, UniqueSet,
+    AccessProfileSource, AccessRequirementsSource, ActorKindSource, CompiledTaskGrantSource,
+    ConsentRequirementSource, EntityPermissionSource, LookupPermissionSource,
+    MembershipBoundarySource, Operation, PermissionsSource, ProvenanceFieldSource,
+    ReadPathPermissionSource, RowBoundarySource, SpatialQueryPermissionSource, UniqueSet,
 };
 
 const UNRESTRICTED: &str = "unrestricted";
@@ -146,8 +144,7 @@ pub(super) enum Rows {}
 
 impl Member for Rows {
     const EXPECTED: &'static str = "unrestricted, or a list of at least one row boundary";
-    const ACTION: &'static str =
-        "List the row boundaries that bind rows to the caller's claims, or write unrestricted to reach every row.";
+    const ACTION: &'static str = "List the row boundaries that bind rows to the caller's claims, or write unrestricted to reach every row.";
 }
 
 /// The scopes a token must carry to select a profile: the keyword
@@ -183,8 +180,7 @@ pub(crate) enum Clients {}
 #[cfg(feature = "runtime")]
 impl Member for Clients {
     const EXPECTED: &'static str = "unrestricted, or a list of at least one OAuth client";
-    const ACTION: &'static str =
-        "List the OAuth clients whose tokens this registry accepts, or write unrestricted to accept every client.";
+    const ACTION: &'static str = "List the OAuth clients whose tokens this registry accepts, or write unrestricted to accept every client.";
 }
 
 /// The OAuth clients whose tokens a runtime accepts: the keyword
@@ -455,12 +451,6 @@ pub(super) struct AuthoredModuleProfile {
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail.
-    #[serde(
-        default = "super::default_readable_request_fields",
-        skip_serializing_if = "super::is_default_readable_request_fields"
-    )]
-    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     #[serde(default)]
     writable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -480,30 +470,10 @@ pub(super) struct AuthoredModuleProfile {
     membership_boundaries: Vec<MembershipBoundarySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     require_consent: Vec<ConsentRequirementSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(
-        default,
-        deserialize_with = "apply_targets",
-        serialize_with = "serialize_apply_targets",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredApplyTarget>"))]
-    apply_targets: Vec<ApplyTargetPermissionSource>,
-    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
-    submitter_targets: UniqueSet<String>,
-    #[serde(
-        default,
-        deserialize_with = "request_presence",
-        serialize_with = "serialize_request_presence",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredRequestPresence>"))]
-    request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "super::is_false")]
     allow_count: bool,
     #[serde(default)]
@@ -535,7 +505,6 @@ impl From<AuthoredModuleProfile> for AccessProfileSource {
             required_purposes: authored.required_purposes,
             operations: authored.operations,
             readable_fields: authored.readable_fields,
-            readable_request_fields: authored.readable_request_fields,
             writable_fields: authored.writable_fields,
             filterable_fields: authored.filterable_fields,
             sortable_fields: authored.sortable_fields,
@@ -543,12 +512,8 @@ impl From<AuthoredModuleProfile> for AccessProfileSource {
             row_boundaries: authored.row_boundaries,
             membership_boundaries: authored.membership_boundaries,
             require_consent: authored.require_consent,
-            request_visibility: authored.request_visibility,
             lookups: authored.lookups,
             read_paths: authored.read_paths,
-            apply_targets: authored.apply_targets,
-            submitter_targets: authored.submitter_targets,
-            request_presence: authored.request_presence,
             allow_count: authored.allow_count,
             revision_access: authored.revision_access,
             provenance_fields: authored.provenance_fields,
@@ -570,7 +535,6 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
             required_purposes: profile.required_purposes,
             operations: profile.operations,
             readable_fields: profile.readable_fields,
-            readable_request_fields: profile.readable_request_fields,
             writable_fields: profile.writable_fields,
             filterable_fields: profile.filterable_fields,
             sortable_fields: profile.sortable_fields,
@@ -578,12 +542,8 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
             row_boundaries: profile.row_boundaries,
             membership_boundaries: profile.membership_boundaries,
             require_consent: profile.require_consent,
-            request_visibility: profile.request_visibility,
             lookups: profile.lookups,
             read_paths: profile.read_paths,
-            apply_targets: profile.apply_targets,
-            submitter_targets: profile.submitter_targets,
-            request_presence: profile.request_presence,
             allow_count: profile.allow_count,
             revision_access: profile.revision_access,
             provenance_fields: profile.provenance_fields,
@@ -613,9 +573,8 @@ pub(super) fn serialize_module_access_profiles<S: Serializer>(
 pub(super) enum UngroupedPermissions {}
 
 impl Member for UngroupedPermissions {
-    const EXPECTED: &'static str = "a mapping with entities, actions, and datasets";
-    const ACTION: &'static str =
-        "Group the permissions by what each names: write every permission that names an entity under permissions.entities, every one that names an action under permissions.actions, and every one that names a statistical dataset under permissions.datasets. A profile that grants nothing omits permissions.";
+    const EXPECTED: &'static str = "a mapping with records, proposals, actions, and datasets";
+    const ACTION: &'static str = "Group the permissions by what each names: write Record permissions under permissions.records, Proposal permissions under permissions.proposals, Action permissions under permissions.actions, and statistical dataset permissions under permissions.datasets. A profile that grants nothing omits permissions.";
 }
 
 enum PermissionsShapes {
@@ -646,13 +605,11 @@ pub(super) fn permissions<'de, D: Deserializer<'de>>(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AuthoredEntityPermission {
+    #[serde(rename = "recordType")]
     entity: String,
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail.
-    #[serde(default = "readable_request_fields")]
-    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     #[serde(default)]
     writable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -670,22 +627,10 @@ pub(super) struct AuthoredEntityPermission {
     /// Current subject-issued consent required for each row, ANDed.
     #[serde(default)]
     require_consent: Vec<ConsentRequirementSource>,
-    /// Restricts change-request reads to rows owned by the authenticated principal.
-    #[serde(default)]
-    request_visibility: Option<RequestVisibilitySource>,
     #[serde(default)]
     lookups: Vec<LookupPermissionSource>,
     #[serde(default)]
     read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default, deserialize_with = "apply_targets")]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredApplyTarget>"))]
-    apply_targets: Vec<ApplyTargetPermissionSource>,
-    /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
-    #[serde(default)]
-    submitter_targets: UniqueSet<String>,
-    #[serde(default, deserialize_with = "request_presence")]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredRequestPresence>"))]
-    request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default)]
     allow_count: bool,
     #[serde(default)]
@@ -698,10 +643,6 @@ pub(super) struct AuthoredEntityPermission {
     provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     allow_data_export: bool,
-}
-
-fn readable_request_fields() -> UniqueSet<RequestMetadataFieldSource> {
-    super::default_readable_request_fields()
 }
 
 impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
@@ -718,7 +659,6 @@ impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
             entity: authored.entity,
             operations: authored.operations,
             readable_fields: authored.readable_fields,
-            readable_request_fields: authored.readable_request_fields,
             writable_fields: authored.writable_fields,
             filterable_fields: authored.filterable_fields,
             sortable_fields: authored.sortable_fields,
@@ -726,95 +666,12 @@ impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
             row_boundaries: row_boundaries.into_boundaries(),
             membership_boundaries: authored.membership_boundaries,
             require_consent: authored.require_consent,
-            request_visibility: authored.request_visibility,
             lookups: authored.lookups,
             read_paths: authored.read_paths,
-            apply_targets: authored.apply_targets,
-            submitter_targets: authored.submitter_targets,
-            request_presence: authored.request_presence,
             allow_count: authored.allow_count,
             revision_access: authored.revision_access,
             provenance_fields: authored.provenance_fields,
             allow_data_export: authored.allow_data_export,
         })
     }
-}
-
-// The authored form of `ApplyTargetPermissionSource`.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(rename = "ApplyTargetPermissionSource"))]
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct AuthoredApplyTarget {
-    entity: String,
-    /// Row reach: `unrestricted`, or a list of at least one row boundary.
-    #[serde(
-        deserialize_with = "row_boundaries",
-        serialize_with = "serialize_row_boundaries"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "RowBoundaries"))]
-    row_boundaries: Vec<RowBoundarySource>,
-}
-
-pub(super) fn apply_targets<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<ApplyTargetPermissionSource>, D::Error> {
-    Ok(Vec::<AuthoredApplyTarget>::deserialize(deserializer)?
-        .into_iter()
-        .map(|target| ApplyTargetPermissionSource {
-            entity: target.entity,
-            row_boundaries: target.row_boundaries,
-        })
-        .collect())
-}
-
-pub(super) fn serialize_apply_targets<S: Serializer>(
-    targets: &[ApplyTargetPermissionSource],
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(targets.iter().map(|target| AuthoredApplyTarget {
-        entity: target.entity.clone(),
-        row_boundaries: target.row_boundaries.clone(),
-    }))
-}
-
-// The authored form of `RequestPresencePermissionSource`.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(
-    feature = "schema",
-    schemars(rename = "RequestPresencePermissionSource")
-)]
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct AuthoredRequestPresence {
-    request_type: String,
-    /// Row reach: `unrestricted`, or a list of at least one row boundary.
-    #[serde(
-        deserialize_with = "row_boundaries",
-        serialize_with = "serialize_row_boundaries"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "RowBoundaries"))]
-    row_boundaries: Vec<RowBoundarySource>,
-}
-
-pub(super) fn request_presence<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<RequestPresencePermissionSource>, D::Error> {
-    Ok(Vec::<AuthoredRequestPresence>::deserialize(deserializer)?
-        .into_iter()
-        .map(|presence| RequestPresencePermissionSource {
-            request_type: presence.request_type,
-            row_boundaries: presence.row_boundaries,
-        })
-        .collect())
-}
-
-pub(super) fn serialize_request_presence<S: Serializer>(
-    presence: &[RequestPresencePermissionSource],
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(presence.iter().map(|presence| AuthoredRequestPresence {
-        request_type: presence.request_type.clone(),
-        row_boundaries: presence.row_boundaries.clone(),
-    }))
 }

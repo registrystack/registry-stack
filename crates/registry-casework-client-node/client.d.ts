@@ -23,14 +23,7 @@ export interface CaseworkClientConfig {
   maxMutationRetries?: SafeInteger | null
 }
 
-export type InboxView = 'mine' | 'my-teams' | 'team-holdings' | 'overdue' | 'completed-by-me'
-export type OccurrenceKind = 'review' | 'application'
-export type OccurrenceState = 'open' | 'claimed' | 'waiting-applicant' | 'waiting-application' | 'synchronizing' | 'completed' | 'superseded' | 'cancelled'
-export type OperationName = string
-export type AttemptState = 'pending' | 'uncertain' | 'completed' | 'refused'
 export type PageStatus = 'complete' | 'budget-exhausted' | 'source-unavailable'
-export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload-moved' | 'clock-reminder' | 'clock-step-applied' | 'clock-recomputed' | 'released' | 'draft-saved' | 'attempt-reserved' | 'attempt-uncertain' | 'action-completed' | 'attempt-settled' | 'superseded' | 'completed'
-
 export interface IssuerPrincipal { issuer: string; subject: string }
 export type TaskGrantBounds = { type: 'evidence'; requirement: string } | { type: 'breg'; permissions: ReadonlyArray<TaskPermission> } | { type: 'scheduling'; permissions: ReadonlyArray<SchedulingTaskPermission> }
 export interface TaskPermission { collection: string; operations: ReadonlyArray<string> }
@@ -45,7 +38,7 @@ export interface TaskTemplatePreview {
   /** Omitted for the existing immediate mode. */
   authorizationMode?: TaskAuthorizationMode
 }
-export interface TaskTemplatePreviews { itemRevision: SafeInteger; templates: ReadonlyArray<TaskTemplatePreview> }
+export interface TaskTemplatePreviews { taskRevision: SafeInteger; templates: ReadonlyArray<TaskTemplatePreview> }
 /** Grant metadata deliberately excludes stored subject values. */
 export interface TaskGrantView {
   id: string; templateId: string; templateVersion: string; agent: IssuerPrincipal; client: string; resource: string; scopes: ReadonlyArray<string>; purpose: string
@@ -64,50 +57,7 @@ export interface TaskGrantStatusDetails {
 export interface TaskGrantStatus { active: boolean; grant?: TaskGrantStatusDetails }
 
 export interface DirectoryMember { issuer: string; subject: string; displayName?: string | null }
-export interface SubjectRef { sourceId: string; kind: string; id: string }
-export interface SourceBinding {
-  sourceRevision: string
-  version: string
-  integrity?: string
-  generation: string
-}
-export type CaseworkActionName = 'claim' | 'release' | OperationName
-export interface CaseworkAction { operation: CaseworkActionName; href: string; ifMatch: string }
-export interface CorrectionRoutingCopy {
-  sourceBinding: SourceBinding
-  reason?: string
-  flaggedFields: ReadonlyArray<string>
-}
-export interface WorkItemRouting {
-  ruleId?: string
-  because?: string
-  policyDigest?: string
-}
-export interface WorkItem {
-  itemId: string
-  subject: SubjectRef
-  occurrenceKind: OccurrenceKind
-  stage?: string
-  binding: SourceBinding
-  bindingReference: string
-  displayReference?: string
-  state: OccurrenceState
-  queueId: string
-  holder?: IssuerPrincipal
-  heldSince?: string
-  assignment?: AssignmentContext
-  revision: SafeInteger
-  firstObservedAt: string
-  passiveDueAt?: string
-  updatedAt: string
-  actions: ReadonlyArray<CaseworkAction>
-  routingCopy?: CorrectionRoutingCopy
-  routing?: WorkItemRouting
-  clockOccurrences?: ReadonlyArray<ClockOccurrenceView>
-  liveAttempt?: AttemptStatus
-}
 export interface Page<T> { items: ReadonlyArray<T>; nextCursor?: string; status: PageStatus }
-export interface WorkItemPage extends Page<WorkItem> { servedQueues: ReadonlyArray<string> }
 export type DirectoryTargetPurpose = 'assignment' | 'absence-person' | 'absence-cover'
 export type DirectoryTargetsQuery = {
   cursor?: string
@@ -118,138 +68,29 @@ export type DirectoryTargetsQuery = {
   | { purpose: 'absence-cover'; queue?: never; personIssuer: string; personSubject: string }
 )
 export type DirectoryTargetPage = Page<DirectoryMember>
-export type ListWorkItemsQuery = {
-  view: InboxView
-  sort?: InboxSort
-  queue?: string
-  cursor?: string
-  limit?: SafeInteger
-} & (
-  | { sourceId: string; subjectKind: string; subjectId: string; reference?: never }
-  | { reference: string; sourceId?: never; subjectKind?: never; subjectId?: never }
-  | { reference?: never; sourceId?: never; subjectKind?: never; subjectId?: never }
-)
-export type InboxSort = 'due' | 'age' | 'type'
-export interface NextWorkItemQuery { queue?: string; cursor?: string }
-export interface SaveDraftRequest {
-  binding: SourceBinding
-  reason: string
-  flaggedFields?: ReadonlyArray<string>
-}
-export interface Draft {
-  itemId: string
-  author: IssuerPrincipal
-  binding: SourceBinding
-  reason: string
-  flaggedFields: ReadonlyArray<string>
-  revision: SafeInteger
-  updatedAt: string
-}
-export interface DraftResponse { draft: Draft }
-export interface DecideRequest {
-  displayedBinding: SourceBinding
-  operation: OperationName
-  reason?: string
-  flaggedFields?: ReadonlyArray<string>
-}
 /** The Registry-Source-Profile header selects the source profile; the body is empty. */
-export type RecoverAttemptRequest = Record<string, never>
-export interface SourceReceipt {
-  sourceRevision: string
-  resultingState: string
-  binding: SourceBinding
-  actorReference?: string
-  metadata: Readonly<Record<string, string>>
-}
-export interface AttemptStatus {
-  attemptId: string
-  itemId: string
-  state: AttemptState
-  itemRevision: SafeInteger
-  operation: OperationName
-  createdAt: string
-  receipt?: SourceReceipt
-}
-export interface MutationResponse { item: WorkItem; attempt?: AttemptStatus }
-export interface HistoryEntryBase {
-  eventId: string
-  itemId: string
-  itemRevision: SafeInteger
-  kind: HistoryKind
-  occurredAt: string
-  actor?: IssuerPrincipal
-  profileId: string
-}
-export interface AttemptReservedHistoryEntry extends HistoryEntryBase {
-  kind: 'attempt-reserved'
-  detail: JsonObject & { attemptId: string; bindingReference: string; operation: OperationName }
-}
-/**
- * An attempt-uncertain detail takes one of three shapes: recovery left the
- * attempt uncertain, the source definitively refused it, or an operator marked
- * an expired pending attempt uncertain. reason is the original decision reason.
- */
-export type AttemptUncertainHistoryDetail = JsonObject & {
-  attemptId: string
-  bindingReference: string
-  operation: OperationName
-  reason?: string
-} & (
-  | { sourceRevision?: string | null; definitivelyRefused?: never; operatorReason?: never }
-  | { definitivelyRefused: true; operatorReason?: never }
-  | { operatorReason: string; decidedBy: string; originalActor: IssuerPrincipal; originalProfileId: string; definitivelyRefused?: never }
-)
-export interface AttemptUncertainHistoryEntry extends HistoryEntryBase {
-  kind: 'attempt-uncertain'
-  detail: AttemptUncertainHistoryDetail
-}
-export interface ActionCompletedHistoryEntry extends HistoryEntryBase {
-  kind: 'action-completed'
-  detail: JsonObject & { attemptId: string; bindingReference: string; sourceRevision: string; sourceReceipt: SourceReceipt }
-}
-export interface AttemptSettledHistoryEntry extends HistoryEntryBase {
-  kind: 'attempt-settled'
-  detail: JsonObject & { attemptId: string; bindingReference: string; operation: OperationName; outcome: 'applied' | 'not-applied'; reason: string; decidedBy: string }
-}
-export interface OtherHistoryEntry extends HistoryEntryBase {
-  kind: Exclude<HistoryKind, 'attempt-reserved' | 'attempt-uncertain' | 'action-completed' | 'attempt-settled'>
-  detail: JsonValue
-}
-export type HistoryEntry = AttemptReservedHistoryEntry | AttemptUncertainHistoryEntry | ActionCompletedHistoryEntry | AttemptSettledHistoryEntry | OtherHistoryEntry
-export interface HoldingSummary {
-  principal: IssuerPrincipal
-  queueId: string
-  activeItems: SafeInteger
-  overdueItems: SafeInteger
-}
 export interface QueueRecord { id: string; label: string }
-export interface PassiveTargetPolicy { id: string; after: { elapsed: string } }
 export type RoutingPredicate = { equals: JsonValue } | { oneOf: ReadonlyArray<JsonValue> }
-export interface RoutingCondition { activity?: 'review' | 'apply'; stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
+export interface RoutingCondition { stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
 export interface RoutingRule { id: string; because: string; when: RoutingCondition; queue: string }
-export interface DisplayReferencePolicy { field: string }
-export interface SourceRequestPolicy { entity: string; queue: string; projection?: ReadonlyArray<string>; routing?: ReadonlyArray<RoutingRule>; displayReference?: DisplayReferencePolicy; clock?: string; target?: PassiveTargetPolicy }
 export type WorkingWeekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
 export interface CalendarPolicy { id: string; timezone: string; workingWeekdays: ReadonlyArray<WorkingWeekday>; holidaySet: string }
-export interface ClockReminder { id: string; workingDaysBefore: SafeInteger }
+export interface WorkingDays { workingDays: SafeInteger }
+export interface ClockReminder { id: string; before: WorkingDays }
+export type ElapsedDuration = { minutes: SafeInteger } | { hours: SafeInteger } | { days: SafeInteger }
 export interface ClockStep { id: string; because: string; at: 'due'; action: { reassign: { queue: string } } }
 export type ClockPolicy = {
-  type: 'subject'; id: string; anchor: 'first-submitted-at'; completeOn: 'review-completed'; after: { elapsed: string }; pauseWhile: ReadonlyArray<'awaiting-applicant'>
+  type: 'subject'; id: string; anchor: { type: 'request-accepted' }; after: ElapsedDuration
 } | {
-  type: 'activity'; id: string; anchor: 'stage-entered-at'; calendar: string; after: { workingDays: SafeInteger }; dueTime: string;
-  atRisk?: { workingDaysBefore: SafeInteger }; reminders?: ReadonlyArray<ClockReminder>; steps?: ReadonlyArray<ClockStep>
-}
-export interface SourcePolicy {
-  id: string
-  adapter: string
-  description: string
-  requests: ReadonlyArray<SourceRequestPolicy>
+  type: 'stage'; id: string; anchor: { type: 'stage-entered' }; calendar: string; after: WorkingDays; dueTime: string;
+  atRisk?: { before: WorkingDays }; reminders?: ReadonlyArray<ClockReminder>; steps?: ReadonlyArray<ClockStep>
 }
 export interface Description {
   projectId: string
   policyVersion: string
   queues: ReadonlyArray<QueueRecord>
-  sources: ReadonlyArray<SourcePolicy>
+  reviewPolicies: ReadonlyArray<ReviewPolicy>
+  contextProviders: ReadonlyArray<ReviewContextProviderPolicy>
   calendars: ReadonlyArray<CalendarPolicy>
   clocks: ReadonlyArray<ClockPolicy>
 }
@@ -266,21 +107,20 @@ export interface AbsenceInput { person: IssuerPrincipal; from: string; until: st
 export interface AbsenceRecord extends AbsenceInput { absenceId: string; revision: SafeInteger }
 export interface AbsencesQuery { cursor?: string; limit?: SafeInteger }
 export interface AbsenceList { directoryRevision: SafeInteger; items: ReadonlyArray<AbsenceRecord>; nextCursor?: string }
-export interface AssignmentContext { owner?: IssuerPrincipal; assignedBy?: IssuerPrincipal; absenceIds: ReadonlyArray<string>; staffingDiagnostic?: 'no-cover-available' }
+export type StaffingDiagnostic = 'no-cover-available'
 export interface AssignmentRequest { assignee: IssuerPrincipal; reason?: string }
 export interface DelegateRequest { delegate: IssuerPrincipal; reason?: string }
-export interface CaseloadMoveRequest { from: IssuerPrincipal; to: IssuerPrincipal; queueId?: string; reason: string }
-export interface CaseloadItemSelection { itemId: string; expectedRevision: SafeInteger }
-export interface CaseloadApplyRequest { movement: CaseloadMoveRequest; items: ReadonlyArray<CaseloadItemSelection> }
-export interface CaseloadPreviewQuery { cursor?: string; limit?: SafeInteger }
-export interface CaseloadItemResult { itemId: string; result: 'moved' | 'not-visible' | 'not-eligible' | 'attempt-in-progress' | 'conflict'; revision?: SafeInteger }
+export interface ReviewCaseloadMoveRequest { from: IssuerPrincipal; to: IssuerPrincipal; queue?: string; reason: string }
+export interface ReviewCaseloadTask { taskId: Uuid; revision: SafeInteger }
+export interface ReviewCaseloadPreview { previewId: Uuid; directoryRevision: SafeInteger; tasks: ReadonlyArray<ReviewCaseloadTask>; expiresAt: string }
+export interface ReviewCaseloadApplyRequest { previewId: Uuid }
+export interface ReviewCaseloadResult { moved: ReadonlyArray<ReviewCaseloadTask> }
 export interface BootstrapDirectoryRequest {
   teamId: string
   staff: ReadonlyArray<IssuerPrincipal>
   supervisors: ReadonlyArray<IssuerPrincipal>
   queueId: string
 }
-export interface HoldingsQuery { cursor?: string; limit?: SafeInteger }
 export interface CaseworkOutcome<T> { kind: 'complete'; value: T; traceId: string }
 
 export type KnownCaseworkProblemCode =
@@ -303,12 +143,12 @@ export type KnownCaseworkProblemCode =
   | 'request.limit-out-of-range'
   | 'request.method-not-allowed'
   | 'request.not-found'
-  | 'request.reason-unsupported'
-  | 'request.source-rejected'
   | 'request.unprocessable'
   | 'request.unsupported-media-type'
   | 'review.initiator-excluded'
   | 'review.initiator-required'
+  | 'review.query-too-broad'
+  | 'review.policy-mismatch'
   | 'review.result-expired'
   | 'review.submission-conflict'
   | 'review.task-not-held'
@@ -317,20 +157,13 @@ export type KnownCaseworkProblemCode =
   | 'source-profile.not-applicable'
   | 'source-profile.required'
   | 'source.bad-gateway'
-  | 'source.not-found'
-  | 'source.record-missing'
-  | 'source.reviewer-not-authorized'
-  | 'source.signature-invalid'
-  | 'work-item.already-claimed'
-  | 'work-item.not-holder'
-  | 'work-item.not-offered'
-  | 'work-item.not-visible'
-  | 'work-item.proposal-changed'
-  | 'work-item.recovery-pending'
-  | 'work-item.source-unavailable'
-  | 'work-item.superseded'
 export type CaseworkProblemCode = KnownCaseworkProblemCode | (string & {})
 export type CaseworkProtocolFailure = 'header-bounds' | 'trace-context' | 'media-type' | 'body' | 'problem' | 'status' | 'protocol'
+
+export interface ReviewTaskGrantReadOptions {
+  taskId: Uuid
+  sourceProfile?: string | null
+}
 
 export class CaseworkClientError extends Error {
   readonly kind: 'configuration' | 'invalid-request' | 'transport' | 'problem' | 'protocol'
@@ -351,53 +184,40 @@ export class CaseworkClientError extends Error {
   readonly detail?: string
   readonly status?: SafeInteger
   readonly traceId?: string
-  readonly originalAttemptId?: string
   readonly validation?: {
     readonly path: string
-    readonly reason: 'kind-not-allowed' | 'reference-invalid' | 'object-required' | 'maximum-bytes-exceeded' | 'maximum-depth-exceeded' | 'schema-mismatch' | 'outcome-not-declared' | 'reason-required' | 'text-invalid' | 'result-not-declared' | 'result-required' | 'field-not-declared' | 'constraint-invalid' | 'constraint-violated'
+    readonly reason: 'policy-not-allowed' | 'reference-invalid' | 'object-required' | 'maximum-bytes-exceeded' | 'maximum-depth-exceeded' | 'schema-mismatch' | 'outcome-not-declared' | 'reason-required' | 'text-invalid' | 'result-not-declared' | 'result-required' | 'field-not-declared' | 'constraint-invalid' | 'constraint-violated' | 'public-reason-required' | 'public-reason-not-declared' | 'approval-outcome-differs'
+    /** Outcome identifiers the review policy declares for the requested settlement when an outcome is refused; empty otherwise. */
+    readonly allowed: ReadonlyArray<string>
   }
   readonly transportKind?: string
   readonly protocolFailure?: CaseworkProtocolFailure
 }
 
-export type ClockRuntimeState = 'running' | 'paused' | 'completed' | 'cancelled' | 'verification-pending' | 'source-facts-missing'
+export type ClockRuntimeState = 'running' | 'completed' | 'cancelled' | 'verification-pending' | 'source-facts-missing'
 export type ClockNextEffect =
   | { kind: 'reminder'; id: string; at: string }
   | { kind: 'reassign'; id: string; at: string; because: string; queueId: string }
-export interface ClockOccurrenceView {
-  clockOccurrenceId: string
-  subject: SubjectRef
-  clockId: string
-  state: ClockRuntimeState
-  policyDigest: string
-  calculationGeneration: SafeInteger
-  recomputeGeneration: SafeInteger
-  anchorAt?: string
-  startedAt?: string
-  dueAt?: string
-  atRiskAt?: string
-  completedAt?: string
-  nextEffect?: ClockNextEffect
-  upcomingEffects?: ReadonlyArray<ClockNextEffect>
-}
 export interface HolidaySetDocument { holidaySet: string; revision: SafeInteger; dates: ReadonlyArray<string> }
 export interface HolidaySetRevisionInput { document: HolidaySetDocument }
-export interface ClockRecomputeRequest { clockId: string; holidaySet: string; holidayRevision: SafeInteger }
-export interface ClockRecomputeChange { clockOccurrenceId: string; itemId: string; expectedCalculationGeneration: SafeInteger; oldDueAt: string; proposedDueAt: string }
-export interface ClockRecomputePreview { previewId: string; clockId: string; holidaySet: string; holidayRevision: SafeInteger; expiresAt: string; changes: ReadonlyArray<ClockRecomputeChange> }
-export interface ClockRecomputeApplyRequest { previewId: string }
-export interface ClockRecomputeResult { previewId: string; appliedOccurrences: ReadonlyArray<string> }
+export interface ReviewClockRecomputeRequest { taskIds: ReadonlyArray<Uuid> }
+export interface ReviewClockRecomputeTask { taskId: Uuid; revision: SafeInteger; deadlineAt?: string }
+export interface ReviewClockRecomputePreview { previewId: Uuid; directoryRevision: SafeInteger; tasks: ReadonlyArray<ReviewClockRecomputeTask>; expiresAt: string }
+export interface ReviewClockRecomputeApplyRequest { previewId: Uuid }
+export interface ReviewClockRecomputeResult { tasks: ReadonlyArray<ReviewClockRecomputeTask> }
 
 export type ContentDigest = `sha256:${string}`
-export interface ReviewSubjectBinding { source: string; type: string; id: string; version: string; digest: ContentDigest }
-export interface ReviewPolicyBinding { id: string; version: string; digest: ContentDigest }
+export interface SubjectBinding { source: string; type: string; id: string; version: string; digest: ContentDigest }
+export interface PolicyBinding { id: string; version: string; digest: ContentDigest }
+/** Select the current admitted policy by ID, or require one complete exact pin. */
+export type PolicySelection = { id: string; version?: never; digest?: never } | PolicyBinding
 export interface HumanIdentity { issuer: string; subject: string }
 export type ReviewContext =
-  | { strategy: 'submitted'; snapshot: Readonly<Record<string, JsonValue>> }
-  | { strategy: 'source'; binding: { reference: string } }
+  | { mode: 'submitted'; snapshot: Readonly<Record<string, JsonValue>> }
+  | { mode: 'current-source'; binding: { reference: string } }
 export interface ReviewCreateRequest {
-  kind: string
-  subject: ReviewSubjectBinding
+  policy: PolicySelection
+  subject: SubjectBinding
   requesterReference: string
   initiator?: HumanIdentity
   context: ReviewContext
@@ -405,8 +225,8 @@ export interface ReviewCreateRequest {
 }
 export interface ReviewRequestAccepted {
   requestId: Uuid
-  subject: ReviewSubjectBinding
-  policy: ReviewPolicyBinding
+  subject: SubjectBinding
+  policy: PolicyBinding
   submissionDigest: ContentDigest
 }
 export type ReviewRequestLifecycle = 'reviewing' | 'approved' | 'rejected' | 'changes-requested' | 'answered' | 'cancelled' | 'superseded'
@@ -422,6 +242,7 @@ export interface ReviewResult extends ReviewRequestAccepted {
   resultId: Uuid
   status: ReviewResultStatus
   outcome?: string
+  publicReason?: string
   result?: JsonObject
   completedAt: string
   availableUntil: string
@@ -431,22 +252,27 @@ export type ReviewResultOutcome =
   | { kind: 'pending' | 'concealed_or_unknown' | 'expired'; value: null; traceId: string }
 export interface ReviewResultFeedEntry { eventId: Uuid; requestId: Uuid; resultId: Uuid; completedAt: string }
 export interface ReviewResultFeedPage { items: ReadonlyArray<ReviewResultFeedEntry>; nextCursor?: Uuid }
-export interface ReviewCancelRequest { subject: ReviewSubjectBinding; reason: string }
+export interface ReviewCancelRequest { subject: SubjectBinding; reason: string }
 export type ReviewCancelResponse =
   | { outcome: 'cancelled'; result: ReviewResult }
   | { outcome: 'already-terminal'; result: ReviewResult }
 export interface ReviewPageQuery { cursor?: Uuid; limit?: SafeInteger }
 export type ReviewTaskOwnership = 'assigned-to-me' | 'unclaimed'
-export interface ReviewTaskQuery extends ReviewPageQuery { queue?: string; ownership?: ReviewTaskOwnership }
+export type ReviewTaskSort = 'due' | 'subject' | 'reference'
+export interface ReviewStaffingPageQuery { queue?: string; ownership?: ReviewTaskOwnership; reference?: string; sort?: ReviewTaskSort; cursor?: Uuid; limit?: SafeInteger }
+/** A subject selector is absent or names every component of its immutable binding. */
+export type ReviewStaffingQuery = ReviewStaffingPageQuery & (
+  | { subjectSource?: never; subjectType?: never; subjectId?: never; subjectVersion?: never; subjectDigest?: never }
+  | { subjectSource: string; subjectType: string; subjectId: string; subjectVersion: string; subjectDigest: ContentDigest }
+)
 export interface SupervisoryReviewTaskQuery extends ReviewPageQuery { queue?: string; requestId?: Uuid }
 export interface OwnReviewDecisionQuery extends ReviewPageQuery { queue?: string }
-export interface WorkItemHistoryQuery { cursor?: string; limit?: SafeInteger }
-export type ReviewerTaskState = 'open' | { held: { holder: IssuerPrincipal } } | 'decided'
+export type ReviewTaskState = 'open' | { held: { holder: IssuerPrincipal } } | 'decided'
 export type ReviewDecisionType = 'approve' | 'reject' | 'changes-requested' | 'answer'
 export interface ReviewDecisionReceipt {
-  policy: ReviewPolicyBinding
+  policy: PolicyBinding
   decision: ReviewDecisionType
-  outcome?: string
+  outcome: string
   outcomeLabel?: string
   decidedAt: string
 }
@@ -458,7 +284,12 @@ export interface OwnReviewDecision {
   decisionReceipt: ReviewDecisionReceipt
 }
 export interface OwnReviewDecisionPage { items: ReadonlyArray<OwnReviewDecision>; nextCursor?: Uuid; status: PageStatus }
-export interface ReviewerTask {
+export interface ReviewTask {
+  subject: SubjectBinding
+  requesterReference: string
+  deadlineAt?: string | null
+  createdAt: string
+  displayReference?: string
   taskId: Uuid
   requestId: Uuid
   stageIndex: SafeInteger
@@ -466,11 +297,12 @@ export interface ReviewerTask {
   queue: string
   revision: SafeInteger
   eligibleProfiles: ReadonlyArray<string>
-  state: ReviewerTaskState
+  state: ReviewTaskState
+  staffingDiagnostic?: StaffingDiagnostic
   decidedByCaller?: boolean
   decisionReceipt?: ReviewDecisionReceipt
 }
-export interface ReviewTaskPage { items: ReadonlyArray<ReviewerTask>; nextCursor?: Uuid; status: PageStatus }
+export interface ReviewTaskPage { items: ReadonlyArray<ReviewTask>; nextCursor?: Uuid; status: PageStatus }
 export type SupervisoryReviewTaskState = 'open' | 'held' | 'decided'
 export interface SupervisoryReviewTask {
   taskId: Uuid
@@ -478,21 +310,22 @@ export interface SupervisoryReviewTask {
   queue: string
   revision: SafeInteger
   state: SupervisoryReviewTaskState
+  staffingDiagnostic?: StaffingDiagnostic
   accountabilityEventId?: Uuid
 }
 export interface SupervisoryReviewTaskPage { items: ReadonlyArray<SupervisoryReviewTask>; nextCursor?: Uuid; status: PageStatus }
 export type ReviewSourceBindingStatus = 'current' | 'binding-changed'
-export interface ReviewSourceProjection { binding: SourceBinding; displayReference?: string; display: Readonly<Record<string, JsonValue>> }
+export interface ReviewSourceProjection { binding: SubjectBinding; displayReference?: string; display: Readonly<Record<string, JsonValue>> }
 export type ReviewTaskContextData =
-  | { strategy: 'submitted'; snapshot: Readonly<Record<string, JsonValue>> }
-  | { strategy: 'source'; reference: string; bindingStatus: ReviewSourceBindingStatus; projection?: ReviewSourceProjection }
+  | { mode: 'submitted'; snapshot: Readonly<Record<string, JsonValue>> }
+  | { mode: 'current-source'; reference: string; bindingStatus: ReviewSourceBindingStatus; projection?: ReviewSourceProjection }
 export interface ReviewTaskContext {
   taskId: Uuid
   requestId: Uuid
-  subject: ReviewSubjectBinding
+  subject: SubjectBinding
   requesterReference: string
-  policy: ReviewPolicyBinding
-  policySnapshot: ReviewKindPolicySnapshot
+  policy: PolicyBinding
+  policyClosure: ReviewPolicyClosure
   resultConstraints?: JsonObject
   context: ReviewTaskContextData
 }
@@ -504,7 +337,7 @@ export interface ReviewClockOccurrence {
   clockId: string
   requestId: Uuid
   correlation: ReviewClockCorrelation
-  state: 'running' | 'paused' | 'completed' | 'cancelled' | 'source-facts-missing'
+  state: 'running' | 'completed' | 'cancelled' | 'source-facts-missing'
   policyDigest: ContentDigest
   anchorAt: string
   dueAt?: string
@@ -513,10 +346,11 @@ export interface ReviewClockOccurrence {
 }
 export interface ReviewTaskDraftInput { body: JsonValue }
 export interface ReviewTaskDraft { taskId: Uuid; author: IssuerPrincipal; body: JsonValue; revision: SafeInteger; updatedAt: string }
-export type ReviewerDecision =
-  | { type: 'approve' }
-  | { type: 'reject' | 'changes-requested' | 'answer'; outcome: string; reason?: string | null; result?: JsonObject | null }
-export interface ReviewTaskDecisionRequest { decision: ReviewerDecision }
+export type DecisionKind =
+  | { type: 'approve'; outcome: string; publicReason?: string | null }
+  | { type: 'reject' | 'changes-requested' | 'answer'; outcome: string; reason?: string | null; publicReason?: string | null; result?: JsonObject | null }
+export interface Decision { taskId: Uuid; requestId: Uuid; stageId: string; reviewer: IssuerPrincipal; profileId: string; decision: DecisionKind }
+export interface ReviewTaskDecisionRequest { decision: DecisionKind }
 export type ReviewHistoryAudience = 'reviewers' | 'requester'
 export interface ReviewNoteRequest { audience: ReviewHistoryAudience; note: string }
 export interface ReviewHistoryEntry { eventId: Uuid; requestId: Uuid; taskId?: Uuid; kind: string; actorRef?: string; detail: JsonValue; occurredAt: string }
@@ -528,18 +362,28 @@ export interface ReviewAccountabilityRecord {
   decisionReceipt?: ReviewDecisionReceipt
 }
 export interface ReviewStagePolicy { id: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
-export interface ReviewRetentionPolicy { terminalDays: SafeInteger; accountabilityDays: SafeInteger }
-export interface ReviewKindPolicySnapshot {
-  identity: ReviewPolicyBinding
+export interface ReviewRetentionPolicy { terminalRetentionDays: SafeInteger; accountabilityRetentionDays: SafeInteger }
+export interface ReviewContextContract { id: string; revision: ContentDigest; schemaDigest: ContentDigest }
+export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }
+export type ReviewContextCapability = 'human-display' | 'service-status' | 'task-grant-context' | 'routing-context'
+export interface ReviewContextProviderPolicy { id: string; capabilities: ReadonlyArray<ReviewContextCapability>; sourceNamespace: string; deploymentRef: string; serviceProfiles?: Partial<Record<ReviewContextCapability, string>> }
+export interface ReviewPolicy { id: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
+export interface ReviewPolicyClosure {
+  identity: PolicyBinding
   purpose: 'approval' | 'answer'
-  contextStrategy: 'submitted' | 'source'
+  context: ReviewContextPolicy
+  routing?: ReadonlyArray<RoutingRule>
+  dependencies: JsonObject
   stages: ReadonlyArray<ReviewStagePolicy>
   clocks?: ReadonlyArray<string>
   retention: ReviewRetentionPolicy
   displaySchema: JsonValue
   resultSchema?: JsonValue
-  outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; resultRequired?: boolean }>
+  outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }>
 }
+
+/** Compute the canonical producer submission digest locally, without I/O. */
+export function submissionDigest(producer: string, sourceNamespace: string, request: ReviewCreateRequest): ContentDigest
 
 export class CaseworkClient {
   constructor(config: CaseworkClientConfig)
@@ -549,21 +393,22 @@ export class CaseworkClient {
   reviewResult(token: string, profile: string, accepted: ReviewRequestAccepted): Promise<ReviewResultOutcome>
   reviewResults(token: string, profile: string, query?: ReviewPageQuery | null): Promise<CaseworkOutcome<ReviewResultFeedPage>>
   cancelReviewRequest(token: string, profile: string, accepted: ReviewRequestAccepted, idempotencyKey: string, request: ReviewCancelRequest): Promise<CaseworkOutcome<ReviewCancelResponse>>
-  reviewKinds(token: string, profile: string): Promise<CaseworkOutcome<ReadonlyArray<ReviewKindPolicySnapshot>>>
-  reviewKind(token: string, profile: string, kindId: string): Promise<CaseworkOutcome<ReviewKindPolicySnapshot>>
-  reviewTasks(token: string, profile: string, query?: ReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
+  reviewPolicies(token: string, profile: string): Promise<CaseworkOutcome<ReadonlyArray<ReviewPolicyClosure>>>
+  reviewPolicy(token: string, profile: string, policyId: string): Promise<CaseworkOutcome<ReviewPolicyClosure>>
+  nextReviewTask(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask | null>>
+  reviewTasks(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
   supervisoryReviewTasks(token: string, profile: string, query?: SupervisoryReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<SupervisoryReviewTaskPage>>
   ownReviewDecisions(token: string, profile: string, query?: OwnReviewDecisionQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<OwnReviewDecisionPage>>
-  reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
+  reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask>>
   reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
-  previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: Uuid): Promise<CaseworkOutcome<TaskTemplatePreviews>>
-  listReviewTaskGrants(token: string, profile: string, sourceProfile: string, taskId: Uuid): Promise<CaseworkOutcome<TaskGrantList>>
-  approveReviewTaskGrant(token: string, profile: string, sourceProfile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest): Promise<CaseworkOutcome<TaskGrantView>>
+  previewReviewTaskTemplates(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskTemplatePreviews>>
+  listReviewTaskGrants(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskGrantList>>
+  approveReviewTaskGrant(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<TaskGrantView>>
   revokeReviewTaskGrant(token: string, profile: string, taskId: Uuid, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
-  claimReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
-  releaseReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<ReviewerTask>>
-  assignReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewerTask>>
-  delegateReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewerTask>>
+  claimReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask>>
+  releaseReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<ReviewTask>>
+  assignReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTask>>
+  delegateReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTask>>
   reviewTaskDraft(token: string, profile: string, taskId: Uuid, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft | null>>
   saveReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft>>
   deleteReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string): Promise<CaseworkOutcome<null>>
@@ -572,42 +417,23 @@ export class CaseworkClient {
   addReviewNote(token: string, profile: string, requestId: Uuid, idempotencyKey: string, note: ReviewNoteRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewHistoryEntry>>
   reviewClocks(token: string, profile: string, requestId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReadonlyArray<ReviewClockOccurrence>>>
   reviewAccountability(token: string, profile: string, eventId: Uuid): Promise<CaseworkOutcome<ReviewAccountabilityRecord>>
-  listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<WorkItemPage>>
-  nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItemPage>>
-  getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>
-  previewTaskTemplates(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<TaskTemplatePreviews>>
-  listTaskGrants(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<TaskGrantList>>
-  approveTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest): Promise<CaseworkOutcome<TaskGrantView>>
-  revokeTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
   taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome<TaskAssertionResponse>>
   /** Exact empty-POST authority route for the shared remote exchange provider. */
   taskAssertionEndpoint(grantId: string): string
   taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome<TaskGrantStatus>>
-  claimWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
-  releaseWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
-  getDraft(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<DraftResponse>>
-  saveDraft(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, draft: SaveDraftRequest): Promise<CaseworkOutcome<DraftResponse>>
-  deleteDraft(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<null>>
-  decideWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string, decision: DecideRequest): Promise<CaseworkOutcome<MutationResponse>>
-  recoverDecision(token: string, profile: string, sourceProfile: string, itemId: string, attemptId: string, recovery: RecoverAttemptRequest): Promise<CaseworkOutcome<MutationResponse>>
-  recoverDecisionByKey(token: string, profile: string, sourceProfile: string, itemId: string, idempotencyKey: string, recovery: RecoverAttemptRequest): Promise<CaseworkOutcome<MutationResponse>>
-  workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string, query?: WorkItemHistoryQuery | null): Promise<CaseworkOutcome<Page<HistoryEntry>>>
-  holdings(token: string, profile: string, sourceProfile: string, query?: HoldingsQuery | null): Promise<CaseworkOutcome<Page<HoldingSummary>>>
+  reviewTaskHoldings(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
   directory(token: string, profile: string): Promise<CaseworkOutcome<DirectoryResponse>>
   directoryTargets(token: string, profile: string, query: DirectoryTargetsQuery): Promise<CaseworkOutcome<DirectoryTargetPage>>
   bootstrapDirectory(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: BootstrapDirectoryRequest): Promise<CaseworkOutcome<DirectoryResponse>>
   updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DirectoryTeamUpdateRequest): Promise<CaseworkOutcome<DirectoryResponse>>
-  workItemClocks(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<ReadonlyArray<ClockOccurrenceView>>>
   holidayRevision(token: string, profile: string, holidaySet: string, revision: SafeInteger): Promise<CaseworkOutcome<HolidaySetDocument>>
   createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: HolidaySetRevisionInput): Promise<CaseworkOutcome<HolidaySetDocument>>
-  previewClockRecompute(token: string, profile: string, request: ClockRecomputeRequest): Promise<CaseworkOutcome<ClockRecomputePreview>>
-  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: ClockRecomputeApplyRequest): Promise<CaseworkOutcome<ClockRecomputeResult>>
+  previewClockRecompute(token: string, profile: string, request: ReviewClockRecomputeRequest): Promise<CaseworkOutcome<ReviewClockRecomputePreview>>
+  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: ReviewClockRecomputeApplyRequest): Promise<CaseworkOutcome<ReviewClockRecomputeResult>>
   absences(token: string, profile: string, query?: AbsencesQuery | null): Promise<CaseworkOutcome<AbsenceList>>
   createAbsence(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
   updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
   deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<null>>
-  assignWorkItem(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<MutationResponse>>
-  delegateWorkItem(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<MutationResponse>>
-  previewCaseloadMove(token: string, profile: string, movement: CaseloadMoveRequest, query?: CaseloadPreviewQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<Page<WorkItem>>>
-  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: CaseloadApplyRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReadonlyArray<CaseloadItemResult>>>
+  previewCaseloadMove(token: string, profile: string, movement: ReviewCaseloadMoveRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewCaseloadPreview>>
+  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: ReviewCaseloadApplyRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewCaseloadResult>>
 }

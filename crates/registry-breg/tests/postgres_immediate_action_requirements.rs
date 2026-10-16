@@ -198,11 +198,12 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
             "vocabulary":"status", "values":["active","inactive"], "required":true,
             "classification":"restricted"
         }));
-    source["actions"][0]["requires"][0]
+    source["actions"][0]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+        json!("expected-status");
     let (database, registry, identity) = setup_with_project(source).await;
     let app = app(&database, registry.clone(), identity, None);
     let accepted = invoke_with_input(
@@ -240,7 +241,7 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
     // set whatever the database collation is.
     let mut source = support::project();
     for (field, api_name) in [("award-number", "awardNumber"), ("awarded-by", "awardedBy")] {
-        source["entities"][1]["fields"]
+        source["recordTypes"][1]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -254,7 +255,7 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
                 "id": field, "apiName": api_name, "type": "string", "maximumLength": 32,
                 "required": true, "classification": "restricted"
             }));
-        source["actions"][0]["effects"][0]["set"][field] = json!({"fromField": field});
+        source["actions"][0]["plan"]["effects"][0]["set"][field] = json!({"fromInput": field});
     }
     let database = TestDatabase::create_with_locale(8, "en_US.utf8").await;
     let locale_ordered = database
@@ -302,7 +303,11 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
 
 fn status_sql(registry: &registry_breg::CompiledRegistry) -> String {
     let parent = &registry.entities()["parent"];
-    format!("UPDATE registry_data.{} SET {} = $1, record_revision = record_revision + 1 WHERE record_id = $2", q(&parent.physical_table), q(&parent.fields["status"].physical_name))
+    format!(
+        "UPDATE registry_data.{} SET {} = $1, record_revision = record_revision + 1 WHERE record_id = $2",
+        q(&parent.physical_table),
+        q(&parent.fields["status"].physical_name)
+    )
 }
 
 async fn counts(database: &TestDatabase, registry: &registry_breg::CompiledRegistry) -> Vec<i64> {

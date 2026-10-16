@@ -31,8 +31,9 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
 use registry_evidence_authoring::{
-    formats::{decode_authored, MOCK_PLAN},
     openapi::types::OperationKey,
+    project::{self, SourceType},
+    target,
 };
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_yaml::{Diagnostic, Report, Severity};
@@ -76,8 +77,8 @@ pub struct ServeArgs {
 
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
@@ -127,8 +128,8 @@ pub struct GenerateArgs {
 
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
@@ -165,8 +166,8 @@ pub struct CheckArgs {
 
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
     /// Exit 1 when a warning is reported.
@@ -826,52 +827,6 @@ fn plan_refusal(error: anyhow::Error, config: &Path, base: &Path) -> anyhow::Err
     authored::rebase(found, base).into()
 }
 
-/// Check what the mock plan at `file`, named from `project`, depends on: the
-/// OpenAPI description it names and each response body it lists, as
-/// `evidencectl source mock check` reads them. The plan's own structure is
-/// checked by [`check_plan_document`]; its reader warnings are reported there.
-pub(crate) fn check_plan_dependencies(project: &Path, file: &str) -> Report {
-    let config = Path::new(file);
-    let Err(error) = load_checked_plan(project, config, false) else {
-        return Report::default();
-    };
-    let message = error.to_string();
-    let refusal = plan_refusal(error, config, Path::new(""));
-    if let Some(report) = authored::report_in(&refusal) {
-        return report.clone();
-    }
-    Report::new(vec![authored::file_diagnostic(
-        Severity::Error,
-        "evidence.mock-plan.invalid",
-        None,
-        file,
-        "",
-        &message,
-        PLAN_ACTION,
-    )])
-}
-
-/// Check one mock plan read from a project: the reader's diagnostics, then
-/// the plan's own structure. The OpenAPI description and the response bodies
-/// the plan names are read by `source mock check`, not here.
-pub(crate) fn check_plan_document(file: &str, bytes: &[u8]) -> Report {
-    let decoded = match decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN) {
-        Ok(decoded) => decoded,
-        Err(found) => return found,
-    };
-    let mut found = decoded.document.warnings();
-    if let Err(error) = plan::validate_plan(&decoded.value) {
-        found.push(decoded.document.diagnostic_at_value(
-            Severity::Error,
-            "evidence.mock-plan.invalid",
-            "",
-            &error.to_string(),
-            PLAN_ACTION,
-        ));
-    }
-    found
-}
-
 struct CheckedPlan {
     plan: MockPlan,
     /// The warnings the reader reported on the plan.
@@ -1241,17 +1196,28 @@ fn project_source_binding(
     root: &Path,
     prepared: &openapi::PreparedOpenApi,
 ) -> Result<ProjectSourceBinding> {
-    let sources = root.join("sources");
-    let metadata = fs::symlink_metadata(&sources).context(
-        "project mock serve needs a compiled source; run source suggest --base-url http://127.0.0.1:4010",
+    let project_bytes = files::read_confined(
+        root,
+        Path::new(project::PROJECT_FILE),
+        registry_evidence_authoring::layout::MAX_SOURCE_ARTIFACT_BYTES,
+        "Evidence project",
     )?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("sources must be a plain directory");
+    let project = project::read_project(project::PROJECT_FILE, &project_bytes)?.value;
+    let target_path = Path::new("local-target.yaml");
+    let target_bytes = files::read_confined(
+        root,
+        target_path,
+        registry_evidence_authoring::layout::MAX_SOURCE_ARTIFACT_BYTES,
+        "local Evidence target",
+    )
+    .context(
+        "project mock serve needs local-target.yaml with the Source's numeric-loopback connection",
+    )?;
+    let target = target::read_target("local-target.yaml", &target_bytes)?.value;
+    if target.project != project.id {
+        bail!("local-target.yaml must name the EvidenceProject being served");
     }
-    let mut files = fs::read_dir(&sources)
-        .context("reading project sources")?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    files.sort_by_key(fs::DirEntry::file_name);
+
     let operation_keys = prepared
         .operations
         .iter()
@@ -1259,56 +1225,44 @@ fn project_source_binding(
         .collect::<BTreeSet<_>>();
     let mut addresses = BTreeSet::new();
     let mut routes = BTreeMap::new();
-    for entry in files {
-        let name = entry.file_name();
-        let relative = PathBuf::from("sources").join(&name);
-        if relative
-            .extension()
-            .and_then(|extension| extension.to_str())
-            != Some("yaml")
-        {
+    for source in project.sources.values() {
+        if source.source_type != SourceType::HttpJson {
             continue;
         }
-        let bytes =
-            files::read_confined(root, &relative, plan::MAX_PLAN_BYTES as u64, "source draft")?;
-        let value = registry_evidence_authoring::formats::scan_authored(
-            &relative.to_string_lossy(),
-            &bytes,
-        )
-        .map(crate::authored::node_value)?;
-        let method = value
-            .get("request")
-            .and_then(|request| request.get("method"))
-            .and_then(serde_json::Value::as_str);
-        let path = value
-            .get("request")
-            .and_then(|request| request.get("path").and_then(serde_json::Value::as_str));
+        let method = source.request.get("method").and_then(Value::as_str);
+        let path = source.request.get("path").and_then(Value::as_str);
         let Some((method, source_path)) = method.zip(path) else {
             continue;
         };
         let Some(operation) = select_project_operation(&operation_keys, method, source_path) else {
             continue;
         };
-        let base_url = value
-            .get("baseUrl")
-            .and_then(serde_json::Value::as_str)
-            .context("applicable project sources need an explicit baseUrl")?;
-        addresses.insert(loopback_origin_address(base_url)?);
+        let connection_id = source
+            .connection
+            .as_ref()
+            .context("applicable HTTP Source needs a named target connection")?;
+        let connection = target.connections.get(connection_id).with_context(|| {
+            format!(
+                "local-target.yaml needs connection `{connection_id}` for an applicable HTTP Source"
+            )
+        })?;
+        let origin = connection.origin.as_str();
+        addresses.insert(loopback_origin_address(origin)?);
         let key = (operation.0.to_owned(), operation.1.to_owned());
         if routes
             .insert(key, source_path.to_owned())
             .is_some_and(|existing| existing != source_path)
         {
-            bail!("applicable project sources disagree on the served request path");
+            bail!("applicable project Sources disagree on the served request path");
         }
     }
     if addresses.len() != 1 {
-        bail!("applicable project sources must agree on one numeric-loopback origin; rerun source suggest with --base-url")
+        bail!("applicable project Sources must use one numeric-loopback target connection origin")
     }
     let address = addresses
         .into_iter()
         .next()
-        .context("project has no applicable compiled source; run source suggest --base-url")?;
+        .context("project has no applicable HTTP Source and target connection")?;
     Ok(ProjectSourceBinding { address, routes })
 }
 

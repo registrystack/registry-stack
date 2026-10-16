@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: decision-follow-up
+  version: '1'
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required:
+    - applicationId
+    - summary
+    properties:
+      applicationId:
+        type: string
+        format: uuid
+      summary:
+        type: string
+        minLength: 1
+        maxLength: 4000
+contracts:
+  applications:
+    type: breg
+    source: generated/applications.contract.json
+functions:
+  assessment-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: assessment_request
+    inputs:
+      input:
+        typeRef: workflow-input
+    output:
+      operationInput: assessor-evaluate-decision
+  assessment-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: assessment_route
+    inputs:
+      reply:
+        operationOutput: assessor-evaluate-decision
+    output:
+      type: string
+      enum:
+      - request
+      - skip
+      - review
+  action-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: action_request
+    inputs:
+      input:
+        typeRef: workflow-input
+    output:
+      operationInput: applications-invoke-breg-action
+operations:
+  assessor-evaluate-decision:
+    uses: evaluation.evaluate/v1
+    connection: assessor
+  applications-invoke-breg-action:
+    uses: breg.invoke-action/v1
+    connection: applications
+    action:
+      contract: applications
+      id: request-information
+workflow:
+  input:
+    typeRef: workflow-input
+  deadlineSeconds: 300
+  start: assess
+  steps:
+    assess:
+      type: call
+      operation: assessor-evaluate-decision
+      input:
+        type: function
+        function: assessment-request
+        inputs:
+          input:
+            type: input
+      next: route
+    route:
+      type: choose
+      choose:
+        type: function
+        function: assessment-route
+        inputs:
+          reply:
+            type: step
+            step: assess
+      cases:
+        request: request-information
+        skip: skipped
+        review: review
+    request-information:
+      type: call
+      operation: applications-invoke-breg-action
+      input:
+        type: function
+        function: action-request
+        inputs:
+          input:
+            type: input
+      next: accepted
+    accepted:
+      type: finish
+      outcome: information-requested
+      output:
+        type: fields
+        fields:
+          actionApplicationId:
+            type: step
+            step: request-information
+            path: /applicationId
+    skipped:
+      type: finish
+      outcome: no-action
+    review:
+      type: finish
+      outcome: needs-review
+  outcomes:
+    information-requested:
+      type: object
+      additionalProperties: false
+      required:
+      - actionApplicationId
+      properties:
+        actionApplicationId:
+          type: string
+          format: uuid
+    no-action:
+      type: 'null'
+    needs-review:
+      type: 'null'

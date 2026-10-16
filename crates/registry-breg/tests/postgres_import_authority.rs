@@ -53,8 +53,10 @@ const FIXTURE: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"import-authority-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "entities":[{
+  "datasets":[{"id":"test-dataset"}],
+          "recordTypes":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+    "mutationPolicy":{"create":"proposal-required"},
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
     "fields":[
@@ -78,23 +80,23 @@ const FIXTURE: &str = r#"{
   }],
   "accessProfiles":[{
     "id":"loader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-    "permissions":{"entities":[{
-      "entity":"widget","operations":["import"],
+    "permissions":{"records":[{
+      "recordType":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     },{
-      "entity":"gadget","operations":["import"],
+      "recordType":"gadget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     },{
-      "entity":"ledger","operations":["create","batch"],
+      "recordType":"ledger","operations":["create","batch"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
   },{
     "id":"second-loader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-    "permissions":{"entities":[{
-      "entity":"widget","operations":["import"],
+    "permissions":{"records":[{
+      "recordType":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
@@ -1150,6 +1152,15 @@ async fn an_open_authority_opens_no_direct_write_route() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_chunk_counts_against_the_authority_until_it_is_exhausted() {
     let harness = Harness::create().await;
+    assert!(
+        harness.registry.entities()["widget"]
+            .change_control
+            .as_ref()
+            .unwrap()
+            .required_for
+            .contains(&registry_breg::contract::Operation::Create),
+        "the explicit import capability is exercised on a Proposal-required create"
+    );
     let authority = harness.open("widget", "loader", 5, &[]).await;
     let load = plan("counted", 5);
     let run_id = harness.created_run("widgets", "loader", &load).await;

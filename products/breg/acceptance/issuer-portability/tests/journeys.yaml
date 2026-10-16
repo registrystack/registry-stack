@@ -4,7 +4,7 @@ journeys:
   - id: issuer-portability-package
     steps:
       - id: list-empty-registry
-        entity: record
+        recordType: record
         accessProfile: clerk
         claims:
           principal: urn:institution:service-clerk

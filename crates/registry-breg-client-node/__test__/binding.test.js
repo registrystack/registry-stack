@@ -8,11 +8,7 @@ const { after, before, test } = require('node:test');
 const {
   BaseRegistryClient,
   BaseRegistryClientError,
-  BRegAttachmentSlot,
-  BRegAttachmentUpload,
   BRegCreateBinding,
-  BRegLifecycleAction,
-  BRegLifecycleAuthority,
   BRegMetadata,
   BRegPatchBinding,
 } = require('..');
@@ -58,8 +54,8 @@ before(async () => {
       id: 'test-registry',
       version: '1.0.0',
       revision: `sha256:${'a'.repeat(64)}`,
-      metadataVersion: '1',
-      entities: [],
+      metadataVersion: '2',
+      recordTypes: [],
       operations: [],
     }));
     else if (request.url.endsWith(`/v1/records/companies/${MISSING_RECORD_ID}`)) {
@@ -226,7 +222,7 @@ test('unknown problem codes fall back to HTTP status semantics', async () => {
       assert.equal(error.status, status);
       assert.equal(error.traceId, TRACE_ID);
       assert.equal(error.code, undefined);
-      assert.equal(error.planRefusal, undefined);
+      assert.equal('planRefusal' in error, false);
       assert.equal(error.refusalCode, undefined);
       assert.equal(error.reasonCode, undefined);
       assert.equal(error.fieldPath, undefined);
@@ -287,10 +283,6 @@ test('metadata-selected authority types have no public constructor', () => {
   for (const Authority of [
     BRegCreateBinding,
     BRegPatchBinding,
-    BRegLifecycleAuthority,
-    BRegLifecycleAction,
-    BRegAttachmentSlot,
-    BRegAttachmentUpload,
     BRegMetadata,
   ]) {
     assert.throws(() => new Authority());

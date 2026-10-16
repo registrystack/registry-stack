@@ -33,7 +33,7 @@ fn project_with_local_hook(kind: &str, path: &str) -> Value {
         "kind": "BRegProject",
         "project": {"id": "hook-handler", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-handler.example.test"},
-        "entities": [{
+        "datasets":[{"id":"test-dataset"}],"recordTypes":[{
             "id": "case",
             "primaryDataset": "test-dataset",
             "route": "cases",

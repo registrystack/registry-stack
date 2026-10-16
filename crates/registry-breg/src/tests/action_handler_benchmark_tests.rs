@@ -14,14 +14,16 @@
 
 use std::time::{Duration, Instant};
 
+use crate::action_evidence_fixture as evidence_fixture;
+
 use super::{
-    compile_source_for_action, evaluate_admitted_action_detailed, evaluate_with_cached_program,
+    compile_source_for_function, evaluate_admitted_action_detailed, evaluate_with_cached_program,
     ActionHandlerError, ActionHandlerOutcome, CachedActionHandlerProgram,
 };
 use crate::{
     compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_json, parse_project_yaml, ModuleAssetSource},
-    model::{CompiledAction, CompiledActionMutation, CompiledActionValue},
+    contract::{parse_project_json, ModuleAssetSource},
+    model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue},
     rhai_planner,
 };
 use serde_json::{json, Map, Value};
@@ -30,26 +32,34 @@ fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(5)
 }
 
-/// The register-person handler from the unchanged Rhai acceptance fixture.
+/// The acceptance Rhai program and cases, compiled through the neutral Action contract.
 fn acceptance_action() -> CompiledAction {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-registration-rhai");
-    let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-    let assets = project
-        .actions
-        .iter()
-        .filter_map(|action| {
-            action
-                .handler
-                .as_ref()
-                .and_then(|handler| handler.script().map(str::to_owned))
-        })
-        .map(|script| ModuleAssetSource {
-            module: None,
-            bytes: std::fs::read(root.join(&script)).unwrap(),
-            path: script,
-        })
-        .collect::<Vec<_>>();
+    let source = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"acceptance-benchmark","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "datasets":[{"id":"records"}],
+        "recordTypes":[{"id":"person","route":"people","primaryDataset":"records","mutationMode":"mutable","fields":[
+            {"id":"identifier","type":"string","required":true,"maximumLength":13,"classification":"internal"},
+            {"id":"display-name","type":"string","required":true,"minimumLength":1,"maximumLength":200,"classification":"internal"}]}],
+        "functions":[{"id":"register-plan","runtime":"rhai","source":"scripts/register-person.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
+        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
+            {"id":"identifier","type":"string","required":true,"maximumLength":13,"classification":"internal"},
+            {"id":"given-name","type":"string","maximumLength":80,"classification":"internal"},
+            {"id":"family-name","type":"string","maximumLength":80,"classification":"internal"}],
+            "plan":{"type":"function","function":"register-plan","inputs":["identifier","given-name","family-name"],
+                "refusals":[{"code":"blank-name","label":"At least one name part is required."}],
+                "writes":[{"id":"person","target":{"recordType":"person"},"operation":"create","fields":["identifier","display-name"]}]}}],
+        "accessProfiles":[{"id":"writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[
+            {"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+    });
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let assets = vec![ModuleAssetSource {
+        module: None,
+        path: "scripts/register-person.rhai".into(),
+        bytes: std::fs::read(root.join("scripts/register-person.rhai")).unwrap(),
+    }];
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
         .unwrap()
         .actions()
@@ -79,23 +89,25 @@ fn characterization_action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{"id":"record","primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"baseline"}],
+        "recordTypes":[{"id":"record","primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
         ]}],
-        "actions":[{"id":"register-record","inputs":[
+        "functions":[{"id":"baseline-plan","runtime":"rhai","source":"handlers/baseline.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
+        "actions":[{"id":"register-record","execution":{"mode":"immediate"},"inputs":[
             {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"required":true,"classification":"restricted"},
             {"id":"note","type":"string","maximumLength":80,"classification":"restricted"}
-        ],"handler":{"type":"rhai","script":"handlers/baseline.rhai","abi":"registry.action-handler/v1",
+        ],"plan":{"type":"function","function":"baseline-plan","inputs":["label","count","amount","note"],
             "refusals":[{"code":"blank-label","label":"A label is required."}],
-            "writes":[{"id":"record","target":{"entity":"record"},"operation":"create","fields":["label","count","amount"]}]
+            "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
         "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
-                {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
+                {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
             ]
         }}]
     });
@@ -131,9 +143,9 @@ fn assert_matches_expectation(outcome: &ActionHandlerOutcome, expected: &Value, 
             let mut set = Map::new();
             for mutation in &effects[0].mutations {
                 match mutation {
-                    CompiledActionMutation::Set {
+                    CompiledPlanMutation::Set {
                         field,
-                        value: CompiledActionValue::Literal { value },
+                        value: CompiledPlanValue::Literal { value },
                     } => {
                         set.insert(field.clone(), value.clone());
                     }
@@ -248,37 +260,20 @@ fn cached_program_outcomes_match_fresh_evaluation_on_characterization_handler_sh
 /// declaring no Evidence, exactly as a fresh compile of that action is.
 #[test]
 fn cached_program_refuses_evaluation_for_a_different_evidence_declaration() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/farmer-landholding-evidence");
-    let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-    let mut assets = project
-        .actions
-        .iter()
-        .filter_map(|action| {
-            action
-                .handler
-                .as_ref()
-                .and_then(|handler| handler.script().map(str::to_owned))
-        })
-        .map(|script| ModuleAssetSource {
-            module: None,
-            bytes: std::fs::read(root.join(&script)).unwrap(),
-            path: script,
-        })
-        .collect::<Vec<_>>();
-    assets.push(ModuleAssetSource {
-        module: None,
-        path: "evidence/farmer-contracts.json".into(),
-        bytes: std::fs::read(root.join("evidence/farmer-contracts.json")).unwrap(),
-    });
-    let declared = compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
-        .unwrap()
+    let registry = evidence_fixture::registry(true);
+    let capability = registry
         .actions()
         .actions
         .iter()
-        .find(|action| action.id == "register-landholding")
-        .cloned()
-        .expect("register-landholding action");
+        .flat_map(|action| &action.commit_evidence)
+        .next()
+        .unwrap()
+        .capability
+        .clone();
+    let mut declared = characterization_action("fn handle(ctx) { 42 }");
+    declared.evidence.push(capability);
+    declared.handler.as_mut().unwrap().script_bytes =
+        b"fn handle(ctx) { evidence::resolve(\"status\", #{}); #{effects:[]} }".to_vec();
     assert!(!declared.evidence.is_empty());
     let program = CachedActionHandlerProgram::compile(&declared).unwrap();
     let mut undeclared = declared.clone();
@@ -471,7 +466,14 @@ fn benchmark_variant_times_engine_construction_compilation_and_evaluation() {
         "compilation",
         "current",
         &measure(REPETITIONS, COMPILATION_CALLS, || {
-            drop(compile_source_for_action(source, !action.evidence.is_empty()).unwrap());
+            drop(
+                compile_source_for_function(
+                    source,
+                    &handler.entrypoint,
+                    !action.evidence.is_empty(),
+                )
+                .unwrap(),
+            );
         }),
     );
     report(

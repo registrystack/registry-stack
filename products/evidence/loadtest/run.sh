@@ -90,7 +90,7 @@ if [[ ! -f "$run_dir/env.json" ]]; then
   printf '%s\n' "no load-test environment at $run_dir/env.json; run up.sh first" >&2
   exit 2
 fi
-for pool_file in subjects.txt absent.txt pool-summary.json; do
+for pool_file in subjects.txt absent.txt private-canaries.txt pool-summary.json; do
   if [[ ! -f "$run_dir/pool/$pool_file" ]]; then
     printf '%s\n' "no complete subject pool at $run_dir/pool; run up.sh first" >&2
     exit 2
@@ -207,6 +207,7 @@ run_one() {
     "${secret_arguments[@]}" \
     --seed-pool "$run_dir/pool/subjects.txt" \
     --seed-pool "$run_dir/pool/absent.txt" \
+    --seed-pool "$run_dir/pool/private-canaries.txt" \
     --out "$result_dir/safety.json" || status=1
 
   if [[ -f "$result_dir/k6-summary.json" ]]; then

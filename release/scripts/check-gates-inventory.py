@@ -16,6 +16,9 @@ PLATFORM_FUZZ_RUNNER = ROOT / "products" / "platform" / "scripts" / "run-fuzz-sm
 CASEWORK_CHECKPOINT_RUNNER = (
     ROOT / "products" / "casework" / "scripts" / "check-checkpoint.sh"
 )
+CASEWORK_SCHEMA_RUNNER = (
+    ROOT / "products" / "casework" / "scripts" / "check-schemas.sh"
+)
 SCHEDULING_CHECKPOINT_RUNNER = (
     ROOT / "products" / "scheduling" / "scripts" / "check-checkpoint.sh"
 )
@@ -273,7 +276,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         # pin names the job it belongs to. A bare digest would be satisfied by
         # the other product's copy and would stop reporting its own removal.
         "Casework PostgreSQL 17 image pin",
-        "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
         "        env:\n"
         "          POSTGRES_DB: casework",
     ),
@@ -305,47 +308,45 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Casework offline authoring journeys",
-        '"$caseworkctl_bin" test "$work/project"',
+        '"$caseworkctl_bin" --format json test "$project"',
     ),
     (
-        "Casework claim, reconciliation, and attempt suite",
-        "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
+        "Casework current review transaction aggregate",
+        "cargo test --locked -p registry-casework --features postgres-test \\\n"
+        "            --test review_acceptance_postgres \\\n"
+        "            --test review_migration_postgres \\\n"
+        "            --test review_directory_postgres \\\n"
+        "            --test review_postgres \\\n"
+        "            --test review_http \\\n"
+        "            --test review_payment_fixture_postgres \\\n"
+        "            --test breg_review_journey",
     ),
     (
-        "Casework package activation suite",
-        "cargo test --locked -p registry-casework --features postgres-test --test activation_postgres",
+        "Casework current task-grant library suite",
+        "cargo test --locked -p registry-casework --features postgres-test --lib task_grants::",
     ),
     (
-        "Casework caller visibility suite",
-        "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
+        "Casework Evidence deployment loader selection",
+        "task_grants::native_exchange_tests::"
+        "the_rewritten_evidence_deployment_loads_through_the_evidence_loader",
     ),
     (
-        "Casework assignment, source routing, and task-grant invalidation suites",
-        "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation",
+        "Casework Evidence deployment loader result assertion",
+        r"grep -q 'test result: ok\. 1 passed' "
+        '"${RUNNER_TEMP}/casework-evidence-fixture.log"',
     ),
     (
-        "Casework persisted source clock selection",
-        "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",
+        "Casework operator schema-newer refusal",
+        "operator_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal",
     ),
     (
-        "Casework persisted source clock result assertion",
-        r"grep -q 'test result: ok\. 1 passed'",
+        "Casework retained split-session runtime boundary",
+        "dev::tests::a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime",
     ),
     (
-        "Casework inbox ordering suite",
-        "cargo test --locked -p registry-casework --features postgres-test --test inbox_ordering_postgres",
-    ),
-    (
-        "Casework source retention suite",
-        "cargo test --locked -p registry-casework --features postgres-test --test source_retention_postgres",
-    ),
-    (
-        "Casework governed review persistence, HTTP, payment, and BReg suites",
-        "cargo test --locked -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
-    ),
-    (
-        "Casework governed review schema upgrade suite",
-        "cargo test --locked -p registry-casework --features postgres-test --test review_migration_postgres",
+        "Casework operator refusal result assertion",
+        r"grep -q 'test result: ok\. 2 passed' "
+        '"${RUNNER_TEMP}/caseworkctl-apply.log"',
     ),
     (
         "Casework Python client binding coverage",
@@ -356,8 +357,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid",
     ),
     (
-        "Casework task approval on the source-backed local issuer",
-        "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
+        "Casework task approval result assertion",
+        r"grep -q 'test result: ok\. 1 passed' "
+        '"${RUNNER_TEMP}/casework-task-approval.log"',
+    ),
+    (
+        "Casework task approval on the submitted-review local issuer",
+        "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
+    ),
+    (
+        "Casework submitted-review result assertion",
+        r"grep -q 'test result: ok\. 1 passed' "
+        '"${RUNNER_TEMP}/casework-local-session.log"',
     ),
     (
         "Messaging Python client binding coverage",
@@ -370,6 +381,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling Node client binding coverage",
         "registry-messaging-client-node registry-scheduling-client-node",
+    ),
+    (
+        "Coordinator Python client binding coverage",
+        "registry-scheduling-client-py registry-coordinator-client-py",
+    ),
+    (
+        "Coordinator Node client binding coverage",
+        "registry-scheduling-client-node registry-coordinator-client-node",
     ),
     (
         "Scheduling contract path filter",
@@ -399,7 +418,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Scheduling PostgreSQL 17 image pin",
-        "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
         "        env:\n"
         "          POSTGRES_DB: scheduling",
     ),
@@ -465,7 +484,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging PostgreSQL 17 image pin",
-        "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
         "        env:\n"
         "          POSTGRES_DB: messaging",
     ),
@@ -484,6 +503,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Messaging product script tests",
         "python3 -m unittest discover -s products/messaging/scripts -p 'test_*.py'",
+    ),
+    (
+        "Coordinator dependency-direction guard",
+        "run: python3 products/coordinator/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Coordinator dependency gate tests",
+        "run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
     ),
     (
         "Messaging security contract validation",
@@ -668,12 +695,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         '"docs/site/scripts/run-tutorial.mjs",',
     ),
     (
-        "Registry Casework tutorial replay",
-        "node docs/site/scripts/run-tutorial.mjs --gate casework\n",
-    ),
-    (
-        "Registry Casework tutorial command drift",
-        "run: npm run check:tutorial:casework:dry-run",
+        "Registry Casework developer journey",
+        "run: products/casework/scripts/check-review-journeys.sh",
     ),
     (
         "Registry Casework tutorial path filter",
@@ -1134,6 +1157,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             '    "casework",\n',
             '    "scheduling",\n',
             '    "messaging",\n',
+            '    "coordinator",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",
@@ -1380,6 +1404,7 @@ def missing_gates(
     casework_checkpoint_runner_text: str | None = None,
     scheduling_checkpoint_runner_text: str | None = None,
     messaging_checkpoint_runner_text: str | None = None,
+    casework_schema_runner_text: str | None = None,
 ) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
@@ -1393,6 +1418,12 @@ def missing_gates(
         casework_checkpoint_runner_text = (
             CASEWORK_CHECKPOINT_RUNNER.read_text(encoding="utf-8")
             if CASEWORK_CHECKPOINT_RUNNER.is_file()
+            else ""
+        )
+    if casework_schema_runner_text is None:
+        casework_schema_runner_text = (
+            CASEWORK_SCHEMA_RUNNER.read_text(encoding="utf-8")
+            if CASEWORK_SCHEMA_RUNNER.is_file()
             else ""
         )
     if scheduling_checkpoint_runner_text is None:
@@ -1409,8 +1440,8 @@ def missing_gates(
         )
     inventory_text = (
         f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}\n"
-        f"{casework_checkpoint_runner_text}\n{scheduling_checkpoint_runner_text}\n"
-        f"{messaging_checkpoint_runner_text}"
+        f"{casework_checkpoint_runner_text}\n{casework_schema_runner_text}\n"
+        f"{scheduling_checkpoint_runner_text}\n{messaging_checkpoint_runner_text}"
     )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 

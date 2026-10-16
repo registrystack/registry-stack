@@ -52,17 +52,21 @@ impl SymbolKind {
         match self {
             Self::Product(_, "authored file") => CompletionItemKind::FILE,
             Self::Product(_, _) => CompletionItemKind::REFERENCE,
-            Self::Evidence(EvidenceKind::Question) => CompletionItemKind::FUNCTION,
-            Self::Evidence(EvidenceKind::Concept) => CompletionItemKind::FIELD,
-            Self::Evidence(EvidenceKind::Source | EvidenceKind::AccessPolicy) => {
+            Self::Evidence(EvidenceKind::Project | EvidenceKind::Target) => {
+                CompletionItemKind::MODULE
+            }
+            Self::Evidence(EvidenceKind::AuthorityFile) => CompletionItemKind::FILE,
+            Self::Evidence(EvidenceKind::AssertionDefinition) => CompletionItemKind::FUNCTION,
+            Self::Evidence(EvidenceKind::Output) => CompletionItemKind::FIELD,
+            Self::Evidence(EvidenceKind::Source | EvidenceKind::Function) => {
                 CompletionItemKind::MODULE
             }
             Self::Evidence(EvidenceKind::SelectorProfile) => CompletionItemKind::INTERFACE,
             Self::Evidence(
-                EvidenceKind::DerivationFile | EvidenceKind::SchemaFile | EvidenceKind::FixtureFile,
+                EvidenceKind::FunctionFile | EvidenceKind::SchemaFile | EvidenceKind::FixtureFile,
             ) => CompletionItemKind::FILE,
-            Self::Evidence(EvidenceKind::Operation) => CompletionItemKind::METHOD,
-            Self::Evidence(EvidenceKind::Collection) => CompletionItemKind::VALUE,
+            Self::Evidence(EvidenceKind::Requirement) => CompletionItemKind::METHOD,
+            Self::Evidence(EvidenceKind::Fact) => CompletionItemKind::VALUE,
         }
     }
 
@@ -85,30 +89,14 @@ impl SymbolKind {
     /// name their authoring scopes in their own vocabulary.
     fn scope_label(self) -> &'static str {
         match self {
-            Self::Evidence(_) => "question",
+            Self::Evidence(_) => "assertion definition",
             Self::Product(_, _) => "authoring scope",
         }
     }
 
-    /// Whether a name of this kind written twice is reported here.
-    ///
-    /// A concept is excluded because `registry_evidence_authoring::validate` already refuses a
-    /// question that answers one concept twice, at the answer that repeats, and its sentence is the
-    /// one the compiler prints. A duplicate reported here would be a second error on one mistake,
-    /// and one per occurrence at that, which is what the `disclosure.allow` reference refuses for
-    /// the same reason.
-    ///
-    /// An operation is excluded for the opposite reason: nothing refuses it. `unique_operation`
-    /// (`crates/registry-evidencectl/src/authoring.rs`) is asked about one identifier, the
-    /// one a question wrote, so a description publishing two operations under an identifier no
-    /// question names builds. The sentence for the identifier a question does name belongs at that
-    /// question, where the ambiguous reference is, and not at two places in a description the author
-    /// may not even own.
+    /// Shared Evidence readers own duplicate-name diagnostics, including mapping keys.
     fn reports_duplicates(self) -> bool {
-        !matches!(
-            self,
-            Self::Evidence(EvidenceKind::Concept | EvidenceKind::Operation)
-        )
+        matches!(self, Self::Product(..))
     }
 }
 
@@ -118,29 +106,22 @@ impl From<EvidenceKind> for SymbolKind {
     }
 }
 
-/// What an Evidence authoring project names.
-///
-/// These are the names one document writes and another document spells back, which is the only
-/// reason a name is worth indexing. A question names the concept it answers, the source it reads,
-/// the selector profile it picks a subject with, the schema its output is checked against, the
-/// derivation file that computes it, and the fixtures that exercise it, and an access policy names
-/// the questions it admits.
-///
-/// The last two are the names of the compact form, where a question reads the project's own OpenAPI
-/// description instead of a source document: it names an operation that description publishes, and
-/// it bounds each collection its facts visit.
+/// Names declared by the normalized EvidenceProject and its named assets.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum EvidenceKind {
-    Question,
-    Concept,
+    Project,
+    Target,
+    AuthorityFile,
+    AssertionDefinition,
+    Output,
     Source,
     SelectorProfile,
-    DerivationFile,
+    FunctionFile,
     SchemaFile,
     FixtureFile,
-    AccessPolicy,
-    Operation,
-    Collection,
+    Function,
+    Requirement,
+    Fact,
 }
 
 impl EvidenceKind {
@@ -148,34 +129,35 @@ impl EvidenceKind {
     /// which is why these are the authoring form's own words rather than the variant names.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Question => "question",
-            Self::Concept => "concept",
+            Self::Project => "Evidence project",
+            Self::Target => "Evidence target",
+            Self::AuthorityFile => "target authority file",
+            Self::AssertionDefinition => "assertion definition",
+            Self::Output => "output",
             Self::Source => "source",
             Self::SelectorProfile => "selector profile",
-            Self::DerivationFile => "derivation file",
+            Self::FunctionFile => "function file",
             Self::SchemaFile => "schema file",
             Self::FixtureFile => "fixture file",
-            Self::AccessPolicy => "access policy",
-            Self::Operation => "operation",
-            Self::Collection => "collection",
+            Self::Function => "function",
+            Self::Requirement => "requirement",
+            Self::Fact => "fact",
         }
     }
 
-    /// The icon an editor draws beside the name. A question is asked and answered like a call, a
-    /// concept is a property of the subject the assertion is about, a source is a unit the project
-    /// reads from, a selector profile is the contract for picking one subject, the three file kinds
-    /// are files, and an access policy collects the questions one caller may ask. An operation is
-    /// invoked, and a collection is the array a fact path walks through.
+    /// The nearest editor icon for each normalized authoring concept.
     pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
-            Self::Question => LspSymbolKind::FUNCTION,
-            Self::Concept => LspSymbolKind::FIELD,
+            Self::Project | Self::Target => LspSymbolKind::MODULE,
+            Self::AuthorityFile => LspSymbolKind::FILE,
+            Self::AssertionDefinition => LspSymbolKind::FUNCTION,
+            Self::Output => LspSymbolKind::FIELD,
             Self::Source => LspSymbolKind::MODULE,
             Self::SelectorProfile => LspSymbolKind::INTERFACE,
-            Self::DerivationFile | Self::SchemaFile | Self::FixtureFile => LspSymbolKind::FILE,
-            Self::AccessPolicy => LspSymbolKind::PACKAGE,
-            Self::Operation => LspSymbolKind::METHOD,
-            Self::Collection => LspSymbolKind::ARRAY,
+            Self::FunctionFile | Self::SchemaFile | Self::FixtureFile => LspSymbolKind::FILE,
+            Self::Function => LspSymbolKind::FUNCTION,
+            Self::Requirement => LspSymbolKind::METHOD,
+            Self::Fact => LspSymbolKind::ARRAY,
         }
     }
 
@@ -184,16 +166,19 @@ impl EvidenceKind {
     /// sentences they accompany.
     pub(crate) fn slug(self) -> &'static str {
         match self {
-            Self::Question => "question",
-            Self::Concept => "concept",
+            Self::Project => "project",
+            Self::Target => "target",
+            Self::AuthorityFile => "authority-file",
+            Self::AssertionDefinition => "assertion-definition",
+            Self::Output => "output",
             Self::Source => "source",
             Self::SelectorProfile => "selector-profile",
-            Self::DerivationFile => "derivation-file",
+            Self::FunctionFile => "function-file",
             Self::SchemaFile => "schema-file",
             Self::FixtureFile => "fixture-file",
-            Self::AccessPolicy => "access-policy",
-            Self::Operation => "operation",
-            Self::Collection => "collection",
+            Self::Function => "function",
+            Self::Requirement => "requirement",
+            Self::Fact => "fact",
         }
     }
 }
@@ -564,9 +549,7 @@ impl ProjectIndex {
     pub fn definitions_at(&self, path: &Path, position: Position) -> Vec<IndexedLocation> {
         if let Some(reference) = self.reference_at(path, position) {
             let references = self.references.iter().filter(|candidate| {
-                std::ptr::eq(*candidate, reference)
-                    || (matches!(reference.target.kind, SymbolKind::Product(_, _))
-                        && candidate.location == reference.location)
+                std::ptr::eq(*candidate, reference) || candidate.location == reference.location
             });
             let mut locations = references
                 .flat_map(|reference| self.definitions_for(&reference.target))
@@ -904,9 +887,6 @@ fn is_reader_syntax_diagnostic(diagnostic: &IndexedDiagnostic) -> bool {
 /// The rule a document larger than the ceiling its family holds it to is refused under.
 pub(crate) const DOCUMENT_CEILING_RULE: &str = "document-ceiling";
 
-/// The rule a directory holding more documents than the editor indexes is reported under.
-pub(crate) const DIRECTORY_CEILING_RULE: &str = "directory-ceiling";
-
 /// The rule a project exceeding the editor's aggregate indexing budget is reported under.
 pub(crate) const PROJECT_CEILING_RULE: &str = "project-ceiling";
 
@@ -1169,10 +1149,10 @@ mod tests {
     fn a_scope_is_named_in_the_vocabulary_of_the_family_that_owns_it() {
         assert_eq!(
             scope_suffix(
-                SymbolKind::Evidence(EvidenceKind::Concept),
+                SymbolKind::Evidence(EvidenceKind::Output),
                 Some("adult-status")
             ),
-            " in question 'adult-status'"
+            " in assertion definition 'adult-status'"
         );
     }
 
@@ -1180,7 +1160,10 @@ mod tests {
     #[test]
     fn a_name_with_no_scope_carries_no_suffix() {
         assert_eq!(
-            scope_suffix(SymbolKind::Evidence(EvidenceKind::Question), None),
+            scope_suffix(
+                SymbolKind::Evidence(EvidenceKind::AssertionDefinition),
+                None
+            ),
             String::new()
         );
     }
@@ -1193,9 +1176,9 @@ mod tests {
     /// holds the operation half of that end to end.
     #[test]
     fn a_concept_and_an_operation_leave_their_duplicates_to_another_check() {
-        assert!(!SymbolKind::Evidence(EvidenceKind::Concept).reports_duplicates());
-        assert!(!SymbolKind::Evidence(EvidenceKind::Operation).reports_duplicates());
-        assert!(SymbolKind::Evidence(EvidenceKind::Question).reports_duplicates());
+        assert!(!SymbolKind::Evidence(EvidenceKind::Output).reports_duplicates());
+        assert!(!SymbolKind::Evidence(EvidenceKind::Requirement).reports_duplicates());
+        assert!(!SymbolKind::Evidence(EvidenceKind::AssertionDefinition).reports_duplicates());
     }
 
     /// A name is quoted at the width of a name, and a whole sentence at the width of a sentence.
@@ -1279,16 +1262,20 @@ mod tests {
         assert_eq!(code_span(""), "` `");
         assert_eq!(code_span("a"), "`a`");
         assert_eq!(
-            headline(SymbolKind::Evidence(EvidenceKind::Question), "", None),
-            "**question** ` `"
+            headline(
+                SymbolKind::Evidence(EvidenceKind::AssertionDefinition),
+                "",
+                None
+            ),
+            "**assertion definition** ` `"
         );
         assert_eq!(
             headline(
-                SymbolKind::Evidence(EvidenceKind::Concept),
+                SymbolKind::Evidence(EvidenceKind::Output),
                 "person.adult-status",
                 Some("adult")
             ),
-            "**concept** `person.adult-status` in question `adult`"
+            "**output** `person.adult-status` in assertion definition `adult`"
         );
     }
 }

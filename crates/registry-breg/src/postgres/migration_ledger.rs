@@ -319,7 +319,7 @@ pub(crate) async fn install_migration_ledger(
                      CHECK (registry_revision <> ''),
                  plan_kind text NOT NULL
                      CONSTRAINT registry_migrations_plan_kind_closed
-                     CHECK (plan_kind IN ('initial', 'successor', 'adopted')),
+                     CHECK (plan_kind IN ('initial', 'successor')),
                  migration_kind text NOT NULL
                      CONSTRAINT registry_migrations_migration_kind_closed
                      CHECK (migration_kind IN ('compiled-additive', 'metadata-only', 'reviewed')),
@@ -359,7 +359,7 @@ pub(crate) async fn install_migration_ledger(
                      CONSTRAINT registry_migrations_runtime_role_nonempty
                      CHECK (runtime_role <> ''),
                  CONSTRAINT registry_migrations_predecessor_consistent CHECK (
-                     (plan_kind IN ('initial', 'adopted') AND predecessor_package_digest IS NULL)
+                     (plan_kind = 'initial' AND predecessor_package_digest IS NULL)
                      OR (plan_kind = 'successor' AND predecessor_package_digest IS NOT NULL)
                  ),
                  CONSTRAINT registry_migrations_artifacts_consistent CHECK (
@@ -420,42 +420,14 @@ pub(crate) async fn install_migration_ledger(
              REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;",
         )
         .await?;
-    install_pre_ledger_package_positions(migration).await?;
     let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
             "{}
-             {}
              {}",
             revoke.revoke_all_on("TABLE registry_internal.registry_migrations"),
             revoke.revoke_all_on("TABLE registry_internal.registry_migration_steps"),
-            revoke.revoke_all_on("TABLE registry_internal.registry_pre_ledger_package_positions"),
         ))
-        .await?;
-    Ok(())
-}
-
-/// Installs the order of the package revisions a pre-ledger database's
-/// ledger named, as an earlier release's adoption of it recorded them.
-/// Field-encryption flips and request proposals recorded before adoption name
-/// those revisions, and erasure orders them against each other here; every
-/// position precedes the first activation, so a revision the ledger records
-/// always follows them. The table is empty on a database the ledger recorded
-/// from its first activation.
-async fn install_pre_ledger_package_positions(migration: &impl GenericClient) -> Result<()> {
-    migration
-        .batch_execute(
-            "CREATE TABLE IF NOT EXISTS registry_internal.registry_pre_ledger_package_positions (
-                 package_revision text PRIMARY KEY
-                     CONSTRAINT registry_pre_ledger_package_positions_revision_nonempty
-                     CHECK (package_revision <> ''),
-                 package_sequence bigint NOT NULL
-                     CONSTRAINT registry_pre_ledger_package_positions_precede_the_ledger
-                     CHECK (package_sequence < 1)
-             );
-             REVOKE ALL ON TABLE registry_internal.registry_pre_ledger_package_positions
-                 FROM PUBLIC;",
-        )
         .await?;
     Ok(())
 }

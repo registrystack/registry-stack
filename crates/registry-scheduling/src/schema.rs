@@ -177,8 +177,8 @@ fn set_definition_property(
 mod tests {
     use super::*;
     use crate::config::{
-        reads_block, DestinationsConfig, RetentionConfig, MAX_ATTEMPT_RECEIPT_RETENTION_DAYS,
-        MAX_HOOK_DESTINATIONS,
+        reads_block, DestinationsConfig, RetentionConfig, MAX_HOOK_DESTINATIONS,
+        MAX_RECEIPT_RETENTION_DAYS,
     };
 
     #[test]
@@ -426,13 +426,13 @@ mod tests {
             30,
             31,
             365,
-            u64::from(MAX_ATTEMPT_RECEIPT_RETENTION_DAYS),
-            u64::from(MAX_ATTEMPT_RECEIPT_RETENTION_DAYS) + 1,
+            u64::from(MAX_RECEIPT_RETENTION_DAYS),
+            u64::from(MAX_RECEIPT_RETENTION_DAYS) + 1,
         ];
         for attempt_receipt_days in periods {
             for hook_payload_days in periods {
                 let document = serde_json::json!({
-                    "attemptReceiptRetentionDays": attempt_receipt_days,
+                    "receiptRetentionDays": attempt_receipt_days,
                     "hookPayloadRetentionDays": hook_payload_days,
                 });
                 assert_eq!(

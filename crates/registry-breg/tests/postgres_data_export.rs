@@ -358,11 +358,11 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"entry", "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create-only",
             "batch":{"maximumItems":60,"maximumBytes":131072},
             "fields":[
@@ -379,8 +379,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "accessProfiles":[{
             "id":PROFILE, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
-            "permissions":{"entities":[{
-                "entity":"entry",
+            "permissions":{"records":[{
+                "recordType":"entry",
                 "operations":["create","batch","list"],
                 "readableFields":["code"],
                 "writableFields":["code","jurisdiction","secret"],

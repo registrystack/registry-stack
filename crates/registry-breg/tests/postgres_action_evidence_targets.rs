@@ -71,7 +71,7 @@ async fn setup_with_age(
         parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
     let mut document: serde_json::Value =
         serde_json::from_slice(&source_bytes::source_bytes(&project)).unwrap();
-    document["entities"].as_array_mut().unwrap().push(json!({
+    document["recordTypes"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "route":"local-registers", "primaryDataset":"farmer-landholding-evidence", "mutationMode":"mutable",
         "fields":[
             {"id":"zone", "type":"string", "maximumLength":32,"required":true,"classification":"restricted"},
@@ -82,13 +82,17 @@ async fn setup_with_age(
     document["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "apiName":"localRegister", "type":"reference", "target":"local-register", "required":true,"classification":"restricted"
     }));
-    document["actions"][0]["requires"] =
+    document["actions"][0]["plan"]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("local-register"));
+    document["actions"][0]["commitGuards"]["targets"] =
         json!([{"input":"local-register","field":"active","equals":true}]);
-    document["actions"][0]["handler"]["writes"].as_array_mut().unwrap().push(json!({
-        "id":"local-register", "target":{"fromField":"local-register"},"operation":"patch","fields":["checked"]
+    document["actions"][0]["plan"]["writes"].as_array_mut().unwrap().push(json!({
+        "id":"local-register", "target":{"fromInput":"local-register"},"operation":"patch","fields":["checked"]
     }));
     document["accessProfiles"][0]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({
-        "entity":"local-register", "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
+        "recordType":"local-register", "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
     }));
     project = parse_project_yaml(&serde_json::to_vec(&document).unwrap()).unwrap();
     for action in &mut project.actions {
@@ -334,8 +338,11 @@ async fn final_local_target_checks_refuse_changes_during_external_wait_even_for_
                 "{loss}: {}",
                 response.1
             );
-            assert_eq!(counts(&database, &registry).await, before,
-                "{loss}: final denial leaves no business write revision receipt idempotency result or retained Evidence");
+            assert_eq!(
+                counts(&database, &registry).await,
+                before,
+                "{loss}: final denial leaves no business write revision receipt idempotency result or retained Evidence"
+            );
         }
         let row = database
             .admin

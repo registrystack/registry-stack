@@ -19,10 +19,11 @@ NAMES = {
     "runtime": "registry-messaging",
     "ctl": "registry-messagingctl",
     "breg": "registry-breg",
+    "coordinator": "registry-coordinator",
+    "coordinator-client": "registry-coordinator-client",
     "casework-core": "registry-casework-core",
     "scheduling-core": "registry-scheduling-core",
     "evidence-client": "registry-evidence-client",
-    "relay-client": "registry-relay-client",
     "cli-docs": "registry-cli-docs",
     "platform": "registry-platform-httpsec",
     "serde": "serde",
@@ -33,14 +34,15 @@ INTENDED = {
     "client": ["core", "platform"],
     "client-node": ["client", "serde"],
     "client-py": ["client", "serde"],
-    "stack-client": ["client", "evidence-client", "relay-client"],
+    "stack-client": ["client", "evidence-client"],
     "runtime": ["core", "platform"],
     "ctl": ["runtime", "core"],
     "breg": [],
+    "coordinator": [],
+    "coordinator-client": [],
     "casework-core": [],
     "scheduling-core": [],
     "evidence-client": [],
-    "relay-client": [],
     "cli-docs": ["runtime", "ctl", "breg"],
     "platform": ["serde"],
     "serde": [],
@@ -86,9 +88,9 @@ class DependencyDirectionTests(unittest.TestCase):
         for product in (
             "breg",
             "casework-core",
+            "coordinator",
             "scheduling-core",
             "evidence-client",
-            "relay-client",
         ):
             with self.subTest(product=product):
                 failures = "\n".join(MODULE.violations(metadata(client=["core", product])))
@@ -168,7 +170,7 @@ class DependencyDirectionTests(unittest.TestCase):
                 )
 
     def test_a_product_reaching_the_messaging_runtime_is_rejected(self):
-        for product in ("breg", "scheduling-core", "relay-client"):
+        for product in ("breg", "coordinator", "scheduling-core", "evidence-client"):
             with self.subTest(product=product):
                 failures = "\n".join(MODULE.violations(metadata(**{product: ["client"], "client": ["runtime"]})))
                 self.assertIn(
@@ -176,6 +178,36 @@ class DependencyDirectionTests(unittest.TestCase):
                     "registry-messaging",
                     failures,
                 )
+
+    def test_coordinator_dev_dependencies_are_part_of_the_boundary(self):
+        graph = metadata(coordinator=["runtime"])
+        node = next(n for n in graph["resolve"]["nodes"] if n["id"] == "coordinator")
+        node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-coordinator transitively depends on Messaging runtime package(s): registry-messaging", failures)
+        self.assertEqual(MODULE.violations(metadata(coordinator=["client", "core"])), [])
+
+    def test_a_messaging_crate_reaching_any_coordinator_crate_is_refused(self):
+        for crate in ("core", "client", "client-node", "client-py", "runtime", "ctl"):
+            for coordinator in ("coordinator", "coordinator-client"):
+                with self.subTest(crate=crate, coordinator=coordinator):
+                    edges = [*INTENDED[crate], coordinator]
+                    failures = "\n".join(MODULE.violations(metadata(**{crate: edges})))
+                    self.assertIn(
+                        f"{NAMES[crate]} transitively depends on other-product "
+                        f"package(s): {NAMES[coordinator]}",
+                        failures,
+                    )
+
+    def test_the_coordinator_client_reaching_the_messaging_runtime_is_refused(self):
+        failures = "\n".join(
+            MODULE.violations(metadata(**{"coordinator-client": ["runtime"]}))
+        )
+        self.assertIn(
+            "registry-coordinator-client transitively depends on Messaging runtime "
+            "package(s): registry-messaging",
+            failures,
+        )
 
     def test_a_product_may_use_the_messaging_client(self):
         self.assertEqual(MODULE.violations(metadata(breg=["client"])), [])

@@ -65,8 +65,8 @@ pub(crate) struct HistoryErasureLifecycleOutcome {
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
     pub scrubbed_ingestion_receipt_count: u64,
-    pub scrubbed_request_target_count: u64,
-    pub scrubbed_request_proposal_count: u64,
+    pub scrubbed_proposal_target_count: u64,
+    pub scrubbed_proposal_submission_count: u64,
     pub removed_descriptor_count: u64,
 }
 
@@ -143,8 +143,8 @@ fn outcome_report(
         scrubbed_outbox_payload_count: outcome.scrubbed_outbox_payload_count,
         scrubbed_cached_response_count: outcome.scrubbed_cached_response_count,
         scrubbed_ingestion_receipt_count: outcome.scrubbed_ingestion_receipt_count,
-        scrubbed_request_target_count: outcome.scrubbed_request_target_count,
-        scrubbed_request_proposal_count: outcome.scrubbed_request_proposal_count,
+        scrubbed_proposal_target_count: outcome.scrubbed_proposal_target_count,
+        scrubbed_proposal_submission_count: outcome.scrubbed_proposal_submission_count,
         removed_descriptor_count: outcome.removed_descriptor_count,
     }
 }
@@ -159,6 +159,7 @@ fn bounded_timeout(timeout: Duration) -> Result<Duration, HistoryErasureLifecycl
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawHistoryErasureRequest {
+    #[serde(rename = "recordType")]
     entity_id: String,
     record_id: String,
     erase_through_revision: i64,
@@ -247,8 +248,8 @@ mod tests {
                 scrubbed_outbox_payload_count: 1,
                 scrubbed_cached_response_count: 1,
                 scrubbed_ingestion_receipt_count: 1,
-                scrubbed_request_target_count: 2,
-                scrubbed_request_proposal_count: 1,
+                scrubbed_proposal_target_count: 2,
+                scrubbed_proposal_submission_count: 1,
                 removed_descriptor_count: 0,
             },
         );
@@ -259,15 +260,15 @@ mod tests {
         assert_eq!(report.scrubbed_change_context_count, 1);
         assert_eq!(report.scrubbed_cached_response_count, 1);
         assert_eq!(report.scrubbed_ingestion_receipt_count, 1);
-        assert_eq!(report.scrubbed_request_target_count, 2);
-        assert_eq!(report.scrubbed_request_proposal_count, 1);
+        assert_eq!(report.scrubbed_proposal_target_count, 2);
+        assert_eq!(report.scrubbed_proposal_submission_count, 1);
     }
 
     #[test]
     fn erasure_request_file_is_strict_and_complete() {
         let parsed = parse_erasure_request_bytes(
             br#"{
-              "entityId":"membership",
+              "recordType":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
               "eraseThroughRevision":1,
               "operatorReference":"ops-ticket-1",
@@ -278,17 +279,30 @@ mod tests {
         assert_eq!(parsed.entity_id, "membership");
         assert_eq!(parsed.erase_through_revision, 1);
 
-        assert!(parse_erasure_request_bytes(
-            br#"{
-              "entityId":"membership",
-              "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
-              "eraseThroughRevision":1,
-              "operatorReference":"ops-ticket-1",
-              "reason":"retention request",
-              "extra":"refused"
-            }"#,
-        )
-        .is_err());
+        let valid = serde_json::json!({
+            "recordType": "membership",
+            "recordId": "018feaa0-68f9-4a45-b9e3-58436df07af7",
+            "eraseThroughRevision": 1,
+            "operatorReference": "ops-ticket-1",
+            "reason": "retention request"
+        });
+        for mutate in [
+            |request: &mut serde_json::Value| request["extra"] = serde_json::json!("refused"),
+            |request: &mut serde_json::Value| request["recordType"] = serde_json::json!(""),
+            |request: &mut serde_json::Value| request["recordType"] = serde_json::Value::Null,
+            |request: &mut serde_json::Value| {
+                let record_type = request
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("recordType")
+                    .unwrap();
+                request["entityId"] = record_type;
+            },
+        ] {
+            let mut request = valid.clone();
+            mutate(&mut request);
+            assert!(parse_erasure_request_bytes(&serde_json::to_vec(&request).unwrap()).is_err());
+        }
     }
 
     #[cfg(unix)]
@@ -303,7 +317,7 @@ mod tests {
         std::fs::write(
             &target,
             br#"{
-              "entityId":"membership",
+              "recordType":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
               "eraseThroughRevision":1,
               "operatorReference":"ops-ticket-1",

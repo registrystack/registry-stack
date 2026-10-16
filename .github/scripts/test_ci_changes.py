@@ -316,6 +316,7 @@ class CiChangesTest(unittest.TestCase):
             "messaging-postgres": (
                 "needs.changes.outputs.messaging_postgres == 'true'"
             ),
+            "coordinator-postgres": "needs.changes.outputs.coordinator == 'true'",
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
             ),
@@ -384,6 +385,7 @@ class CiChangesTest(unittest.TestCase):
             "breg_integration",
             "breg_contracts_lanes",
             "full_sweep",
+            "casework_tutorial",
         ):
             with self.subTest(output=name):
                 self.assertEqual(
@@ -405,12 +407,17 @@ class CiChangesTest(unittest.TestCase):
             self.workflow_jobs["platform-coverage-upload"]["if"],
         )
 
-        review_examples = next(
+        developer_journey = next(
             step
             for step in self.workflow_jobs["casework-tutorial"]["steps"]
-            if step.get("name") == "Verify BReg, payment, and standalone review examples"
+            if step.get("name") == "Execute the canonical Casework developer journey"
         )
-        self.assertEqual("needs.changes.outputs.full_sweep == 'true'", review_examples["if"])
+        self.assertNotIn("if", developer_journey)
+        self.assertEqual(
+            "${{ !cancelled() && needs.changes.result == 'success' && "
+            "needs.changes.outputs.casework_tutorial == 'true' }}",
+            self.workflow_jobs["casework-tutorial"]["if"],
+        )
 
     def test_ci_scheduling_graph_retains_every_job_and_aggregate_dependency(
         self,
@@ -440,6 +447,7 @@ class CiChangesTest(unittest.TestCase):
             "messaging-contracts",
             "messaging-postgres",
             "messaging-smtp",
+            "coordinator-postgres",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -477,6 +485,7 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "coordinator-postgres",
                 "config-conformance",
             ),
             "release-tool-required": ("changes", "release-tool"),
@@ -503,6 +512,7 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "coordinator-postgres",
                 "config-conformance",
                 "release-tool",
                 "release-source-proof",
@@ -560,7 +570,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(33, len(final_needs))
+        self.assertEqual(34, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -622,6 +632,8 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-breg-review/src/config.rs",
             "crates/registry-platform-config/src/blocks.rs",
             "crates/registry-messaging/src/config.rs",
+            "crates/registry-coordinator/src/runtime.rs",
+            "products/coordinator/generated/runtime/runtime.schema.json",
             "products/messaging/generated/runtime/runtime.schema.json",
             "crates/registry-breg/src/runtime_config.rs",
             "crates/registry-render/src/manifest.rs",
@@ -698,7 +710,11 @@ class CiChangesTest(unittest.TestCase):
                 crates.add(node)
 
         collect(registry)
-        self.assertIn("products/breg/examples/minimal/registry.yaml", paths)
+        self.assertIn("products/platform/conformance/projects/breg-project/registry.yaml", paths)
+        self.assertIn(
+            "products/platform/conformance/projects/breg/modules/contact-notes/module.yaml",
+            paths,
+        )
         self.assertIn("registry-bregctl", crates)
         self.assertEqual(config_format_inputs(root), (frozenset(paths), frozenset(crates)))
         self.assertLessEqual(crates, set(self.workspace.package_names))
@@ -828,7 +844,9 @@ class CiChangesTest(unittest.TestCase):
             for entry in harness.values()
             for copy in (entry.get("copies") or {}).values()
         }
-        self.assertIn("crates/registry-evidencectl/templates/sqlite-extract", sources)
+        self.assertIn("products/evidence/examples/standalone", sources)
+        self.assertIn("products/platform/conformance/projects/breg-project", sources)
+        self.assertIn("products/platform/conformance/projects/breg", sources)
         for source in sorted(sources):
             path = source if Path(source).is_file() else f"{source}/conformance-probe.yaml"
             with self.subTest(path=path):
@@ -1116,6 +1134,63 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(unrelated["messaging_contracts"])
         self.assertFalse(unrelated["messaging_postgres"])
 
+    def test_coordinator_selects_its_runtime_cli_reference_and_postgres_proof(self) -> None:
+        for path in (
+            "crates/registry-coordinator/src/worker.rs",
+            "products/coordinator/examples/delayed-follow-up/workflow.yaml",
+            "products/coordinator/scripts/test-postgres.sh",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertEqual(outputs["rust_packages"], ["registry-cli-docs", "registry-coordinator"])
+                self.assertTrue(outputs["coordinator"])
+                self.assertFalse(outputs["messaging_postgres"])
+                self.assertEqual(
+                    outputs["rust_matrix"]["include"],
+                    [{"name": "developer-tools", "packages": ["registry-cli-docs", "registry-coordinator"], "all_features": False}],
+                )
+
+        for dependency in (
+            "registry-platform-dispatch",
+            "registry-platform-testing",
+            "registry-breg-client",
+            "registry-casework-client",
+            "registry-messaging-client",
+            "registry-scheduling-client",
+        ):
+            with self.subTest(dependency=dependency):
+                outputs = classify(self.workspace, (f"crates/{dependency}/src/lib.rs",))
+                self.assertTrue(outputs["coordinator"])
+
+    def test_coordinator_configuration_formats_run_the_existing_conformance_job(self) -> None:
+        for path in (
+            "products/coordinator/generated/project/project.schema.json",
+            "products/coordinator/generated/runtime/runtime.schema.json",
+            "products/coordinator/generated/scenarios/scenarios.schema.json",
+            "products/coordinator/scripts/check-schemas.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["config_conformance"])
+        steps = self.workflow_jobs["config-conformance"]["steps"]
+        self.assertTrue(any(step.get("run") == "products/coordinator/scripts/check-schemas.sh" for step in steps))
+        self.assertIn("registry-coordinator", CONFIG_CHECK_PACKAGES)
+
+    def test_coordinator_postgres_proof_has_its_own_database_job(self) -> None:
+        job = self.workflow_jobs["coordinator-postgres"]
+        proof = next(step for step in job["steps"] if step.get("run") == "products/coordinator/scripts/test-postgres.sh")
+        self.assertNotIn("if", proof)
+        # A Coordinator change pays only for its own suite, never Messaging's.
+        self.assertNotIn("coordinator", self.workflow_jobs["messaging-postgres"]["if"])
+        self.assertIn("COORDINATOR_TEST_DATABASE_URL", proof["env"])
+        self.assertIn("COORDINATOR_MESSAGING_TEST_DATABASE_URL", proof["env"])
+        self.assertNotEqual(proof["env"]["COORDINATOR_TEST_DATABASE_URL"], proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"])
+        script = Path("products/coordinator/scripts/test-postgres.sh").read_text()
+        self.assertRegex(script, r"cargo test --locked -p registry-coordinator[^\n]*--lib")
+        self.assertIn("--test messaging_integration", script)
+        self.assertIn("--test process_restart", script)
+        self.assertIn("--test deployment_postgres", script)
+        self.assertIn("cargo build --locked -p registry-messaging -p registry-messagingctl", script)
+
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(
             self.workspace,
@@ -1172,10 +1247,10 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["breg_contracts"])
                 self.assertIn("registry-breg", outputs["rust_packages"])
 
-    def test_starter_inputs_run_compiler_and_native_example_tests(self) -> None:
+    def test_native_example_inputs_run_compiler_and_native_example_tests(self) -> None:
         for path in (
-            "products/breg/starters/public-organizations/core/registry.yaml",
-            "products/breg/starters/agricultural-holdings/core/tests/journeys.yaml",
+            "products/breg/examples/minimal/registry.yaml",
+            "products/breg/examples/facility/registry.yaml",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
@@ -1227,6 +1302,7 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
             "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
             "docs/site/package.json",
+            "products/evidence/examples/standalone/evidence.yaml",
         )
         for path in infrastructure:
             with self.subTest(path=path):
@@ -1281,6 +1357,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-evidence-client-py/src/lib.rs",
             "crates/registry-messaging-client-py/src/lib.rs",
             "crates/registry-scheduling-client-py/src/lib.rs",
+            "crates/registry-coordinator-client-py/src/lib.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(
@@ -1301,67 +1378,68 @@ class CiChangesTest(unittest.TestCase):
         breg_job = workflow.split("\n  breg-tutorial:\n", 1)[1].split(
             "\n  breg-evidence-composition:\n", 1
         )[0]
-        test = (
-            "dev::examples::tests::"
-            "native_create_recovers_after_process_exit_without_duplicate_records"
+        tests = (
+            "dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records",
+            "dev::examples::tests::native_invoke_recovers_original_conditions_after_restart",
         )
-        self.assertIn(test, breg_job)
-        self.assertIn("-- --ignored --exact", breg_job)
+        self.assertIn('"$test" -- --ignored --exact', breg_job)
         # A renamed test would otherwise leave the step running zero tests.
         self.assertIn(
             "grep -q 'test result: ok\\. 1 passed' "
-            '"${RUNNER_TEMP}/breg-example-recovery.log" || '
+            '"${RUNNER_TEMP}/breg-example-recovery-${test}.log" || '
             '{ echo "::error::expected exactly one passing test for '
-            f'{test.rsplit("::", 1)[1]}"; exit 1; }}',
+            '${test}"; exit 1; }',
             breg_job,
         )
-        source = (
-            Path("crates/registry-bregctl/src/dev/examples.rs").read_text()
-        )
-        self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
+        source = Path("crates/registry-bregctl/src/dev/examples.rs").read_text()
+        for test in tests:
+            self.assertIn(test, breg_job)
+            self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
 
-    def test_evidence_lifecycle_runs_the_reference_authoring_check_exactly(
+    def test_evidence_lifecycle_runs_current_authoring_and_fixture_proofs_exactly(
         self,
     ) -> None:
-        script = next(
-            step["run"]
+        step = next(
+            step
             for step in self.workflow_jobs["evidence-tutorials"]["steps"]
             if step.get("name") == "Test the exact local Evidence lifecycle"
         )
-        test = (
-            "check::tests::"
-            "the_reference_authoring_example_checks_with_no_diagnostic"
+        script = step["run"]
+        self.assertIn("-p registry-evidencectl --test dev_lifecycle --", script)
+        self.assertIn("--ignored --test-threads=1", script)
+        self.assertEqual(
+            "${{ github.workspace }}/target/debug/evidence", step["env"]["EVIDENCE_BIN"]
         )
-        name = test.rsplit("::", 1)[1]
-        # The check delegates fixture evaluation to the sibling `evidence`
-        # binary the job builds, so the test is ignored elsewhere and this
-        # step names it exactly: a renamed test would otherwise leave the
-        # step running zero tests.
-        self.assertRegex(
-            script,
-            rf"-p registry-evidencectl --lib \\\s*\n\s*{re.escape(test)} \\"
-            r"\s*\n\s*-- --ignored --exact \\",
-        )
-        self.assertIn(
-            "grep -q 'test result: ok\\. 1 passed' "
-            '"${RUNNER_TEMP}/evidence-reference-authoring.log" || '
-            '{ echo "::error::expected exactly one passing test for '
-            f'{name}"; exit 1; }}',
-            script,
-        )
-        source = Path("crates/registry-evidencectl/src/check.rs").read_text()
-        self.assertRegex(source, rf"#\[ignore = \"[^\"]+\"\]\s*\n\s*fn {name}\(\)")
-        # The test checks the reference example, so a change to it reaches
-        # the job that runs the test.
-        self.assertTrue(
-            classify(
-                self.workspace,
-                (
-                    "products/evidence/reference/authoring-projects/example/"
-                    "evidence-project.yaml",
-                ),
-            )["evidence_tutorial"]
-        )
+        source_path = Path("crates/registry-evidencectl/tests/production_handoff.rs")
+        source = source_path.read_text()
+        # Authoring inspection and real compiled fixture evaluation are separate
+        # current contracts; both exact filters must resolve and report one pass.
+        for name, log in (
+            ("offline_project_check_needs_no_disposable_signing_state", "evidence-authoring-check.log"),
+            ("production_build_checks_and_evaluates_every_neutral_authoring_shape", "evidence-fixture-evaluation.log"),
+        ):
+            with self.subTest(test=name):
+                self.assertRegex(
+                    script,
+                    rf"-p registry-evidencectl --test production_handoff \\\s*\n\s*{re.escape(name)} \\\s*\n\s*-- --ignored --exact \\",
+                )
+                self.assertIn(
+                    "grep -q 'test result: ok\\. 1 passed' "
+                    f'"${{RUNNER_TEMP}}/{log}" || '
+                    '{ echo "::error::expected exactly one passing test for '
+                    f'{name}"; exit 1; }}',
+                    script,
+                )
+                self.assertRegex(
+                    source, rf"#\[ignore = \"[^\"]+\"\]\s*\n\s*fn {name}\(\)"
+                )
+        for path in (
+            str(source_path),
+            "products/evidence/examples/standalone/evidence.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["evidence_tutorial"])
 
     def test_casework_postgres_runs_task_approval_and_local_session_exactly(
         self,
@@ -1378,7 +1456,7 @@ class CiChangesTest(unittest.TestCase):
             ),
             (
                 "task_grants::local_session_tests::"
-                "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
+                "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
                 "casework-local-session.log",
             ),
         )
@@ -1525,8 +1603,6 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
             "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
             "docs/site/package.json",
-            "products/breg/scripts/test-request-attachments.py",
-            "products/breg/acceptance/request-attachments/registry.yaml",
         )
         for path in infrastructure:
             with self.subTest(path=path):
@@ -1714,7 +1790,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-bregctl/src/main.rs",
             "crates/registry-evidence/src/source.rs",
             "crates/registry-evidencectl/src/source_cli.rs",
-            "crates/registry-evidence-authoring/src/model.rs",
+            "crates/registry-evidence-authoring/src/project.rs",
             "products/breg/evidence/registry/registry.yaml",
             "products/breg/evidence/tests/verify-composition.py",
         ):
@@ -2173,6 +2249,62 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(command["docs"])
         self.assertIn("registry-cli-docs", command["rust_packages"])
 
+    def test_native_citizen_journey_inputs_select_the_existing_postgres_lane(self) -> None:
+        for path in (
+            "crates/registry-breg-mcp/tests/native_citizen.rs",
+            "crates/registry-breg-mcp/tests/support/citizen_project.rs",
+            "crates/registry-breg-mcp/src/gateway.rs",
+            "crates/registry-breg-review/tests/support/mod.rs",
+            "crates/registry-breg-review/src/lib.rs",
+            "crates/registry-breg-mcp/tests/support/breg_service.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(
+                    self.workspace, (path,), pull_request=True, ci_full=True
+                )
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertIn("postgres", outputs["breg_contracts_lanes"])
+
+    def test_native_citizen_journey_runs_with_built_services_and_owned_postgres(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text()
+        job = workflow.split("\n  breg-contracts:\n", 1)[1].split(
+            "\n  breg-wasm:\n", 1
+        )[0]
+        step = job.split(
+            "      - name: Native citizen gateway and review authority journey\n", 1
+        )[1].split("\n      # The native worker", 1)[0]
+        self.assertIn("if: matrix.lane == 'postgres'", step)
+        self.assertIn("shell: bash", step)
+        # The fixture reads the job-wide BREG_TEST_DATABASE_URL directly.
+        self.assertIn('echo "BREG_TEST_DATABASE_URL=', job)
+        self.assertNotIn("COORDINATOR_", step)
+        for variable, binary in (
+            ("BREG_BIN", "breg"),
+            ("BREGCTL_BIN", "bregctl"),
+            ("BREG_REVIEW_NATIVE_BIN", "breg-review"),
+        ):
+            with self.subTest(binary=binary):
+                self.assertIn(
+                    f"{variable}: ${{{{ github.workspace }}}}/target/debug/{binary}", step
+                )
+                self.assertIn(f"--bin {binary}", step)
+        self.assertIn("cargo build --locked", step)
+        self.assertIn("--features registry-breg/postgres-test", step)
+        self.assertIn(
+            "cargo test --locked -p registry-breg-mcp --test native_citizen", step
+        )
+        self.assertIn(
+            "-- --ignored --exact "
+            "native_citizen_gateway_and_review_share_engine_owned_authority "
+            "--test-threads=1",
+            step,
+        )
+        self.assertIn("test result: ok\\. 1 passed", step)
+        self.assertIn(
+            "async fn native_citizen_gateway_and_review_share_engine_owned_authority()",
+            Path("crates/registry-breg-mcp/tests/native_citizen.rs").read_text(),
+        )
+
     def test_review_page_command_change_runs_the_catalog_test(self) -> None:
         # `breg-review`'s Clap tree is built in its lib.rs, which the
         # registry-cli-docs snapshot test holds to the committed catalog, so a
@@ -2282,6 +2414,36 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["client_bindings"])
         self.assertIn("registry-scheduling-client-node", outputs["rust_packages"])
         self.assertIn("registry-scheduling-client-py", outputs["rust_packages"])
+
+    def test_coordinator_bindings_run_the_native_client_job(self) -> None:
+        # The Coordinator bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-coordinator-client-node/src/lib.rs",
+            "crates/registry-coordinator-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertIn(
+                    path.split("/")[1], outputs["rust_packages"]
+                )
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-coordinator-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_a_coordinator_client_change_also_runs_the_binding_job(self) -> None:
+        # Both bindings are Cargo path-dependents of the Rust client, so a
+        # client change can alter the native surface the packages wrap.
+        outputs = classify(
+            self.workspace, ("crates/registry-coordinator-client/src/lib.rs",)
+        )
+        self.assertTrue(outputs["client_bindings"])
+        self.assertIn("registry-coordinator-client-node", outputs["rust_packages"])
+        self.assertIn("registry-coordinator-client-py", outputs["rust_packages"])
 
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
@@ -3048,13 +3210,14 @@ class LockfileSelectionTest(unittest.TestCase):
         self,
     ) -> None:
         # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
-        # pure-Rust companion rhai reaches six members through normal edges.
+        # pure-Rust companion rhai reaches its consumers through normal edges.
         change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
         self.assertEqual(
             change.members,
             frozenset(
                 {
                     "registry-breg",
+                    "registry-coordinator",
                     "registry-evidence",
                     "registry-evidence-authoring",
                     "registry-evidencectl",

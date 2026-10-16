@@ -20,20 +20,10 @@ use registry_casework::{
 };
 use registry_casework_client::{
     BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError,
-    ReviewTaskOwnership, ReviewTaskQuery, SupervisoryReviewTaskQuery,
+    ReviewStaffingQuery, ReviewTaskOwnership, SupervisoryReviewTaskQuery,
 };
-use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation, CallerSubjectView,
-    CaseworkProject, CaseworkRole, ContentDigest, DiscoveryCursor, EphemeralCredential,
-    EventRequest, ExecutePreparedRequest, HumanIdentity, InboxPolicy, OccurrenceKind,
-    OccurrenceState, PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity, QueuePolicy,
-    ReviewContext, ReviewContextStrategy, ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose,
-    ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestAccepted,
-    ReviewResult, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage,
-    ReviewerDecisionKind, SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding,
-    SourceReceipt, SubjectBinding, SubjectRef, TransitionHint, CASEWORK_PROFILE_HEADER,
-    SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
-};
+use registry_casework_core::*;
+
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
@@ -50,111 +40,80 @@ struct ReviewSource {
     revoked: Arc<AtomicBool>,
     changed: Arc<AtomicBool>,
     failure: Arc<AtomicU8>,
-    source_state: Arc<Mutex<OccurrenceState>>,
+    source_state: Arc<Mutex<SourceReviewability>>,
+}
+
+#[derive(Clone, Copy)]
+enum SourceReviewability {
+    Open,
+    Cancelled,
+    Completed,
 }
 
 #[async_trait]
-impl SourceAdapter for ReviewSource {
-    fn source_id(&self) -> &str {
+impl ReviewContextProvider for ReviewSource {
+    fn provider_id(&self) -> &str {
         "registry"
     }
-
-    fn binding_generation(&self) -> &str {
-        "review-http-source"
+    fn capabilities(&self) -> &[ReviewContextCapability] {
+        &[
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+        ]
     }
-
-    async fn verify_transition(
+    async fn human_display(
         &self,
-        _request: EventRequest,
-    ) -> Result<TransitionHint, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
-    }
-
-    async fn read_authoritative(
-        &self,
-        subject: &SubjectRef,
-    ) -> Result<AuthoritativeObservation, SourceAdapterError> {
-        Ok(AuthoritativeObservation {
-            subject: subject.clone(),
-            occurrence_key: format!("review:{}", subject.id),
-            ordered_revision: 1,
-            representation_etag: format!("\"{}\"", subject.id),
-            binding: SourceBinding {
-                source_revision: "source-revision-1".to_owned(),
-                version: "1".to_owned(),
-                integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
-                generation: self.binding_generation().to_owned(),
-            },
-            display_reference: None,
-            occurrence_kind: OccurrenceKind::Review,
-            stage: Some("review".to_owned()),
-            submitted_at: None,
-            stage_entered_at: None,
-            review_timing: None,
-            routing_context: None,
-            state: *self.source_state.lock().expect("source state lock"),
-            remaining_actions: Vec::new(),
-        })
-    }
-
-    async fn discover_active(
-        &self,
-        _cursor: Option<&DiscoveryCursor>,
-        _limit: usize,
-    ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
-        Ok(ActiveSubjectsPage {
-            subjects: Vec::new(),
-            next_cursor: None,
-        })
-    }
-
-    async fn read_for_caller(
-        &self,
-        subject: &SubjectRef,
-        source_profile_id: &str,
-        _credential: EphemeralCredential<'_>,
-    ) -> Result<CallerSubjectView, SourceAdapterError> {
+        request: HumanDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
         match self.failure.load(Ordering::SeqCst) {
-            1 => return Err(SourceAdapterError::Unavailable),
-            2 => return Err(SourceAdapterError::Invalid),
+            1 => return Err(ReviewContextError::Unavailable),
+            2 => return Err(ReviewContextError::Invalid),
             _ => {}
         }
         if self.revoked.load(Ordering::SeqCst)
-            || subject.id.starts_with("concealed-")
-            || source_profile_id != "reviewer-source"
+            || request.identity.subject.id.starts_with("concealed-")
+            || request.source_profile_id != "reviewer-source"
         {
-            return Err(SourceAdapterError::Concealed);
+            return Err(ReviewContextError::Concealed);
         }
-        Ok(CallerSubjectView {
-            subject: subject.clone(),
-            binding: SourceBinding {
-                source_revision: "source-revision-1".to_owned(),
-                version: if self.changed.load(Ordering::SeqCst) {
-                    "2".to_owned()
-                } else {
-                    "1".to_owned()
-                },
-                integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
-                generation: self.binding_generation().to_owned(),
-            },
+        let mut identity = request.identity.clone();
+        if self.changed.load(Ordering::SeqCst) {
+            identity.subject.version = "2".into();
+        }
+        Ok(HumanDisplayObservation {
+            identity,
+            reviewable: matches!(
+                *self.source_state.lock().unwrap(),
+                SourceReviewability::Open
+            ),
             display_reference: None,
-            disclosed: BTreeMap::from([("summary".to_owned(), json!("Authorized source view"))]),
-            permitted_operations: Vec::new(),
+            fields: BTreeMap::from([("summary".to_owned(), json!("Authorized source view"))]),
         })
     }
-
-    async fn prepare_action(
+    async fn service_status(
         &self,
-        _request: PrepareActionRequest<'_>,
-    ) -> Result<PreparedSourceAttempt, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
+        identity: &ReviewContextIdentity,
+    ) -> Result<ServiceStatusObservation, ReviewContextError> {
+        Ok(ServiceStatusObservation {
+            identity: identity.clone(),
+            reviewable: matches!(
+                *self.source_state.lock().unwrap(),
+                SourceReviewability::Open
+            ),
+        })
     }
+}
 
-    async fn execute_prepared(
-        &self,
-        _request: ExecutePreparedRequest<'_>,
-    ) -> Result<SourceReceipt, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
+fn display_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string","maxLength":160}}})
+}
+fn context_contract() -> ReviewContextContract {
+    ReviewContextContract {
+        id: "registry-context".into(),
+        revision: ContentDigest::for_bytes(b"registry-context-v1"),
+        schema_digest: ContentDigest::for_bytes(
+            &registry_platform_canonical_json::canonicalize_json(&display_schema()).unwrap(),
+        ),
     }
 }
 
@@ -187,13 +146,15 @@ fn project(issuer: &str) -> CaseworkProject {
             id: "review".to_owned(),
             label: "Review".to_owned(),
         }],
-        sources: Vec::new(),
-        review_kinds: vec![
-            ReviewKindPolicy {
+        context_providers: vec![ReviewContextProviderPolicy { id:"registry".into(),description:None,capabilities:vec![ReviewContextCapability::HumanDisplay,ReviewContextCapability::ServiceStatus],source_namespace:"registry".into(),deployment_ref:"registry".into(),service_profiles:BTreeMap::from([(ReviewContextCapability::ServiceStatus,"status-reader".into())]) }],
+        teams: vec![serde_json::from_value(json!({"id":"review-team","label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]})).unwrap()],
+        review_policies: vec![
+            ReviewPolicy {
                 id: "registry-correction".to_owned(),
                 version: "1".to_owned(),
-                purpose: ReviewKindPurpose::Approval,
-                context_strategy: ReviewContextStrategy::Source,
+                purpose: ReviewPurpose::Approval,
+                context: ReviewContextPolicy::CurrentSource {provider:"registry".into(),contract:context_contract()},
+                routing:Vec::new(),
                 stages: vec![ReviewStagePolicy {
                     id: "review".to_owned(),
                     queue: "review".to_owned(),
@@ -204,8 +165,8 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
                 clocks: Vec::new(),
                 retention: ReviewRetentionPolicy {
-                    terminal_days: 90,
-                    accountability_days: 365,
+                    terminal_retention_days: 90,
+                    accountability_retention_days: 365,
                 },
                 display_schema: json!({
                     "type": "object",
@@ -214,13 +175,21 @@ fn project(issuer: &str) -> CaseworkProject {
                     "properties": {"summary": {"type": "string", "maxLength": 160}}
                 }),
                 result_schema: None,
-                outcomes: Vec::new(),
+                outcomes: vec![ReviewOutcomePolicy {
+                        id: "approved".to_owned(),
+                        label: "Approved".to_owned(),
+                        settlement: ReviewOutcomeSettlement::Approved,
+                        reason_required: false,
+                        public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+                        result_required: false,
+                    }],
             },
-            ReviewKindPolicy {
+            ReviewPolicy {
                 id: "registry-answer".to_owned(),
                 version: "1".to_owned(),
-                purpose: ReviewKindPurpose::Answer,
-                context_strategy: ReviewContextStrategy::Submitted,
+                purpose: ReviewPurpose::Answer,
+                context: ReviewContextPolicy::Submitted,
+                routing:Vec::new(),
                 stages: vec![ReviewStagePolicy {
                     id: "answer".to_owned(),
                     queue: "review".to_owned(),
@@ -231,8 +200,8 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
                 clocks: Vec::new(),
                 retention: ReviewRetentionPolicy {
-                    terminal_days: 90,
-                    accountability_days: 365,
+                    terminal_retention_days: 90,
+                    accountability_retention_days: 365,
                 },
                 display_schema: json!({
                     "type": "object",
@@ -250,11 +219,12 @@ fn project(issuer: &str) -> CaseworkProject {
                     label: "Found".to_owned(),
                     settlement: ReviewOutcomeSettlement::Answered,
                     reason_required: false,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
                     result_required: true,
                 }],
             },
         ],
-        review_producers: vec![
+        trusted_producers: vec![
             ReviewProducerPolicy {
                 id: "registry".to_owned(),
                 profile: "producer".to_owned(),
@@ -263,11 +233,13 @@ fn project(issuer: &str) -> CaseworkProject {
                 trusted_initiator_issuer: Some(issuer.to_owned()),
                 initiator_profile: Some("initiator".to_owned()),
                 source_namespaces: vec!["registry".to_owned()],
-                kinds: vec![
+                review_policies: vec![
                     "registry-correction".to_owned(),
                     "registry-answer".to_owned(),
                 ],
-                recovery_days: 30,
+                retention: registry_casework_core::ProducerRetention {
+                    receipt_retention_days: 30,
+                },
                 completion: None,
             },
             ReviewProducerPolicy {
@@ -278,11 +250,13 @@ fn project(issuer: &str) -> CaseworkProject {
                 trusted_initiator_issuer: Some(issuer.to_owned()),
                 initiator_profile: None,
                 source_namespaces: vec!["registry".to_owned()],
-                kinds: vec![
+                review_policies: vec![
                     "registry-correction".to_owned(),
                     "registry-answer".to_owned(),
                 ],
-                recovery_days: 30,
+                retention: registry_casework_core::ProducerRetention {
+                    receipt_retention_days: 30,
+                },
                 completion: None,
             },
         ],
@@ -299,7 +273,11 @@ fn review_request_for_subject(
     issuer: &str,
 ) -> ReviewCreateRequest {
     ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: project(issuer)
+            .compile_policy("registry-correction")
+            .unwrap()
+            .binding()
+            .into(),
         subject: SubjectBinding {
             source: "registry".to_owned(),
             subject_type: "record".to_owned(),
@@ -312,7 +290,7 @@ fn review_request_for_subject(
             issuer: issuer.to_owned(),
             subject: "initiator".to_owned(),
         }),
-        context: ReviewContext::Source {
+        context: ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: format!("registry:record:{subject_id}"),
             },
@@ -333,7 +311,7 @@ async fn app_with_database(
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     Arc<AtomicU8>,
-    Arc<Mutex<OccurrenceState>>,
+    Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
     app_with_project(idp, project(&idp.issuer())).await
@@ -348,7 +326,7 @@ async fn app_with_project(
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     Arc<AtomicU8>,
-    Arc<Mutex<OccurrenceState>>,
+    Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
@@ -423,7 +401,7 @@ async fn app_with_project(
     let revoked = Arc::new(AtomicBool::new(false));
     let changed = Arc::new(AtomicBool::new(false));
     let failure = Arc::new(AtomicU8::new(0));
-    let source_state = Arc::new(Mutex::new(OccurrenceState::Open));
+    let source_state = Arc::new(Mutex::new(SourceReviewability::Open));
     let service = CaseworkService::new(
         store,
         project.clone(),
@@ -432,7 +410,7 @@ async fn app_with_project(
             changed: Arc::clone(&changed),
             failure: Arc::clone(&failure),
             source_state: Arc::clone(&source_state),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("review HTTP service");
     (
@@ -458,7 +436,7 @@ async fn app(
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     Arc<AtomicU8>,
-    Arc<Mutex<OccurrenceState>>,
+    Arc<Mutex<SourceReviewability>>,
 ) {
     let (app, service, revoked, changed, failure, source_state, _) = app_with_database(idp).await;
     (app, service, revoked, changed, failure, source_state)
@@ -539,7 +517,11 @@ async fn create_answer_task(
     reference: &str,
 ) -> (ReviewRequestAccepted, Uuid) {
     let mut body = review_request_for_subject(reference, reference, &idp.issuer());
-    body.kind = "registry-answer".to_owned();
+    body.policy = project(&idp.issuer())
+        .compile_policy("registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     body.context = ReviewContext::Submitted {
         snapshot: json!({}),
     };
@@ -552,7 +534,30 @@ async fn create_task(
     idp: &MockIdp,
     body: &ReviewCreateRequest,
 ) -> (ReviewRequestAccepted, Uuid) {
-    let mut request = create_http_request(body, Some(&token(idp)));
+    let mut body = body.clone();
+    let policies = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-policies")
+                .header("authorization", format!("Bearer {}", token(idp)))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(policies.status(), StatusCode::OK);
+    let policies: Vec<ReviewPolicyClosure> =
+        serde_json::from_slice(&to_bytes(policies.into_body(), 1024 * 1024).await.unwrap())
+            .unwrap();
+    body.policy = policies
+        .iter()
+        .find(|policy| policy.identity.id == body.policy.id)
+        .unwrap()
+        .binding()
+        .into();
+    let mut request = create_http_request(&body, Some(&token(idp)));
     request.headers_mut().insert(
         "idempotency-key",
         format!("create-{}", body.requester_reference)
@@ -587,8 +592,9 @@ fn assert_client_status(error: CaseworkClientError, expected: u16) {
 
 fn answer_decision() -> registry_casework_client::ReviewTaskDecisionRequest {
     registry_casework_client::ReviewTaskDecisionRequest {
-        decision: ReviewerDecisionKind::Answer {
+        decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: Some("private-reason-canary".to_owned()),
             result: Some(json!({"answer": "producer-result-canary"})),
         },
@@ -609,7 +615,7 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
         .method("POST")
         .uri("/v1/review-requests")
         .header(CONTENT_TYPE, "application/json")
-        .header(CASEWORK_PROFILE_HEADER, "producer")
+        .header(REVIEW_PROFILE_HEADER, "producer")
         .header("idempotency-key", "create-record-1");
     if let Some(token) = token {
         request = request.header("authorization", format!("Bearer {token}"));
@@ -653,7 +659,8 @@ fn review_note_http_request(
 async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     let idp = MockIdp::start().await;
     let (app, _, source_revoked, source_changed, source_failure, source_state) = app(&idp).await;
-    let request = review_request("producer-ref-1", &idp.issuer());
+    let mut request = review_request("producer-ref-1", &idp.issuer());
+    request.policy = registry_casework_core::PolicySelection::current("registry-correction");
 
     let obsolete_hosted_route = app
         .clone()
@@ -681,28 +688,28 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/review-kinds")
+                .uri("/v1/review-policies")
                 .header("authorization", format!("Bearer {token}"))
                 .header(CASEWORK_PROFILE_HEADER, "producer")
                 .body(Body::empty())
-                .expect("review kind request"),
+                .expect("review policy request"),
         )
         .await
-        .expect("review kind response");
+        .expect("review policy response");
     assert_eq!(kinds.status(), StatusCode::OK);
-    let kinds: Vec<registry_casework_core::ReviewKindPolicySnapshot> = serde_json::from_slice(
+    let kinds: Vec<registry_casework_core::ReviewPolicyClosure> = serde_json::from_slice(
         &to_bytes(kinds.into_body(), 128 * 1024)
             .await
-            .expect("bounded review kind response"),
+            .expect("bounded review policy response"),
     )
-    .expect("review kind JSON");
+    .expect("review policy JSON");
     assert_eq!(kinds.len(), 2);
     assert!(kinds
         .iter()
         .any(|kind| kind.identity.id == "registry-correction"));
 
     let serialized = serde_json::to_string(&request).expect("serialize duplicate-key request");
-    let duplicate_key_body = serialized.replacen('{', r#"{"kind":"registry-correction","#, 1);
+    let duplicate_key_body = serialized.replacen('{', r#"{"policy":{},"#, 1);
     let duplicate_key = app
         .clone()
         .oneshot(
@@ -710,8 +717,8 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
                 .method("POST")
                 .uri("/v1/review-requests")
                 .header(CONTENT_TYPE, "application/json")
-                .header(CASEWORK_PROFILE_HEADER, "producer")
-                .header("idempotency-key", "duplicate-kind-member")
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .header("idempotency-key", "duplicate-policy-member")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(duplicate_key_body))
                 .expect("duplicate-key request"),
@@ -741,22 +748,15 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("task list response without source profile");
-    // Only source-backed candidates exist, so the absent header is named
-    // rather than answered with a silent empty page.
-    assert_eq!(
-        tasks_without_source_profile.status(),
-        StatusCode::BAD_REQUEST
-    );
-    let tasks_without_source_profile: Value = serde_json::from_slice(
-        &to_bytes(tasks_without_source_profile.into_body(), 32 * 1024)
+    // A mixed-capability policy query cannot reveal source task existence through a missing-profile error.
+    assert_eq!(tasks_without_source_profile.status(), StatusCode::OK);
+    let hidden: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(tasks_without_source_profile.into_body(), 32768)
             .await
-            .expect("bounded task list without source profile"),
+            .unwrap(),
     )
-    .expect("task list without source profile JSON");
-    assert_eq!(
-        tasks_without_source_profile["code"],
-        "source-profile.required"
-    );
+    .unwrap();
+    assert!(hidden.items.is_empty());
 
     let visible_tasks = app
         .clone()
@@ -870,21 +870,17 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("changed-binding task context response");
-    assert_eq!(changed_context.status(), StatusCode::OK);
-    let changed_context: serde_json::Value = serde_json::from_slice(
-        &to_bytes(changed_context.into_body(), 64 * 1024)
-            .await
-            .expect("bounded changed-binding task context"),
-    )
-    .expect("changed-binding task context JSON");
-    assert_eq!(
-        changed_context["context"]["bindingStatus"],
-        "binding-changed"
-    );
-    assert!(changed_context["context"].get("projection").is_none());
+    assert_eq!(changed_context.status(), StatusCode::NOT_FOUND);
+    let changed_context: Value =
+        serde_json::from_slice(&to_bytes(changed_context.into_body(), 32768).await.unwrap())
+            .unwrap();
+    assert_eq!(changed_context["code"], "request.not-found");
+    assert!(!changed_context
+        .to_string()
+        .contains("Authorized source view"));
     source_changed.store(false, Ordering::SeqCst);
 
-    *source_state.lock().expect("source state lock") = OccurrenceState::Cancelled;
+    *source_state.lock().expect("source state lock") = SourceReviewability::Cancelled;
     let terminal_task_read = app
         .clone()
         .oneshot(
@@ -915,11 +911,9 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("terminal-source claim response");
-    assert_eq!(terminal_claim.status(), StatusCode::FORBIDDEN);
-    // A completed occurrence stays reviewable: Casework's bounded retention
-    // intentionally accepts fresh reviews for settled proposals, and the
-    // source's pinned correlation, not this gate, refuses their results.
-    *source_state.lock().expect("source state lock") = OccurrenceState::Completed;
+    assert_eq!(terminal_claim.status(), StatusCode::NOT_FOUND);
+    // A provider that marks the frozen subject unreviewable conceals the task.
+    *source_state.lock().expect("source state lock") = SourceReviewability::Completed;
     let completed_task_read = app
         .clone()
         .oneshot(
@@ -933,8 +927,8 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("completed-source task read response");
-    assert_eq!(completed_task_read.status(), StatusCode::OK);
-    *source_state.lock().expect("source state lock") = OccurrenceState::Open;
+    assert_eq!(completed_task_read.status(), StatusCode::NOT_FOUND);
+    *source_state.lock().expect("source state lock") = SourceReviewability::Open;
     let active_context = app
         .clone()
         .oneshot(
@@ -1037,7 +1031,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
             Request::builder()
                 .uri(format!("/v1/review-requests/{}/result", created.request_id))
                 .header("authorization", format!("Bearer {token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .body(Body::empty())
                 .expect("pending result request"),
         )
@@ -1050,7 +1044,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
             Request::builder()
                 .uri(format!("/v1/review-requests/{}", created.request_id))
                 .header("authorization", format!("Bearer {token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header(SOURCE_PROFILE_HEADER, "source-reader")
                 .body(Body::empty())
                 .expect("source-scoped request"),
@@ -1322,7 +1316,7 @@ async fn source_context_review_history_notes_and_clocks_require_current_pinned_s
         )
         .await
         .expect("revoked source clocks response");
-    assert_eq!(revoked_clocks.status(), StatusCode::FORBIDDEN);
+    assert_eq!(revoked_clocks.status(), StatusCode::NOT_FOUND);
     let revoked_note_canary = "REVOKED_SOURCE_NOTE_CANARY";
     let revoked_note = app
         .clone()
@@ -1335,7 +1329,7 @@ async fn source_context_review_history_notes_and_clocks_require_current_pinned_s
         ))
         .await
         .expect("revoked source note response");
-    assert_eq!(revoked_note.status(), StatusCode::FORBIDDEN);
+    assert_eq!(revoked_note.status(), StatusCode::NOT_FOUND);
 
     let revoked = app
         .clone()
@@ -1353,7 +1347,7 @@ async fn source_context_review_history_notes_and_clocks_require_current_pinned_s
         )
         .await
         .expect("revoked source history response");
-    assert_eq!(revoked.status(), StatusCode::FORBIDDEN);
+    assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
     let revoked = String::from_utf8(
         to_bytes(revoked.into_body(), 16 * 1024)
             .await
@@ -1402,7 +1396,7 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
         "cursor-source-canary",
         &idp.issuer(),
     );
-    let (accepted, anchor) = create_task(&app, &database, &idp, &source_request).await;
+    let (accepted, _anchor) = create_task(&app, &database, &idp, &source_request).await;
     let (_, following) = create_task(
         &app,
         &database,
@@ -1429,6 +1423,7 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
         assert!(!body.to_string().contains("cursor-source-canary"));
         body
     };
+    let mut issued_cursors = BTreeMap::new();
     for (path, principal, profile) in [
         ("/v1/review-tasks", "reviewer", "staff"),
         ("/v1/review-tasks/supervision", "supervisor", "supervisor"),
@@ -1453,7 +1448,25 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
                     .expect("cursor task page request"),
             )
         };
-        let authorized = list(anchor, Some("reviewer-source"), "review")
+        let initial = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{path}?queue=review&limit=1"))
+                    .header("authorization", format!("Bearer {bearer}"))
+                    .header(CASEWORK_PROFILE_HEADER, profile)
+                    .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(initial.status(), StatusCode::OK);
+        let initial: Value =
+            serde_json::from_slice(&to_bytes(initial.into_body(), 32768).await.unwrap()).unwrap();
+        let cursor: Uuid = initial["nextCursor"].as_str().unwrap().parse().unwrap();
+        issued_cursors.insert(path, cursor);
+        let authorized = list(cursor, Some("reviewer-source"), "review")
             .await
             .expect("authorized source cursor response");
         assert_eq!(authorized.status(), StatusCode::OK);
@@ -1468,15 +1481,15 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
 
         for (cursor, source_profile, queue) in [
             (Uuid::new_v4(), Some("reviewer-source"), "review"),
-            (anchor, None, "review"),
-            (anchor, Some("other-source-profile"), "review"),
-            (anchor, Some("reviewer-source"), "elsewhere"),
+            (cursor, None, "review"),
+            (cursor, Some("other-source-profile"), "review"),
+            (cursor, Some("reviewer-source"), "elsewhere"),
         ] {
             problem(list(cursor, source_profile, queue).await.unwrap()).await;
         }
         revoked.store(true, Ordering::SeqCst);
         problem(
-            list(anchor, Some("reviewer-source"), "review")
+            list(cursor, Some("reviewer-source"), "review")
                 .await
                 .unwrap(),
         )
@@ -1524,7 +1537,10 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("{path}?cursor={anchor}"))
+                    .uri(format!(
+                        "{path}?queue=review&limit=1&cursor={}",
+                        issued_cursors[path]
+                    ))
                     .header("authorization", format!("Bearer {bearer}"))
                     .header(CASEWORK_PROFILE_HEADER, profile)
                     .header(SOURCE_PROFILE_HEADER, "reviewer-source")
@@ -1539,7 +1555,7 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
 }
 
 #[tokio::test]
-async fn review_task_inbox_continues_after_the_configured_source_read_budget() {
+async fn review_task_inbox_refuses_a_broad_live_query_and_accepts_exact_subject_narrowing() {
     let idp = MockIdp::start().await;
     let (app, service, _, _, _, _) = app(&idp).await;
     let producer = ActorContext {
@@ -1591,46 +1607,36 @@ async fn review_task_inbox_continues_after_the_configured_source_read_budget() {
         )
         .await
         .expect("first bounded task page response");
-    assert_eq!(first.status(), StatusCode::OK);
-    let first: ReviewTaskPage = serde_json::from_slice(
-        &to_bytes(first.into_body(), 32 * 1024)
-            .await
-            .expect("bounded first task page"),
-    )
-    .expect("first task page JSON");
-    assert!(first.items.is_empty());
-    // The short page says the source-read budget ran out, so a caller does
-    // not read it as the end of the inbox.
-    assert_eq!(
-        first.status,
-        registry_casework_core::PageStatus::BudgetExhausted
+    assert_eq!(first.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let problem: Value =
+        serde_json::from_slice(&to_bytes(first.into_body(), 32768).await.unwrap()).unwrap();
+    assert_eq!(problem["code"], "review.query-too-broad");
+    assert!(!problem.to_string().contains("concealed-reference"));
+    let subject = &visible.accepted.subject;
+    // This fixture's identifiers and digest contain only URI-safe ASCII.
+    let query = format!(
+        "subjectSource={}&subjectType={}&subjectId={}&subjectVersion={}&subjectDigest={}",
+        subject.source, subject.subject_type, subject.id, subject.version, subject.digest
     );
-    let continuation = first
-        .next_cursor
-        .expect("scan-budget page preserves a continuation");
-
     let second = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/review-tasks?limit=1&cursor={continuation}"))
+                .uri(format!("/v1/review-tasks?limit=1&{query}"))
                 .header("authorization", format!("Bearer {reviewer_token}"))
                 .header(CASEWORK_PROFILE_HEADER, "staff")
                 .header(SOURCE_PROFILE_HEADER, "reviewer-source")
                 .body(Body::empty())
-                .expect("continued task page"),
+                .unwrap(),
         )
         .await
-        .expect("continued task page response");
+        .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
-    let second: ReviewTaskPage = serde_json::from_slice(
-        &to_bytes(second.into_body(), 32 * 1024)
-            .await
-            .expect("bounded continued task page"),
-    )
-    .expect("continued task page JSON");
+    let second: ReviewTaskPage =
+        serde_json::from_slice(&to_bytes(second.into_body(), 32768).await.unwrap()).unwrap();
     assert_eq!(second.items.len(), 1);
     assert_eq!(second.items[0].request_id, visible.accepted.request_id);
-    assert_eq!(second.status, registry_casework_core::PageStatus::Complete);
+    assert!(second.next_cursor.is_none());
+    assert_eq!(second.status, PageStatus::Complete);
 
     idp.stop().await;
 }
@@ -1657,7 +1663,11 @@ async fn mixed_context_inbox_lists_submitted_and_source_tasks_together() {
     .expect("mixed source create JSON");
 
     let mut answer_request = review_request("mixed-answer-ref", &idp.issuer());
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = project(&idp.issuer())
+        .compile_policy("registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     answer_request.subject.id = "answer-record-1".to_owned();
     answer_request.subject.digest = ContentDigest::for_bytes(b"answer-record-1");
     answer_request.context = ReviewContext::Submitted {
@@ -1670,7 +1680,7 @@ async fn mixed_context_inbox_lists_submitted_and_source_tasks_together() {
                 .method("POST")
                 .uri("/v1/review-requests")
                 .header(CONTENT_TYPE, "application/json")
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header("idempotency-key", "create-mixed-answer")
                 .header("authorization", format!("Bearer {producer_token}"))
                 .body(Body::from(
@@ -1754,9 +1764,13 @@ async fn mixed_context_inbox_lists_submitted_and_source_tasks_together() {
 #[tokio::test]
 async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_http() {
     let idp = MockIdp::start().await;
-    let (app, _, _, _, _, _) = app(&idp).await;
+    let (app, service, _, _, _, _) = app(&idp).await;
     let mut request = review_request("answer-ref-1", &idp.issuer());
-    request.kind = "registry-answer".to_owned();
+    request.policy = project(&idp.issuer())
+        .compile_policy("registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     request.subject.id = "answer-record-1".to_owned();
     request.subject.digest = ContentDigest::for_bytes(b"answer-record-1");
     request.context = ReviewContext::Submitted {
@@ -1777,7 +1791,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
                 .method("POST")
                 .uri("/v1/review-requests")
                 .header("authorization", format!("Bearer {producer_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .header(CONTENT_TYPE, "application/json")
                 .header("idempotency-key", "create-null-constraints")
                 .body(Body::from(
@@ -1792,7 +1806,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     assert!(
         null_constraints
             .headers()
-            .get(VALIDATION_PATH_HEADER)
+            .get(REVIEW_VALIDATION_PATH_HEADER)
             .is_none(),
         "the protocol rejects a non-object shape without structured detail"
     );
@@ -2078,9 +2092,53 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     .expect("explicit-null result problem JSON");
     assert_eq!(null_result_problem["code"], "request.invalid");
 
+    let oversized_public_reason = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "answer-oversized-public-reason")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "decision": {
+                            "type": "answer",
+                            "outcome": "found",
+                            "publicReason": "x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1),
+                            "result": {}
+                        }
+                    }))
+                    .expect("serialize an oversized public reason"),
+                ))
+                .expect("oversized public reason request"),
+        )
+        .await
+        .expect("oversized public reason response");
+    assert_eq!(oversized_public_reason.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        oversized_public_reason
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("$.publicReason")
+    );
+    assert_eq!(
+        oversized_public_reason
+            .headers()
+            .get(VALIDATION_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("maximum-bytes-exceeded"),
+        "an oversized public reason names the byte bound"
+    );
+
     let decision = ReviewTaskDecisionRequest {
-        decision: ReviewerDecisionKind::Answer {
+        decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: None,
             result: Some(json!({"answer":"The structured answer"})),
         },
@@ -2103,7 +2161,31 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         )
         .await
         .expect("decide standalone answer response");
-    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+    if decided.status() != StatusCode::NO_CONTENT {
+        let actor = ActorContext {
+            principal: IssuerPrincipal {
+                issuer: idp.issuer(),
+                subject: "reviewer".into(),
+            },
+            profile_id: "staff".into(),
+            role: CaseworkRole::Staff,
+        };
+        let cause = service
+            .decide_review_task(
+                &actor,
+                task_id,
+                decision.clone(),
+                None,
+                &reviewer_token,
+                2,
+                "answer-answer-record-1",
+            )
+            .await;
+        panic!(
+            "standalone decision returned {}: {cause:?}",
+            decided.status()
+        );
+    }
 
     let result = app
         .clone()
@@ -2111,7 +2193,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
             Request::builder()
                 .uri(format!("/v1/review-requests/{}/result", created.request_id))
                 .header("authorization", format!("Bearer {producer_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .body(Body::empty())
                 .expect("poll standalone answer request"),
         )
@@ -2135,7 +2217,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
             Request::builder()
                 .uri(format!("/v1/review-requests/{}/result", Uuid::new_v4()))
                 .header("authorization", format!("Bearer {producer_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(REVIEW_PROFILE_HEADER, "producer")
                 .body(Body::empty())
                 .expect("unknown review result request"),
         )
@@ -2232,7 +2314,7 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
             .method("POST")
             .uri("/v1/review-requests")
             .header(CONTENT_TYPE, "application/json")
-            .header(CASEWORK_PROFILE_HEADER, "producer-alternate")
+            .header(REVIEW_PROFILE_HEADER, "producer-alternate")
             .header("idempotency-key", "create-alternate-initiator")
             .header(
                 "authorization",
@@ -2325,7 +2407,14 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
             Request::builder()
                 .uri(format!("/v1/review-requests/{request_id}/{path}"))
                 .header("authorization", format!("Bearer {own_token}"))
-                .header(CASEWORK_PROFILE_HEADER, "initiator")
+                .header(
+                    if path == "result" {
+                        REVIEW_PROFILE_HEADER
+                    } else {
+                        CASEWORK_PROFILE_HEADER
+                    },
+                    "initiator",
+                )
                 .body(Body::empty())
                 .expect("initiator read request"),
         )
@@ -2365,7 +2454,11 @@ async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_htt
     let idp = MockIdp::start().await;
     let (app, _, _, _, _, _) = app(&idp).await;
     let mut request = review_request("decided-by-caller-ref", &idp.issuer());
-    request.kind = "registry-answer".to_owned();
+    request.policy = project(&idp.issuer())
+        .compile_policy("registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     request.subject.id = "decided-by-caller-record".to_owned();
     request.subject.digest = ContentDigest::for_bytes(b"decided-by-caller-record");
     request.context = ReviewContext::Submitted {
@@ -2537,7 +2630,7 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
     let first_page = client
         .review_tasks(
             auth(),
-            &ReviewTaskQuery {
+            &ReviewStaffingQuery {
                 queue: Some("review".to_owned()),
                 limit: Some(1),
                 ..Default::default()
@@ -2547,7 +2640,7 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
         .expect("default first page")
         .value;
     assert_eq!(first_page.items[0].task_id, first);
-    let assigned_query = ReviewTaskQuery {
+    let assigned_query = ReviewStaffingQuery {
         queue: Some("review".to_owned()),
         ownership: Some(ReviewTaskOwnership::AssignedToMe),
         limit: Some(1),
@@ -2561,7 +2654,7 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
     assert_eq!(mine.items.len(), 1);
     assert_eq!(mine.items[0].task_id, assigned);
     assert!(mine.next_cursor.is_none());
-    let unclaimed = ReviewTaskQuery {
+    let unclaimed = ReviewStaffingQuery {
         queue: Some("review".to_owned()),
         ownership: Some(ReviewTaskOwnership::Unclaimed),
         limit: Some(1),
@@ -2574,19 +2667,37 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
         .value;
     assert_eq!(available.items[0].task_id, first);
     let cursor = available.next_cursor.expect("more available work");
+    // The next task is the earliest-due one; a list cursor carried over from
+    // the same unclaimed, due-ordered query of one does not move it.
+    let next = client
+        .next_review_task(
+            auth(),
+            &ReviewStaffingQuery {
+                cursor: Some(cursor),
+                ..unclaimed.clone()
+            },
+        )
+        .await
+        .expect("next with a list cursor")
+        .value
+        .expect("an unclaimed task");
+    assert_eq!(next.task_id, first);
     client
         .claim_review_task(auth(), first, 1, "claim-cursor-anchor")
         .await
         .expect("claim anchor");
-    let continuation = ReviewTaskQuery {
+    let continuation = ReviewStaffingQuery {
         cursor: Some(cursor),
         ..unclaimed.clone()
     };
-    let after_claim = client
-        .review_tasks(auth(), &continuation)
-        .await
-        .expect("claim keeps scan position")
-        .value;
+    assert_client_status(
+        client
+            .review_tasks(auth(), &continuation)
+            .await
+            .unwrap_err(),
+        410,
+    );
+    let after_claim = client.review_tasks(auth(), &unclaimed).await.unwrap().value;
     assert_eq!(
         after_claim
             .items
@@ -2599,11 +2710,14 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
         .decide_review_task(auth(), first, 2, "decide-cursor-anchor", &answer_decision())
         .await
         .expect("decide anchor");
-    let after_decision = client
-        .review_tasks(auth(), &continuation)
-        .await
-        .expect("decision keeps scan position")
-        .value;
+    assert_client_status(
+        client
+            .review_tasks(auth(), &continuation)
+            .await
+            .unwrap_err(),
+        410,
+    );
+    let after_decision = client.review_tasks(auth(), &unclaimed).await.unwrap().value;
     assert_eq!(
         after_decision
             .items
@@ -2639,7 +2753,7 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
     let colleagues = client
         .review_tasks(
             colleague_auth(),
-            &ReviewTaskQuery {
+            &ReviewStaffingQuery {
                 limit: Some(100),
                 ..assigned_query.clone()
             },
@@ -2666,16 +2780,23 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
         .release_review_task(colleague_auth(), held, 2, "release-held-anchor")
         .await
         .expect("release cursor anchor");
+    assert_client_status(
+        client
+            .review_tasks(
+                colleague_auth(),
+                &ReviewStaffingQuery {
+                    cursor: Some(held_cursor),
+                    ..assigned_query.clone()
+                },
+            )
+            .await
+            .unwrap_err(),
+        410,
+    );
     let after_release = client
-        .review_tasks(
-            colleague_auth(),
-            &ReviewTaskQuery {
-                cursor: Some(held_cursor),
-                ..assigned_query.clone()
-            },
-        )
+        .review_tasks(colleague_auth(), &assigned_query)
         .await
-        .expect("released anchor keeps scan position")
+        .unwrap()
         .value;
     assert_eq!(after_release.items[0].task_id, assigned);
     client
@@ -2685,7 +2806,7 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
     let refreshed = client
         .review_tasks(
             auth(),
-            &ReviewTaskQuery {
+            &ReviewStaffingQuery {
                 limit: Some(100),
                 ..unclaimed.clone()
             },
@@ -2746,7 +2867,7 @@ async fn supervisory_request_lookup_precedes_pagination_and_conceals_inaccessibl
 ) {
     let idp = MockIdp::start().await;
     let mut policy = project(&idp.issuer());
-    policy.review_kinds[0].stages[0].required_approvals = 3;
+    policy.review_policies[0].stages[0].required_approvals = 3;
     policy.inbox.default_page_size = 1;
     policy.inbox.maximum_candidate_scan = 2;
     policy.inbox.maximum_source_reads = 2;
@@ -2952,12 +3073,12 @@ async fn supervisory_request_lookup_precedes_pagination_and_conceals_inaccessibl
         empty
     );
     changed.store(false, Ordering::SeqCst);
-    *source_state.lock().unwrap() = OccurrenceState::Cancelled;
+    *source_state.lock().unwrap() = SourceReviewability::Cancelled;
     assert_eq!(
         page(list(query.clone(), "supervisor").await.unwrap()).await,
         empty
     );
-    *source_state.lock().unwrap() = OccurrenceState::Open;
+    *source_state.lock().unwrap() = SourceReviewability::Open;
     database
         .execute(
             "DELETE FROM casework_memberships WHERE subject='supervisor'",
@@ -3027,7 +3148,7 @@ async fn supervisors_discover_operational_reviews_without_decision_eligibility_o
         ..Default::default()
     };
     assert!(client
-        .review_tasks(auth(), &ReviewTaskQuery::default())
+        .review_tasks(auth(), &ReviewStaffingQuery::default())
         .await
         .expect("supervisor remains ineligible as a reviewer")
         .value
@@ -3333,7 +3454,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         receipt.decision,
         registry_casework_core::ReviewDecisionType::Answer
     );
-    assert_eq!(receipt.outcome.as_deref(), Some("found"));
+    assert_eq!(receipt.outcome, "found");
     let receipt_wire = serde_json::to_value(receipt).expect("receipt wire");
     assert_eq!(receipt_wire.as_object().expect("receipt object").len(), 5);
     assert_eq!(receipt_wire["outcomeLabel"], "Found");
@@ -3378,7 +3499,10 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
             2,
             "approve-source-receipt",
             &registry_casework_client::ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
         )
         .await
@@ -3394,7 +3518,7 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
         approved.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert!(approved.outcome.is_none());
+    assert_eq!(approved.outcome, "approved");
     revoked.store(true, Ordering::SeqCst);
     assert_client_status(
         client
@@ -3480,7 +3604,11 @@ async fn an_excluded_initiator_and_a_missing_initiator_get_their_own_problem_cod
         }
     };
     let mut request = review_request("initiator-codes", &idp.issuer());
-    request.kind = "registry-answer".to_owned();
+    request.policy = project(&idp.issuer())
+        .compile_policy("registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     request.subject.id = "initiator-codes-record".to_owned();
     request.subject.digest = ContentDigest::for_bytes(b"initiator-codes-record");
     request.context = ReviewContext::Submitted {
@@ -3543,16 +3671,18 @@ async fn an_excluded_initiator_and_a_missing_initiator_get_their_own_problem_cod
 async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
     let idp = MockIdp::start().await;
     let mut policy = project(&idp.issuer());
-    policy.review_kinds[1].outcomes = [("confirm", "Confirm"), ("return", "Return for correction")]
-        .into_iter()
-        .map(|(id, label)| ReviewOutcomePolicy {
-            id: id.to_owned(),
-            label: label.to_owned(),
-            settlement: ReviewOutcomeSettlement::Answered,
-            reason_required: true,
-            result_required: true,
-        })
-        .collect();
+    policy.review_policies[1].outcomes =
+        [("confirm", "Confirm"), ("return", "Return for correction")]
+            .into_iter()
+            .map(|(id, label)| ReviewOutcomePolicy {
+                id: id.to_owned(),
+                label: label.to_owned(),
+                settlement: ReviewOutcomeSettlement::Answered,
+                reason_required: true,
+                public_reason: registry_casework_core::ReviewPublicReasonRule::Required,
+                result_required: true,
+            })
+            .collect();
     policy
         .access_profiles
         .push(profile("other-staff", CaseworkRole::Staff));
@@ -3579,8 +3709,9 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
                 2,
                 &format!("decide-{code}"),
                 &registry_casework_client::ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Answer {
+                    decision: DecisionKind::Answer {
                         outcome: code.to_owned(),
+                        public_reason: Some("PUBLIC_REASON_CANARY".to_owned()),
                         reason: Some("OWN_REASON_CANARY".to_owned()),
                         result: Some(json!({"answer": "PRODUCER_RESULT_CANARY"})),
                     },
@@ -3679,7 +3810,7 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
             .value;
         let receipt = record.decision_receipt.unwrap();
         assert_eq!(receipt.policy, accepted.policy);
-        assert_eq!(receipt.outcome.as_deref(), Some(*code));
+        assert_eq!(receipt.outcome, *code);
         assert_eq!(receipt.outcome_label.as_deref(), Some(*label));
         assert_eq!(receipt.decided_at, record.occurred_at);
         assert_eq!(
@@ -3803,7 +3934,14 @@ async fn send_strict_json(
         .method(route.method)
         .uri(&route.path)
         .header("authorization", format!("Bearer {token}"))
-        .header(CASEWORK_PROFILE_HEADER, profile)
+        .header(
+            if route.producer {
+                REVIEW_PROFILE_HEADER
+            } else {
+                CASEWORK_PROFILE_HEADER
+            },
+            profile,
+        )
         .header(CONTENT_TYPE, "application/json")
         .header("if-match", "\"1\"")
         .header("idempotency-key", "strict-json");
@@ -3871,10 +4009,6 @@ fn principal(subject: &str) -> Value {
     json!({"issuer": "https://issuer.example.test", "subject": subject})
 }
 
-fn source_binding() -> Value {
-    json!({"sourceRevision": "revision-1", "version": "1", "generation": "review-http-source"})
-}
-
 #[tokio::test]
 async fn review_request_routes_refuse_a_duplicate_member() {
     let id = Uuid::new_v4();
@@ -3937,7 +4071,7 @@ async fn review_task_routes_refuse_a_duplicate_member() {
                 ..strict_route(
                     "POST",
                     format!("/v1/review-tasks/{id}/decisions"),
-                    json!({"decision": {"type": "approve"}}),
+                    json!({"decision": {"type": "approve", "outcome": "approved"}}),
                 )
             },
         ]
@@ -3946,51 +4080,32 @@ async fn review_task_routes_refuse_a_duplicate_member() {
 }
 
 #[tokio::test]
-async fn work_item_routes_refuse_a_duplicate_member() {
+async fn retired_work_item_and_attempt_routes_are_absent() {
+    let idp = MockIdp::start().await;
+    let (app, ..) = app(&idp).await;
     let id = Uuid::new_v4();
-    let source = |mut route: StrictJsonRoute| {
-        route.source_profile = true;
-        route
-    };
-    assert_duplicate_members_are_refused(|_issuer| {
-        vec![
-            source(strict_route(
-                "PUT",
-                format!("/v1/work-items/{id}/draft"),
-                json!({"binding": source_binding(), "reason": "draft", "flaggedFields": []}),
-            )),
-            source(strict_route(
-                "POST",
-                format!("/v1/work-items/{id}/decisions"),
-                json!({"displayedBinding": source_binding(), "operation": "approve"}),
-            )),
-        ]
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn attempt_recovery_routes_refuse_a_duplicate_member() {
-    let id = Uuid::new_v4();
-    let source = |mut route: StrictJsonRoute| {
-        route.source_profile = true;
-        route
-    };
-    assert_duplicate_members_are_refused(|_issuer| {
-        vec![
-            source(strict_route(
-                "POST",
-                format!("/v1/work-items/{id}/attempts/recover"),
-                json!({}),
-            )),
-            source(strict_route(
-                "POST",
-                format!("/v1/work-items/{id}/attempts/{}/recover", Uuid::new_v4()),
-                json!({}),
-            )),
-        ]
-    })
-    .await;
+    for path in [
+        format!("/v1/work-items/{id}/draft"),
+        format!("/v1/work-items/{id}/decisions"),
+        format!("/v1/work-items/{id}/attempts/recover"),
+        format!("/v1/work-items/{id}/attempts/{}/recover", Uuid::new_v4()),
+        format!("/v1/work-items/{id}/task-grants"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+    idp.stop().await;
 }
 
 #[tokio::test]
@@ -4010,12 +4125,12 @@ async fn assignment_directory_and_absence_routes_refuse_a_duplicate_member() {
     assert_duplicate_members_are_refused(|_issuer| vec![
         strict_route(
             "POST",
-            format!("/v1/work-items/{id}/assign"),
+            format!("/v1/review-tasks/{id}/assign"),
             json!({"assignee": principal("colleague")}),
         ),
         strict_route(
             "POST",
-            format!("/v1/work-items/{id}/delegate"),
+            format!("/v1/review-tasks/{id}/delegate"),
             json!({"delegate": principal("colleague")}),
         ),
         strict_route("POST", "/v1/directory/absences".to_owned(), absence.clone()),
@@ -4028,7 +4143,7 @@ async fn assignment_directory_and_absence_routes_refuse_a_duplicate_member() {
         strict_route(
             "POST",
             "/v1/directory/caseload/apply".to_owned(),
-            json!({"movement": movement, "items": [{"itemId": id, "expectedRevision": 1}]}),
+            json!({"previewId": id}),
         ),
         strict_route(
             "PUT",
@@ -4048,7 +4163,7 @@ async fn assignment_directory_and_absence_routes_refuse_a_duplicate_member() {
         strict_route(
             "POST",
             "/v1/directory/clocks/recompute/preview".to_owned(),
-            json!({"clockId": "review-deadline", "holidaySet": "office", "holidayRevision": 1}),
+            json!({"taskIds": [id]}),
         ),
         strict_route(
             "POST",
@@ -4068,18 +4183,11 @@ async fn task_grant_approval_routes_refuse_a_duplicate_member() {
     };
     let approval = json!({"templateId": "review-assistant", "templateVersion": "1"});
     assert_duplicate_members_are_refused(|_issuer| {
-        vec![
-            source(strict_route(
-                "POST",
-                format!("/v1/work-items/{id}/task-grants"),
-                approval.clone(),
-            )),
-            source(strict_route(
-                "POST",
-                format!("/v1/review-tasks/{id}/task-grants"),
-                approval,
-            )),
-        ]
+        vec![source(strict_route(
+            "POST",
+            format!("/v1/review-tasks/{id}/task-grants"),
+            approval,
+        ))]
     })
     .await;
 }
@@ -4102,7 +4210,7 @@ async fn a_review_request_with_a_duplicate_member_creates_nothing_and_its_twin_d
             .method("POST")
             .uri("/v1/review-requests")
             .header(CONTENT_TYPE, "application/json")
-            .header(CASEWORK_PROFILE_HEADER, "producer")
+            .header(REVIEW_PROFILE_HEADER, "producer")
             .header("idempotency-key", "strict-json-twin")
             .header("authorization", format!("Bearer {}", token(&idp)))
             .body(Body::from(body))
@@ -4123,7 +4231,7 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
     let id = Uuid::new_v4();
     // (method, path with query prefix, maximum, producer, source profile, body)
     type PagedRoute = (&'static str, String, usize, bool, bool, Option<Value>);
-    let routes: [PagedRoute; 9] = [
+    let routes: [PagedRoute; 8] = [
         (
             "GET",
             "/v1/review-tasks?".to_owned(),
@@ -4150,7 +4258,7 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
         ),
         (
             "GET",
-            "/v1/work-items?view=my-teams&".to_owned(),
+            "/v1/review-tasks/supervision?".to_owned(),
             100,
             false,
             true,
@@ -4158,13 +4266,20 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
         ),
         (
             "GET",
-            format!("/v1/work-items/{id}/history?"),
+            "/v1/review-tasks/own-decisions?".to_owned(),
             100,
             false,
             true,
             None,
         ),
-        ("GET", "/v1/holdings?".to_owned(), 100, false, true, None),
+        (
+            "GET",
+            "/v1/review-tasks/holdings?".to_owned(),
+            100,
+            false,
+            true,
+            None,
+        ),
         (
             "GET",
             "/v1/directory/targets?purpose=absence-person&".to_owned(),
@@ -4181,18 +4296,6 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
             false,
             None,
         ),
-        (
-            "POST",
-            "/v1/directory/caseload/preview?".to_owned(),
-            100,
-            false,
-            false,
-            Some(json!({
-                "from": {"issuer": idp.issuer(), "subject": "reviewer"},
-                "to": {"issuer": idp.issuer(), "subject": "colleague"},
-                "reason": "rebalance",
-            })),
-        ),
     ];
     for (method, prefix, maximum, producer, source_profile, body) in routes {
         for (limit, refused) in [(0, true), (maximum + 1, true), (maximum, false)] {
@@ -4205,7 +4308,14 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
                 .method(method)
                 .uri(format!("{prefix}limit={limit}"))
                 .header("authorization", format!("Bearer {token}"))
-                .header(CASEWORK_PROFILE_HEADER, profile);
+                .header(
+                    if producer {
+                        REVIEW_PROFILE_HEADER
+                    } else {
+                        CASEWORK_PROFILE_HEADER
+                    },
+                    profile,
+                );
             if source_profile {
                 request = request.header(SOURCE_PROFILE_HEADER, "reviewer-source");
             }
@@ -4248,15 +4358,27 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
 }
 
 #[tokio::test]
-async fn an_inbox_emptied_only_by_the_missing_source_profile_says_so() {
+async fn a_statically_source_only_inbox_requires_a_source_profile() {
     let idp = MockIdp::start().await;
-    let (app, ..) = app(&idp).await;
+    let mut policy = project(&idp.issuer());
+    policy
+        .review_policies
+        .retain(|policy| policy.id == "registry-correction");
+    for producer in &mut policy.trusted_producers {
+        producer
+            .review_policies
+            .retain(|id| id == "registry-correction");
+    }
+    let expected = policy
+        .compile_policy("registry-correction")
+        .unwrap()
+        .binding();
+    let (app, ..) = app_with_project(&idp, policy).await;
+    let mut request = review_request("source-only-ref", &idp.issuer());
+    request.policy = expected.into();
     let created = app
         .clone()
-        .oneshot(create_http_request(
-            &review_request("source-only-ref", &idp.issuer()),
-            Some(&token(&idp)),
-        ))
+        .oneshot(create_http_request(&request, Some(&token(&idp))))
         .await
         .expect("create source-context review");
     assert_eq!(created.status(), StatusCode::CREATED);
@@ -4312,7 +4434,7 @@ async fn an_inbox_emptied_only_by_the_missing_source_profile_says_so() {
 }
 
 #[tokio::test]
-async fn an_inbox_page_short_only_of_its_source_read_budget_continues_without_a_source_profile() {
+async fn submitted_tasks_remain_discoverable_without_spending_human_source_read_budget() {
     let idp = MockIdp::start().await;
     let (app, service, _, _, _, _) = app(&idp).await;
     let producer = ActorContext {
@@ -4345,7 +4467,11 @@ async fn an_inbox_page_short_only_of_its_source_read_budget_continues_without_a_
         "budget-answer-reference",
         &idp.issuer(),
     );
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = project(&idp.issuer())
+        .compile_policy("registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     answer_request.context = ReviewContext::Submitted {
         snapshot: json!({}),
     };
@@ -4370,39 +4496,113 @@ async fn an_inbox_page_short_only_of_its_source_read_budget_continues_without_a_
         )
     };
 
-    // The first page is empty because the source-read budget ran out, not
-    // because the inbox holds nothing this caller can see, so it is an
-    // ordinary short page with its continuation rather than a refusal.
-    let first = list(None).await.expect("first profile-less page response");
-    assert_eq!(first.status(), StatusCode::OK);
-    let first: ReviewTaskPage = serde_json::from_slice(
-        &to_bytes(first.into_body(), 32 * 1024)
-            .await
-            .expect("bounded first page"),
-    )
-    .expect("first page JSON");
-    assert!(first.items.is_empty());
-    assert_eq!(
-        first.status,
-        registry_casework_core::PageStatus::BudgetExhausted
-    );
-    let continuation = first
-        .next_cursor
-        .expect("a budget-exhausted page keeps its continuation");
+    let response = list(None).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let page: ReviewTaskPage =
+        serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap()).unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].request_id, answer.accepted.request_id);
+    assert_eq!(page.status, PageStatus::Complete);
+    assert!(page.next_cursor.is_none());
 
-    let second = list(Some(continuation))
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn no_cover_notice_crosses_the_real_router_and_native_client_without_identity_disclosure() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_database(&idp).await;
+    let (request, task) = create_answer_task(&app, &database, &idp, "no-cover-http").await;
+    let absence = Uuid::new_v4();
+    database.execute(
+        "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,
+            starts_at,ends_at,cover_issuer,cover_subject,revision)
+         VALUES($1,$2,'reviewer',now()-interval '1 hour',now()+interval '1 hour',$2,'ineligible-cover',1)",
+        &[&absence, &idp.issuer()]
+    ).await.expect("seed cover that does not serve the review queue");
+    let (client, server) = native_review_client(app).await;
+    let supervisor = human_token(&idp, "supervisor", "supervisor");
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    let nomination = AssignmentRequest {
+        assignee: IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "reviewer".into(),
+        },
+        reason: None,
+    };
+    let blocked = client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            task,
+            1,
+            "assign-no-cover-http",
+            &nomination,
+        )
         .await
-        .expect("continued profile-less page response");
-    assert_eq!(second.status(), StatusCode::OK);
-    let second: ReviewTaskPage = serde_json::from_slice(
-        &to_bytes(second.into_body(), 32 * 1024)
+        .expect("assign without eligible cover over HTTP")
+        .value;
+    assert_eq!(blocked.state, ReviewTaskState::Open);
+    assert_eq!(
+        blocked.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    let visible = client
+        .review_task(CaseworkAuth::new(&reviewer, "staff"), task)
+        .await
+        .expect("reviewer reads notice over HTTP")
+        .value;
+    assert_eq!(visible.staffing_diagnostic, blocked.staffing_diagnostic);
+    let query = SupervisoryReviewTaskQuery {
+        request_id: Some(request.request_id),
+        ..Default::default()
+    };
+    let page = client
+        .supervisory_review_tasks(CaseworkAuth::new(&supervisor, "supervisor"), &query)
+        .await
+        .expect("supervisor reads notice over HTTP")
+        .value;
+    assert_eq!(
+        serde_json::to_value(&page.items[0]).unwrap(),
+        json!({
+            "taskId":task, "requestId":request.request_id, "queue":"review", "revision":2,
+            "state":"open", "staffingDiagnostic":"no-cover-available"
+        })
+    );
+    assert_client_status(
+        client
+            .review_task(CaseworkAuth::new(&supervisor, "supervisor"), task)
             .await
-            .expect("bounded continued page"),
-    )
-    .expect("continued page JSON");
-    assert_eq!(second.items.len(), 1);
-    assert_eq!(second.items[0].request_id, answer.accepted.request_id);
-    assert_eq!(second.status, registry_casework_core::PageStatus::Complete);
-
+            .expect_err("supervisory notice grants no review authority"),
+        404,
+    );
+    database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence],
+        )
+        .await
+        .expect("end cover absence");
+    let assigned = client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            task,
+            blocked.revision,
+            "assign-available-http",
+            &nomination,
+        )
+        .await
+        .expect("assign available reviewer over HTTP")
+        .value;
+    assert_eq!(assigned.staffing_diagnostic, None);
+    let page = client
+        .supervisory_review_tasks(CaseworkAuth::new(&supervisor, "supervisor"), &query)
+        .await
+        .expect("supervision reflects recovered responsibility")
+        .value;
+    assert!(serde_json::to_value(&page.items[0])
+        .unwrap()
+        .get("staffingDiagnostic")
+        .is_none());
+    server.abort();
     idp.stop().await;
 }

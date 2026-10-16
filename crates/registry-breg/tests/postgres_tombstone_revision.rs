@@ -14,8 +14,8 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationOutcome,
-    MutationPlan, MutationRequest, PatchOperation,
+    MutationBody, MutationError, MutationFaultPoint, MutationOutcome, MutationPlan,
+    MutationRequest, MutationTransaction, PatchOperation,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
@@ -78,7 +78,7 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
         )
         .await
         .expect("test simulates a same-schema package upgrade");
-    let upgraded = MutationCoordinator::new(
+    let upgraded = MutationTransaction::new(
         fixture.lock_key,
         Duration::from_secs(2),
         upgraded_identity,
@@ -508,7 +508,7 @@ struct Fixture {
     database: TestDatabase,
     compiled: registry_breg::CompiledRegistry,
     identity: ExpectedRegistryIdentity,
-    coordinator: MutationCoordinator,
+    coordinator: MutationTransaction,
     lock_key: RegistryLockKey,
     profile: AuditProfile,
     table: String,
@@ -538,7 +538,7 @@ impl Fixture {
         let profile = AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
             .expect("test owns keyed audit profile");
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock id is bounded");
-        let coordinator = MutationCoordinator::new(
+        let coordinator = MutationTransaction::new(
             lock_key,
             Duration::from_secs(2),
             identity.clone(),
@@ -589,7 +589,8 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{
+          "datasets":[{{"id":"test-dataset"}}],
+          "recordTypes":[{{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
@@ -606,13 +607,13 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{{"entities":[{{
-              "entity":"widget","operations":[{operations}],
+            "permissions":{{"records":[{{
+              "recordType":"widget","operations":[{operations}],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
             }},{{
-              "entity":"log","operations":["create","get","list"],
+              "recordType":"log","operations":["create","get","list"],
               "readableFields":["jurisdiction","message"],
               "writableFields":["jurisdiction","message"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
@@ -1004,7 +1005,7 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id:
     assert_eq!(
         envelope.get("data"),
         Some(&json!({
-            "entity": "widget",
+            "recordType": "widget",
             "recordId": record_id,
             "revision": 3,
             "trigger": "tombstoned",

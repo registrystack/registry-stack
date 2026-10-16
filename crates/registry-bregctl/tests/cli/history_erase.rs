@@ -45,7 +45,7 @@ impl Drop for EraseFixture {
     }
 }
 
-const REQUEST: &str = r#"{"entityId":"membership-record","recordId":"00000000-0000-4000-8000-000000000001","eraseThroughRevision":2,"operatorReference":"ops-ticket-1","reason":"approved-retention-request"}"#;
+const REQUEST: &str = r#"{"recordType":"membership-record","recordId":"00000000-0000-4000-8000-000000000001","eraseThroughRevision":2,"operatorReference":"ops-ticket-1","reason":"approved-retention-request"}"#;
 
 fn erase_failure(runtime_config: &Path, request_file: &Path, acknowledge: bool) -> Value {
     let mut arguments = vec![

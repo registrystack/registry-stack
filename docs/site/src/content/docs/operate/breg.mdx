@@ -30,43 +30,35 @@ Two roles take part. The author prepares a package from the project. The operato
 migration credential, activates the package and runs the server. One person may hold both roles on
 a pilot; the commands stay the same. A package carries no signature: the migration credential is
 what authorizes an activation, and the database records each one in its activation ledger, which
-`bregctl status` reads. Every command reads `--help`. Paths given to `--runtime-config`,
-`--credentials`, `--output`, and `--package` must be absolute.
+`bregctl status` reads. Every command accepts `--help`.
 
-Many operator paths are resolved through held directory descriptors rather than by name: data export output and checkpoint, data import state and checkpoint, test receipt
-output and the credentials file `bregctl test` reads, package inputs and outputs, history request
-files, the reviewed migrations tree, and authoring sources, including each
-module's SQL assets and planner scripts, which are read through the module directory the listing
-opened. `bregctl` resolves each component of these paths against the directory descriptor that
-holds it, then opens, creates, renames, and publishes through those held descriptors, so a
-directory replaced by a symbolic link after the path is validated cannot redirect the command.
-`--runtime-config` and `--package` are resolved by pathname in `registry-breg` instead, as is
-every `bregctl dev` path, and the local file `apply --backup <binding>=<path>` names, which
-`registry-breg` opens with `O_NOFOLLOW` on its final component only.
+Authoring commands accept relative or absolute project paths, including symbolic-link aliases of
+the project directory. `init` and artifact generation also accept relative output paths and
+aliases of the existing parent directory. Choose a new output directory: an existing destination,
+including a symbolic link, is refused. Governed source files and directories inside the project
+must not be symbolic links.
 
-Name the real directory rather than a symbolic link: on macOS, `/tmp`, `/var`, `/etc`, and `/home`,
-among others, are reached through symbolic links at the root, so pass `/private/tmp` and
-`/private/var` for the descriptor-resolved paths above. The descriptor-based refusal is
-fail-closed: the Linux and macOS builds resolve every descriptor-based path this way, and a build
-for a platform that offers no equivalent kernel-enforced resolution refuses each one instead of
-falling back to resolution by pathname; the diagnostic code depends on the command, since each
-surface reports the refusal under its own code rather than one shared across all of them.
+Deployment paths have stricter requirements. Give `--runtime-config`, the test command's
+`--credentials` and receipt `--output`, and the activation commands' `--package` absolute paths
+without parent-directory components or symbolic links. The runtime file's package and file-secret
+roots must also name real directories. If a path is refused, use the command's diagnostic to
+correct the named file, its parent directory, or its permissions, then retry. If a receipt does
+not match the candidate, rerun `test` for that exact candidate before packaging.
 
-{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, resolve_write_destination();
-    crates/registry-bregctl/src/test_lifecycle.rs, preflight_output() and read_credentials();
-    crates/registry-bregctl/src/package_lifecycle.rs;
-    crates/registry-bregctl/src/history_erasure_lifecycle.rs and history_rebaseline_lifecycle.rs;
-    crates/registry-bregctl/src/reviewed_migrations.rs;
-    crates/registry-bregctl/src/lib.rs, write_project_registry(),
-    read_bounded_source_file(), read_module_directory_names(), load_module_asset_files(),
-    and path_diagnostic();
-    crates/registry-bregctl/src/safe_path.rs, SafeDir and SafeEntry;
-    crates/registry-breg/src/runtime_config.rs, load_runtime_config_with_env();
-    crates/registry-breg/src/package.rs, reject_relative_symlinks();
-    crates/registry-breg/src/migration.rs, open_bound_backup();
-    crates/registry-bregctl/src/dev/mod.rs, project();
-    crates/registry-bregctl/src/apply_lifecycle.rs, parse_backup_arguments();
-    products/breg/scripts/test-adopter-workflow.sh. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, canonicalize_project_path(),
+    write_files_with_before_publish();
+    crates/registry-bregctl/tests/authoring_paths.rs,
+    authoring_accepts_explicit_project_and_output_parent_aliases(),
+    selected_root_alias_does_not_allow_governed_source_symlinks(),
+    output_parent_alias_does_not_allow_an_existing_symlink_leaf();
+    crates/registry-bregctl/src/test_lifecycle.rs, preflight_output(), read_credentials();
+    crates/registry-bregctl/src/package_lifecycle.rs, read_test_receipt(), validate_test_receipt();
+    crates/registry-bregctl/src/apply_lifecycle.rs, execute();
+    crates/registry-breg/src/runtime_config.rs, validate_loaded_paths();
+    crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(),
+    reject_symlink_components();
+    crates/registry-breg/tests/runtime_config.rs,
+    runtime_config_path_components_must_not_be_symlinks(), loaded_paths_must_not_be_symlinks(). */}
 
 ## Obtain the runtime
 
@@ -301,7 +293,7 @@ settings; `doctor` reads the values the server actually runs with.
     with_jit_disabled(), jit_is_disabled_before_operator_options_so_an_operator_can_enable_it(),
     sessions_carry_the_process_name_unless_the_url_names_one();
     crates/registry-breg/src/startup.rs, SERVER_IDLE_IN_TRANSACTION_TIMEOUT and prepare_database_startup();
-    crates/registry-breg/src/mutation/action.rs, acquire_hook_proposal_lock();
+    crates/registry-breg/src/mutation/action.rs, acquire_hook_change_lock();
     crates/registry-breg/src/postgres/interlock.rs;
     crates/registry-breg/tests/postgres_kernel.rs, runtime_sessions_are_named_and_bounded_across_recycling
     and idle_in_transaction_bound_rolls_back_and_the_pool_recovers;
@@ -391,11 +383,11 @@ configured prefix and never derive their authority from request headers.
 | `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |
 | `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. `oidc.allowedClients` is required: list the OAuth clients whose tokens the registry accepts, or write `unrestricted` to accept a token from every client of the issuer. A project that names clients itself, in a profile's `requesterClients`, in `authorityClaims.trustedActors`, or in a consent recipient organization, needs each of them listed here, so `unrestricted` does not start with such a project. |
 | `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms only: spent idempotency keys are found and bound without it, so a retry after the rotation still replays or is refused. Changing the cursor secret invalidates existing cursors. |
-| `idempotency` | Optional `receiptRetentionDays` (default 7, 1 to 365): how long the response to a successful write stays available to an exact retry. The key stays spent after that; see [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses). |
-| `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
+| `retention` | Optional `receiptRetentionDays` (default 7, 1 to 365): how long the response to a successful write stays available to an exact retry. The key stays spent after that; see [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses). Optional `hookPayloadRetentionDays` (default 7, 1 to 30): how long a captured webhook payload is kept for pending or dead-letter delivery; see [Bind webhook receivers](../breg-webhooks/). |
+| `eventDestinations` | One binding per webhook destination the package declares; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, `trustedJwksRef`, `revokedKeyIds`, optional `caBundleRef`, and exactly one of `tokenRef` or a refreshing `privateKeyJwt` credential. The script cannot replace these bindings; see [Governed registry actions](../../explanation/governed-registry-actions/). |
 | `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `type` member selects the custodian. `type: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `attemptTimeoutMilliseconds` (default 5000, at most 30000). `type: local-file` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
-| `attachmentStorage` | PostgreSQL by default, or an operator-bound S3-compatible backend for request attachments; see [Attachment storage](../../reference/breg-configuration/#attachment-storage). |
+| `attachmentStorage` | PostgreSQL by default, or an operator-bound S3-compatible backend for Proposal attachments; see [Attachment storage](../../reference/breg-configuration/#attachment-storage). |
 | `attachmentVerification` | Optional asynchronous HTTP verifier; content stays quarantined until approved. Configure it before the first attachment upload; see [External attachment verification](../../reference/breg-configuration/#external-attachment-verification). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
 | `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
@@ -536,7 +528,8 @@ must equal the role named under `database.roles`, and the runtime requires TLS o
 itself, so the URL needs no `sslmode` parameter and a server without TLS refuses the connection.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, read_secret_file(),
-    validate_file_metadata(), and valid_file_name();
+    validate_file_metadata();
+    crates/registry-platform-yaml/src/secret.rs, valid_file_name();
     crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
     crates/registry-breg/src/cursor.rs, ROOT_SECRET_MIN_BYTES;
     crates/registry-breg/src/runtime_config.rs, database_connection_config_for();
@@ -620,7 +613,7 @@ Keep the selected principal values stable if existing ownership and review decis
 Test new tokens before the serving cutover, including refused permissions and assignment shapes.
 
 Resolve uncertain writes before changing issuer mappings, profiles, or packages.
-After a timeout, retry the same request with its original idempotency key and the same effective principal, profile, purpose, and row context, within the receipt horizon (`idempotency.receiptRetentionDays`).
+After a timeout, retry the same request with its original idempotency key and the same effective principal, profile, purpose, and row context, within the receipt horizon (`retention.receiptRetentionDays`).
 A replacement token can satisfy those conditions; changing the profile or authority context produces `idempotency.conflict` instead of a replay.
 Keys are spent per caller, under the configured issuer and the principal value, so a retry under a changed issuer or principal mapping is a different caller's fresh request and can duplicate a write whose first response was lost.
 The binding also covers the request and the activation that serves it, so issuing a fresh key blindly can duplicate a write whose first response was lost.
@@ -751,8 +744,8 @@ package's own source, and reports the package digest, the registry id, version, 
 inventory counts. It does not say whether the database is on that package; `status` and readiness
 do, and startup refuses to serve a package the ledger does not name as active. `doctor` opens every startup dependency without binding the listener: the runtime file, the
 package, the database connection and its readiness, the audit key and destination writability, the cursor key, the OIDC
-verifier's key material, the event destination bindings, the retained review authority and
-executor bindings, the authentication profile's claim mapping, accepted algorithms, and audience
+verifier's key material, the event destination bindings, the configured review authorities and
+their producer identities for retained submissions, the authentication profile's claim mapping, accepted algorithms, and audience
 against the package this runtime serves, and the field-encryption provider and its stored key. It
 names the first dependency that refuses and stops there. A run that reaches the end lists every
 dependency it checked, then the PostgreSQL advisories from
@@ -832,7 +825,9 @@ PostgreSQL advisories:
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PlanArgs, PlanSuccessReport, StatusArgs,
     StatusSuccessReport, ApplySuccessReport;
     crates/registry-breg/src/migration.rs, AlreadyActive;
-    crates/registry-breg/src/startup.rs, ActivePackageMismatch. */}
+    crates/registry-breg/src/startup.rs, ActivePackageMismatch;
+    crates/registry-bregctl/src/doctor.rs, CHECKED_DEPENDENCIES;
+    crates/registry-breg/src/review_store.rs, verify_retained_bindings(). */}
 
 Start the process and check
 `GET /ready` before admitting traffic; `GET /health` reports liveness only.
@@ -847,128 +842,59 @@ durable review submission, result reconciliation, and automatic application jobs
 not recreate a Casework review and does not bypass current Base Registry Engine application
 authority.
 
-`doctor` and readiness report setup and dependency health. They are not a change-request workflow
-console. To trace one review, read the request under a profile granted
-`readableRequestFields: [review-state]` and inspect `data.request.review`. Its closed sections are
-`submission`, `result`, `delivery`, `application`, and `recovery`; identifiers and timestamps are
-omitted until known. Correlate its Casework request id with Casework's request, task, result, and
-result-feed resources. After durable submission, `submission.recoveryDeadline` reports the fixed
-recovery deadline. It bounds submission and cancellation retries, not the review itself: once the
-authority accepts a review, it may stay pending for as long as the authority holds it. Automatic
-application jobs report `application.attempts` from 0 through 1000;
-`application.nextAttemptAt` is present only while the job is queued or applying and is omitted once
-it is blocked or applied. An applied job includes `application.receiptRecovered: true` when the
-Base Registry Engine reconstructed the receipt by discovering the source request in its
-already-applied state. Omission means the Base Registry Engine completed through the apply
-response; an idempotent retry may have replayed that response, so omission does not prove that the
-source applied the request for the first time. Use
-`application.state` with `recovery.code` to choose the supported operator action, and do not query
-the database directly.
+`doctor` and readiness report setup and dependency health. Observe durable work
+through ordinary authorized Proposal Get. Keep the exact `actionRevision`,
+`submissionVersion`, and `effectDigest`; a revised or rebased successor does not
+satisfy an observation of the earlier frozen submission.
 
-A `409` or `412` from application schedules another discovery after 5 seconds,
-then doubles the delay up to 5 minutes. A failed business precondition or row
-boundary therefore does not consume the retry budget in a tight loop. The
-worker keeps the same job and idempotency key, and each delayed discovery and
-application still checks current source authority.
+### Recover a blocked Proposal
 
-{/* Evidence: crates/registry-breg/src/review_store.rs; crates/registry-breg/tests/postgres_review_executor.rs */}
+Read `applicationStatus`, its safe reason and recovery hint, and currently
+promoted transitions. Applied work exposes retained local application evidence.
+A missing review-authority binding disables dependent operations without blocking
+unrelated CRUD, immediate Actions, or no-review Proposals. Restore the exact
+endpoint, producer, policy, and credential binding before retrying dependent work.
+An authority outage never implies approval.
 
-| `recovery.code` | Operator action |
-| --- | --- |
-| `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. A later pending answer or a reconciled result clears `result-lookup-uncertain`. |
-| `token-unavailable` | Restore the configured review-authority credential provider, then let the durable worker retry. |
-| `submission-recovery-expired` | Reconcile the Casework request by the recorded idempotency and digest bindings. If the authority never received it, `bregctl review-recovery resubmit` submits the same retained request again; otherwise start a new proposal. |
-| `remote-refused` | Correct the producer, policy, or submitted contract reported by the review authority before submitting a new proposal. |
-| `cancellation-recovery-expired`, `cancellation-attempts-exhausted` | Reconcile the exact Casework request and cancellation idempotency key. If cancellation did not complete, correct the binding before starting a fresh proposal. |
-| `result-expired` | Start a new review; the authority no longer promises the result payload. |
-| `result-unknown-to-authority` | The authority answered the result lookup with an empty `404`: it no longer holds the accepted review, typically because the review environment was restored from an older backup or replaced. The engine keeps polling, after every review the authority still knows, until the attempt budget runs out. Once the authority is back in its intended state, run `bregctl review-recovery resubmit` to submit the same retained request again, or `bregctl review-recovery close` to stop waiting. |
-| `result-poll-attempts-exhausted` | The result lookup failed, or answered an empty `404`, until the attempt budget ran out; a review the authority keeps answering as pending is never failed. Reconcile the accepted Casework request by its retained binding. If the authority lost the review, `bregctl review-recovery resubmit` submits the same retained request again. If the authority still holds a result, repair the result endpoint and start a new proposal; the retained binding identifies the review to close. |
-| `operator-closed` | An operator closed the review with `bregctl review-recovery close`. Start a new proposal, or run `bregctl review-recovery resubmit` if the authority can take the same request again. |
-| `executor-unconfigured` | Restore the named executor in runtime configuration, then use the advertised authorized manual apply action for the same approved proposal. |
-| `executor-denied` | Correct the executor credential or application grant, restart with that binding, then run `bregctl review-recovery retry-application` for the exact request and proposal version. The approval must still be current. |
-| `source-action-unavailable` | Restore the compiled source apply action and its access profile, then use the advertised authorized manual apply action for the same approved proposal. |
-| `source-response-invalid` | Repair the source deployment so its read and apply responses match the compiled contract, then use the advertised authorized manual apply action. |
-| `application-attempts-exhausted` | Inspect the source and executor logs using the request and application ids, then apply manually or create a new proposal. |
-
-To recover an executor-denied job after correcting its binding:
+Automatic application uses the restricted built-in executor and needs no OAuth
+executor credential or self-HTTP endpoint. After repairing an application grant
+or deployment problem, use an authorized human recovery transition or the exact
+operator recovery binding. Inspect the command first:
 
 ```sh
-bregctl --format json review-recovery retry-application \
-  --runtime-config /srv/registry/runtime.yaml \
-  --request-entity correction-request \
-  --request-id 00000000-0000-4000-8000-000000000001 \
-  --proposal-version 1
+bregctl review-recovery retry-application --help
 ```
 
-The report returns `state: queued`. Re-read the request's `review.application`
-until it reports `applied` or a new recovery code. Recovery preserves the exact
-proposal and job idempotency key. It refuses an expired approval, a withdrawn
-or replaced proposal, a running job, and a block for any other reason.
-
-{/* Evidence: crates/registry-breg/src/review_recovery.rs; crates/registry-breg/tests/postgres_change_requests.rs */}
+Operator commands identify `--action-id`, `--proposal-id`, and
+`--submission-version` with an absolute `--runtime-config`. They cannot replace a
+review decision, replan frozen effects, or reset a semantic refusal. Manual Apply
+keeps its separately configured caller authority.
 
 ### Resubmit or close a review the authority lost
 
-A review environment restored from an older backup, or replaced by a fresh one, no longer holds
-the reviews the engine submitted to it. Two commands recover one exact request proposal version. Both
-need the migration authority of the runtime file, take the registry lock, and append one audit
-record that names the request only by its keyed record reference.
+Reconcile the exact accepted authority work before choosing a recovery. Inspect
+both operator commands:
 
-```bash
-bregctl --format json review-recovery resubmit \
-  --runtime-config /etc/registry/breg/runtime.yaml \
-  --request-entity correction-request \
-  --request-id 00000000-0000-4000-8000-000000000001 \
-  --proposal-version 1
+```sh
+bregctl review-recovery resubmit --help
+bregctl review-recovery close --help
 ```
 
-`resubmit` accepts an accepted review coded `result-unknown-to-authority`, or a failed one coded
-`result-poll-attempts-exhausted`, `submission-recovery-expired`, or `operator-closed`. It releases
-the recorded authority binding, resets the attempt counters, restarts the recovery deadline with
-the configured window, and queues the retained request for submission under its original
-idempotency key. An authority that still holds the request answers with the same binding; one that
-lost it creates the review again. A result the old binding delivers later is recorded as
-unmatched.
+`resubmit` uses the retained exact review request and original idempotency binding.
+`close` ends waiting for that exact accepted review without fabricating a result.
+Both bind the Action, Proposal, and submission version and require operator
+migration authority and audit. Retained detail that is erased or no longer
+applicable cannot be made current by a recovery command. Refetch the Proposal
+and preserve its exact binding after recovery.
 
-Resubmitting relies on the authority still honouring that idempotency key. Before you resubmit a
-review coded `result-poll-attempts-exhausted` or `operator-closed`, confirm at the authority that
-it no longer holds the review: an authority whose idempotency retention has lapsed opens a second
-review while a reviewer may still be working the first.
+For an uncertain Start, Submit, or Apply, recover its original prepared command
+and idempotency key. A later Proposal Get is an observation, not proof that the
+uncertain command executed. Expired or erased receipts refuse execution and keep
+keys spent. Do not create a fresh key blindly.
 
-`close` accepts an accepted review without a result. It marks the submission failed with
-`operator-closed` and keeps the binding for reconciliation, and a result the authority delivers
-for it afterwards is refused. It does not contact the authority, so cancel the review there as
-well if it still exists.
-
-Both refuse a withdrawn proposal, a review whose result is already recorded, and any other state
-with `review-recovery.submission.ineligible`, whose message names the reason, state, and code.
-`resubmit` also refuses once request retention erased the review request (`request-erased`), or
-when the request no longer awaits review for that proposal version (`proposal-not-submitted`).
-
-Each operation writes an audit `request` entry to the `bregctl` companion audit file before it
-changes the submission, and its `response` after the change commits. An audit destination that
-refuses the request entry stops the operation before it changes anything. One that refuses the
-response after the commit is reported as `review-recovery.recovery.unaudited`: the recovery took
-effect, so read the submission's state before retrying.
-
-Retain the project sources, module locks, generated files, test receipt, and runtime
-file for each activation. Store secrets separately.
-
-{/* Evidence: crates/registry-bregctl/src/apply_lifecycle.rs;
-    crates/registry-breg/src/review_recovery.rs, ReviewRecoveryOperatorService;
-    crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost;
-    crates/registry-bregctl/src/review_recovery.rs;
-    crates/registry-breg/src/review_store.rs, read_projection();
-    crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
-    crates/registry-bregctl/src/lib.rs, VerifyArgs, verify(), write_doctor_success(),
-    doctor_success_output_is_stable_in_human_and_machine_formats(), and
-    doctor_reports_postgres_advisories_after_the_passing_checks_without_failing();
-    crates/registry-breg/src/postgres/baseline.rs, a_healthy_server_reports_only_the_connection_numbers();
-    crates/registry-breg/src/api/mod.rs;
-    crates/registry-breg/src/startup.rs.
-    The doctor output above was captured on 2026-09-25 from a local bregctl dev session
-    (products/breg/DEV.md), running `bregctl doctor` in both formats against the session's
-    runtime file with SSL_CERT_FILE naming the session's PostgreSQL CA. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, ReviewRecoveryExactArgs;
+    crates/registry-breg/src/review_recovery.rs;
+    crates/registry-breg/src/runtime_config.rs; crates/registry-breg-client/src/proposal.rs. */}
 
 ## Turn encryption on over existing plaintext
 
@@ -992,7 +918,7 @@ bregctl field-encryption preflight \
 The preflight is read-only and value-free. It binds the same predecessor package an apply binds,
 refuses when the active revision is anything else, and reports counts per covered field: the live
 rows still carrying plaintext, the retained journal revisions that carry the field member, and
-the retained change-request snapshots, cached idempotency responses, and event payloads that
+the retained Proposal snapshots, cached idempotency responses, and event payloads that
 mention the field. When a covered field declares a unique blind index, the preflight refuses when
 two of those plaintext values would normalize onto one index entry, naming the authored record
 identifiers, capped at 64, and never a value. Correct one of the named records and run the
@@ -1294,7 +1220,7 @@ worker to investigate; raising the restart budget only repeats the outage.
     crates/registry-breg/src/subject_access_log.rs, run_retention();
     crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL;
     crates/registry-breg/tests/startup_http.rs;
-    crates/registry-breg/tests/postgres_review_executor.rs;
+    crates/registry-breg/tests/postgres_facility_proposal.rs;
     crates/registry-breg/tests/postgres_startup.rs. */}
 
 ## Operate statistical releases
@@ -1325,8 +1251,8 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | `doctor` reports `startup.package.not-active` | The ledger names another package as active than the one at `package.root`. Run `bregctl status` to see the active digest, then set `package.root` to that package, or `plan` and `apply` the package you meant to serve. |
 | `doctor` reports `startup.runtime-role.can-write` | In split role mode the runtime role can write the activation ledger or the registry state, for example through a grant, an ownership, a membership, or a trigger no compiled migration creates. Run `bregctl plan --package DIR`: its refusal names the object and the statement that removes it, such as `DROP TRIGGER`. |
 | `doctor` reports `startup.runtime-role.grants-missing` | The runtime role lacks a grant the active package gives it, as after `REASSIGN OWNED`. Run `bregctl apply --package DIR` with the active package to reissue the grants. |
-| `doctor` reports `startup.role-mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role, which records a `role-change` activation. |
-| `plan` or `apply` reports `apply.successor.roles-differ` | The runtime file names other database roles than the active activation serves with, and only a role change retires the recorded runtime role. Run `plan` and `apply` with the active package under the new roles, which records a `role-change` activation, then apply the successor. |
+| `doctor` reports `startup.role-mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role. The role change records a metadata-only `successor` activation of the same package. |
+| `plan` or `apply` reports `apply.successor.roles-differ` | The runtime file names other database roles than the active activation serves with, and only a role change retires the recorded runtime role. Run `plan` and `apply` with the active package under the new roles, then apply the successor package. The role change records a metadata-only `successor` activation whose predecessor and target package digests are the same. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
 | `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `diff --runtime-config` reads the active package, and `test` and `package` accept its directory through `--baseline-package`; `verify` refuses it until the successor is active. The successor carries the statements that bring the generated views and declared indexes up to date even when the project is unchanged; [the first successor after an engine upgrade](../breg-changes/#the-first-successor-after-an-engine-upgrade) describes what they lock. |
 | `doctor` or startup warns `postgres.connections.pool-over-half` | Lower `database.pool.maximumConnections` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
@@ -1334,12 +1260,15 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | The runtime file is refused with `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
-| A command refuses a path that exists | Some component of the path is a symbolic link. Name the real directory; on macOS pass `/private/tmp` rather than `/tmp`. |
+| A command refuses a path that exists | Follow the named path diagnostic. Deployment files require real absolute paths; authoring accepts aliases of the selected project and output parent, but refuses symbolic links inside the project and existing output destinations. Check the file type and permissions too. |
 
 {/* Evidence: crates/registry-breg/src/package.rs, rederive(), inspect_package_integrity(), and load_predecessor_package();
     crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package() and
     inspect_baseline_package();
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+    crates/registry-breg/src/migration.rs, role_change_ledger_entry();
+    crates/registry-breg/tests/postgres_migration.rs,
+    real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation();
     crates/registry-breg/tests/postgres_reference_indexes.rs,
     a_successor_adds_reference_indexes_to_a_database_activated_without_them. */}
 

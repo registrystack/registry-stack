@@ -292,7 +292,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
     def test_cli_ci_profile_is_explicit_and_rejects_unknown_profiles(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--output-dir", "/out",
-            "--version", "0.40.0",
+            "--version", "0.42.0",
             "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
             "--include-casework", "--zig-python", "/maturin/python",
             "--maturin", "/maturin/maturin",
@@ -384,7 +384,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 "--output-dir",
                 "/out",
                 "--version",
-                "0.40.0",
+                "0.42.0",
                 "--napi-platform",
                 "darwin-arm64",
                 "--include-casework",

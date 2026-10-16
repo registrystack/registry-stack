@@ -38,7 +38,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -57,14 +57,17 @@ entities:
     classification: restricted
     fields:
       - {id: text, type: text, required: true, maximumLength: 200, classification: restricted}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label]
@@ -75,8 +78,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [create, get, list, patch, tombstone, batch, revisions]
           allowCount: true
           readableFields: [label, secret, jurisdiction]
@@ -85,7 +88,7 @@ accessProfiles:
           sortableFields: [label]
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdictions, operator: in}
-        - entity: protected-note
+        - recordType: protected-note
           rowBoundaries: unrestricted
           operations: [create, get, list]
           readableFields: [text]
@@ -100,7 +103,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: household
     primaryDataset: test-dataset
     route: households
@@ -134,6 +137,9 @@ entities:
     fields:
       - {id: person-code, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: sensitive-note, type: string, required: false, maximumLength: 64, classification: restricted}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: operator
     default: true
@@ -141,8 +147,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: household
+      records:
+        - recordType: household
           rowBoundaries: unrestricted
           operations: [get, lookup, list]
           readableFields: [household-code, administrative-area, local-household-number]
@@ -157,7 +163,7 @@ accessProfiles:
               filterableFields: [person-code]
               sortableFields: [person-code]
               allowCount: true
-        - entity: person
+        - recordType: person
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [sensitive-note]
@@ -168,8 +174,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: household
+      records:
+        - recordType: household
           operations: [get, lookup]
           readableFields: [household-code]
           rowBoundaries:
@@ -188,7 +194,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: benefit-record
     primaryDataset: test-dataset
     route: benefit-records
@@ -203,6 +209,9 @@ entities:
         execution: live
         fields:
           - {id: eligibility-score, type: int64, classification: restricted}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: operator
     default: true
@@ -210,8 +219,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: benefit-record
+      records:
+        - recordType: benefit-record
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label, eligibility-score]
@@ -225,7 +234,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: public-record
     primaryDataset: test-dataset
     route: public-records
@@ -246,7 +255,6 @@ entities:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [classified-status]
     constraints:
       - {type: temporal-non-overlap, scopeFields: [classified-status], startField: valid-from, endField: valid-to}
     hooks:
@@ -257,14 +265,17 @@ entities:
         handler:
           type: url
           destinationId: classified-operations-destination
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: public-record
+      records:
+        - recordType: public-record
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label]
@@ -275,14 +286,14 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: public-record
+      records:
+        - recordType: public-record
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label, restricted-canary-field]
           filterableFields: [label]
           sortableFields: [label]
-        - entity: protected-ledger
+        - recordType: protected-ledger
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [classified-status, valid-from, valid-to]
@@ -301,7 +312,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: logical-record
     primaryDataset: test-dataset
     route: logical-records
@@ -311,14 +322,17 @@ entities:
       - {id: household-code, type: string, required: true, maximumLength: 64, classification: public}
       - {id: household-kind-code, apiName: householdKind, type: vocabulary-code, vocabulary: household-kind, required: true, classification: public}
       - {id: private-canary-field, apiName: privateCanary, type: string, required: true, maximumLength: 64, classification: restricted}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: logical-record
+      records:
+        - recordType: logical-record
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [household-code, household-kind-code]
@@ -355,7 +369,7 @@ manifestProjection:
     - id: permit
       identifiers:
         - {field: display-token, kind: display}
-entities:
+recordTypes:
   - id: permit
     primaryDataset: test-dataset
     route: permits
@@ -372,7 +386,6 @@ entities:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [permit-number]
     constraints:
       - {type: unique, fields: [hidden-permit-key]}
       - {type: unique, fields: [permit-number, valid-from]}
@@ -393,7 +406,6 @@ entities:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [inspection-code]
     constraints:
       - {type: unique, fields: [hidden-inspection-key, valid-from]}
       - {type: unique, fields: [inspection-code, valid-from]}
@@ -418,28 +430,31 @@ entities:
     constraints:
       - {type: unique, fields: [hidden-certificate-key]}
       - {type: unique, fields: [certificate-code]}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: permit
+      records:
+        - recordType: permit
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
-        - entity: inspection
+        - recordType: inspection
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
           filterableFields: [inspection-code]
           sortableFields: [inspection-code]
-        - entity: finding
+        - recordType: finding
           rowBoundaries: unrestricted
           operations: [get]
           readableFields: [inspection]
-        - entity: certificate
+        - recordType: certificate
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [import-source, certificate-code]
@@ -447,12 +462,12 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: inspection
+      records:
+        - recordType: inspection
           rowBoundaries: unrestricted
           operations: [get]
           readableFields: [import-source, valid-from]
-        - entity: finding
+        - recordType: finding
           rowBoundaries: unrestricted
           operations: [get]
           readableFields: [inspection]
@@ -466,7 +481,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: site
     primaryDataset: test-dataset
     route: sites
@@ -477,14 +492,17 @@ entities:
       - {id: location, type: crs84-point, precision: 6, required: false, classification: public}
     geojson:
       geometryField: location
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: map-reader
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: site
+      records:
+        - recordType: site
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [code, location]
@@ -497,8 +515,8 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: site
+      records:
+        - recordType: site
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [code]
@@ -556,7 +574,7 @@ const SNAPSHOT_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
-entities:
+recordTypes:
   - id: assignment
     primaryDataset: test-dataset
     route: assignments
@@ -569,6 +587,9 @@ entities:
       - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: restricted}
       - {id: starts, type: date, required: true, classification: restricted}
       - {id: ends, type: date, classification: restricted}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: history
     default: true
@@ -576,8 +597,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: assignment
+      records:
+        - recordType: assignment
           operations: [snapshot]
           readableFields: [label, starts, ends]
           filterableFields: [label]
@@ -589,8 +610,8 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      entities:
-        - entity: assignment
+      records:
+        - recordType: assignment
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label, starts, ends]
@@ -598,99 +619,12 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      entities:
-        - entity: assignment
+      records:
+        - recordType: assignment
           rowBoundaries: unrestricted
           operations: [revisions]
           revisionAccess: true
           readableFields: [label]
-"#;
-
-const REQUEST_METADATA_GRANT_PROJECT: &str = r#"
-apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
-kind: BRegProject
-project: {id: request-metadata-grants, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
-entities:
-  - id: placement
-    primaryDataset: test-dataset
-    route: placements
-    mutationMode: mutable
-    classification: public
-    changeControl:
-      requiredFor: [patch]
-    fields:
-      - {id: site, type: string, required: true, maximumLength: 64, classification: public}
-      - {id: holder-note, type: string, maximumLength: 64, classification: public}
-  - id: placement-correction
-    primaryDataset: test-dataset
-    route: placement-corrections
-    mutationMode: mutable
-    classification: public
-    fields:
-      - {id: target, type: reference, target: placement, required: true, classification: public}
-      - {id: proposed-site, type: string, required: true, maximumLength: 64, classification: public}
-    changeRequest:
-      effects:
-        - target: {fromField: target}
-          operation: patch
-          set:
-            site: {fromField: proposed-site}
-          clear: [holder-note]
-      review:
-        type: required
-        authority: casework-main
-        policyId: placement-correction
-      onApproved: {mode: manual}
-accessProfiles:
-  - id: public
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: unrestricted
-    permissions:
-      entities:
-        - {entity: placement-correction, rowBoundaries: unrestricted, operations: [get, list], readableFields: [target, proposed-site]}
-  - id: correction-officer
-    principalClaim: registry_principal
-    requiredScopes: [registry.read]
-    requiredPurposes: [case-management]
-    permissions:
-      entities:
-        - entity: placement
-          rowBoundaries: unrestricted
-          operations: [get]
-          readableFields: [site]
-        - entity: placement-correction
-          rowBoundaries: unrestricted
-          operations: [create, get, list, patch, submit-request, apply-request]
-          readableFields: [target, proposed-site]
-          writableFields: [target, proposed-site]
-          applyTargets:
-            - {entity: placement, rowBoundaries: unrestricted}
-  - id: checkpoint-reader
-    principalClaim: registry_principal
-    requiredScopes: [registry.read]
-    requiredPurposes: [case-management]
-    permissions:
-      entities:
-        - entity: placement
-          rowBoundaries: unrestricted
-          operations: [get]
-          readableFields: [site]
-        - entity: placement-correction
-          rowBoundaries: unrestricted
-          operations: [get, list]
-          readableFields: [target, proposed-site]
-          readableRequestFields: [reason, review-state]
-  - id: narrow-reader
-    principalClaim: registry_principal
-    requiredScopes: [registry.read]
-    requiredPurposes: [case-management]
-    permissions:
-      entities:
-        - entity: placement-correction
-          rowBoundaries: unrestricted
-          operations: [get, list]
-          readableFields: [target, proposed-site]
 "#;
 
 fn snapshot_harness(
@@ -1019,7 +953,7 @@ async fn snapshot_default_projection_excludes_live_derived_fields() {
     .await;
     assert_eq!(metadata.status(), StatusCode::OK);
     let metadata = body_json(metadata).await;
-    assert!(metadata["entities"]
+    assert!(metadata["recordTypes"]
         .as_array()
         .unwrap()
         .iter()
@@ -1232,7 +1166,7 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
         .is_some());
     assert_eq!(
         spatial_success["headers"]["Link"]["description"],
-        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible record type schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
     );
     assert_eq!(
         spatial_success["headers"]["Link"]["schema"]["example"],
@@ -1676,8 +1610,8 @@ async fn lookup_route_conceals_a_substituted_access_profile_selection() {
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: household
+      records:
+        - recordType: household
           rowBoundaries: unrestricted
           operations: [get]
           readableFields: [household-code]
@@ -1943,7 +1877,7 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
     .await;
     assert_eq!(
         openapi["paths"]["/v1/records/households/{record_id}/people"]["get"]
-            ["x-registry-responseEntity"],
+            ["x-registry-responseRecordType"],
         "person"
     );
     assert_eq!(
@@ -1989,7 +1923,7 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
             .await,
     )
     .await;
-    let person = metadata["entities"]
+    let person = metadata["recordTypes"]
         .as_array()
         .expect("metadata entities")
         .iter()
@@ -2907,13 +2841,13 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
             .await,
     )
     .await;
-    assert_eq!(public_metadata["entities"].as_array().unwrap().len(), 1);
+    assert_eq!(public_metadata["recordTypes"].as_array().unwrap().len(), 1);
     assert_eq!(
-        public_metadata["entities"][0]["readableFields"],
+        public_metadata["recordTypes"][0]["readableFields"],
         json!(["label"])
     );
     assert_eq!(
-        public_metadata["entities"][0]["operations"],
+        public_metadata["recordTypes"][0]["operations"],
         json!([
             {"operation": "get", "accessProfile": "public"},
             {"operation": "list", "accessProfile": "public"}
@@ -3142,7 +3076,7 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     );
     let public_metadata =
         body_json(send_to(&app, Method::GET, "/v1/registry", Some(public_claims())).await).await;
-    assert_eq!(public_metadata["entities"].as_array().unwrap().len(), 1);
+    assert_eq!(public_metadata["recordTypes"].as_array().unwrap().len(), 1);
     let metadata_artifact = registry
         .artifacts()
         .get(REGISTRY_METADATA_ARTIFACT_PATH)
@@ -3153,7 +3087,7 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     assert_eq!(metadata_artifact["registryId"], "discovery-matrix");
     assert_eq!(public_metadata["revision"], registry.revision());
     assert_eq!(
-        public_metadata["entities"][0],
+        public_metadata["recordTypes"][0],
         metadata_response_from_inventory(&registry, "public-record", "public")
     );
     let public_schema = body_json(
@@ -3259,14 +3193,17 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         .await,
     )
     .await;
-    assert_eq!(protected_metadata["entities"].as_array().unwrap().len(), 2);
-    assert!(protected_metadata["entities"]
+    assert_eq!(
+        protected_metadata["recordTypes"].as_array().unwrap().len(),
+        2
+    );
+    assert!(protected_metadata["recordTypes"]
         .as_array()
         .unwrap()
         .iter()
         .flat_map(|entity| entity["operations"].as_array().unwrap())
         .all(|operation| operation["accessProfile"] == "caseworker"));
-    let protected_ledger_metadata = protected_metadata["entities"]
+    let protected_ledger_metadata = protected_metadata["recordTypes"]
         .as_array()
         .expect("protected metadata entities")
         .iter()
@@ -3483,7 +3420,7 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
         .await,
     )
     .await;
-    let case = protected_metadata["entities"]
+    let case = protected_metadata["recordTypes"]
         .as_array()
         .expect("entities")
         .iter()
@@ -3559,6 +3496,9 @@ fn metadata_response_from_inventory(
     }
     json!({
         "id": metadata_entity.id,
+        "apiName": registry.entities()[entity_id].api_name,
+        "display": registry.entities()[entity_id].display,
+        "revision": registry.entities()[entity_id].definition_revision,
         "datasetIdentifier": dataset_identifier,
         "route": metadata_entity.route,
         "operations": operations.into_iter().map(|(operation, access_profile)| json!({
@@ -3580,11 +3520,8 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
-        Operation::SubmitRequest => "submit-request",
-        Operation::ReviseRequest => "revise-request",
-        Operation::CancelRequest => "cancel-request",
-        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
+        Operation::Start => "start",
         Operation::Snapshot => "snapshot",
         Operation::Import => "import",
     }
@@ -3682,7 +3619,7 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
     let link = &record_operation["responses"]["200"]["headers"]["Link"];
     assert_eq!(
         link["description"],
-        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible record type schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
     );
     assert_eq!(
         link["schema"]["example"],
@@ -3887,115 +3824,6 @@ fn metadata_operation<'a>(document: &'a Value, id: &str) -> &'a Value {
 }
 
 #[tokio::test]
-async fn workspace_metadata_projects_request_field_disclosure_per_caller_profile() {
-    let harness = Harness::from_project(REQUEST_METADATA_GRANT_PROJECT, true);
-    let granted = body_json(
-        harness
-            .send(
-                Method::GET,
-                "/v1/registry?accessProfile=checkpoint-reader",
-                Some(caseworker_claims("case-management")),
-            )
-            .await,
-    )
-    .await;
-    assert_eq!(
-        metadata_operation(&granted, "records.placement-correction.get")["readableRequestFields"],
-        json!(["reason", "review-state"])
-    );
-    assert_eq!(
-        metadata_operation(&granted, "records.placement-correction.list")["readableRequestFields"],
-        json!(["reason", "review-state"])
-    );
-    // An entity without a change request never carries request metadata, so the
-    // projection stays empty whatever the profile's default grant holds.
-    assert_eq!(
-        metadata_operation(&granted, "records.placement.get")["readableRequestFields"],
-        json!([])
-    );
-
-    let ungranted = body_json(
-        harness
-            .send(
-                Method::GET,
-                "/v1/registry?accessProfile=narrow-reader",
-                Some(caseworker_claims("case-management")),
-            )
-            .await,
-    )
-    .await;
-    assert_eq!(
-        metadata_operation(&ungranted, "records.placement-correction.get")["readableRequestFields"],
-        json!(["reason"])
-    );
-
-    assert_eq!(harness.records.calls(), 0);
-}
-
-#[tokio::test]
-async fn workspace_metadata_names_only_the_readable_target_fields_a_change_request_changes() {
-    let harness = Harness::from_project(REQUEST_METADATA_GRANT_PROJECT, true);
-    let change_request = |document: &Value| {
-        document["entities"]
-            .as_array()
-            .expect("metadata entities")
-            .iter()
-            .find(|entity| entity["id"] == "placement-correction")
-            .expect("request entity")["changeRequest"]
-            .clone()
-    };
-
-    let officer = body_json(
-        harness
-            .send(
-                Method::GET,
-                "/v1/registry?accessProfile=correction-officer",
-                Some(caseworker_claims("case-management")),
-            )
-            .await,
-    )
-    .await;
-    let effects = change_request(&officer)["effects"].clone();
-    assert_eq!(effects.as_array().map(Vec::len), Some(1), "{effects}");
-    assert!(effects[0]["id"].is_string(), "{effects}");
-    assert_eq!(effects[0]["operation"], "patch");
-    assert_eq!(
-        effects[0]["target"],
-        json!({"entity": "placement", "fromField": "target"})
-    );
-    assert_eq!(
-        effects[0]["set"],
-        json!([{"field": "site", "fromField": "proposed-site"}])
-    );
-    assert_eq!(
-        effects[0]["clear"],
-        json!([]),
-        "a target field the profile cannot read is not named"
-    );
-    assert!(!officer.to_string().contains("holder-note"));
-
-    let narrow = body_json(
-        harness
-            .send(
-                Method::GET,
-                "/v1/registry?accessProfile=narrow-reader",
-                Some(caseworker_claims("case-management")),
-            )
-            .await,
-    )
-    .await;
-    assert_eq!(
-        change_request(&narrow)["effects"],
-        json!([]),
-        "an effect on an entity the profile cannot read is not described"
-    );
-    let rendered = narrow.to_string();
-    assert!(!rendered.contains("holder-note"));
-    assert!(!rendered.contains("\"site\""));
-    assert_eq!(harness.records.calls(), 0);
-}
-
-#[tokio::test]
 async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_before_generic_fallback(
 ) {
     let harness = Harness::from_project(METADATA_LABEL_PROJECT, true);
@@ -4034,7 +3862,7 @@ async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_b
 
     let finding = metadata_operation(&document, "records.finding.get");
     let reference = &finding["fields"][0]["reference"];
-    assert_eq!(reference["targetEntity"], "inspection");
+    assert_eq!(reference["targetRecordType"], "inspection");
     assert!(reference["operations"]
         .as_array()
         .expect("reference operations")
@@ -4089,11 +3917,11 @@ async fn workspace_metadata_keeps_route_fields_selectors_and_query_capabilities_
         .await;
     assert_eq!(response.headers()["cache-control"], "no-store");
     let document = body_json(response).await;
-    assert_eq!(document["metadataVersion"], "1");
+    assert_eq!(document["metadataVersion"], "2");
     assert!(document["revision"].is_string());
     let path = metadata_operation(&document, "records.household.path.people");
-    assert_eq!(path["sourceEntity"], "household");
-    assert_eq!(path["responseEntity"], "person");
+    assert_eq!(path["sourceRecordType"], "household");
+    assert_eq!(path["responseRecordType"], "person");
     assert_eq!(path["readPath"], json!({"id":"people", "label":"People"}));
     assert_eq!(path["readableFields"], json!(["person-code"]));
     assert_eq!(path["fields"][0]["apiName"], "personCode");
@@ -4233,7 +4061,7 @@ async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping
 
 #[tokio::test]
 async fn workspace_references_require_independent_same_profile_target_operations() {
-    let source = LOOKUP_PATH_PROJECT.replace("        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]", "        - entity: membership\n          rowBoundaries: unrestricted\n          operations: [get]\n          readableFields: [person]\n        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]");
+    let source = LOOKUP_PATH_PROJECT.replace("        - recordType: person\n          rowBoundaries: unrestricted\n          operations: [get, list]", "        - recordType: membership\n          rowBoundaries: unrestricted\n          operations: [get]\n          readableFields: [person]\n        - recordType: person\n          rowBoundaries: unrestricted\n          operations: [get, list]");
     let harness = Harness::from_project(&source, true);
     let document = body_json(
         harness
@@ -4248,7 +4076,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
     let membership = metadata_operation(&document, "records.membership.get");
     assert_eq!(membership["fields"].as_array().unwrap().len(), 1);
     let reference = &membership["fields"][0]["reference"];
-    assert_eq!(reference["targetEntity"], "person");
+    assert_eq!(reference["targetRecordType"], "person");
     assert_eq!(reference["manualEntry"], true);
     assert_eq!(reference["operations"].as_array().unwrap().len(), 2);
     for operation in reference["operations"].as_array().unwrap() {
@@ -4256,7 +4084,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
         assert_ne!(operation["operationId"], "records.household.path.people");
     }
-    let path_only = source.replace("        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]\n          readableFields: [sensitive-note]\n          filterableFields: [sensitive-note]\n          sortableFields: [sensitive-note]\n", "");
+    let path_only = source.replace("        - recordType: person\n          rowBoundaries: unrestricted\n          operations: [get, list]\n          readableFields: [sensitive-note]\n          filterableFields: [sensitive-note]\n          sortableFields: [sensitive-note]\n", "");
     let harness = Harness::from_project(&path_only, true);
     let document = body_json(
         harness
@@ -4278,7 +4106,9 @@ async fn workspace_references_require_independent_same_profile_target_operations
         .any(|operation| operation["readPath"]["id"] == "people"));
     // The no-profile request can have different compiled defaults per route.
     // Even a visible direct operation in another profile cannot label this reference.
-    let other_profile = format!("{path_only}        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]\n          readableFields: [sensitive-note]\n");
+    let other_profile = format!(
+        "{path_only}        - recordType: person\n          rowBoundaries: unrestricted\n          operations: [get, list]\n          readableFields: [sensitive-note]\n"
+    );
     let harness = Harness::from_project(&other_profile, true);
     let document = body_json(
         harness
@@ -4430,94 +4260,6 @@ async fn assert_problem_type(response: axum::response::Response, code: &str) {
     );
 }
 
-#[tokio::test]
-async fn attachment_query_metadata_matches_readable_slots_without_scalar_sql_projections() {
-    let mut source: Value = serde_json::from_str(include_str!(
-        "../../../products/breg/acceptance/request-attachments/registry.yaml"
-    ))
-    .unwrap();
-    let mut narrow = source["accessProfiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|profile| profile["id"] == "owner")
-        .unwrap()
-        .clone();
-    narrow["id"] = json!("metadata-narrow");
-    narrow["permissions"]["entities"][0]["operations"] = json!(["get", "list"]);
-    narrow["permissions"]["entities"][0]["readableFields"] = json!(["record", "label"]);
-    narrow["permissions"]["entities"][0]["writableFields"] = json!([]);
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(narrow);
-    let source = serde_json::to_string(&source).unwrap();
-    let project = parse_project_yaml(source.as_bytes()).unwrap();
-    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    for query in &registry.queries().operations {
-        assert!(!query
-            .projection_fields
-            .contains(&"supporting-file".to_owned()));
-        assert!(!query
-            .processing_fields
-            .contains(&"supporting-file".to_owned()));
-    }
-    let harness = Harness::from_project(&source, true);
-    let claims = VerifiedRequestClaims::authenticated(
-        "registry_principal",
-        "attachment-owner",
-        BTreeSet::from(["attachments:submit".to_owned()]),
-        Some("attachment-acceptance".to_owned()),
-        BTreeMap::new(),
-    )
-    .unwrap();
-    for (profile, expected) in [
-        ("owner", json!(["label", "record", "supporting-file"])),
-        ("metadata-narrow", json!(["label", "record"])),
-    ] {
-        let response = harness
-            .send(
-                Method::GET,
-                &format!("/v1/registry?accessProfile={profile}"),
-                Some(claims.clone()),
-            )
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let metadata = body_json(response).await;
-        let operation = metadata_operation(&metadata, "records.correction-request.list");
-        let selectable = operation["query"]["selectableFields"].as_array().unwrap();
-        assert_eq!(
-            json!(selectable
-                .iter()
-                .map(|field| field["id"].clone())
-                .collect::<Vec<_>>()),
-            expected
-        );
-        assert_eq!(
-            json!(selectable
-                .iter()
-                .map(|field| field["apiName"].clone())
-                .collect::<Vec<_>>()),
-            expected
-        );
-        let response = harness
-            .send(
-                Method::GET,
-                &format!("/openapi.json?accessProfile={profile}"),
-                Some(claims.clone()),
-            )
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let openapi = body_json(response).await;
-        assert_eq!(
-            openapi["paths"]["/v1/records/correction-requests"]["get"]["x-registry-queryProfile"]
-                ["selectableProperties"],
-            expected
-        );
-    }
-    assert_eq!(harness.records.calls(), 0);
-}
-
 const FIELD_ENCRYPTION_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
@@ -4526,7 +4268,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: holder
     primaryDataset: test-dataset
     route: holders
@@ -4544,20 +4286,23 @@ entities:
     classification: restricted
     fields:
       - {id: text, type: string, required: true, maximumLength: 200, classification: restricted}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: holder
+      records:
+        - recordType: holder
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label, secret]
           filterableFields: [label]
           sortableFields: [label]
-        - entity: note
+        - recordType: note
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [text]

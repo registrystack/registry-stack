@@ -1,6 +1,6 @@
 ---
 title: Base Registry Engine API reference
-description: Routes, the Registry Record envelope, headers, query options, mutations, history reads, change requests, immediate actions, problem codes, and the event and webhook contract.
+description: Routes, the Registry Record envelope, headers, query options, mutations, history reads, Proposals, Actions, problem codes, and the event and webhook contract.
 status: draft
 owner: registry-docs
 source_repos:
@@ -48,42 +48,40 @@ under `authorityClaims`.
 Each route has one default access profile. A caller selects another with the `accessProfile`
 query option. A profile grants access when the token satisfies its `requiredScopes`,
 `requiredPurposes`, and `principalClaim`, and when the profile grants the operation on that
-entity. Row boundaries on the grant compare a record field with a token claim and hide every
-record outside them, on reads and on writes.
+Record type. Row boundaries on the grant compare a record field with a token claim.
+Reads conceal records outside that boundary; mutations recheck authority over their
+targets and prospective values before committing.
 
-A refusal is concealed as `404 resource.not_found` whenever the verified token does not satisfy
-the profile or names a record outside the caller's boundary. The only exception is a token that
-is missing, or presented and rejected, which returns `401 authentication.refused`. A caller
-therefore cannot distinguish a record that does not exist from one it may not see.
+A missing or invalid token returns `401 authentication.refused`. Unknown or
+ungranted profiles and operations return `404 resource.not_found`, as do Record
+reads outside the caller's boundary. Proposal owner and scope refusals are also
+concealed. An admitted mutation can return `412 precondition.failed` when its
+current target authority, prospective row boundary, or revision precondition
+fails. That response contains no protected values and commits no effects.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/src/api/mod.rs, router();
     crates/registry-breg/src/query.rs, access_profile;
-    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and PermissionsSource. */}
+    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and PermissionsSource;
+    crates/registry-breg/src/api/proposals.rs, proposal_problem;
+    crates/registry-breg/tests/postgres_mutation.rs, real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic. */}
 
 ## Routes
 
-`{route}` is the entity's `route` value. `{readPath}` is the `route` of one of the entity's
-`readPaths`. `{stage}` is a review stage identifier, `{action}` under `/v1/actions` is an
-immediate action identifier, `{runId}` is an ingestion-run identifier, and `{chunkIndex}` is a
-chunk position. An unknown path or a method the route does not accept returns the
-same concealed 404 as an unauthorized request. Read routes accept `GET` only: a `HEAD`
-request to any of them, including the discovery documents, receives that 404. Only
-`/health`, `/healthz`, and `/ready` answer `HEAD`.
+`{route}` is the configured Record type route, `{readPath}` a declared read
+path, and `{action}` an Action ID. Unknown paths, ungranted operations, and
+unsupported methods use the same concealed refusal. Read routes accept GET;
+only health/readiness probes also answer HEAD.
 
 <ApiReferenceTable id="routes" />
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, router(), refuse_head(), registry_metadata(), entity_schema(), revision_dispatch(), and tombstone_dispatch();
-    crates/registry-breg/src/api/access_log.rs, routes();
-    crates/registry-breg/src/api/attachments.rs, routes();
-    crates/registry-breg/src/api/gis.rs, routes();
-    crates/registry-breg/src/compiler.rs, route_shape() and query_kind_id();
-    crates/registry-breg/src/model.rs, MAX_REVISION_HISTORY_RECORDS. */}
+{/* Evidence: crates/registry-breg/src/api/mod.rs; crates/registry-breg/src/api/proposals.rs;
+    crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/proposal_artifacts.rs. */}
 
 A successful `GET /v1/registry` response carries a `Registry-Engine-Version` header with the
 engine release that served it, the value `breg --version` prints. It grants nothing, and the
 concealed 404 does not carry it. Casework reads it to hold its BReg sources to its own release, as
-[Upgrade Casework and BReg in lock-step](../../operate/casework/#upgrade-casework-and-breg-in-lock-step)
+[Change the active Casework package](../../operate/casework/#change-the-active-package)
 describes.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, registry_metadata();
@@ -119,8 +117,6 @@ Record envelope:
 | `data.revisionIdentifier` | string, `^[1-9][0-9]*$` | Revision counter, starting at `1`. Compare as a string. |
 | `data.domainData` | object | The entity's fields under their `apiName`, narrowed to the grant's `readableFields` and to `$select`. |
 | `data.snapshot` | string | Present on mutation responses: an opaque token for `:snapshot` reads, at most 4096 bytes. |
-| `data.request` | object | Present on change request records: workflow state and the actions the caller may take. |
-| `data.requestPresence` | object | Present when the grant declares `requestPresence`: the pending change requests that target this record. |
 | `meta.*` | strings | Registry, dataset, and entity identifiers from the compiled package. |
 
 Every field is served, read, filtered, and written under its `apiName`. A field id in kebab-case
@@ -286,7 +282,7 @@ item.
 ### Idempotency
 
 Send `Idempotency-Key` (1 to 256 visible ASCII bytes, without a comma or semicolon) on any create,
-patch, tombstone, batch, request action, or immediate action. Request actions and immediate actions
+patch, tombstone, batch, Proposal transition, or immediate Action. Proposal transitions and immediate Actions
 require the header.
 
 - Keys are per verified caller, in one key space shared by every write that caller sends. The
@@ -298,7 +294,7 @@ require the header.
 - Only successes are held. A refused or failed attempt spends nothing, so correct the request and
   retry it with the same key.
 - A repeat of the same request under the same key returns the held response without writing
-  again, for `idempotency.receiptRetentionDays` after the first attempt committed (7 days by
+  again, for `retention.receiptRetentionDays` after the first attempt committed (7 days by
   default).
 - The same key with a different request returns `409 idempotency.conflict`. The binding covers the
   request body and the package activation, selected access profile, and verified claims it ran
@@ -314,7 +310,7 @@ require the header.
     crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, resolve_binding(), and lock_and_load();
     crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and SpentKeyCaller;
     crates/registry-breg/src/postgres/statistics.rs, IdempotencyKeyDomain::Caller;
-    crates/registry-breg/src/mutation/request.rs;
+    crates/registry-breg/src/mutation/proposal.rs;
     crates/registry-breg/src/postgres/mutation.rs;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;
     crates/registry-breg/tests/postgres_temporal_corrections.rs;
@@ -389,7 +385,7 @@ Every run response is one document:
 | `runId` | The run identifier. |
 | `status` | `open`, `complete`, `cancelled`, or `blocked`. |
 | `blockedReason` | Present when the run is `blocked`: `activePackageChanged` or `importAuthorityClosed`. |
-| `entityId`, `operation`, `profileId` | The bound entity, its create-or-patch operation, and the selected profile. |
+| `recordType`, `operation`, `profileId` | The bound Record type, its create-or-patch operation, and the selected profile. |
 | `packageRevision`, `schemaFingerprint` | The binding the run was created under. |
 | `inputDigest`, `inputLength`, `itemCount`, `chunkCount` | The announced source: digest, byte length, item count, and chunk count. |
 | `chunkAlgorithmVersion` | The chunking contract the chunks follow. |
@@ -443,7 +439,8 @@ audit, receipt, and the checkpoint advance commit in one transaction.
 ### List and read runs
 
 `GET /v1/records/{route}/ingestion-runs` lists the caller's runs: `limit` (default 25, at most
-100), keyset `after` a run id, and optional `status` and `inputDigest` filters.
+100), the keyset `cursor` from a previous page's `nextCursor`, and optional `status` and
+`inputDigest` filters.
 `GET /v1/records/{route}/ingestion-runs/{runId}` returns one run document with `nextChunkIndex`,
 so a restarting client rebuilds its plan from API state alone and never resends a committed
 chunk.
@@ -528,320 +525,103 @@ snapshot at or after the earliest erased commit unavailable, including later one
     crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/tests/postgres_historical.rs. */}
 
-## Change requests
+## Proposals
 
-A change request is a record of an entity that declares `changeRequest`. Creating it stores a
-draft; a submitted proposal changes its targets only when it is applied. BReg owns four source
-states:
+<ApiReferenceTable id="proposal-transitions" />
 
-```text
-draft ──submit──▶ submitted ──apply with exact approved evidence──▶ applied
-  ▲                   │
-  └────revise─────────┘
-draft or submitted ──cancel by owner──▶ cancelled
-```
+An Action with `execution.mode: proposal` creates a distinct durable Proposal.
+The Action descriptor promotes Start; the Proposal promotes its currently
+permitted transitions. The execution mode is fixed by the package.
 
-`submit`, `revise`, and `cancel` belong to the principal that owns the request. Another principal
-does not see those actions in `actions`, and calling one regardless is refused with
-`precondition.failed`. Review decisions and reviewer stages belong to the configured external
-authority, such as Registry Casework. BReg does not expose local approval routes.
+| Resource | Contract |
+| --- | --- |
+| `/v1/actions/{action}/proposals` | Start a draft for the selected Action under Start authority. |
+| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. `turn=party`, `official` or `nobody` keeps only Proposals waiting on that turn. A page may hold fewer than `limit` items; keep paging while `nextCursor` is present. |
+| `/v1/proposals/{proposal_id}` | Read the Proposal under current ownership, target, and disclosure grants. |
+| `/v1/proposals/{proposal_id}/submissions/{submission_version}` | Read one exact submission under the same Get authority: its frozen `effectDigest`, its `review` result, its `decision` when one was made, and its `application` outcome as separate members. Only the current submission reports application progress. Answers 410 `proposal.submission_expired` once the result window has lapsed and no application receipt remains. |
+| Promoted transition links | Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply only when currently authorized. |
+| Promoted review and attachment links | Separate review-status, review-context, slot read/upload, and verification authority. |
 
-With `review: {type: none}`, the ordinary apply action needs no external result. Otherwise BReg
-submits the exact frozen proposal binding to `review.authority` and accepts application only after
-it has reconciled an approved result for the same subject, policy, and submission digest.
-`onApproved.mode: manual` waits for a currently authorized caller. `automatic` names a logical
-executor whose separately configured ordinary credential follows the same BReg apply action and
-guards. A completion notification never carries application authority.
+Use the metadata and current representation to bind method, path, selected
+profile, operation, and lifecycle condition. Clients validate origin and registry
+base before promoting a link and refuse credential-bearing redirects. Lifecycle
+conditions are distinct from record ETags. Refetch after every transition.
 
-An `rhai` planner runs at submit. A planner that produces no plan refuses the submission with
-`400 request.plan_refused`, whose detail names the failure kind from the planner's closed
-vocabulary and nothing else; a planner that ran out of its time budget returns
-`503 service.unavailable` instead. Nothing is stored either way: the request stays a draft, and
-the refusal is journaled with the same failure kind.
+Submission freezes the Action revision, inputs, effects, target revisions,
+review policy binding, attachments, and effect digest. Apply uses that exact
+frozen plan and rechecks commit guards. Review-required application needs fresh
+authenticated unexpired approval. Changed planner code cannot alter accepted work.
 
-A read of the request record adds `data.request`:
+Automatic application is the default. A restricted built-in system grant binds
+the exact frozen submission; no executor OAuth client or self-HTTP route is
+configured. Explicit `application.mode: manual` uses separately granted caller
+Apply authority. External Apply or Retry of automatic work requires a verified
+human and an explicit grant. Missing optional authority bindings disable only
+dependent operations.
 
-```json
-{
-  "bregState": "submitted",
-  "proposalVersion": 2,
-  "effectDigest": "sha256:9f2c…",
-  "proposal": {"review": {"type": "required", "authority": "casework", "policyId": "asset-placement-correction"}},
-  "review": {
-    "submission": {"state": "accepted", "authority": "casework", "requestId": "…", "submissionDigest": "sha256:…", "policy": {"id": "asset-placement-correction", "version": "1", "digest": "sha256:…"}},
-    "result": {"state": "approved", "resultId": "…", "completedAt": "2026-09-20T00:00:00.000000Z", "availableUntil": "2026-10-20T00:00:00.000000Z"},
-    "delivery": {"state": "reconciled", "eventId": "…", "receivedAt": "2026-09-20T00:00:01.000000Z"},
-    "application": {"mode": "manual", "state": "ready"},
-    "recovery": {"state": "none"}
-  },
-  "editable": false,
-  "actions": [
-    {"operation": "apply-request", "href": "/v1/records/placement-corrections/2d7e…/actions/apply?accessProfile=correction-applier", "ifMatch": "\"breg-hmac-sha256:…\"", "proposalVersion": 2, "effectDigest": "sha256:9f2c…"}
-  ]
-}
-```
+### Observe an exact submission
 
-`actions` lists only what the caller's profile may do in the current state, with the exact
-`href` and the `ifMatch` value to send. Follow those links rather than composing routes.
+An authorized Proposal Get carries `id`, `actionId`, `actionRevision`,
+`submissionVersion`, `revision`, `state`, `turn`, and `effectDigest` when frozen.
+`applicationStatus` describes local progress, safe blocked reason and recovery
+hint, and automatic retry information where applicable. Applied work includes
+retained `application` evidence. Inputs and attachments follow separate disclosure.
 
-`proposal` appears once the request has been submitted and describes its frozen review binding.
-`review` is separately disclosure-controlled by `readableRequestFields: [review-state]`. It reports
-durable submission, terminal result, delivery, application, and recovery state. Optional binding,
-result, delivery, and application identifiers are omitted until known. These observations do not
-grant authority. `editable` is `true` only while the request is a draft, the caller owns it, and
-the selected profile may patch it.
+`state` is `draft`, `submitted`, `applied`, `cancelled` or `rejected`. A Review
+that rejects the current submission ends the Proposal in `rejected`; no
+transition leaves it, and every command link reads `review-rejected` with
+recovery `receipt-only`. A changes-requested result keeps it `submitted` and
+promotes Revise. `turn` is `party`, `official` or `nobody`: whose move the
+Proposal waits on, derived when it is read. Once the reviewer decided the
+current submission, `decision` carries `status`, `decidedAt` and, when the
+reviewer wrote one for the subject, `publicReason`, the only reviewer text BReg
+serves. The same Get authority that reads the Proposal reads its review state
+and decision; there is no separate grant to withhold them.
 
-A settled result never moves the request out of `submitted`: its owner acts on it, and the result
-decides which actions stay on offer.
+The `apply` link's availability names the Review state: `pending-review` with
+`refresh` while a decision is awaited, `dependency-outage` with `retry` while
+delivery is failing, `review-changes-requested` with `revise`, and
+`review-ended` with `revise` for an expired approval, a review submission that
+failed for good, an `answered` result, or a provider end.
 
-| Result for the current proposal | Actions offered | Refused |
-|---|---|---|
-| `rejected` | `cancel-request` | `revise-request` with `409 mutation.conflict`; `apply-request` with `412 precondition.failed` |
-| `changesRequested` | `revise-request` with `rebase: false`, `cancel-request` | a rebase with `409 mutation.conflict`; `apply-request` with `412 precondition.failed` |
-| `approved`, `availableUntil` not yet reached | `apply-request` for the applier; `revise-request` with `rebase: true` and `cancel-request` for the owner | nothing beyond the ordinary guards |
-| `approved`, `availableUntil` passed before application | `revise-request` with `rebase: false`, `cancel-request` | a rebase with `409 mutation.conflict`; `apply-request` with `412 precondition.failed` |
-| `answered`, `cancelled`, or `superseded` | `revise-request` with `rebase: true`, `cancel-request` | `apply-request` with `412 precondition.failed` |
-| none yet | unchanged | nothing beyond the ordinary guards |
+Preserve the exact Action revision, submission version, and digest while waiting.
+Revise or Rebase makes the earlier binding stale. Do not silently follow its
+successor. A later observation cannot establish whether an earlier uncertain
+Start or Submit executed; recover the original prepared command with its original
+idempotency key. Expired or erased receipts cannot execute again.
 
-Send the `rebase` value the `revise-request` action carries: `false` records the new draft as a
-revision of the proposal, `true` as a rebase onto updated context. An approval that expired
-unapplied reports `review.application.state` `expired` beside the result's `availableUntil`, also
-when its automatic application is still queued; an application already `applying` keeps that state
-because it may still succeed. The other application states are `awaitingReview`, `ready`, `queued`,
-`applying`, `applied`, and `blocked`.
+### Proposal attachments
 
-The offered actions follow the result even when the selected profile does not disclose
-`review-state`, so the owner and the applier can tell a coarse outcome from which actions remain,
-for example that a request was rejected. This is deliberate: the same caller would learn as much
-from the refusal of an action BReg no longer offers.
+Slot descriptors carry requiredness, byte limit, content types, classification,
+verification, and caller-authorized links. Submission binds the exact content
+digest and verification. Changed content cannot inherit approval. Scope downloads
+to the current Proposal grant. Review context contains no raw attachment bytes.
+Retention and external deletion are independent from record-history erasure.
 
-The read and apply decide expiry on different clocks. The read compares the cached result's
-`availableUntil` with the database clock, while apply fetches the result from the review authority
-and checks it with the BReg service clock. Close to `availableUntil` the two can briefly disagree:
-a read can still offer `apply-request` that then answers `412 precondition.failed`, or report
-`expired` while the authority's result is still available. Apply is authoritative.
-
-A request list whose selected profile discloses `review-state` may also filter on
-`reviewOutcome`, with `eq` or `in`. Its values are `pending`, `approved`, `approvedExpired`,
-`rejected`, `changesRequested`, `answered`, `cancelled`, and `superseded`; a request whose current
-proposal was never submitted for review matches none of them. The filter describes the review
-only, so combine it with `bregState`: an applied request keeps the outcome that authorized it, and
-its approval can pass `availableUntil` afterwards. The approvals still waiting for an applier, and
-those that expired before anyone applied them, are:
-
-```text
-$filter=bregState eq 'submitted' and reviewOutcome eq 'approved'
-$filter=bregState eq 'submitted' and reviewOutcome eq 'approvedExpired'
-```
-
-A profile that does not disclose `review-state` is refused the filter with `400 query.invalid`, the
-same answer as for any field its grant withholds.
-
-{/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
-    crates/registry-breg/src/mutation/request.rs, the settled review outcome check;
-    crates/registry-breg/src/review_store.rs, settled_outcome, read_projection, and approved_evidence;
-    crates/registry-breg/src/review_integration.rs, from_approved;
-    crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
-    crates/registry-breg/src/compiler.rs, query_operation;
-    crates/registry-breg/tests/postgres_change_requests.rs, rejected_review_offers_only_cancel_and_refuses_revise_and_apply,
-    changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_and_apply,
-    revision_after_changes_requested_records_revision_not_rebase,
-    answered_review_hides_apply_and_keeps_revise_and_cancel,
-    unexpired_approval_offers_apply_and_the_apply_succeeds,
-    expired_approval_hides_apply_and_is_answered_by_a_revision,
-    expired_automatic_approval_projects_expired_until_an_apply_is_in_flight, and
-    request_list_filters_on_the_settled_review_outcome. */}
-
-<ApiReferenceTable id="request-actions" />
-
-Every action requires `If-Match` and `Idempotency-Key`. An apply names the exact proposal through
-`proposalVersion` and `effectDigest`; both come from the read that showed the action. BReg rejects
-a stale or substituted binding before applying any effect.
-
-An apply body may also include an optional `reason` string of up to 4096 Unicode characters.
-The server preserves whitespace and Unicode exactly, accepts an empty string, and refuses null,
-other types, NUL, or longer text with `400 request.invalid`. Include the same reason when replaying
-an action with its original idempotency key; changing it is a different request body. The applied
-request's `data.request.application` carries `reasonPresent`, and carries `reason` only when retained
-and permitted by the selected profile. Request-detail erasure removes the text while retaining the
-presence flag.
-
-`readableRequestFields` accepts `review-state`, which discloses the closed `review` projection,
-and `actor-reference`, which discloses `submitterReference` and
-`applierReference`. Every change-request action response
-separately includes `actorReference`, the caller-supplied actor identity recorded with that
-action, independent of `readableRequestFields`.
-
-{/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs request_proposal_metadata and may_disclose_review_state; crates/registry-breg/src/review_store.rs read_projection; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs. */}
-
-`GET /v1/registry` lists the same grant as `readableRequestFields` on each operation, beside
-`readableFields`, so a caller can learn before a read which request fields its selected profile
-receives. The list follows the rule request reads apply: an entity without a change request
-lists no request fields.
-
-{/* Evidence: crates/registry-breg/src/api/metadata.rs, readable_request_fields;
-    crates/registry-breg/tests/http_read_only.rs, workspace_metadata_projects_request_field_disclosure_per_caller_profile. */}
-
-History returns up to 50 whole proposals per page. The response byte budget can shorten a page
-without splitting a proposal. To continue, send the returned
-`data.request.history.nextAfterProposalVersion` as `requestHistoryAfterProposalVersion` on the
-same request GET, keeping the same access profile. Follow each returned cursor until it is
-null; a page with fewer than 50 proposals can still have a next page.
-
-{/* Evidence: crates/registry-breg/src/request_retention.rs load_retained_history; crates/registry-breg/src/postgres/request_read.rs retained_history and bound_request_metadata; crates/registry-breg/src/api/mod.rs requestHistoryAfterProposalVersion. */}
-
-The response of an action is not a Registry Record envelope:
-
-```json
-{
-  "id": "2d7e5e0c-…",
-  "revision": 4,
-  "snapshot": "…",
-  "request": {
-    "bregState": "applied",
-    "proposalVersion": 2,
-    "effectDigest": "sha256:9f2c…",
-    "application": {"applicationId": "7c1d…", "proposalVersion": 2, "effectDigest": "sha256:9f2c…", "appliedAt": "2026-09-02T10:15:00Z"}
-  }
-}
-```
-
-`application` is `null` until the request is applied. When the entity sets
-`retention.mode: operator-erase`, an operator can erase the proposal payload of a terminal
-request; a later read then shows `request.detailErased: true` and the provenance stub stays
-while target revisions reference the request.
-
-`GET /v1/registry` describes each request entity's `changeRequest` capability: the planner kind
-(`declarative`, or `rhai` with its ABI, limits, and possible write count), the review mode, and
-the application policy with its allowed dispositions and queue reasons.
-
-The capability also lists the request's `effects`: each effect's `id`, `operation`, the `target`
-entity with the request field (`fromField`) or earlier effect (`fromEffect`) that selects it, the
-fields it `set`s with where each value comes from, and the fields it `clear`s. A `rhai` planner
-likewise lists its declared `writes`, each with its target, operation, and fields. Both are
-filtered to what the caller may read: an effect or write on an entity the caller cannot read is
-left out, a target field the caller cannot read is not named, and a request field the caller
-cannot read is never given as a source, nor is an effect that is left out. `possibleWriteCount` still counts every declared write.
-Fields in `effects` and `writes` are named by their authored field id, as in `readableFields`,
-not by the `apiName` a record uses in `data.domainData`. To show one under its API name, look up
-the id in the `fields` list of a capability on that entity, which gives each readable field's `id`
-and `apiName`. The description cannot grant write
-authority: whether a request may be submitted or applied is still decided by the request routes.
-The Rust, Node.js, and Python clients require `effects`, and `writes` on a `rhai` planner, so
-use a client and runtime from the same release.
-
-{/* Evidence: crates/registry-breg/src/request_workflow.rs, RequestState;
-    crates/registry-breg/src/mutation/request.rs, action_requires_request_owner();
-    crates/registry-breg/src/api/mod.rs, request_action_dispatch() and planner_failure_problem();
-    crates/registry-breg/src/artifacts.rs, request_action_response_schema() and request_capability_metadata();
-    crates/registry-breg/src/api/mod.rs, registry_metadata();
-    crates/registry-breg/src/fixtures.rs, assert_request_action_shape();
-    crates/registry-breg/src/postgres/request_read.rs;
-    products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
-    products/breg/acceptance/person-name-change-rhai/registry.yaml. */}
-
-### Request attachments
-
-A request entity can declare up to eight `attachments[]` slots. Each slot holds
-one file and declares `id`, `required`, `maximumBytes` (1 to 16,777,216),
-`contentTypes` (concrete lowercase media types), and `classification`. An
-incomplete draft is allowed; submission refuses a missing required slot with
-`412 Precondition Failed`.
-
-| Method and route | Request | Authority and preconditions |
-| --- | --- | --- |
-| `PATCH /v1/records/{route}/{record_id}/attachments/{slot_id}` | Raw nonempty bytes with an allowed `Content-Type` | Draft owner, selected profile's request `patch` grant and slot `writableFields`, row boundary, record `If-Match`, `Idempotency-Key` |
-| `DELETE /v1/records/{route}/{record_id}/attachments/{slot_id}` | Empty body | Same as upload |
-| `GET /v1/records/{route}/{record_id}/attachments/{slot_id}?proposalVersion=N` | No body | Authenticated current request GET authority for the exact proposal version and slot `readableFields` |
-
-All three accept `accessProfile`. Discover concrete slot paths from caller-filtered
-OpenAPI or the field schema's `x-registry-attachment` extension in `/v1/registry`.
-That extension repeats the compiled slot policy: `requiredForSubmit`,
-`maximumBytes`, `contentTypes`, `classification`, and the verification policy.
-Upload and removal return the ordinary record mutation response. Refetch the
-request to obtain its updated attachment metadata and record ETag. A slot is
-engine-owned and cannot be set by ordinary create, JSON Patch, or request effects.
-
-A selected slot appears under `domainData` using its slot ID verbatim. It is null
-when empty. Filled metadata contains `slotId`, `proposalVersion`, `filled`,
-`erased`, `byteSize`, `sha256`, `contentType`, `uploadedAt`, `uploadedBy`, and
-`verificationStatus`.
-BReg computes size and SHA-256 from the received bytes. `requiredForSubmit` in
-discovery is independent of the ordinary create-field `required` flag. Current
-upload limits and allowed media types do not rewrite retained metadata: older
-proposals can describe content accepted under an earlier slot policy.
-
-`verificationStatus` is `notRequired` when external verification is disabled.
-When configured, an upload is quarantined as `pending` until the asynchronous
-verifier returns `approved` or `rejected`. Pending and rejected content cannot be
-downloaded (`404 Not Found`) and blocks submission with `412 Precondition Failed`, including a
-filled optional slot. Refetch the request to observe the result. External service
-failure leaves the status pending for retry. Replacing content requires approval
-for the exact hash, media type, and policy; an existing matching approval can be
-reused. With verification configured, submission binds the verification policy
-digest into the frozen manifest.
-
-Upload, replacement, and removal advance request concurrency state. Submission
-binds the slot manifest into proposal integrity. Revision and rebase carry slot
-references into the next draft; editing that draft preserves earlier submitted
-manifests. Downloads use the explicit proposal version, never a hash or storage
-URL. Owner and applier access use their current compiled request read authority.
-Casework reviewers read source context through a separately configured Casework source profile;
-the caller's delegated credential is checked against that ordinary BReg read grant. `applyTargets`
-continues to constrain the applier. Field projection also applies: a slot reaches a caller only
-through the profile's `readableFields`. The authored `classification` is served
-so a caller can handle the bytes accordingly; it grants and withholds nothing.
-
-Downloads return complete, integrity-verified bytes with attachment disposition,
-`Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. Hidden requests,
-slots, versions, and erased content do not become discoverable through a download.
-Erasure retains slot ID, proposal version, filled/erased state, size, and hash;
-it removes content type, verification status, and uploading actor/time from the
-projected metadata.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, AttachmentSlotSource;
-    crates/registry-breg/src/artifacts.rs, attachment_metadata_schema() and openapi_attachment_operation();
-    crates/registry-breg/src/api/metadata.rs, attachment_request();
-    crates/registry-breg/src/attachment_store.rs;
-    crates/registry-breg/src/request_workflow.rs, AttachmentManifestEntry. */}
+{/* Evidence: crates/registry-breg/src/api/proposals.rs;
+    crates/registry-breg/src/proposal_prepare.rs; crates/registry-breg/src/proposal_store.rs;
+    crates/registry-breg/src/proposal_artifacts.rs; crates/registry-breg-client/src/proposal.rs;
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Immediate actions
 
-An action declared under `actions[]` applies its effects in one request. Call
-`POST /v1/actions/{action}/target-conditions` with the input to learn which records the effects
-would touch and the `ifMatch` each one currently has:
+An Action with `execution.mode: immediate` invokes one atomic ordered plan.
+Select its caller-filtered descriptor and use its advertised Invoke and any
+required target-condition routes. Input names are exact `apiName` values. Each
+input requires its compiler-emitted JSON Schema; clients and MCP use that schema
+without a partial field-type fallback. The current metadata owns the request
+envelope, conditions, bounds, and result contract.
 
-```json
-{"input": {"assetCode": "AST-0042", "siteCode": "SITE-001"}}
-```
+Invoke requires Action authority for every target, including existing link-only
+references. Commit guards recheck current target facts and concurrency. A
+Proposal-required Record type remains protected. Record effects, revisions,
+audit, receipt, and outbox commit together; failure creates no partial effect.
+Use the original prepared command and idempotency key for uncertain execution.
 
-Then call `POST /v1/actions/{action}` with the same input and those preconditions:
-
-```json
-{
-  "input": {"assetCode": "AST-0042", "siteCode": "SITE-001"},
-  "preconditions": {"asset": {"ifMatch": "\"breg-hmac-sha256:…\""}}
-}
-```
-
-The response names the application and every record the effects wrote:
-
-```json
-{
-  "action": "register-asset",
-  "applicationId": "7c1d…",
-  "results": {"asset": {"entity": "asset-item", "recordId": "2d7e…", "revision": 2}}
-}
-```
-
-A precondition that no longer matches returns `412 precondition.failed` and nothing is written.
-The caller needs the `invoke` operation on the action, and its `targets` row boundaries apply to
-every record an effect reaches.
-
-{/* Evidence: crates/registry-breg/src/api/mod.rs, router();
-    crates/registry-breg/src/contract.rs, ActionSource;
-    crates/registry-breg/src/fixtures.rs;
-    products/breg/generated/household-contact-actions/generated/openapi.json. */}
+{/* Evidence: crates/registry-breg/src/api/actions.rs;
+    crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs;
+    crates/registry-breg-mcp/src/contract.rs;
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Problem documents
 
@@ -900,210 +680,76 @@ want the published description of a refusal you have not seen before.
 
 ## Events and webhooks
 
-An event is declared as a hook on an entity or a module extension. A `url` handler delivers to a
-webhook destination bound in the runtime configuration; a `rhai` or `wasm` handler runs its
-reviewed program in the post-commit worker. Field paths in the next table are relative to one
-hook under `entities[].hooks[]`; types, defaults, and descriptions come from the generated module
-schema, and compiler rules follow the table.
+<ConfigurationReference contracts={eventConfiguration(configuration)} />
 
-<ConfigurationReference contracts={eventConfiguration(configuration)} prefix="breg-events" compact />
+Record hooks belong to `recordTypes[].hooks`. They declare `phase: after`, a
+`created`, `patched`, or `tombstoned` trigger, exact field projection, optional
+field conditions, and one URL or local handler. A create-only Record type cannot
+emit Patch or Tombstone hooks. Conditions and projection use logical field IDs;
+the highest classification of all referenced fields bounds destination disclosure.
 
-Compiler rules:
+Proposal hooks belong to `actions[].execution.proposal.hooks`. They select native
+transitions and use the dedicated closed Proposal event schema. Their binding
+identifies the Action revision, Proposal, submission, effect digest, transition,
+and application authority. They do not reuse a record's field projection.
 
-- Hook IDs are unique across the registry.
-- A projection names at least one declared field.
-- An entity hook declares `phase: after`; the compiler refuses any other phase. `handler.type` is
-  `url`, `rhai`, or `wasm`; a local handler names its reviewed `script` or `module` path.
-- Production compilation requires every hook to declare a handler, either a bound destination or a
-  reviewed local program.
-- Conditions and projections use authored field IDs, not the record API's `apiName` spellings.
-- The event's classification is the highest classification of every projected or condition field,
-  and a lifecycle event is at least as classified as its request entity.
-
-Destination URLs, keys, network policy, and ceilings live in runtime `eventDestinations`, keyed by
-`handler.destinationId`. The runtime binds the exact compiled destination set, and each
-destination's `classificationCeiling` must cover the event classification; runtime configuration
-cannot add projected fields.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, HookSource and HookHandlerSource;
-    crates/registry-breg/src/compiler.rs, validate_hooks() and compile_event_delivery_inventory();
-    crates/registry-breg/src/event_destination.rs, EventDestinationConfig.
-    Configuration fields selected by docs/site/src/lib/breg-event-reference.mjs, eventConfiguration(),
-    from products/breg/generated/authoring/registry-module.schema.json through
-    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
-
-### Triggers and conditions
-
-<EventReferenceTable id="triggers" />
-
-A create-only entity refuses `patched` and `tombstoned`, and `tombstoned` also requires tombstone
-support. Only a change request entity permits `request-lifecycle`. Omitting `when` selects every
-matching trigger. With `type: fields`, at least one test is nonempty, every test combines with
-AND, and `changed` compares before and after values rather than whether a field appeared in the
-patch. With `type: request-lifecycle`, at least one of `transitions`, `toStates`, or `stages`
-is set and each nonempty list must match; the projection then contains request fields, not target
-values.
-
-Capture and mutation commit in one transaction. Delivery uses the captured projection; later
-record or package changes do not recompute it.
-
-{/* Evidence: crates/registry-breg/src/compiler.rs, validate_event_condition();
-    crates/registry-breg/src/outbox.rs, condition_matches() and insert_configured_events();
-    crates/registry-breg/src/request_events.rs, lifecycle_condition_matches() and insert_request_lifecycle_events();
-    crates/registry-breg/src/mutation.rs. */}
+Capture commits atomically with the source operation. Outbound work is dispatched
+after commit, so later package or record edits never recompute its captured content.
+Deployment `eventDestinations` supplies exact URL, network/TLS policy, HMAC key,
+classification ceiling, and operational bounds. Deployment may narrow the compiled
+contract but cannot widen it.
 
 ### HTTP request
 
-Method `POST` to the configured fixed path, without query parameters, encoded as
-[CloudEvents 1.0 HTTP binary mode](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md)
-with canonical JSON in the body. Every listed header is present on every delivery.
-
+<EventReferenceTable id="triggers" />
 <EventReferenceTable id="headers" />
-
-The package carries each event schema at
-`generated/event-schemas/<entity-id>.<event-id>.schema.json`. Record identifiers appear in the
-body, never in CloudEvents headers.
-
-The body is one shared hook envelope, the same envelope every Registry Stack product delivers.
-Its eight members are required and nothing else appears beside them. The envelope restates the
-event identity the CloudEvents headers carry, so a receiver that reads only the body still knows
-which event it holds; a body and its headers can never describe two different events. Delivery
-attributes stay on the transport: attempt, generation, delivery time, idempotency key, and
-signature are headers, never envelope members.
-
 <EventReferenceTable id="envelope" />
-
-`data` carries the captured event data. The six common members are required, and a lifecycle
-event also requires `request`. Other members and unprojected values are absent.
-
 <EventReferenceTable id="payload" />
+<EventReferenceTable id="proposal-payload" />
 
-The lifecycle `request` object requires `proposalVersion` and `workflowRevision` as positive
-integers, `transition`, `fromState`, `toState`, and `deduplicationKey` as strings, and `stage`
-and `effectDigest` as strings or null. The deduplication key is stable across retries and
-operator replay. Receiving a lifecycle event grants no authority to approve or apply a request.
-
-```json
-{
-  "causation": {"hop": 0, "root": "<event-uuid>"},
-  "data": {
-    "entity": "record",
-    "packageRevision": "sha256:<package-digest>",
-    "recordId": "<record-uuid>",
-    "revision": 2,
-    "trigger": "patched",
-    "values": {"code": "EX-003", "label": "Updated label"}
-  },
-  "dataschema": "urn:breg:event-schema:<registry-id>:record:record-patched-v1:sha256:<digest>",
-  "id": "<event-uuid>",
-  "source": "urn:registrystack:registry:<registry-id>:instance:<instance-id>",
-  "subject": {"recordReference": "hmac-sha256:<64-hex>", "recordRevision": 2},
-  "time": "2026-01-01T00:00:00.123Z",
-  "type": "record-patched-v1"
-}
-```
-
-Members appear in canonical JSON order, the order the bytes on the wire use.
-
-{/* Evidence: crates/registry-platform-hooks/src/envelope.rs, HookEnvelope, EventSubject, and Causation;
-    crates/registry-platform-hooks/src/delivery/service.rs, reload_and_send() and accept_stored_envelope();
-    crates/registry-breg/src/artifacts.rs, event_data_schema_binding();
-    crates/registry-platform-httputil/src/destination.rs, EventDestinationRequestTemplate;
-    crates/registry-breg/src/outbox.rs, insert_configured_events() and capture_envelope();
-    crates/registry-breg/src/request_events.rs, insert_request_lifecycle_events();
-    crates/registry-breg/tests/postgres_webhook_delivery.rs, assert_exact_request(). */}
+Delivery uses the shared CloudEvents envelope and exact canonical bytes. Registry,
+instance, event contract, event identity, and captured payload remain bound across
+retry. Operator replay retains event identity and increments its delivery generation.
+The current runtime OpenAPI, generated event schema, and destination contract own
+the exact headers and payload for a configured event.
 
 ### Signature
 
-`X-Registry-Signature` is an HMAC-SHA-256 over the request, keyed with the exact bytes resolved
-by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded.
-This is a Base Registry Engine format, not a CloudEvents signing standard.
-Node receivers can use the registry client's
-[webhook delivery verifier](../client-api/#verify-a-webhook-delivery) instead of constructing this
-signing input themselves. The receiver still owns clock-skew, expected-event, and deduplication
-policy.
-
-The signing input starts with the ASCII bytes `breg-webhook-signature-v1`. Each later
-value is prefixed with its byte length as an unsigned 64-bit big-endian integer, in this order:
-
-1. `ce-specversion`
-2. `ce-id`
-3. `ce-source`
-4. `ce-type`
-5. `ce-time`
-6. `ce-dataschema`
-7. `X-Registry-Event-Generation`
-8. `X-Registry-Delivery-Attempt`
-9. `X-Registry-Delivery-Time`
-10. The method bytes, `POST`
-11. The configured request path bytes, without the origin
-12. The content type bytes, `application/json`
-13. `Idempotency-Key`
-14. The exact body bytes
-
-Header values keep their original bytes; header names are not included. The header value is:
-
-```text
-v1=BASE64URL_WITHOUT_PADDING(HMAC_SHA256(key, signing_input))
-```
-
-A receiver compares the signature in constant time, validates the expected source, type, schema,
-and payload, bounds the skew of `X-Registry-Delivery-Time` (not `ce-time`), and deduplicates
-before it acts. The accepted skew is receiver policy, not a BReg limit.
-
-{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs, SignatureFields, sign_v1(),
-    and v1_binds_every_field_and_exact_body();
-    crates/registry-breg/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
-    crates/registry-platform-config/src/secrets.rs, resolve_reference() and read_secret_file();
-    products/breg/demo/support/demo.py, _verify_webhook_request(). */}
+Verify the HMAC signature against the exact received body and signed headers in
+constant time. Validate expected source, type, schema, content, and delivery-time
+skew before durable acceptance. Bound `X-Registry-Delivery-Time`, not the original
+event time. The receiver's skew policy is independent of BReg's retry horizon.
+Use the retained durable receiver example as a concrete independent implementation.
 
 ### Delivery, retry, and replay
 
 <EventReferenceTable id="delivery" />
-
-Runtime ceilings may tighten compiled limits, never widen them. A durable attempt audit precedes
-every send, and the terminal audit entry is accepted before the state transition and payload
-erasure commit together.
-Activation refuses a destination change that would strand retained nonterminal work.
-
 <EventReferenceTable id="retry-replay" />
-
-An idempotency key identifies one delivery generation, not an event across generations. A replay
-opens a new generation with a new key, so a receiver whose effect must happen once deduplicates on
-event identity, `ce-source` plus `ce-id`, or on a business key.
-
 <EventReferenceTable id="states" />
 
-An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance,
-and an expired payload cannot be replayed.
-
-{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, replay(), delivery_idempotency_key(), and verify_retained_bindings();
-    crates/registry-platform-hooks/src/delivery/store.rs, finished_columns() and after_finished();
-    crates/registry-platform-dispatch/src/postgres/dispatcher.rs, claim(), finish(), and replay();
-    crates/registry-breg/src/webhook.rs, WebhookDeliveryService and WebhookDeliveryStatusKind;
-    crates/registry-breg/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
-    crates/registry-breg/src/runtime_config.rs, default_webhook_payload_retention_days();
-    crates/registry-breg/src/event_destination.rs, EventDestinationDeliveryCeilings;
-    crates/registry-bregctl/src/webhook_lifecycle.rs, list_item(). */}
+Delivery is bounded outbox work. Pending attempts retry under the captured binding;
+dead letters retain value-free inspection and eligible operator replay. A receiver
+commits durable acceptance and deduplicates before triggering an external effect.
+An acknowledgement establishes acceptance, not completion of that effect.
 
 ### Operator commands
 
-Command prefix `bregctl`; add `--format json` for a machine-readable report.
-
+<EventReferenceTable id="operator-fields" />
 <EventReferenceTable id="commands" />
 
-`list` and `replay` connect directly to PostgreSQL through the runtime configuration, and
-[bind webhook receivers](../../operate/breg-webhooks/) is the operator procedure that runs them
-against a bound destination. The public
-record API has no outbox, payload, delivery, or replay endpoint. A replay needs a retained,
-unexpired dead letter and the matching generation and activated destination binding. The JSON
-result of `list` is a `deliveries` array whose entries carry these fields and no record values:
+Use `bregctl webhook list` with the absolute runtime configuration to inspect
+value-free pending/dead-letter metadata. Replay or discard requires the exact event,
+delivery, and expected generation. Replay creates a new delivery generation;
+discard stops future attempts and cannot undo earlier receiver acceptance.
+Use each command's `--help` for its exact flags.
 
-<EventReferenceTable id="operator-fields" />
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, WebhookCommand, WebhookListArgs, and WebhookReplayArgs;
-    crates/registry-bregctl/src/webhook_lifecycle.rs, WebhookListOutcome and WebhookListItem;
-    crates/registry-breg/src/webhook.rs, WebhookOperatorService and MAX_WEBHOOK_STATUS_RESULTS. */}
+{/* Evidence: crates/registry-breg/src/proposal_hooks.rs;
+    crates/registry-breg/src/proposal_events.rs; crates/registry-breg/src/outbox.rs;
+    crates/registry-breg/src/event_destination.rs;
+    crates/registry-platform-crypto/src/delivery_signature.rs;
+    products/breg/generated/event-schemas/proposal-lifecycle.schema.json;
+    products/breg/examples/webhook-receiver/receiver.py;
+    crates/registry-bregctl/src/lib.rs, WebhookCommand. */}
 
 ## Spatial adapter
 
@@ -1149,6 +795,6 @@ maintained data checked against that implementation.
 
 - [Deploy a registry](../../operate/breg/) for runtime configuration and erasure.
 - [Bind webhook receivers](../../operate/breg-webhooks/) for destinations, the signing key, and replay.
-- [Author a registry project](../../configure/breg/) for entities, profiles, change requests, and actions.
+- [Author a registry project](../../configure/breg/) for Record types, profiles, Actions, and Proposals.
 - [Base Registry Engine configuration reference](../breg-configuration/) for every project, module, and runtime key.
 - [Create and query your first registry](../../tutorials/first-breg/) to see the envelope and headers in a running server.

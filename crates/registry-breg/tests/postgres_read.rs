@@ -1850,11 +1850,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry {
     let mut source: Value = serde_json::from_str(&registry_source()).expect("read fixture is JSON");
-    source["entities"][0]["selectorProfiles"]
+    source["recordTypes"][0]["selectorProfiles"]
         .as_array_mut()
         .expect("widget has selector profiles")
         .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
-    source["accessProfiles"][0]["permissions"]["entities"][0]["lookups"]
+    source["accessProfiles"][0]["permissions"]["records"][0]["lookups"]
         .as_array_mut()
         .expect("operator has widget lookups")
         .push(json!({"selector": "by-amount-and-label", "valueOrigin": "request"}));
@@ -1895,11 +1895,11 @@ fn compile_registry_source(source: &str) -> registry_breg::CompiledRegistry {
 }
 
 fn registry_source() -> String {
-    r#"{
+    r#"{"datasets":[{"id": "test-dataset"}],
 	          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
 	          "kind":"BRegProject",
 	          "project":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget",
             "primaryDataset":"test-dataset",
             "route":"widgets",
@@ -1931,8 +1931,7 @@ fn registry_source() -> String {
             ],
             "temporal":{
               "startField":"valid-from",
-              "endField":"valid-to",
-              "scopeFields":["label"]
+              "endField":"valid-to"
             },
             "constraints":[{
               "type":"temporal-non-overlap",
@@ -1947,8 +1946,8 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management","audit-review"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["create","get","lookup","list","tombstone"],
               "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
               "writableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
@@ -1958,7 +1957,7 @@ fn registry_source() -> String {
               "allowCount":true,
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             },{
-              "entity":"assignment",
+              "recordType":"assignment",
               "operations":["create","get","list"],
               "readableFields":["label","jurisdiction","valid-from","valid-to"],
               "writableFields":["label","jurisdiction","valid-from","valid-to"],
@@ -1971,8 +1970,8 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["get","list"],
               "readableFields":["label","jurisdiction","internal-code"],
               "filterableFields":["label"],

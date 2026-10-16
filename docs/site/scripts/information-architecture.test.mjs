@@ -43,6 +43,14 @@ const messagingRedirects = new Function(
   'productRoutes',
   `${messagingRoutesSource}; ${messagingRedirectsSource.replace(/^export /, '')}; return messagingRedirects;`,
 )(productRoutes);
+const coordinatorRedirectsSource = configSource.match(/export function coordinatorRedirects[\s\S]*?^}\n/m)?.[0];
+const coordinatorRoutesSource = configSource.match(/const coordinatorRoutes = productRoutes\('registry-coordinator'\);/)?.[0];
+assert.ok(coordinatorRedirectsSource && coordinatorRoutesSource,
+  'could not isolate Coordinator docset routing');
+const coordinatorRedirects = new Function(
+  'productRoutes',
+  `${coordinatorRoutesSource}; ${coordinatorRedirectsSource.replace(/^export /, '')}; return coordinatorRedirects;`,
+)(productRoutes);
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
@@ -84,17 +92,31 @@ const messagingOpenApiSchema = {
   schema: './openapi/registry-messaging.openapi.json',
   sidebar: { label: 'API operations', collapsed: true },
 };
+const coordinatorOpenApiSchema = {
+  base: 'reference/apis/coordinator',
+  schema: './openapi/registry-coordinator.openapi.json',
+  sidebar: { label: 'API operations', collapsed: true },
+};
 const apiSchemaFactory = new Function(
   'hasCasework',
   'hasScheduling',
   'hasMessaging',
+  'hasCoordinator',
   'caseworkOpenApiSchema',
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
+  'coordinatorOpenApiSchema',
   `return ${apiConfigSource};`,
 );
 const apiSchemas = apiSchemaFactory(
-  true, true, true, caseworkOpenApiSchema, schedulingOpenApiSchema, messagingOpenApiSchema,
+  true,
+  true,
+  true,
+  true,
+  caseworkOpenApiSchema,
+  schedulingOpenApiSchema,
+  messagingOpenApiSchema,
+  coordinatorOpenApiSchema,
 );
 const generatedAPI = apiSchemas.map((schema) => ({
   ...schema.sidebar,
@@ -112,6 +134,7 @@ const sidebarFactory = new Function(
   'hasRender',
   'hasMessaging',
   'hasBregServices',
+  'hasCoordinator',
   'selectedDocset',
   `return [${sidebarSource}];`,
 );
@@ -134,9 +157,10 @@ const everyProductDocset = {
     'registry-render': {},
     'registry-messaging': {},
     'registry-breg-services': {},
+    'registry-coordinator': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, everyProductDocset);
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset);
 
 const messagingPageRoutes = [
   '/start/messaging/',
@@ -144,6 +168,13 @@ const messagingPageRoutes = [
   '/configure/messaging/',
   '/operate/messaging/',
   '/reference/apis/registry-messaging/',
+];
+const coordinatorPageRoutes = [
+  '/start/coordinator/',
+  '/configure/coordinator/',
+  '/operate/coordinator/',
+  '/reference/coordinator-configuration/',
+  '/reference/apis/registry-coordinator/',
 ];
 
 function section(label) {
@@ -258,6 +289,7 @@ test('uses the product navigation in its published order', () => {
     'Registry Scheduling',
     'Registry Render',
     'Registry Messaging',
+    'Registry Coordinator',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -277,14 +309,18 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       // operations are not the last of every registered schema.
       // It also carries the Base Registry Engine citizen services.
       { id: 'v0.31.0', status: 'archived', availability: 'candidate', path: '/v/0.31.0/', products: { 'registry-casework': { ref: 'v0.31.0' }, 'registry-messaging': { ref: 'v0.31.0' }, 'registry-breg-services': { ref: 'v0.31.0' } } },
+      // A docset that carries the Coordinator after Messaging and without
+      // Scheduling, so the Coordinator operations follow a skipped schema.
+      { id: 'v0.41.0', status: 'archived', availability: 'candidate', path: '/v/0.41.0/', products: { 'registry-casework': { ref: 'v0.41.0' }, 'registry-messaging': { ref: 'v0.41.0' }, 'registry-coordinator': { ref: 'v0.41.0' } } },
     ],
   };
-  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices] of [
-    ['latest', {}, true, true, true, false, false],
-    ['v0.29.0', {}, false, false, false, false, false],
-    ['v0.30.0', {}, true, false, false, false, false],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false],
-    ['v0.31.0', {}, true, false, false, true, true],
+  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator] of [
+    ['latest', {}, true, true, true, false, false, false],
+    ['v0.29.0', {}, false, false, false, false, false, false],
+    ['v0.30.0', {}, true, false, false, false, false, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false],
+    ['v0.31.0', {}, true, false, false, true, true, false],
+    ['v0.41.0', {}, true, false, false, true, false, true],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     assert.equal(context.hasCasework, hasCasework, id);
@@ -292,6 +328,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(context.hasRender, hasRender, id);
     assert.equal(context.hasMessaging, hasMessaging, id);
     assert.equal(context.hasBregServices, hasBregServices, id);
+    assert.equal(context.hasCoordinator, hasCoordinator, id);
     const docsetSidebar = sidebarFactory(
       ...sidebarArguments,
       context.hasCasework,
@@ -299,12 +336,14 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasRender,
       context.hasMessaging,
       context.hasBregServices,
+      context.hasCoordinator,
       context.selectedDocset,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Render'), hasRender, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Messaging'), hasMessaging, id);
+    assert.equal(docsetSidebar.some((item) => item.label === 'Registry Coordinator'), hasCoordinator, id);
     // The citizen services are seated inside the Base Registry Engine section,
     // which every docset publishes.
     const docsetBreg = docsetSidebar.find((item) => item.label === 'Base Registry Engine');
@@ -314,15 +353,21 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasCasework,
       context.hasScheduling,
       context.hasMessaging,
+      context.hasCoordinator,
       caseworkOpenApiSchema,
       schedulingOpenApiSchema,
       messagingOpenApiSchema,
+      coordinatorOpenApiSchema,
     );
-    assert.equal(docsetSchemas.length, 1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging), id);
+    assert.equal(
+      docsetSchemas.length,
+      1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging) + Number(hasCoordinator),
+      id,
+    );
     // Each product group seats the operations of its own schema, whichever
     // products come before it in this docset.
     const docsetAPI = docsetSchemas.map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
-    const docsetMessaging = sidebarFactory(
+    const docsetAPISidebar = sidebarFactory(
       cliReferenceSidebar,
       sidebarArguments[1],
       sidebarArguments[2],
@@ -334,12 +379,22 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasRender,
       context.hasMessaging,
       context.hasBregServices,
+      context.hasCoordinator,
       context.selectedDocset,
-    ).find((item) => item.label === 'Registry Messaging');
+    );
+    const docsetMessaging = docsetAPISidebar.find((item) => item.label === 'Registry Messaging');
     if (hasMessaging) {
       assert.deepEqual(
         docsetMessaging.items.filter((item) => item.base).map((item) => item.base),
         ['reference/apis/messaging'],
+        id,
+      );
+    }
+    const docsetCoordinator = docsetAPISidebar.find((item) => item.label === 'Registry Coordinator');
+    if (hasCoordinator) {
+      assert.deepEqual(
+        docsetCoordinator.items.filter((item) => item.base).map((item) => item.base),
+        ['reference/apis/coordinator'],
         id,
       );
     }
@@ -361,6 +416,18 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       const twin = `${route.slice(0, -1)}.md`;
       assert.equal(messagingRedirectsResult[route], hasMessaging ? undefined : home, `${id} ${route}`);
       assert.equal(messagingRedirectsResult[twin], hasMessaging ? undefined : home, `${id} ${twin}`);
+    }
+    // The same rule for the Coordinator pages while the current docset does
+    // not publish the Coordinator.
+    const coordinatorRedirectsResult = coordinatorRedirects(
+      context.hasCoordinator,
+      context.currentHasCoordinator,
+      context.currentDocsetRedirect,
+    );
+    for (const route of coordinatorPageRoutes) {
+      const twin = `${route.slice(0, -1)}.md`;
+      assert.equal(coordinatorRedirectsResult[route], hasCoordinator ? undefined : home, `${id} ${route}`);
+      assert.equal(coordinatorRedirectsResult[twin], hasCoordinator ? undefined : home, `${id} ${twin}`);
     }
   }
   // When the current docset publishes Messaging, a docset without it sends each
@@ -395,7 +462,38 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   ))) {
     assert.equal(target, '/dev/', route);
   }
-  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling' \|\| repoId === 'registry-messaging'\) && !docset\.products\[repoId\]/);
+  // When the current docset publishes the Coordinator, a docset without it
+  // sends each Coordinator route to the same route of the current docset.
+  const coordinatorActivated = {
+    ...docsets,
+    docsets: docsets.docsets.map((docset) => docset.id === 'latest'
+      ? { ...docset, products: { ...docset.products, 'registry-coordinator': { ref: 'HEAD' } } }
+      : docset),
+  };
+  for (const [id, env, expected] of [
+    ['latest', {}, {}],
+    ['v0.29.0', {}, Object.fromEntries(coordinatorPageRoutes.flatMap((route) => {
+      const target = `https://docs.registrystack.org/dev${route}`;
+      return [[route, target], [`${route.slice(0, -1)}.md`, target]];
+    }))],
+  ]) {
+    const context = resolveDocsetBuildContext(coordinatorActivated, { DOCS_DOCSET: id, ...env });
+    assert.equal(context.currentHasCoordinator, true, id);
+    assert.deepEqual(
+      coordinatorRedirects(context.hasCoordinator, context.currentHasCoordinator, context.currentDocsetRedirect),
+      expected,
+      id,
+    );
+  }
+  const coordinatorUnpublished = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: 'latest', DOCS_BASE: '/dev/' });
+  for (const [route, target] of Object.entries(coordinatorRedirects(
+    coordinatorUnpublished.hasCoordinator,
+    coordinatorUnpublished.currentHasCoordinator,
+    coordinatorUnpublished.currentDocsetRedirect,
+  ))) {
+    assert.equal(target, '/dev/', route);
+  }
+  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling' \|\| repoId === 'registry-messaging' \|\| repoId === 'registry-coordinator'\) && !docset\.products\[repoId\]/);
   for (const route of [
     '/start/casework/',
     '/tutorials/first-casework/',
@@ -410,6 +508,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   assert.match(configSource, /'\/reference\/apis\/registry-scheduling\/'/);
   assert.match(configSource, /\.\.\.schedulingRedirects\(hasScheduling, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentHasMessaging, currentDocsetRedirect\)/);
+  assert.match(configSource, /\.\.\.coordinatorRedirects\(hasCoordinator, currentHasCoordinator, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {
@@ -481,6 +580,7 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Scheduling',
     'Registry Render',
     'Registry Messaging',
+    'Registry Coordinator',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
@@ -514,6 +614,7 @@ test('publishes one overview route for every section that has one', () => {
     ['Registry Casework', "slug: 'start/casework'"],
     ['Registry Render', "slug: 'start/registry-render'"],
     ['Registry Messaging', "slug: 'start/messaging'"],
+    ['Registry Coordinator', "slug: 'start/coordinator'"],
     ['Operations', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -786,6 +887,33 @@ test('keeps the Casework journey in one product lane', () => {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Casework journey`);
   }
   assert.match(casework, /\.\.\.openAPISidebarGroups\.slice\(1, 2\)/);
+});
+
+// The Coordinator configuration reference has one seat, in the Coordinator
+// lane, so a reader adopting the Coordinator never leaves it.
+test('keeps the Coordinator journey in one product lane', () => {
+  const coordinator = topLevelSection(sidebarSource, 'Registry Coordinator');
+  assert.ok(coordinator, 'could not isolate the Registry Coordinator section');
+  const slugs = [...coordinator.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(slugs, [
+    'start/coordinator',
+    'tutorials/review-an-application-and-send-a-notice',
+    'configure/coordinator',
+    'operate/coordinator',
+    'reference/coordinator-configuration',
+    'reference/apis/registry-coordinator',
+  ]);
+  for (const slug of slugs) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Coordinator journey`);
+  }
+  assert.equal(
+    [...sidebarSource.matchAll(/slug: 'reference\/coordinator-configuration'/g)].length,
+    1,
+  );
+  assert.match(
+    coordinator,
+    /\.\.\.openAPISidebarGroups\.slice\(\s*1 \+ Number\(hasCasework\) \+ Number\(hasScheduling\) \+ Number\(hasMessaging\),\s*2 \+ Number\(hasCasework\) \+ Number\(hasScheduling\) \+ Number\(hasMessaging\),\s*\)/,
+  );
 });
 
 test('does not publish the retired pre-1.0 cutover page', () => {

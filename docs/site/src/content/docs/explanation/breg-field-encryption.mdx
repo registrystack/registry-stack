@@ -107,16 +107,15 @@ values collide.
 
 The compiler refuses the queries a sealed column cannot answer, at authoring time, with a document
 path naming the field. In summary: no filtering or sorting on an encrypted field, no comparison
-other than equality, no change-request flow that targets the field, no derived SQL over it, and no
-event projection of it. A registry whose process needs reviewed change requests on a restricted
+other than equality, no Proposal plan that targets the field, no derived SQL over it, and no
+event projection of it. A registry whose process needs reviewed Proposals on a restricted
 field cannot encrypt that field in Phase 1: the compiler refuses the combination at authoring time
 rather than at the first reviewed change.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, breg.access-profile.processing-encrypted and
-    breg.event.projection-encrypted; crates/registry-breg/src/change_request.rs,
-    breg.change-request.effect-field-encrypted; crates/registry-breg/src/derived_sql.rs,
+    breg.event.projection-encrypted; crates/registry-breg/src/proposal_prepare.rs; crates/registry-breg/src/derived_sql.rs,
     refuse_encrypted_columns(); crates/registry-breg/src/postgres/read.rs, predicate_sql();
-    crates/registry-breg/src/request_prepare.rs, refuse_encrypted_participation();
+    crates/registry-breg/src/proposal_prepare.rs;
     crates/registry-breg/src/outbox.rs, projected_event_values(). */}
 
 ## Startup and stored-envelope failures fail closed
@@ -172,7 +171,7 @@ may recommend, but only the authored choice enables the migration.
 
 The preflight is value-free. Before anything is applied, it reports counts per covered field: the
 live rows still carrying plaintext, the retained journal revisions that carry the field member,
-and the retained change-request snapshots, cached idempotency responses, and event payloads that
+and the retained Proposal snapshots, cached idempotency responses, and event payloads that
 mention it. When a covered field declares a unique blind index, the report also names the records
 whose normalized values would collide on that index, capped at 64 identifiers, and never names a
 value; the apply refuses the same collisions before it seals anything. The operator commands
@@ -195,7 +194,7 @@ step.
     FieldEncryptionBackfillPreflightReport, FieldEncryptionBackfillFieldPreflight,
     MAX_NAMED_DUPLICATE_RECORDS, pending_erase_targets(), and
     erase_field_encryption_history(); crates/registry-breg/src/postgres/interlock.rs,
-    field_encryption_duplicate_preflight() and refuse_retained_plaintext_request_snapshots();
+    field_encryption_duplicate_preflight() and refuse_retained_plaintext_proposal_snapshots();
     crates/registry-bregctl/src/lib.rs,
     FieldEncryptionCommand; crates/registry-bregctl/src/field_encryption_lifecycle.rs,
     run_preflight() and run_erase_history(). */}
@@ -228,7 +227,7 @@ certification status. Registry Stack does not claim certification of itself.
 Three boundaries are worth planning around now, and
 [Known limitations and non-guarantees](../known-limitations/) holds the full list:
 
-- Change-request flows cannot target encrypted fields, so a restricted field that must go through
+- Proposal plans cannot target encrypted fields, so a restricted field that must go through
   review cannot be encrypted yet.
 - Native `pattern` checks cannot apply to encrypted fields, so Phase 1 refuses the combination at
   authoring time.

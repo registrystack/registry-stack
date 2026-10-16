@@ -1,0 +1,219 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+  "kind": "BRegExampleScenarios",
+  "scenarios": [
+    {
+      "id": "register-facility",
+      "description": "Create an operator, atomically register a facility and assignment, and read the facility.",
+      "input": "examples/inputs/facility.json",
+      "steps": [
+        {
+          "id": "create-operator",
+          "operation": "create",
+          "recordType": "operator",
+          "client": "operator-editor",
+          "accessProfile": "operator-editor",
+          "input": "operator",
+          "capture": "operator"
+        },
+        {
+          "id": "register",
+          "operation": "invoke",
+          "recordType": "facility",
+          "client": "registrar",
+          "accessProfile": "facility-registrar",
+          "action": "register-facility",
+          "result": "facility",
+          "input": "facility",
+          "capture": "facility"
+        },
+        {
+          "id": "read-facility",
+          "operation": "get",
+          "recordType": "facility",
+          "client": "reader",
+          "accessProfile": "facility-reader",
+          "record": "facility"
+        }
+      ]
+    },
+    {
+      "id": "deactivate-facility",
+      "description": "Start, inspect, edit, submit and manually apply a no-review Proposal using an earlier registration attempt.",
+      "input": "examples/inputs/deactivation.json",
+      "steps": [
+        {
+          "id": "start",
+          "operation": "start",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "input": "deactivation",
+          "capture": "deactivation",
+          "expect": {
+            "state": "draft"
+          }
+        },
+        {
+          "id": "inspect-draft",
+          "operation": "inspect",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "proposal": "deactivation",
+          "expect": {
+            "state": "draft"
+          }
+        },
+        {
+          "id": "conceal-other-author",
+          "operation": "inspect",
+          "recordType": "facility",
+          "client": "other-author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "proposal": "deactivation",
+          "expect": {
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "edit",
+          "operation": "edit",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "proposal": "deactivation",
+          "input": "deactivation",
+          "expect": {
+            "state": "draft"
+          }
+        },
+        {
+          "id": "submit",
+          "operation": "submit",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "proposal": "deactivation",
+          "expect": {
+            "state": "submitted"
+          }
+        },
+        {
+          "id": "apply",
+          "operation": "apply",
+          "recordType": "facility",
+          "client": "applier",
+          "accessProfile": "facility-correction-applier",
+          "action": "deactivate-facility",
+          "proposal": "deactivation",
+          "expect": {
+            "state": "applied"
+          }
+        },
+        {
+          "id": "read",
+          "operation": "get",
+          "recordType": "facility",
+          "client": "reader",
+          "accessProfile": "facility-reader",
+          "record": "facility"
+        }
+      ]
+    },
+    {
+      "id": "submit-address-correction",
+      "description": "Freeze and submit an address correction to the independently configured review authority.",
+      "input": "examples/inputs/correction.json",
+      "steps": [
+        {
+          "id": "start",
+          "operation": "start",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "correct-address",
+          "input": "correction",
+          "capture": "correction",
+          "expect": {
+            "state": "draft"
+          }
+        },
+        {
+          "id": "submit",
+          "operation": "submit",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "correct-address",
+          "proposal": "correction",
+          "expect": {
+            "state": "submitted"
+          }
+        }
+      ]
+    },
+    {
+      "id": "observe-address-correction",
+      "description": "Inspect the exact submitted Proposal after independent review and automatic application. Resume while review is pending.",
+      "input": "examples/inputs/empty.json",
+      "steps": [
+        {
+          "id": "inspect",
+          "operation": "inspect",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "correct-address",
+          "proposal": "correction",
+          "expect": {
+            "state": "applied"
+          }
+        },
+        {
+          "id": "read",
+          "operation": "get",
+          "recordType": "facility",
+          "client": "reader",
+          "accessProfile": "facility-reader",
+          "record": "facility"
+        }
+      ]
+    },
+    {
+      "id": "cancel-deactivation",
+      "description": "Create and cancel a draft without changing the facility.",
+      "input": "examples/inputs/deactivation.json",
+      "steps": [
+        {
+          "id": "start",
+          "operation": "start",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "input": "deactivation",
+          "capture": "cancelled-deactivation"
+        },
+        {
+          "id": "cancel",
+          "operation": "cancel",
+          "recordType": "facility",
+          "client": "author",
+          "accessProfile": "facility-correction-author",
+          "action": "deactivate-facility",
+          "proposal": "cancelled-deactivation",
+          "expect": {
+            "state": "cancelled"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -3,30 +3,23 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const util = require('node:util');
 const { test } = require('node:test');
-const { BaseRegistryClient, BRegPreparedCreate, BRegPreparedLifecycle } = process.env.BREG_CLIENT_PACKAGE
+const { BaseRegistryClient, BRegPreparedCreate, BRegPreparedProposal } = process.env.BREG_CLIENT_PACKAGE
   ? require(process.env.BREG_CLIENT_PACKAGE).breg : require('..');
 const id = '00000000-0000-4000-8000-000000000001';
 const profile = 'writer';
-const digest = `sha256:${'0123456789abcdef'.repeat(4)}`;
-const proposalVersion = 3;
 const applicationId = '00000000-0000-4000-8000-000000000003';
-const appliedAt = '2026-09-01T12:00:00Z';
-const actionIfMatch = '"breg-action-1"';
-const lifecycleRecordId = '00000000-0000-4000-8000-000000000002';
-const lifecycleRecordRevision = 5;
-const receiptRevision = lifecycleRecordRevision + 1;
 const fields = ['wide', 'decimal', 'date', 'nullable', 'reference'].map(name => ({
   id: name, apiName: name, label: name, schema: {type: name === 'wide' ? 'integer' : 'string'},
   required: false, nullable: true, readOnly: false, removable: true,
 }));
 fields[0].codeLabels = { active: 'Active' };
 fields[0].storageValidation = { kind: 'postgresql-are', pattern: '^[A-Z]+$' };
-fields[0].reference = { manualEntry: true, targetEntity: 'item', operations: [
+fields[0].reference = { manualEntry: true, targetRecordType: 'item', operations: [
   { operationId: 'records.item.lookup', accessProfile: profile, labelFields: ['wide'] },
 ] };
 const query = {
   kind: 'list', selectableFields: [{id: 'wide', apiName: 'wide'}],
-  filterableFields: [{id: '__request_breg_state', apiName: 'bregState', operators: ['equals', 'in']}],
+  filterableFields: [{id: 'wide', apiName: 'wide', operators: ['equals', 'in']}],
   sortableFields: [], allowCount: true, defaultPageSize: 20, maximumPageSize: 100,
   maximumFilterClauses: 10, maximumInValues: 20,
   pagination: {parameter:'$skiptoken', responsePath:'pageInfo.nextCursor', exclusive:true}, temporal:{mode:'current'},
@@ -34,10 +27,10 @@ const query = {
 function operation(kind) {
   return {id:`records.item.${kind}`, method:kind === 'create' ? 'POST' : kind === 'patch' ? 'PATCH' : 'GET',
     path:`/v1/records/items${kind === 'patch' ? '/{record_id}' : ''}`, operation:kind,
-    sourceEntity:'item', responseEntity:'item', accessProfile:profile, requiredCapabilities:[],
+    sourceRecordType:'item', responseRecordType:'item', accessProfile:profile, requiredCapabilities:[],
     futureExecutionMember:{ignored:true},
-    entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
-    readableFields:fields.map(f=>f.id), readableRequestFields:['reason'],
+    recordTypeLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
+    readableFields:fields.map(f=>f.id),
     createWritableFields:kind === 'create' ? fields.map(f=>f.id) : [],
     patchWritableFields:kind === 'patch' ? fields.map(f=>f.id) : [], selectors:[], query:kind === 'list' ? query : null,
     request:kind === 'list' ? {fieldNames:'api',queryParameters:['$filter','$skiptoken']} : {
@@ -50,34 +43,14 @@ function operation(kind) {
 }
 function lookupOperation() {
   return {id:'records.item.lookup', method:'POST', path:'/v1/records/items:lookup', operation:'lookup',
-    sourceEntity:'item', responseEntity:'item', accessProfile:profile, requiredCapabilities:[],
-    entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
-    readableFields:fields.map(f=>f.id), readableRequestFields:[], createWritableFields:[], patchWritableFields:[],
+    sourceRecordType:'item', responseRecordType:'item', accessProfile:profile, requiredCapabilities:[],
+    recordTypeLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
+    readableFields:fields.map(f=>f.id), createWritableFields:[], patchWritableFields:[],
     selectors:[{id:'by-wide-value',label:'By wide value',valueOrigin:'request',
       fields:[{id:'wide',apiName:'wide',label:'Wide',schema:{type:'integer'},required:true}],requestFields:['wide']}],
     readPath:{id:'related-items',label:'Related items'}, query:null,
     request:{fieldNames:'api',queryParameters:[],body:'lookup_selector',contentType:'application/json',
       idempotencyKeyRequired:false,mutationSemantics:'lookup',schema:{type:'object'}},
-  };
-}
-function lifecycleOperation() {
-  return {id:'records.item.request.apply', method:'POST', path:'/v1/records/items/{record_id}/actions/apply',
-    operation:'apply-request', sourceEntity:'item', responseEntity:'item', accessProfile:profile,
-    requiredCapabilities:['change_request_lifecycle'],
-    entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields:[],
-    readableFields:[], readableRequestFields:[], createWritableFields:[], patchWritableFields:[], selectors:[], query:null,
-    request:{fieldNames:'api',queryParameters:[],body:'change_request_action',contentType:'application/json',
-      idempotencyKeyRequired:true,ifMatchRequired:true,mutationSemantics:'change_request_lifecycle',
-      schema:{
-        $schema:'https://json-schema.org/draft/2020-12/schema', type:'object', additionalProperties:false,
-        required:['proposalVersion','effectDigest'],
-        properties:{
-          proposalVersion:{type:'integer',format:'int64',minimum:1,maximum:4294967295},
-          effectDigest:{type:'string',pattern:'^sha256:[0-9a-f]{64}$',description:'Digest of the immutable proposal effects displayed to the actor.'},
-          reason:{type:'string',maxLength:4096,pattern:'^[^\\u0000]*$',description:'Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused.'},
-        },
-      },
-    },
   };
 }
 function tombstoneOperation() {
@@ -99,53 +72,20 @@ function batchOperation() {
 }
 function otherCreateOperation() {
   return {...operation('create'),id:'records.other.create',path:'/v1/records/others',
-    sourceEntity:'other',responseEntity:'other'};
+    sourceRecordType:'other',responseRecordType:'other'};
 }
-const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
+const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'2',
   futureDescription:{label:'Future registry description'},
-  entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
-    operations:['create','patch','list','lookup','apply-request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
-    changeRequest:{planner:{kind:'declarative'},
-      effects:[{id:'move',operation:'patch',target:{entity:'item',fromField:'reference'},set:[{field:'wide',fromField:'date'},{field:'decimal'}],clear:['nullable']}],
-      review:{type:'required',authority:'casework',policyId:'address-review'},
-      onApproved:{mode:'automatic',executor:'breg-worker'},application:{preconditions:{request:[]}}}},
+  recordTypes:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
+    operations:['create','patch','list','lookup','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id)},
     {id:'other',datasetIdentifier:'other-items',route:'others',schema:'/v1/schemas/other',
       operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
-  operations:[...['create','patch','list'].map(operation), lookupOperation(), lifecycleOperation(), tombstoneOperation(), batchOperation(), otherCreateOperation()],
+  operations:[...['create','patch','list'].map(operation), lookupOperation(), tombstoneOperation(), batchOperation(), otherCreateOperation()],
 };
 const meta = {registryIdentifier:'test-registry',datasetIdentifier:'items',entityTypeIdentifier:'item'};
 const record = `{"recordIdentifier":"${id}","revisionIdentifier":"1","snapshot":"breg1_${id}","domainData":{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}}`;
 const lookupValues = '{"wide":9007199254740992,"decimal":"12.3400"}';
 const lookupRecord = `{"recordIdentifier":"${id}","revisionIdentifier":"1","domainData":{"wide":9007199254740992,"decimal":"12.3400"}}`;
-const lifecycleActionHref = `/v1/records/items/${lifecycleRecordId}/actions/apply?accessProfile=${profile}`;
-const lifecycleRecord = JSON.stringify({
-  data: {
-    recordIdentifier: lifecycleRecordId, revisionIdentifier: String(lifecycleRecordRevision), domainData: {},
-    request: {
-      bregState: 'submitted', proposalVersion, editable: false, effectDigest: digest,
-      submitterReference: 'opaque-submitter',
-      proposal: {review:{type:'required',authority:'casework',policyId:'address-review'}},
-      review: {
-        submission:{state:'accepted',authority:'casework',requestId:id,submissionDigest:digest,recoveryDeadline:'2026-10-01T10:00:00Z',policy:{id:'address-review',version:'1',digest}},
-        result:{state:'approved',resultId:applicationId,completedAt:'2026-09-01T11:00:00Z',availableUntil:'2026-10-01T11:00:00Z'},
-        delivery:{state:'received',eventId:lifecycleRecordId,receivedAt:'2026-09-01T11:00:01Z'},
-        application:{mode:'automatic',state:'queued',executor:'breg-worker',attempts:3,nextAttemptAt:'2026-09-01T11:00:05Z'},
-        recovery:{state:'none'},
-      },
-      actions: [{operation:'apply-request', method:'POST', href:lifecycleActionHref, ifMatch:actionIfMatch, proposalVersion, effectDigest:digest}],
-    },
-  },
-  meta,
-});
-const receipt = {
-  id: lifecycleRecordId, revision: receiptRevision, snapshot: `breg1_${lifecycleRecordId}`,
-  actorReference: 'opaque-applier',
-  request: {
-    bregState: 'applied', proposalVersion, effectDigest: digest,
-    application: {applicationId, proposalVersion, effectDigest: digest, appliedAt},
-  },
-};
-
 test('native JSON methods preserve values, metadata, cursors and mutation preconditions', async () => {
   const requests = [];
   let responseNumber = '9007199254740992';
@@ -163,7 +103,6 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
       response.setHeader('link','<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/item>; rel="describedby"');
       return response.end(`{"data":${lookupRecord},"meta":${JSON.stringify(meta)}}`);
     }
-    if (path.endsWith('/actions/apply')) return response.end(JSON.stringify(receipt));
     if (path.endsWith(':batch')) {
       const revision = request.headers['idempotency-key'] === 'exact-batch' ? '9007199254740992' : '2';
       return response.end(`{"snapshot":"breg1_${applicationId}","results":[{"operation":"create","id":"${id}","revision":${revision},"etag":"\\"breg-record-000000000002\\"","data":{"wide":9007199254740992}}]}`);
@@ -186,8 +125,8 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const client = new BaseRegistryClient({baseUrl:`http://127.0.0.1:${server.address().port}`});
     const contract = await client.registryContract(profile);
     const list = contract.operations.find(op=>op.kind === 'list');
-    assert.deepEqual(list.readableRequestFields,['reason']);
-    assert.equal(list.query.filterableFields[0].apiName,'bregState');
+    assert.equal(list.sourceRecordType,'item');
+    assert.equal(list.query.filterableFields[0].apiName,'wide');
     assert.equal(list.fields[0].schemaJson,'{"type":"integer"}');
     assert.equal(list.fields[0].codeLabels.active,'Active');
     assert.equal(list.fields[0].storageValidation.pattern,'^[A-Z]+$');
@@ -195,12 +134,6 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const lookupDescriptor = contract.operations.find(op=>op.kind === 'lookup');
     assert.equal(lookupDescriptor.selectors[0].requestFields[0],'wide');
     assert.equal(lookupDescriptor.readPath.id,'related-items');
-    assert.equal(contract.changeRequestCapability('item').review.policyId,'address-review');
-    assert.equal(contract.changeRequestCapability('item').onApproved.executor,'breg-worker');
-    assert.deepEqual(contract.changeRequestCapability('item').application.preconditions,{request:[]});
-    assert.deepEqual(contract.changeRequestCapability('item').effects,[{id:'move',operation:'patch',
-      target:{entity:'item',fromField:'reference'},set:[{field:'wide',fromField:'date'},{field:'decimal'}],clear:['nullable']}]);
-    assert.deepEqual(contract.changeRequestCapability('item').planner.writes,[]);
     list.id = 'forged';
     assert.equal(contract.operations.find(op=>op.kind === 'list').id,'records.item.list');
     const binding = contract.selectCreate('records.item.create',profile);
@@ -290,7 +223,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const foreign = new BaseRegistryClient({baseUrl:'http://127.0.0.1:1'});
     await assert.rejects(foreign.batchRecords(batch,{items:[{operation:'create',data:{wide:1}}]},'foreign-batch'),error=>error.kind === 'invalid-request');
     assert.equal(requests.length,mutationRequestCount);
-    const page = await client.listRecordsJson('items',{accessProfile:profile,filter:"bregState eq 'submitted'"});
+    const page = await client.listRecordsJson('items',{accessProfile:profile,filter:"wide eq 1"});
     assert.match(page.valueJson,/9007199254740992/);
     assert.equal(page.continuation.skiptoken,'cursor-1');
     await client.continueListJson(page.continuation);
@@ -308,64 +241,73 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.match(lookup.valueJson,/"wide":9007199254740992/);
     assert.equal(JSON.parse(lookup.valueJson).data.domainData.decimal,'12.3400');
 
-    const authority = contract.selectLifecycle('item',profile);
-    const actions = client.lifecycleActionsJson(authority,lifecycleRecord);
-    assert.equal(actions.length,1);
-    assert.equal(actions[0].operation,'apply-request');
-    assert.equal(actions[0].href,lifecycleActionHref);
-    const recoveredReceiptRecord = JSON.parse(lifecycleRecord);
-    recoveredReceiptRecord.data.request.bregState = 'applied';
-    recoveredReceiptRecord.data.request.actions = [];
-    recoveredReceiptRecord.data.request.application = receipt.request.application;
-    recoveredReceiptRecord.data.request.review.application = {
-      mode:'automatic',state:'applied',executor:'breg-worker',applicationId,
-      attempts:3,receiptRecovered:true,
-    };
-    assert.equal(client.lifecycleActions(authority,recoveredReceiptRecord).length,0);
-    recoveredReceiptRecord.data.request.review.application.receiptRecovered = false;
-    assert.throws(
-      () => client.lifecycleActions(authority,recoveredReceiptRecord),
-      error => error.kind === 'lifecycle-promotion' && error.code === 'binding',
-    );
-    const malformedLifecycleRecord = JSON.parse(lifecycleRecord);
-    malformedLifecycleRecord.data.request.review.submission.submissionDigest = 'sha256:UPPERCASE';
-    assert.throws(
-      () => client.lifecycleActions(authority,malformedLifecycleRecord),
-      error => error.kind === 'lifecycle-promotion' && error.code === 'binding',
-    );
-    const preparedLifecycle = client.prepareLifecycleActionJson(
-      authority,lifecycleRecord,actions[0],'recover-apply',
-    );
-    const preparedLifecycleBytes = preparedLifecycle.toBytes();
-    assert.match(util.inspect(preparedLifecycle),/^BRegPreparedLifecycle\(<redacted>\)$/);
-    assert.doesNotMatch(util.inspect(preparedLifecycle),/recover-apply|effectDigest/);
-    const restoredLifecycle = BRegPreparedLifecycle.fromBytes(preparedLifecycleBytes);
-    const restartedAuthority = restartedContract.selectLifecycle('item',profile);
-    const recoveredLifecycle = restartedClient.recoverLifecycleAction(
-      restartedAuthority,restoredLifecycle,
-    );
-    const recoveredExecuted = await restartedClient.executeRecoveredLifecycleActionJson(
-      recoveredLifecycle,
-    );
-    assert.deepEqual(JSON.parse(recoveredExecuted.valueJson),receipt);
-    assert.equal(requests.at(-1).headers['idempotency-key'],'recover-apply');
-    const executed = await client.executeLifecycleActionJson(actions[0],'exact-apply');
-    assert.match(requests.at(-1).url.split('?')[0],/\/actions\/apply$/);
-    assert.equal(requests.at(-1).headers['idempotency-key'],'exact-apply');
-    assert.equal(requests.at(-1).headers['if-match'],actionIfMatch);
-    assert.match(requests.at(-1).body,/"proposalVersion":3/);
-    assert.match(requests.at(-1).body,new RegExp(`"effectDigest":"${digest}"`));
-    const executedValue = JSON.parse(executed.valueJson);
-    assert.equal(executedValue.id,lifecycleRecordId);
-    assert.equal(executedValue.revision,receiptRevision);
-    assert.equal(executedValue.actorReference,'opaque-applier');
-    assert.deepEqual(executedValue,receipt);
-    assert.equal(executedValue.request.application.applicationId,applicationId);
-    assert.equal(executedValue.request.application.proposalVersion,proposalVersion);
-    assert.equal(executedValue.request.application.effectDigest,digest);
-
     const revisions = await client.recordRevisions('items',id,profile);
     assert.equal(revisions.mediaType,'application/json');
     assert.match(requests.at(-1).url,/\/v1\/records\/items\/00000000-0000-4000-8000-000000000001\/revisions\?accessProfile=writer$/);
   } finally { await new Promise(resolve=>server.close(resolve)); }
+});
+
+test('native Proposal JSON preserves exact values and protected edit recovery', async () => {
+  const requests = [];
+  const revision = `sha256:${'a'.repeat(64)}`;
+  const proposal = {
+    id, actionId: 'correct', actionRevision: revision, submissionVersion: 1, revision: 2, state: 'draft',
+    input: {wide: 9007199254740992, decimal: '12.3400', nullable: null},
+    links: {
+      self: {method: 'GET', path: `/v1/proposals/${id}`, accessProfile: profile, operation: 'get'},
+      edit: {method: 'POST', path: `/v1/proposals/${id}/edit`, accessProfile: profile, operation: 'edit', ifMatch: '"edit-condition"'},
+    },
+  };
+  const contractDocument = {id: 'proposal-json', version: '1', revision, metadataVersion: '2', recordTypes: [], operations: [],
+    proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: [], actions: [],
+      get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: [profile]}}};
+  const server = http.createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk;
+    requests.push({url: request.url, body, headers: request.headers});
+    response.writeHead(200, {'content-type': 'application/json', 'cache-control': 'no-store', 'vary': 'authorization, accept',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
+    const value = request.url.startsWith('/tenant/v1/registry') ? contractDocument
+      : request.method === 'POST' && request.url.includes('/edit?')
+        ? {...proposal, input: JSON.parse(body).input, revision: proposal.revision + 1} : proposal;
+    response.end(JSON.stringify(value)
+      .replace('9007199254740992', '9007199254740993'));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/tenant/`});
+    const contract = await client.registryContract(profile);
+    assert.throws(() => contract.selectProposals(profile), error => error.kind === 'metadata-selection');
+    const current = await client.getProposal(contract.selectProposalGet(profile), id);
+    assert.match(current.inputJson, /"wide":9007199254740993/);
+    assert.match(current.documentJson, /"wide":9007199254740993/);
+    assert.equal(JSON.parse(current.inputJson).decimal, '12.3400');
+    assert.equal(JSON.parse(current.inputJson).nullable, null);
+    assert.ok(!Object.hasOwn(JSON.parse(current.inputJson), 'undisclosed'));
+    assert.doesNotMatch(util.inspect(current), /9007199254740993|12\.3400/);
+    const before = requests.length;
+    // Exact reads retain wide integers; persisted edits must also satisfy JCS.
+    for (const invalid of ['{"input":{"wide":0.10000000000000001}}', '{"input":{"wide":1,"wide":2}}', '{"input":{"wide":9007199254740993}}']) {
+      assert.throws(() => client.prepareProposal(current, 'edit', invalid, 'refused'), error => error.kind === 'invalid-request' && error.outcomeUnknown === false, invalid);
+    }
+    assert.equal(requests.length, before);
+    const body = '{"input":{"wide":9007199254740994,"decimal":"12.3400","nullable":null}}';
+    const prepared = client.prepareProposal(current, 'edit', body, 'exact-edit');
+    const bytes = prepared.toBytes();
+    assert.match(util.inspect(prepared), /^BRegPreparedProposal\(<redacted>\)$/);
+    assert.doesNotMatch(util.inspect(prepared), /exact-edit|9007199254740994|12\.3400/);
+    const restored = BRegPreparedProposal.fromBytes(bytes);
+    await assert.rejects(client.executeProposal(restored), error => error.kind === 'invalid-request');
+    const recovered = client.recoverProposal(await client.readProposal(current), restored);
+    assert.deepEqual(recovered.toBytes(), bytes);
+    const edited = JSON.parse((await client.executeProposal(recovered)).documentJson);
+    assert.equal(edited.revision, proposal.revision + 1);
+    assert.equal(edited.submissionVersion, proposal.submissionVersion);
+    assert.equal(edited.state, 'draft');
+    assert.equal(edited.input.wide, 9007199254740994);
+    assert.equal(requests.at(-1).url, `/tenant/v1/proposals/${id}/edit?accessProfile=${profile}`);
+    assert.equal(requests.at(-1).body, '{"input":{"decimal":"12.3400","nullable":null,"wide":9007199254740994}}');
+    assert.match(requests.at(-1).body, /"wide":9007199254740994/);
+    assert.equal(requests.at(-1).headers['if-match'], '"edit-condition"');
+    assert.equal(requests.at(-1).headers['idempotency-key'], 'exact-edit');
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });

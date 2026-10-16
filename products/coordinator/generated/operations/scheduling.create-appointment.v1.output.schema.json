@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "AppointmentStateDocument": {
+      "description": "The lifecycle state of an appointment on the wire.",
+      "enum": [
+        "confirmed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ExternalReference": {
+      "additionalProperties": false,
+      "description": "An opaque link to a record owned by another product.\n\nScheduling stores and returns this tuple without resolving it. The\nidentifier names only the referenced record; callers must not put personal\ndata in any field.",
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "recordType",
+        "identifier"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A confirmed appointment.",
+  "properties": {
+    "appointmentId": {
+      "type": "string"
+    },
+    "cancelledAt": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "createdAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "externalReferences": {
+      "items": {
+        "$ref": "#/$defs/ExternalReference"
+      },
+      "type": "array"
+    },
+    "offering": {
+      "type": "string"
+    },
+    "policyRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "resource": {
+      "description": "The pool member serving the appointment, for exact-time offerings.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "revision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/AppointmentStateDocument"
+    },
+    "units": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "appointmentId",
+    "offering",
+    "start",
+    "end",
+    "resource",
+    "units",
+    "channel",
+    "revision",
+    "state",
+    "policyRevision",
+    "createdAt",
+    "cancelledAt",
+    "externalReferences"
+  ],
+  "title": "scheduling.create-appointment/v1 output",
+  "type": "object"
+}

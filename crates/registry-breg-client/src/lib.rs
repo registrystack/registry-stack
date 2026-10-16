@@ -25,9 +25,9 @@ mod error;
 mod extended_mutation;
 mod geojson;
 mod ingestion;
-mod lifecycle;
 mod metadata;
 mod mutation;
+mod proposal;
 mod query;
 mod read;
 mod recovery;
@@ -43,17 +43,17 @@ pub use batch::*;
 pub use client::BaseRegistryClient;
 pub use config::BaseRegistryClientConfig;
 pub use error::{
-    BRegPlanRefusal, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRefusalCode,
+    BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRefusalCode,
     BaseRegistryClientError, TransportKind,
 };
 pub use geojson::*;
 pub use ingestion::*;
-pub use lifecycle::*;
 pub use metadata::*;
 pub use mutation::*;
+pub use proposal::*;
 pub use query::*;
 pub use read::*;
-pub use recovery::{BRegPreparedCreate, BRegPreparedLifecycle};
+pub use recovery::BRegPreparedCreate;
 pub use registry_platform_httputil::client::{
     BearerToken, PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,
     MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
@@ -65,6 +65,7 @@ pub use registry_record::{
     REGISTRY_RECORD_CONTEXT_IDENTIFIER, REGISTRY_RECORD_PROFILE_IDENTIFIER,
     REGISTRY_RECORD_SCHEMA_IDENTIFIER,
 };
+pub use registry_review_protocol::PolicySelection;
 pub use response::*;
 pub use statistics::*;
 pub use uuid::Uuid;

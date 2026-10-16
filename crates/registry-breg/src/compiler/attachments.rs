@@ -1,60 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Pure authoring checks for request-owned binary slots. A slot participates in
-//! field authority but never becomes a scalar column or a query input.
+//! Pure authoring checks for bounded binary attachment slots.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
-    AccessProfileSource, EntitySource, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_CONTENT_TYPES,
-    MAX_ATTACHMENT_SLOTS,
+    AttachmentSlotSource, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_CONTENT_TYPES, MAX_ATTACHMENT_SLOTS,
 };
 use crate::diagnostics::Diagnostic;
-use crate::logical_names::{default_api_name, reserved_logical_name};
-use crate::model::{request_query_field_id_for_api, CompiledAttachmentSlot};
+use crate::logical_names::reserved_logical_name;
+use crate::model::CompiledAttachmentSlot;
 
-pub(super) fn validate(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
-    let base = format!("entities[id={}].attachments", entity.id);
-    if !entity.attachments.is_empty() && entity.change_request.is_none() {
-        errors.push(Diagnostic::error(
-            "breg.attachment.entity-not-request",
-            &base,
-            "attachment slots require a change-request entity",
-        ));
-    }
-    if entity.attachments.len() > MAX_ATTACHMENT_SLOTS {
+pub(crate) fn validate_slots(
+    slots: &[AttachmentSlotSource],
+    field_names: &BTreeSet<String>,
+    base: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if slots.len() > MAX_ATTACHMENT_SLOTS {
         errors.push(Diagnostic::error(
             "breg.attachment.slots-bounds-invalid",
-            &base,
-            "a request entity supports at most eight attachment slots",
+            base,
+            "a Proposal supports at most eight attachment slots",
         ));
     }
-    let fields = entity
-        .fields
-        .iter()
-        .map(|field| (&field.id, field.api_name.as_deref()))
-        .chain(entity.derived.iter().flat_map(|derived| {
-            derived
-                .fields
-                .iter()
-                .map(|field| (&field.id, field.api_name.as_deref()))
-        }))
-        .flat_map(|(id, api_name)| {
-            [
-                id.clone(),
-                api_name
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| default_api_name(id)),
-            ]
-        })
-        .collect::<BTreeSet<_>>();
     let mut ids = BTreeSet::new();
-    for (index, slot) in entity.attachments.iter().enumerate() {
+    for (index, slot) in slots.iter().enumerate() {
         let path = format!("{base}[{index}]");
         super::validate_id(&slot.id, &format!("{path}.id"), errors);
-        if reserved_logical_name(&slot.id)
-            || request_query_field_id_for_api(&slot.id).is_some()
-            || fields.contains(&slot.id)
-        {
+        if reserved_logical_name(&slot.id) || field_names.contains(&slot.id) {
             errors.push(Diagnostic::error(
                 "breg.attachment.id-collision",
                 format!("{path}.id"),
@@ -124,43 +97,10 @@ fn valid_content_type(value: &str) -> bool {
     })
 }
 
-pub(super) fn validate_profile(
-    entity: &EntitySource,
-    profile: &AccessProfileSource,
-    errors: &mut Vec<Diagnostic>,
-) {
-    for slot in &entity.attachments {
-        let base = format!(
-            "entities[id={}].accessProfiles[id={}]",
-            entity.id, profile.id
-        );
-        for (member, fields) in [
-            ("filterableFields", &profile.filterable_fields),
-            ("sortableFields", &profile.sortable_fields),
-        ] {
-            if fields.contains(&slot.id) {
-                errors.push(Diagnostic::error(
-                    "breg.attachment.access-processing-unsupported",
-                    format!("{base}.{member}[value={}]", slot.id),
-                    "attachment slots cannot be filtered or sorted",
-                ));
-            }
-        }
-        for (index, boundary) in profile.row_boundaries.iter().enumerate() {
-            if boundary.field == slot.id {
-                errors.push(Diagnostic::error(
-                    "breg.attachment.access-processing-unsupported",
-                    format!("{base}.rowBoundaries[{index}].field"),
-                    "attachment slots cannot be row-boundary inputs",
-                ));
-            }
-        }
-    }
-}
-
-pub(super) fn compile(entity: &EntitySource) -> BTreeMap<String, CompiledAttachmentSlot> {
-    entity
-        .attachments
+pub(crate) fn compile_slots(
+    slots: &[AttachmentSlotSource],
+) -> BTreeMap<String, CompiledAttachmentSlot> {
+    slots
         .iter()
         .map(|slot| {
             (

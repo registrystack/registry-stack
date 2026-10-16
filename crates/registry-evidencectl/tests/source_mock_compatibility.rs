@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use registry_platform_yaml::Reader;
 use serde_json::Value;
 
 const FIXTURES: &str = "tests/fixtures/source_mock";
@@ -728,9 +729,9 @@ fn source_mock_check_reports_json_diagnostics() {
 }
 
 #[test]
-fn the_reference_authoring_example_mock_plan_checks() {
+fn the_maintained_format_example_mock_plan_checks() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/evidence/reference/authoring-projects/example");
+        .join("../../products/evidence/examples/formats/source-mock");
     let checked = run(
         &example,
         &[
@@ -856,26 +857,52 @@ fn materialized_path_parameters_keep_the_openapi_json_type() {
 }
 
 #[test]
-fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
+fn normalized_project_source_and_target_connection_drive_bare_mock_serve_create_only() {
     let _server_test = SERVER_TEST_LOCK.lock().expect("lock server test");
     let temporary = tempfile::tempdir().expect("tempdir");
     copy_fixture_tree(temporary.path());
-    fs::copy(
-        temporary.path().join("awkward.openapi.yaml"),
-        temporary.path().join("source.openapi.yaml"),
-    )
-    .expect("retain project OpenAPI");
-    for directory in ["sources", "adapters", "schemas"] {
-        fs::create_dir(temporary.path().join(directory)).expect("authoring directory");
-    }
+    let initialized = run(
+        temporary.path(),
+        &[
+            "init",
+            "project",
+            "--openapi",
+            "awkward.openapi.yaml",
+            "--profile",
+            "local",
+        ],
+    );
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let project = temporary.path().join("project");
     let address = reserve_loopback();
     let origin = format!("http://{address}");
+    let target_path = project.join("local-target.yaml");
+    let target_bytes = fs::read(&target_path).expect("read normalized local target");
+    let mut target: Value = Reader::new(target_path.to_string_lossy().into_owned())
+        .scan(&target_bytes)
+        .expect("scan normalized local target")
+        .expect("normalized local target document")
+        .to_json_value();
+    target["connections"]["people"] = serde_json::json!({
+        "origin": origin,
+        "authentication": {"type": "none"}
+    });
+    fs::write(
+        &target_path,
+        serde_norway::to_string(&target).expect("encode normalized local target"),
+    )
+    .expect("write normalized local target");
+
     let suggested = run(
         temporary.path(),
         &[
             "source",
             "suggest",
-            ".",
+            "project",
             "--operation",
             "GET /people/{person_id}",
             "--select",
@@ -891,16 +918,28 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
         "{}",
         String::from_utf8_lossy(&suggested.stderr)
     );
-    let source_path = temporary.path().join("sources/people.yaml");
-    let source_before = fs::read(&source_path).expect("source draft");
-    assert!(String::from_utf8_lossy(&source_before).contains(&format!("baseUrl: {origin}")));
+    let project_path = project.join("evidence.yaml");
+    let project_before = fs::read(&project_path).expect("normalized project");
+    let project_document: Value = Reader::new(project_path.to_string_lossy().into_owned())
+        .scan(&project_before)
+        .expect("scan normalized project")
+        .expect("normalized project document")
+        .to_json_value();
+    assert_eq!(
+        project_document["sources"]["people"]["connection"],
+        "people"
+    );
+    assert_eq!(
+        target["connections"]["people"]["origin"],
+        Value::String(origin.clone())
+    );
 
     let repeated = run(
         temporary.path(),
         &[
             "source",
             "suggest",
-            ".",
+            "project",
             "--operation",
             "GET /people/{person_id}",
             "--select",
@@ -912,9 +951,9 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
         ],
     );
     assert!(!repeated.status.success());
-    assert_eq!(fs::read(&source_path).unwrap(), source_before);
+    assert_eq!(fs::read(&project_path).unwrap(), project_before);
 
-    let mut server = start_server(temporary.path(), &["source", "mock", "serve", "."]);
+    let mut server = start_server(&project, &["source", "mock", "serve", "."]);
     assert_eq!(
         request(address, "GET", "/v1/people/person-123", &[]).status,
         200

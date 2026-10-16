@@ -271,28 +271,24 @@ pub struct ServiceConfig {
     pub review_base_url: Url,
 }
 
-/// The entity holding the citizen's own record, found through the agent
+/// The Record type holding the citizen's own record, found through the agent
 /// profile's linked lookup.
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DetailsConfig {
-    pub entity: LocalId,
+    pub record_type: LocalId,
 }
 
-/// The application entity and the two fields the gateway, never the chat
-/// host, writes.
+/// The proposal-mode Action and its target input, resolved by the gateway.
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplicationConfig {
-    pub entity: LocalId,
-    /// The field identifier of the field that references the citizen's own
+    pub action: LocalId,
+    /// The input identifier of the input that references the citizen's own
     /// record.
-    pub target_field: LocalId,
-    /// The field identifier of the field that records the citizen's
-    /// principal. It names a different field than `targetField`.
-    pub owner_field: LocalId,
+    pub target_input: LocalId,
 }
 
 /// The audit block every Registry Stack product shares: the hash key, then a
@@ -772,17 +768,6 @@ fn cross_member_findings(
              resourceServer.resource.",
         ));
     }
-    if !defers("/service/application/targetField")
-        && config.service.application.owner_field == config.service.application.target_field
-    {
-        findings.push(Finding::new(
-            "breg.mcp-runtime.owner-field-is-target",
-            "/service/application/ownerField",
-            "service.application.ownerField names the same field as targetField",
-            "Name the field that records the citizen's principal, which differs from the field \
-             that references the citizen's record.",
-        ));
-    }
 }
 
 fn loopback_host(url: &url::Url) -> bool {
@@ -1027,11 +1012,10 @@ service:
   description: Correct the postal address the registry holds for you.
   disclosure: The assistant you use will see your current address and the correction you request.
   details:
-    entity: person-address
+    recordType: person-address
   application:
-    entity: address-correction-request
-    targetField: address
-    ownerField: owner
+    action: correct-address
+    targetInput: address
   reviewBaseUrl: https://review.example.test
 audit:
   hashKeyRef: secret:file/audit-key
@@ -1547,7 +1531,7 @@ rateLimits:
         }
     }
 
-    /// The review page serves `/requests/<id>` at the root of its
+    /// The review page serves `/proposals/<id>` at the root of its
     /// `publicOrigin` and signs in with root-relative return paths, so a
     /// base URL with a path would hand the citizen a link the page does not
     /// serve.
@@ -1575,15 +1559,15 @@ rateLimits:
         }
     }
 
-    /// The gateway writes the citizen's record into the target field and the
-    /// citizen's principal into the owner field, so one field named twice
-    /// would have the owner silently overwrite the target.
     #[test]
-    fn the_owner_field_is_not_the_target_field() {
+    fn the_retired_owner_input_is_unknown() {
         refused(
-            &document().replace("ownerField: owner", "ownerField: address"),
-            "breg.mcp-runtime.owner-field-is-target",
-            "/service/application/ownerField",
+            &document().replace(
+                "    targetInput: address",
+                "    targetInput: address\n    ownerInput: owner",
+            ),
+            "config.unknown-key",
+            "/service/application/ownerInput",
         );
     }
 

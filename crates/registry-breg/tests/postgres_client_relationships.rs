@@ -278,124 +278,6 @@ async fn read_path_answers_when_the_profile_has_no_entry_for_its_target_entity()
     fixture.finish().await;
 }
 
-/// #1391 for a change-request target: a profile with no entry for the target
-/// installs no owner request visibility and reads exactly what the target
-/// policy authorizes, while a profile declaring `requestVisibility: owner`
-/// on the change-request entity still sees only its own requests.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn read_path_to_a_change_request_entity_leaves_owner_visibility_to_its_own_profile() {
-    let fixture = client_http::ClientFixture::start(
-        compile(
-            CHANGE_REQUEST_TARGET_PROJECT,
-            "change-request target project",
-        ),
-        principal_claims("request-operator"),
-    )
-    .await;
-    let operator_client = &fixture.http.client;
-    let first = fixture
-        .client_for(principal_claims("first-submitter"))
-        .await;
-    let second = fixture
-        .client_for(principal_claims("second-submitter"))
-        .await;
-    let operator = operator_client
-        .registry_contract(Some("operator"))
-        .await
-        .unwrap();
-    let household = operator_client
-        .create_record(
-            &create_binding(&operator.value, "records.household.create", "operator"),
-            &create(json!({"householdCode":"HH-1"})),
-            &key("request-household"),
-            BRegRecordFormat::Json,
-        )
-        .await
-        .unwrap();
-    let mut requests = BTreeMap::new();
-    for (name, http) in [("first", &first), ("second", &second)] {
-        // A write binding is tied to the client origin it was read through.
-        let submitter = http
-            .client
-            .registry_contract(Some("submitter"))
-            .await
-            .unwrap();
-        let request = http
-            .client
-            .create_record(
-                &create_binding(&submitter.value, "records.claim.create", "submitter"),
-                &create(json!({
-                    "household": household.value.data.record_identifier,
-                    "proposedCode": format!("HH-{name}"),
-                    "reason": format!("{name} reason")
-                })),
-                &key(&format!("request-{name}")),
-                BRegRecordFormat::Json,
-            )
-            .await
-            .unwrap();
-        operator_client
-            .create_record(
-                &create_binding(&operator.value, "records.claim-link.create", "operator"),
-                &create(json!({
-                    "household": household.value.data.record_identifier,
-                    "claim": request.value.data.record_identifier
-                })),
-                &key(&format!("request-link-{name}")),
-                BRegRecordFormat::Json,
-            )
-            .await
-            .unwrap();
-        requests.insert(name, request.value.data.record_identifier.clone());
-    }
-
-    let page = operator_client
-        .list_relationship_records(
-            "households",
-            &household.value.data.record_identifier,
-            "claims",
-            &relationship_request("operator", "reason"),
-        )
-        .await
-        .expect("the path grant alone authorizes the change-request target read");
-    let seen = page
-        .value
-        .value
-        .items
-        .iter()
-        .map(|record| record.record_identifier.clone())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(seen, requests.values().cloned().collect());
-
-    for (name, http) in [("first", &first), ("second", &second)] {
-        let own = http
-            .client
-            .list_records(
-                "claims",
-                &BRegListRequest::default().options(
-                    BRegRecordOptions::default()
-                        .access_profile("submitter")
-                        .unwrap()
-                        .select(["reason"])
-                        .unwrap(),
-                ),
-            )
-            .await
-            .unwrap();
-        let own = own
-            .value
-            .value
-            .items
-            .iter()
-            .map(|record| record.record_identifier.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(own, vec![requests[name].clone()]);
-    }
-    drop(first);
-    drop(second);
-    fixture.finish().await;
-}
-
 fn relationship_request(profile: &str, field: &str) -> BRegRelationshipListRequest {
     BRegRelationshipListRequest::default().options(
         BRegRecordOptions::default()
@@ -406,17 +288,6 @@ fn relationship_request(profile: &str, field: &str) -> BRegRelationshipListReque
     )
 }
 
-fn principal_claims(principal: &str) -> VerifiedRequestClaims {
-    VerifiedRequestClaims::authenticated(
-        "registry_principal",
-        principal,
-        BTreeSet::from(["registry.read".to_owned()]),
-        Some("case-management".into()),
-        BTreeMap::new(),
-    )
-    .unwrap()
-}
-
 fn compile(source: &str, label: &str) -> registry_breg::CompiledRegistry {
     let project = parse_project_json(source.as_bytes())
         .unwrap_or_else(|error| panic!("{label} parses: {error:?}"));
@@ -424,11 +295,11 @@ fn compile(source: &str, label: &str) -> registry_breg::CompiledRegistry {
         .unwrap_or_else(|error| panic!("{label} compiles: {error:?}"))
 }
 
-const UNGRANTED_TARGET_PROJECT: &str = r#"{
+const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ungranted-read-path-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-  "entities":[
+  "recordTypes":[
     {
       "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
       "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
@@ -451,13 +322,13 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "id":"operator","default":true,"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
+            "recordType":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
             "readableFields":["household-code"],"writableFields":["household-code"],
             "readPaths":[{"path":"people","readableFields":["person-code"]}]
           },
-          {"entity":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]}
+          {"recordType":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]}
         ]
       }
     },
@@ -465,8 +336,8 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "id":"writer","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
-          {"entity":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],"readableFields":["person-code"],"writableFields":["person-code"]}
+        "records":[
+          {"recordType":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],"readableFields":["person-code"],"writableFields":["person-code"]}
         ]
       }
     },
@@ -474,84 +345,8 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "id":"viewer","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
-          {"entity":"household","rowBoundaries":"unrestricted","operations":["get","list"],"readableFields":["household-code"]}
-        ]
-      }
-    }
-  ]
-}"#;
-
-const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
-  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-  "kind":"BRegProject",
-  "project":{"id":"change-request-read-path-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-  "entities":[
-    {
-      "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
-      "changeControl":{"requiredFor":["patch"]},
-      "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
-      "readPaths":[{"id":"claims","through":"claim-link","to":"claim","route":"claims"}]
-    },
-    {
-      "id":"claim-link","primaryDataset":"test-dataset","route":"claim-links","mutationMode":"mutable","classification":"restricted",
-      "fields":[
-        {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},
-        {"id":"claim","type":"reference","target":"claim","required":true,"classification":"restricted"}
-      ]
-    },
-    {
-      "id":"claim","primaryDataset":"test-dataset","route":"claims","mutationMode":"mutable","classification":"restricted",
-      "fields":[
-        {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},
-        {"id":"proposed-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"},
-        {"id":"reason","type":"string","required":true,"maximumLength":64,"classification":"restricted"}
-      ],
-      "changeRequest":{
-        "effects":[{"target":{"fromField":"household"},"operation":"patch","set":{"household-code":{"fromField":"proposed-code"}}}],
-        "review":{"type":"required","authority":"casework-main","policyId":"claim-review"},
-        "onApproved":{"mode":"manual"}
-      }
-    }
-  ],
-  "accessProfiles":[
-    {
-      "id":"operator","default":true,"principalClaim":"registry_principal",
-      "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-      "permissions":{
-        "entities":[
-          {
-            "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
-            "readableFields":["household-code"],"writableFields":["household-code"],
-            "readPaths":[{"path":"claims","readableFields":["reason"]}]
-          },
-          {"entity":"claim-link","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","claim"],"writableFields":["household","claim"]}
-        ]
-      }
-    },
-    {
-      "id":"submitter","principalClaim":"registry_principal",
-      "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-      "permissions":{
-        "entities":[
-          {
-            "entity":"claim","rowBoundaries":"unrestricted","operations":["create","get","list","submit-request"],
-            "readableFields":["household","proposed-code","reason"],"writableFields":["household","proposed-code","reason"],
-            "requestVisibility":"owner"
-          }
-        ]
-      }
-    },
-    {
-      "id":"applier","principalClaim":"registry_principal",
-      "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-      "permissions":{
-        "entities":[
-          {
-            "entity":"claim","rowBoundaries":"unrestricted","operations":["get","apply-request"],
-            "readableFields":["household","proposed-code","reason"],
-            "applyTargets":[{"entity":"household","rowBoundaries":"unrestricted"}]
-          }
+        "records":[
+          {"recordType":"household","rowBoundaries":"unrestricted","operations":["get","list"],"readableFields":["household-code"]}
         ]
       }
     }
@@ -596,11 +391,11 @@ fn claims() -> VerifiedRequestClaims {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"client-relationships","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-          "entities":[
+          "recordTypes":[
             {
               "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
               "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
@@ -625,15 +420,15 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
             "permissions":{
-              "entities":[
+              "records":[
                 {
-                  "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
+                  "recordType":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
                   "readableFields":["household-code"],"writableFields":["household-code"],
                   "readPaths":[{"path":"people","readableFields":["person-code"],"sortableFields":["person-code"],"allowCount":true}]
                 },
-                {"entity":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]},
+                {"recordType":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]},
                 {
-                  "entity":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],
+                  "recordType":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],
                   "readableFields":["sensitive-note"],"writableFields":["person-code","sensitive-note"]
                 }
               ]

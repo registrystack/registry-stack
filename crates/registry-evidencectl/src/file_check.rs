@@ -18,26 +18,28 @@ use std::{
 };
 
 use registry_evidence_client::{
-    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_KIND,
+    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
+    EVIDENCE_CLIENT_CONTRACTS_KIND, EVIDENCE_CLIENT_PROFILE_API_VERSION,
     EVIDENCE_CLIENT_PROFILE_KIND,
 };
 use registry_platform_yaml::{
-    Diagnostic, NodeValue, Reader, Report, Source, MAXIMUM_DOCUMENT_BYTES,
+    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, NodeValue, Reader, Report, Source,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde_json::{json, Value};
 
-use crate::{dev, report, source_import, OutputFormat};
+use crate::{access, dev, report, source_import, OutputFormat};
 
-type Check = fn(&str, &[u8]) -> Result<(), Failure>;
+type Check = fn(&str, &[u8]) -> Result<Report, Failure>;
 
 /// The `schema` header a client profile and a reviewed contracts file opened
 /// with before the envelope, and the reader that refuses it by name.
 const REMOVED_SCHEMA_HEADERS: [(&str, Check); 2] = [
     ("registry.evidence-client-contracts/v1", |file, bytes| {
-        Ok(read_reviewed_contracts(file, bytes).map(drop)?)
+        Ok(read_reviewed_contracts(file, bytes).map(|_| one_file(Vec::new()))?)
     }),
     ("registry.evidence-client-profile/v1", |file, bytes| {
-        Ok(read_client_profile(file, bytes).map(drop)?)
+        Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?)
     }),
 ];
 
@@ -45,29 +47,68 @@ const REMOVED_SCHEMA_HEADERS: [(&str, Check); 2] = [
 /// may exceed the shared reader's document bound, and its check. The two
 /// source-import files embed project content, so the importer bounds them
 /// itself and the reader never sees them.
-const FORMATS: [(&str, bool, Check); 7] = [
-    (EVIDENCE_CLIENT_CONTRACTS_KIND, false, |file, bytes| {
-        Ok(read_reviewed_contracts(file, bytes).map(drop)?)
+macro_rules! tooling_format {
+    ($kind:expr, $version:expr) => {
+        FormatSpec {
+            kind: $kind,
+            envelope: EnvelopeRule::ApiVersionKind {
+                api_versions: &[ApiVersion::current($version)],
+                retired_api_versions: &[],
+            },
+            removed_keys: &[],
+        }
+    };
+}
+
+const FORMATS: [(FormatSpec<'static>, bool, Check); 8] = [
+    (
+        registry_evidence_authoring::formats::ACCESS_CLIENT,
+        false,
+        |file, bytes| Ok(access::check_client_document(file, bytes)?),
+    ),
+    (
+        tooling_format!(
+            EVIDENCE_CLIENT_CONTRACTS_KIND,
+            EVIDENCE_CLIENT_CONTRACTS_API_VERSION
+        ),
+        false,
+        |file, bytes| Ok(read_reviewed_contracts(file, bytes).map(|_| one_file(Vec::new()))?),
+    ),
+    (
+        tooling_format!(
+            EVIDENCE_CLIENT_PROFILE_KIND,
+            EVIDENCE_CLIENT_PROFILE_API_VERSION
+        ),
+        false,
+        |file, bytes| Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?),
+    ),
+    (dev::DEV_STATE_FORMAT, false, |file, bytes| {
+        Ok(dev::check_state_document(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
-    (EVIDENCE_CLIENT_PROFILE_KIND, false, |file, bytes| {
-        Ok(read_client_profile(file, bytes).map(drop)?)
+    (
+        tooling_format!(
+            source_import::JOURNAL_KIND,
+            source_import::JOURNAL_API_VERSION
+        ),
+        true,
+        |file, bytes| {
+            let text = utf8(file, bytes)?;
+            source_import_refusal(file, source_import::check_journal_file(text))
+        },
+    ),
+    (
+        tooling_format!(source_import::STATE_KIND, source_import::STATE_API_VERSION),
+        true,
+        |file, bytes| {
+            let text = utf8(file, bytes)?;
+            source_import_refusal(file, source_import::check_state_file(text))
+        },
+    ),
+    (source_import::RESOLUTION_FORMAT, false, |file, bytes| {
+        Ok(source_import::check_resolution_file(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
-    (dev::DEV_STATE_KIND, false, |file, bytes| {
-        Ok(dev::check_state_document(file, bytes)?)
-    }),
-    (source_import::JOURNAL_KIND, true, |file, bytes| {
-        let text = utf8(file, bytes)?;
-        source_import_refusal(file, source_import::check_journal_file(text))
-    }),
-    (source_import::STATE_KIND, true, |file, bytes| {
-        let text = utf8(file, bytes)?;
-        source_import_refusal(file, source_import::check_state_file(text))
-    }),
-    (source_import::RESOLUTION_KIND, false, |file, bytes| {
-        Ok(source_import::check_resolution_file(file, bytes)?)
-    }),
-    (source_import::EXPORT_KIND, false, |file, bytes| {
-        Ok(source_import::check_export_manifest(file, bytes)?)
+    (source_import::EXPORT_FORMAT, false, |file, bytes| {
+        Ok(source_import::check_export_manifest(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
 ];
 
@@ -93,10 +134,10 @@ impl From<source_import::DocumentRefused> for Failure {
 
 /// Check one file and write the verdict. Exits 0 when the file passes, 1
 /// when it is refused, and 3 when the check could not run.
-pub(crate) fn run(file: &Path, format: OutputFormat) -> ExitCode {
+pub(crate) fn run(file: &Path, format: OutputFormat, deny_warnings: bool) -> ExitCode {
     let label = file.display().to_string();
-    let (lead, report, exit) = match check(file, &label) {
-        Ok(()) => (None, one_file(Vec::new()), report::SUCCESS_EXIT),
+    let (lead, report, exit) = match apply_warning_policy(check(file, &label), deny_warnings) {
+        Ok(report) => (None, report, report::SUCCESS_EXIT),
         Err(Failure::Refused(report)) => (
             Some("evidencectl check refused the file."),
             report,
@@ -142,7 +183,20 @@ pub(crate) fn run(file: &Path, format: OutputFormat) -> ExitCode {
     ExitCode::from(exit)
 }
 
-fn check(file: &Path, label: &str) -> Result<(), Failure> {
+fn apply_warning_policy(
+    outcome: Result<Report, Failure>,
+    deny_warnings: bool,
+) -> Result<Report, Failure> {
+    outcome.and_then(|diagnostics| {
+        if crate::check::refuses_warnings(&diagnostics, deny_warnings) {
+            Err(Failure::Refused(diagnostics))
+        } else {
+            Ok(diagnostics)
+        }
+    })
+}
+
+fn check(file: &Path, label: &str) -> Result<Report, Failure> {
     let bytes = read(file)?;
     let (kind, schema) = if bytes.len() <= MAXIMUM_DOCUMENT_BYTES {
         let root = Reader::new(label).scan(&bytes)?;
@@ -164,7 +218,7 @@ fn check(file: &Path, label: &str) -> Result<(), Failure> {
     };
     let found = FORMATS
         .iter()
-        .find(|(wanted, ..)| kind.as_deref() == Some(wanted));
+        .find(|(wanted, ..)| kind.as_deref() == Some(wanted.kind));
     let Some((_, may_exceed_reader_bound, check)) = found else {
         if kind.is_none() {
             let removed = REMOVED_SCHEMA_HEADERS
@@ -178,33 +232,16 @@ fn check(file: &Path, label: &str) -> Result<(), Failure> {
             // The reader refuses a document over its bound, naming the bound.
             Reader::new(label).scan(&bytes)?;
         }
-        return Err(Failure::Refused(one_file(vec![unknown_format(label)])));
+        // No format was selected. Let the shared envelope reader report missing
+        // or unsupported kinds with the complete supported envelope list.
+        let formats: Vec<_> = FORMATS.iter().map(|(format, ..)| *format).collect();
+        Reader::new(label).read(&bytes, &Expect::new(&formats))?;
+        unreachable!("a known valid kind would have selected its owning checker")
     };
     if bytes.len() > MAXIMUM_DOCUMENT_BYTES && !may_exceed_reader_bound {
         Reader::new(label).scan(&bytes)?;
     }
     check(label, &bytes)
-}
-
-/// The diagnostic for a file whose `kind` names no format this command
-/// reads. It lists the kinds it does read.
-fn unknown_format(label: &str) -> Diagnostic {
-    let known: Vec<String> = FORMATS
-        .iter()
-        .map(|(kind, ..)| format!("kind {kind}"))
-        .collect();
-    in_file(
-        Diagnostic::error(
-            "evidence.check.unknown-format",
-            "",
-            "the file's root `kind` names no format this command checks",
-            format!(
-                "Name one of: {}. To check an authoring project, pass its directory without --file.",
-                known.join(", ")
-            ),
-        ),
-        label,
-    )
 }
 
 /// Read the file, bounded to one byte more than the largest file any format
@@ -251,8 +288,8 @@ fn utf8<'a>(label: &str, bytes: &'a [u8]) -> Result<&'a str, Failure> {
 
 /// The importer's refusals are static sentences that name their fix; carry
 /// one as the file's diagnostic.
-fn source_import_refusal(file: &str, outcome: anyhow::Result<()>) -> Result<(), Failure> {
-    outcome.map_err(|error| {
+fn source_import_refusal(file: &str, outcome: anyhow::Result<()>) -> Result<Report, Failure> {
+    outcome.map(|()| one_file(Vec::new())).map_err(|error| {
         Failure::Refused(one_file(vec![in_file(
             Diagnostic::error(
                 "evidence.check.source-import-file",
@@ -280,4 +317,29 @@ fn in_file(mut diagnostic: Diagnostic, label: &str) -> Diagnostic {
         });
     }
     diagnostic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_file_warnings_are_preserved_and_obey_the_requested_policy() {
+        let warning = || {
+            one_file(vec![Diagnostic::warning(
+                "config.retired-api-version",
+                "/apiVersion",
+                "this file uses a retired format version",
+                "Use the current format version.",
+            )])
+        };
+        let allowed = apply_warning_policy(Ok(warning()), false)
+            .unwrap_or_else(|_| panic!("warnings may pass without denial"));
+        assert_eq!(allowed.warning_count(), 1);
+        let Err(Failure::Refused(refused)) = apply_warning_policy(Ok(warning()), true) else {
+            panic!("the standalone file warning must refuse under --deny-warnings");
+        };
+        assert_eq!(refused.warning_count(), 1);
+        assert_eq!(refused.diagnostics()[0].code, "config.retired-api-version");
+    }
 }

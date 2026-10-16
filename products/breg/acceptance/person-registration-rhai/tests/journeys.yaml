@@ -25,7 +25,7 @@ journeys:
     captureResults:
       person: full-name-person
   - id: read-exact-stored-name
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -119,7 +119,7 @@ journeys:
     captureResults:
       person: given-only-person
   - id: read-single-given-name
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -155,7 +155,7 @@ journeys:
     captureResults:
       person: family-only-person
   - id: read-single-family-name
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -192,7 +192,7 @@ journeys:
     captureResults:
       person: null-family-person
   - id: read-name-with-null-family
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -286,7 +286,7 @@ journeys:
       status: 400
       problemCode: request.invalid
   - id: ordinary-create-preserves-supplied-display-name
-    entity: person
+    recordType: person
     accessProfile: person-administrator
     claims:
       principal: synthetic-person-administrator
@@ -306,7 +306,7 @@ journeys:
         displayName: '  Supplied unchanged  '
     capture: ordinary-person
   - id: read-ordinary-value
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -341,7 +341,7 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
   - id: unicode-identifier
     action: register-person
@@ -362,7 +362,7 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
   - id: whitespace-identifier
     action: register-person
@@ -383,7 +383,7 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
   - id: embedded-newline-identifier
     action: register-person
@@ -406,7 +406,7 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
   - id: trailing-newline-identifier
     action: register-person
@@ -429,10 +429,10 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
   - id: ordinary-create-enforces-identifier-pattern
-    entity: person
+    recordType: person
     accessProfile: person-administrator
     claims:
       principal: synthetic-person-administrator
@@ -448,10 +448,10 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
   - id: ordinary-patch-enforces-identifier-pattern
-    entity: person
+    recordType: person
     accessProfile: person-administrator
     claims:
       principal: synthetic-person-administrator
@@ -469,12 +469,12 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
-      entityId: person
+      recordType: person
       fieldId: identifier
 - id: coordinated-registration-and-omission
   steps:
   - id: create-active-register
-    entity: register
+    recordType: register
     accessProfile: person-administrator
     claims:
       principal: synthetic-person-administrator
@@ -538,7 +538,7 @@ journeys:
       registration: coordinated-registration
       register: patched-register
   - id: read-coordinated-person
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -555,7 +555,7 @@ journeys:
         identifier: '1123456789012'
         displayName: Mina Example
   - id: read-coordinated-registration
-    entity: registration
+    recordType: registration
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -666,7 +666,7 @@ journeys:
     captureResults:
       person: coordinated-person-only
   - id: read-coordinated-person-only
-    entity: person
+    recordType: person
     accessProfile: person-reader
     claims:
       principal: synthetic-person-reader
@@ -712,7 +712,7 @@ journeys:
       person: no-patch-person
       registration: no-patch-registration
   - id: read-register-for-maintenance
-    entity: register
+    recordType: register
     accessProfile: person-administrator
     claims:
       principal: synthetic-person-administrator
@@ -727,7 +727,7 @@ journeys:
       status: 200
     capture: register-before-inactivation
   - id: inactivate-register
-    entity: register
+    recordType: register
     accessProfile: person-administrator
     claims:
       principal: synthetic-person-administrator

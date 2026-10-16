@@ -5,7 +5,15 @@ producer-facing review handoff contract. It creates or recovers review
 requests, reads their bindings, retrieves terminal results, pages the
 requester result feed, and cancels unfinished requests.
 
-Creation requires the producer's expected submission digest. Result lookup
+The producer selects an explicitly granted provider profile with
+`Registry-Review-Profile`. Failures accept bounded, well-formed opaque provider problem URIs and
+bounded Review validation headers. Provider task APIs and policy evaluators
+remain outside this client.
+
+Creation requires a policy selector and submission digest. A selector with only
+`id` accepts the trusted provider's concrete current policy; adding both `version`
+and `digest` requires an exact pin. The accepted response must match that selector,
+subject and original submission digest. Result lookup
 requires the accepted request binding and refuses a response unless its
 request, subject, policy, and submission digest all match exactly. A producer
 must persist that accepted binding before consuming a terminal result.

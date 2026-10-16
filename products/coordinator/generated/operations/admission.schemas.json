@@ -1,0 +1,146 @@
+{
+  "HookEnvelope": {
+    "$defs": {
+      "Causation": {
+        "additionalProperties": false,
+        "description": "Why this event exists: the chain it belongs to and the event that caused it.",
+        "properties": {
+          "hop": {
+            "description": "0 for a root event, parent hop + 1 otherwise.",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parent": {
+            "description": "The id of the event whose handler proposed the change that produced\nthis one. Absent for a root event, never spelled `null` on the wire:\nthe decoder refuses bytes a re-encode cannot reproduce. A UUID when\npresent.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "root": {
+            "description": "The id of the first event in the chain; equals `id` for a root event.\nA later orchestrator correlates on this field. A UUID, like every\nevent identity on the envelope.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "hop"
+        ],
+        "type": "object"
+      },
+      "EventSubject": {
+        "additionalProperties": false,
+        "description": "The product record the triggering change landed on.",
+        "properties": {
+          "recordReference": {
+            "description": "The record reference, as the product addresses it.",
+            "type": "string"
+          },
+          "recordRevision": {
+            "description": "The revision the triggering change produced. Revisions start at one, so\na revision of zero or below is refused on both encode and decode, the\nsame bound the delivery store enforces on a stored envelope.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recordReference",
+          "recordRevision"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "The hook envelope, one shape for every product and every destination kind.",
+    "properties": {
+      "causation": {
+        "$ref": "#/$defs/Causation",
+        "description": "The chain this event belongs to."
+      },
+      "data": {
+        "description": "The product projection. Integers that are not exactly representable as\nbinary64 must be strings; canonical JSON refuses them otherwise."
+      },
+      "dataschema": {
+        "description": "The product data contract id for `data`.",
+        "type": "string"
+      },
+      "id": {
+        "description": "Event identity, unique per triggering change. The idempotency key a\nremote handler must honor across retries.\n\nA UUID: the delivery store keys an envelope by a UUID event id, so an\nid that is not one could never be stored. Refused on both encode and\ndecode.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "source": {
+        "description": "The producing product and deployment identity.",
+        "type": "string"
+      },
+      "subject": {
+        "$ref": "#/$defs/EventSubject",
+        "description": "The product record reference and revision."
+      },
+      "time": {
+        "description": "Commit time of the triggering change, RFC 3339.\n\nNormalized on every serialization: converted to UTC and truncated to\nwhole milliseconds, so two equal instants written at different offsets\nor at finer precision produce identical canonical bytes. The in-memory\nvalue keeps whatever the product gave it; the wire form is the\nnormalized one. Decoding requires that wire form and refuses any other\nspelling, so a decoded envelope re-encodes to the bytes it arrived as.",
+        "format": "date-time",
+        "type": "string"
+      },
+      "type": {
+        "description": "The hook's stable contract id.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "type",
+      "source",
+      "time",
+      "subject",
+      "dataschema",
+      "data",
+      "causation"
+    ],
+    "title": "HookEnvelope",
+    "type": "object"
+  },
+  "ReviewCompletion": {
+    "$defs": {
+      "ReviewCompletionType": {
+        "enum": [
+          "review.completed"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "completedAt": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "eventId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requestId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "resultId": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": {
+        "$ref": "#/$defs/ReviewCompletionType"
+      }
+    },
+    "required": [
+      "type",
+      "eventId",
+      "requestId",
+      "resultId",
+      "completedAt"
+    ],
+    "title": "ReviewCompletion",
+    "type": "object"
+  }
+}

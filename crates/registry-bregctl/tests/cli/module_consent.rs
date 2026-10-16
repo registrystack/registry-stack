@@ -33,7 +33,9 @@ vocabularies:
 - id: data-use-purpose
   values: [food-assistance, health-referral]
 
-entities:
+datasets:
+  - id: people
+recordTypes:
 - id: person
   primaryDataset: people
   route: persons
@@ -59,12 +61,12 @@ accessProfiles:
   requiredScopes: [records:read]
   requiredPurposes: [food-assistance]
   permissions:
-    entities:
-    - entity: person
+    records:
+    - recordType: person
       rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [given-name, district]
-    - entity: household
+    - recordType: household
       rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [head, label]
@@ -74,13 +76,13 @@ accessProfiles:
   requesterClients: [registrar-console]
   requiredScopes: [records:manage]
   permissions:
-    entities:
-    - entity: person
+    records:
+    - recordType: person
       rowBoundaries: unrestricted
       operations: [create, get, patch]
       readableFields: [given-name, district]
       writableFields: [given-name, district]
-    - entity: household
+    - recordType: household
       rowBoundaries: unrestricted
       operations: [create, get, patch]
       readableFields: [head, label]
@@ -152,7 +154,7 @@ fn registry_source(project: &Path) -> String {
 
 /// Each warning's code and the place it names, read back out of the source
 /// file its pointer addresses: every list item is named by the first of its
-/// `id`, `action`, or `entity` members.
+/// `id`, `action`, or `recordType` members; scalar list leaves retain their index.
 fn finding_codes(report: &Value) -> Vec<(String, String)> {
     report["diagnostics"]
         .as_array()
@@ -184,11 +186,14 @@ fn named_path(document: &Value, pointer: &str) -> String {
         match node {
             Value::Array(items) => {
                 let item = &items[segment.parse::<usize>().expect("an index")];
-                let (key, value) = ["id", "action", "entity"]
+                if let Some((key, value)) = ["id", "action", "recordType"]
                     .into_iter()
                     .find_map(|key| item[key].as_str().map(|value| (key, value)))
-                    .expect("a list item names itself");
-                named.push_str(&format!("[{key}={value}]"));
+                {
+                    named.push_str(&format!("[{key}={value}]"));
+                } else {
+                    named.push_str(&format!("[{segment}]"));
+                }
                 node = item;
             }
             _ => {
@@ -229,7 +234,7 @@ fn expected_steward_findings(subject: &str) -> Vec<(String, String)> {
             expected.push((
                 "breg.access.target-unrestricted-rows".to_owned(),
                 format!(
-                    "accessProfiles[id={profile}].permissions.actions[action={action}].targets[entity={target}].rowBoundaries"
+                    "accessProfiles[id={profile}].permissions.actions[action={action}].targets[recordType={target}].rowBoundaries"
                 ),
             ));
         }
@@ -261,7 +266,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert_eq!(explanation["subject"], "person");
     assert_eq!(explanation["module"], "consent-person");
     assert_eq!(
-        explanation["entities"],
+        explanation["recordTypes"],
         json!([
             "person-privacy-notice",
             "person-notice-clause",
@@ -300,8 +305,8 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert_eq!(
         explanation["requireConsent"],
         json!([
-            {"entity": "person", "line": "{record: person-consent-decision, on: id}"},
-            {"entity": "household", "line": "{record: person-consent-decision, on: head}"}
+            {"recordType": "person", "line": "{record: person-consent-decision, on: id}"},
+            {"recordType": "household", "line": "{record: person-consent-decision, on: head}"}
         ])
     );
     // No profile requires consent yet, so the synthesized scope vocabulary the
@@ -313,7 +318,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     let steps = report["nextSteps"].as_array().expect("next steps");
     let first = steps[0].as_str().unwrap();
     assert!(
-        first.starts_with("the project compiles once a read permission requires consent: under a profile's '- entity: person' permission, add 'requireConsent: [{record: person-consent-decision, on: id}]'"),
+        first.starts_with("the project compiles once a read permission requires consent: under a profile's '- recordType: person' permission, add 'requireConsent: [{record: person-consent-decision, on: id}]'"),
         "{steps:?}"
     );
     assert_eq!(
@@ -371,8 +376,8 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
         "{record: person-consent-decision, on: id}",
     );
     let gated = gated.replacen(
-        "    - entity: household\n      rowBoundaries: unrestricted\n      operations: [get, list]\n      readableFields: [head, label]\n",
-        "    - entity: household\n      rowBoundaries: unrestricted\n      operations: [get, list]\n      readableFields: [head, label]\n      requireConsent:\n      - {record: person-consent-decision, on: head}\n",
+        "    - recordType: household\n      rowBoundaries: unrestricted\n      operations: [get, list]\n      readableFields: [head, label]\n",
+        "    - recordType: household\n      rowBoundaries: unrestricted\n      operations: [get, list]\n      readableFields: [head, label]\n      requireConsent:\n      - {record: person-consent-decision, on: head}\n",
         1,
     );
     fs::write(project.path().join("registry.yaml"), gated).expect("gated project writes");
@@ -385,7 +390,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert!(
         codes
             .iter()
-            .all(|(code, _)| !code.starts_with("access.consent.")),
+            .all(|(code, _)| !code.starts_with("breg.access.consent-")),
         "{codes:?}"
     );
     // A self-issued action is bound to its subject through the principal link,
@@ -502,7 +507,7 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
     );
     assert_eq!(
         report["explanation"]["requireConsent"],
-        json!([{"entity": "household", "line": "{record: household-consent-decision, on: id}"}])
+        json!([{"recordType": "household", "line": "{record: household-consent-decision, on: id}"}])
     );
     let source = registry_source(project.path());
     assert!(
@@ -548,7 +553,7 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
     }
     assert!(finding_codes(&report)
         .iter()
-        .all(|(code, _)| !code.starts_with("access.consent.")));
+        .all(|(code, _)| !code.starts_with("breg.access.consent-")));
 }
 
 /// A fresh `bregctl init` project already carries a Registry Manifest
@@ -557,14 +562,62 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
 /// the module fits a project it never saw rather than needing an adopter to
 /// pre-declare it.
 #[test]
-fn module_add_consent_fits_a_freshly_initialized_project() {
+fn module_add_consent_fits_an_explicit_manifest_project() {
+    consent_module_fits_an_explicit_manifest_project(false);
+}
+
+#[test]
+fn module_add_consent_preserves_an_unpinned_flow_module_lock() {
+    consent_module_fits_an_explicit_manifest_project(true);
+}
+
+fn consent_module_fits_an_explicit_manifest_project(flow_module_lock: bool) {
     let scratch = TestProject::from_registry_source(b"placeholder: true\n");
     let destination = scratch.path().join("initialized");
 
-    let init = bregctl(&["--format", "json", "init", path(&destination)]);
-    assert!(init.status.success(), "{init:?}");
+    fs::create_dir(&destination).unwrap();
+    let module_bytes =
+        include_bytes!("../../../../products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml");
+    let registry =
+        include_str!("../../../../products/breg/fixtures/generic-operator-workflows/registry.yaml")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("digest:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    let registry = if flow_module_lock {
+        let (before, _) = registry.rsplit_once("modules:\n").unwrap();
+        let module = parse_module_yaml(module_bytes).unwrap();
+        format!(
+            "{before}modules: [{}]\n",
+            json!({"id": module.id, "version": module.version})
+        )
+    } else {
+        registry
+    };
+    fs::create_dir_all(destination.join("modules/record-notes")).unwrap();
+    fs::write(destination.join("registry.yaml"), registry).unwrap();
+    fs::write(
+        destination.join("modules/record-notes/module.yaml"),
+        module_bytes,
+    )
+    .unwrap();
+    fs::create_dir(destination.join("tests")).unwrap();
+    fs::write(
+        destination.join("tests/journeys.yaml"),
+        include_bytes!(
+            "../../../../products/breg/fixtures/generic-operator-workflows/tests/journeys.yaml"
+        ),
+    )
+    .unwrap();
 
-    // The init template declares neither recipients nor a purpose vocabulary;
+    // The existing module deliberately has no lock digest yet. Adding another
+    // module must preserve that valid authoring state without panicking.
+    assert!(parse_project_yaml(registry_source(&destination).as_bytes())
+        .unwrap()
+        .modules
+        .iter()
+        .any(|module| module.id == "record-notes" && module.digest.is_none()));
+    // The fixture declares neither recipients nor a purpose vocabulary;
     // both are prerequisites the docs already ask an adopter to declare before
     // running this command, independent of the dataset this fix adds.
     let initialized = registry_source(&destination);
@@ -581,7 +634,15 @@ fn module_add_consent_fits_a_freshly_initialized_project() {
     );
     fs::write(destination.join("registry.yaml"), with_purposes).expect("prerequisites write");
 
-    let added = module_add(&destination, "record");
+    #[cfg(unix)]
+    let selected_project = {
+        let alias = scratch.path().join("project-alias");
+        std::os::unix::fs::symlink(&destination, &alias).unwrap();
+        alias
+    };
+    #[cfg(not(unix))]
+    let selected_project = destination.clone();
+    let added = module_add(&selected_project, "record");
 
     assert!(added.status.success(), "{added:?}");
     let report = json_stdout(&added);
@@ -589,6 +650,10 @@ fn module_add_consent_fits_a_freshly_initialized_project() {
 
     let source = registry_source(&destination);
     let parsed = parse_project_yaml(source.as_bytes()).expect("the project parses");
+    assert!(parsed
+        .modules
+        .iter()
+        .any(|module| module.id == "record-notes" && module.digest.is_none()));
     let projection = parsed
         .manifest_projection
         .as_ref()
@@ -605,12 +670,12 @@ fn module_add_consent_fits_a_freshly_initialized_project() {
     // names a declared recipient client and a purpose vocabulary code, so this
     // gates the template's read-only `record-reader` profile rather than the
     // mixed-operation `operator` profile.
-    let anchor = "  - id: record-reader\n    principalClaim: registry_principal\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [registry-reporting]\n    permissions:\n      entities:\n        - entity: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {field: status, claim: registry_record_status, operator: equals}\n";
+    let anchor = "  - id: record-reader\n    principalClaim: registry_principal\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [registry-reporting]\n    permissions:\n      records:\n        - recordType: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {field: status, claim: registry_record_status, operator: equals}\n";
     let (before, after) = source
         .split_once(anchor)
         .expect("the init template's record-reader profile is present");
     let gated = format!(
-        "{before}  - id: record-reader\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      entities:\n        - entity: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {{field: status, claim: registry_record_status, operator: equals}}\n          requireConsent:\n          - {{record: record-consent-decision, on: id}}\n{after}"
+        "{before}  - id: record-reader\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      records:\n        - recordType: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {{field: status, claim: registry_record_status, operator: equals}}\n          requireConsent:\n          - {{record: record-consent-decision, on: id}}\n{after}"
     );
     fs::write(destination.join("registry.yaml"), gated).expect("gated project writes");
     // The project check holds the journeys to the profile they call, so they

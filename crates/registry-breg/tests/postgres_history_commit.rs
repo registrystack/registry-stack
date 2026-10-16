@@ -689,11 +689,11 @@ async fn insert_revision(
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"history-store-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"membership",
             "primaryDataset":"test-dataset",
             "route":"memberships",
@@ -714,8 +714,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
             "requiredPurposes":["operations"],
-            "permissions":{"entities":[{
-              "entity":"membership",
+            "permissions":{"records":[{
+              "recordType":"membership",
               "operations":["create","get","list","patch"],
               "readableFields":["person","household","valid-from","valid-to"],
               "writableFields":["person","household","valid-from","valid-to"],

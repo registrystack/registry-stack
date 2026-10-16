@@ -16,7 +16,7 @@ AI assistant, to read their own Base Registry Engine (BReg) record and prepare a
 then confirm that change themselves. This page covers what the registry and the authorization
 server must provide, both runtime configurations, and the Model Context Protocol (MCP) tools the
 gateway serves. [Operate the citizen chat assistant](../../operate/breg-mcp/) covers running both
-services. To see both working first, [run a citizen chat assistant locally](../../tutorials/first-citizen-mcp/).
+services. To see both working first, [prepare a citizen chat deployment](../../tutorials/first-citizen-mcp/).
 
 ## How the two services fit
 
@@ -26,32 +26,32 @@ service names.
 
 - `breg-mcp` is the MCP gateway. A chat host calls it with an access token issued to the chat host
   for one signed-in citizen. The gateway reads that citizen's own record and creates or edits a
-  change-request draft, which it calls an application.
+  Proposal draft, which it calls an application.
 - `breg-review` is a server-rendered page. The citizen opens the link the gateway returns, signs in,
   reads the draft beside the record it would change, and submits it.
 
-After submission the change request goes to the review authority its entity declares, Registry
-Casework in the reference project, and BReg applies it only after approval. The two services are
+After submission BReg uses the Action's frozen review requirement and application mode.
+A required external authority decides review; BReg applies only the exact approved plan. The two services are
 separate processes with separate configuration and credentials, so no single process holds both
 the authority to prepare a change and the authority to submit it.
 
 {/* Evidence: products/breg/MCP-GATEWAY.md;
-    products/breg/acceptance/citizen-address-correction/registry.yaml;
     crates/registry-breg-mcp/README.md; crates/registry-breg-review/README.md. */}
 
 ## What the design guarantees
 
 These properties hold for every deployment, whatever the chat host does:
 
-- The gateway never submits, revises, cancels, or applies a change request, and writes no record
+- The gateway never submits, revises, cancels, or applies a Proposal, and writes no record
   directly. It has no code path to do so: the gateway's lint configuration disallows the client
   methods that would, and a boundary check proves the list still refuses each one.
-- BReg enforces the same split. The gateway's access profile is a standing agent, and the BReg
-  compiler refuses a standing agent profile any lifecycle operation, direct write, or immediate
-  action.
+- BReg enforces the same split. The gateway's access profile is a standing agent, and BReg
+  restricts it to authorized Proposal Start, Get, and draft Edit; submitted
+  transitions, direct record writes, and immediate Invoke remain unavailable.
 - The target of an application comes from the citizen's own linked record, never from tool
   arguments. The gateway resolves that record through the agent profile's linked lookup and writes
-  the target and owner fields itself. A tool argument or edit naming either field is refused before
+  the target input itself. Proposal ownership comes from the verified BReg caller.
+  A tool argument or edit naming the controlled target is refused before
   the gateway reads or writes any record.
 - The chat host's token is never forwarded. The gateway removes it from the request once verified
   and performs an RFC 8693 token exchange on every tool call, calling BReg only with the delegated
@@ -62,7 +62,7 @@ These properties hold for every deployment, whatever the chat host does:
   never reaches a submittable form.
 
 Registry-level target binding is not yet in place, so any client other than these two services
-must not rely on BReg to tie a change request's target to the requester's own record.
+must not rely on BReg to tie a Proposal's target to the requester's own record.
 
 {/* Evidence: crates/registry-breg-mcp/clippy.toml;
     products/breg/scripts/check-mcp-gateway-boundary.sh;
@@ -74,53 +74,29 @@ must not rely on BReg to tie a change request's target to the requester's own re
     crates/registry-platform-httputil/src/client/exchange_authorization.rs,
     an_upstream_token_is_not_held_past_the_subject_token_expiry;
     crates/registry-breg-review/README.md;
-    products/breg/acceptance/citizen-address-correction/README.md. */}
+    crates/registry-breg-mcp/src/contract.rs. */}
 
 ## Prepare the registry
 
-The registry project declares what both services may do. The
-[citizen address correction project](https://github.com/registrystack/registry-stack/blob/main/products/breg/acceptance/citizen-address-correction/registry.yaml)
-is the reference; adapt its shape to your own entities.
+Declare the citizen's Record type, a steward-controlled active link to the verified
+principal, and a proposal-mode Action with one reference input for that target.
+The gateway resolves exactly one permitted own record and supplies that input.
+BReg assigns Proposal ownership from the verified caller, not an editable field.
 
-| Declaration | What it needs |
-|---|---|
-| A record entity | The citizen's own record, such as an address |
-| A link entity | A steward-provisioned link from a verified principal to one record, with an active flag |
-| A change-request entity | A draft entity whose fields reference the target record and record the owner's principal |
-| An agent access profile | `actorKind: agent`, the gateway's exchange client in `requesterClients`, and no `taskGrant` |
-| A review access profile | `actorKind: human` and the review page's client in `requesterClients` |
+The standing agent profile uses `actorKind: agent`, the gateway client in
+`requesterClients`, and no task grant. Grant linked record reads, Action Start,
+and caller-owned Proposal Get/Edit with the required target boundaries. Grant
+no direct CRUD, immediate Invoke, or submitted transitions. The human review
+profile has its independent record/context reads and Proposal Submit authority.
 
-The agent profile reads the citizen's record through a membership boundary on the active link,
-and may `create`, `get`, and `patch` the change-request entity under a row boundary where the owner
-field equals the principal claim, with `requestVisibility: owner`. Its writable fields include the
-target and owner fields, because the gateway writes both. A lookup that finds no record, or more
-than one, refuses the call and creates nothing.
+Set the runtime audience and accepted clients for both services. Bind the trusted
+gateway actor to its exact client under `authentication.authorityClaims.trustedActors`.
+BReg verifies the delegated subject and actor on every request. Registering a
+client adds no profile authority.
 
-The review profile may `get`, `patch`, and `submit-request` the same change-request entity under the
-same row boundary, with the owner field not writable, and may `get` the target record through the
-same membership boundary.
-
-In the BReg runtime configuration, set `authentication.oidc.audience` to the resource both services
-request, admit both clients in `authentication.oidc.allowedClients`, and map the gateway's exchange
-client to the actor subject the authorization server writes in `act.sub` under
-`authentication.authorityClaims.trustedActors`:
-
-```yaml
-authentication:
-  authorityClaims:
-    principal: sub
-    trustedActors:
-      <gateway-exchange-client-id>: <gateway-actor-subject>
-```
-
-BReg treats a token with a verified trusted actor as an agent, whatever its own actor-kind claim
-says. [Configure BReg](../../configure/breg/) describes access profiles and the standing agent
-ceiling in full.
-
-{/* Evidence: products/breg/acceptance/citizen-address-correction/registry.yaml;
-    crates/registry-breg-mcp/tests/support/real_registry.rs, trustedActors;
-    crates/registry-breg/src/auth.rs, optional_actor_subject(), trusted_actors;
-    crates/registry-breg-mcp/src/gateway.rs, resolve_own. */}
+{/* Evidence: crates/registry-breg-mcp/src/config.rs;
+    crates/registry-breg-mcp/src/gateway.rs; crates/registry-breg/src/auth.rs;
+    crates/registry-breg/src/api/proposals.rs; crates/registry-breg/src/compiler.rs. */}
 
 ## Prepare the authorization server
 
@@ -236,11 +212,10 @@ service:
   description: Correct the postal address the registry holds for you.
   disclosure: The assistant you use will see your current address and the correction you request.
   details:
-    entity: person-address
+    recordType: person-address
   application:
-    entity: address-correction-request
-    targetField: address
-    ownerField: owner
+    action: correct-address
+    targetInput: address
   reviewBaseUrl: https://review.example.com/
 audit:
   destination: file
@@ -312,15 +287,13 @@ publishes RFC 9728 protected-resource metadata naming the issuer and the require
 |---|---|
 | `name`, `description` | What `describe_service` tells the chat host about the service |
 | `disclosure` | What the citizen is told about the data the chat host will see |
-| `details.entity` | The entity holding the citizen's own record |
-| `application.entity` | The change-request entity the gateway drafts |
-| `application.targetField` | The field identifier of the reference to the citizen's record |
-| `application.ownerField` | The field identifier of the field recording the citizen's principal |
+| `details.recordType` | The Record type holding the citizen's own record |
+| `application.action` | The proposal-mode Action the gateway Starts |
+| `application.targetInput` | The Action input referring to the citizen's own record |
 | `reviewBaseUrl` | The review page's `publicOrigin`, with no path; the gateway returns `<reviewBaseUrl>/requests/<id>` |
 
-`name`, `description`, and `disclosure` are each at most 4096 characters, and none may be blank. The two field keys take the
-field identifier as the project declares it, such as `new-address-line`, not the API name
-`newAddressLine` the registry's metadata publishes for it, and must name two different fields.
+`name`, `description`, and `disclosure` are each at most 4096 characters, and none may be blank. `targetInput` takes the stable Action input ID, not its public API name.
+Every editable input uses the required compiler-emitted JSON Schema exactly.
 
 ### Audit and limits
 
@@ -369,8 +342,8 @@ signIn:
 registry:
   baseUrl: https://registry.example.com
   resource: https://registry.example.com/citizen-address-correction
-  entity: address-correction-request
-  targetField: address
+  action: correct-address
+  targetInput: address
   accessProfile: citizen-review
 audit:
   destination: file
@@ -390,11 +363,11 @@ audit:
 | `signIn.scopes` | 1 to 16 unique scopes to request besides `openid`, which the page always adds |
 | `registry.baseUrl` | The BReg deployment |
 | `registry.resource` | The registry's RFC 8707 resource, requested at sign-in |
-| `registry.entity`, `registry.accessProfile` | The change-request entity and the review access profile |
-| `registry.targetField` | The field identifier of the target reference, such as `address` |
+| `registry.action`, `registry.accessProfile` | The Proposal Action and the review access profile |
+| `registry.targetInput` | The field identifier of the target reference, such as `address` |
 
-`registry.targetField` takes the field identifier as the project declares it, the same form as
-the gateway's `application.targetField`.
+`registry.targetInput` takes the field identifier as the project declares it, the same form as
+the gateway's `application.targetInput`.
 
 In production the page fetches the issuer's discovery document, key set, and token endpoint under
 a strict policy that refuses loopback, private-range, and cloud-metadata addresses, so the
@@ -457,45 +430,45 @@ configuration; the first `serve` does.
 ## MCP tool reference
 
 The gateway serves MCP at `/mcp` over streamable HTTP, statelessly, with JSON responses. It serves
-six tools:
+seven tools:
 
 | Tool | Arguments | Returns |
 |---|---|---|
 | `describe_service` | None | The configured name, description, and disclosure |
 | `get_my_details` | None | The citizen's own record as labelled fields |
-| `start_application` | The editable application fields | A new draft's `applicationId`, `revision`, and `status` |
+| `start_application` | A non-nil `startAttemptId` UUID and the editable application fields | An application summary with `applicationId`, `revision`, and `status` |
+| `list_applications` | Optional continuation cursor | A bounded page of caller-owned applications, only with explicit Proposal List authority |
 | `update_application` | `applicationId`, `expectedRevision`, `patch` | The edited draft |
 | `prepare_review` | `applicationId` | The draft and its `reviewUrl` |
-| `get_application_status` | `applicationId` | The draft's `status` |
+| `get_application_status` | `applicationId` | The application's current `status` |
 
 Tool input schemas come from the registry's metadata for the agent access profile, so a field the
-profile cannot write is never offered, and the target and owner fields never are. `patch` holds 1 to
+profile cannot write is never offered, and the controlled target input never is. `patch` holds 1 to
 64 edits, each an `add`, `replace`, or `remove` on one editable field path such as `/newLocality`;
 `expectedRevision` must match the draft's current revision. Registry text is returned as labelled
 data with a notice that it is data, never instructions.
 
-`status` is one of `prepared`, `submitted`, `under_review`, `approved`, `rejected`, `applied`, or
-`cancelled`, as BReg reports it. `cancelled` is the request's own state: a review that was
-cancelled, answered, or superseded, or that asked for changes, leaves the request submitted and
-open, so its status is `under_review`. `rejected`, `applied`, and `cancelled` are closed. The agent
-profile in the reference project reads no review outcome, so its status stays `submitted` until the
-change is applied or the request closes.
+The application ID is the native Proposal ID. Status observations use current BReg state and
+permitted disclosure; a Start-only call may return its initial receipt state. The gateway remembers
+no independent workflow.
+A later observation never authorizes a transition or silently follows a revised
+frozen submission. Use the citizen's separate review page to confirm submission.
 
-Writes carry an idempotency key derived from the citizen, the tool, and the arguments, so a
-retried call replays its first answer instead of creating a second draft. A `start_application`
-identical to one whose draft is still open returns that draft. BReg binds each key to the active
-package revision, so after a package activation an identical `start_application` creates a new
-draft, even beside one still open from before the activation. BReg replays a key's answer only
-within its receipt horizon (`idempotency.receiptRetentionDays`, 7 days by default), so an
-identical `start_application` past that horizon also creates a new draft beside an open one. Once
-more than 32 identical applications have closed or been left behind by an activation or a horizon,
-it answers `not-permitted`.
+For each intended new application, generate a new `startAttemptId` UUID and keep it for retries,
+including after an uncertain response or after the Proposal closes. The gateway excludes this ID
+from Action input. It derives the Start key from the verified citizen, tool, and normalized ID.
+The same ID replays the original Start; changed input under that ID conflicts. Use a new ID only
+when you intend another application, including one with identical input. An expired or erased
+receipt keeps its ID's key spent and cannot create another draft. A retry reports current state
+when the citizen has Get authority for that Proposal; otherwise it returns the initial Start
+summary. The issuer must also reissue the original immutable Start task grant for a retry. A new
+or expanded grant cannot replay an earlier authorized request under the same attempt ID. The
+gateway owns no alternate workflow or unbounded chain of fresh keys.
 
-{/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), update_input_schema();
-    crates/registry-breg-mcp/src/gateway.rs, application_summary(), REGISTRY_DATA_NOTICE,
-    MAX_CLOSED_REPEATS;
-    crates/registry-breg-mcp/src/server.rs, NeverSessionManager;
-    crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg-mcp/README.md. */}
+{/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), parse_start(), update_input_schema();
+    crates/registry-breg-mcp/src/gateway.rs, start(), application_summary(), REGISTRY_DATA_NOTICE;
+    crates/registry-breg-mcp/src/gateway/tests.rs, terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft();
+    crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg/src/idempotency.rs. */}
 
 ### Tool errors
 
@@ -511,8 +484,7 @@ the registry supplied one. Each code carries fixed text:
 - `stale-application`: the application changed since it was read, possibly by an earlier call whose
   answer was lost or whose identical retry came past the receipt horizon. Read its status before
   trying again.
-- `idempotency-conflict`: an earlier identical request is still being processed or differed. Only
-  `update_application` answers this code; `start_application` moves on to a new draft instead.
+- `idempotency-conflict`: an earlier identical request is still being processed or differed. An exact retained replay is safe; a different binding cannot be retried as the original command.
 - `not-permitted`: the registry does not permit the action.
 - `authorization-failed`: the registry did not accept the delegated authorization.
 - `registry-unavailable`: the registry is temporarily unavailable.

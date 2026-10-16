@@ -25,7 +25,9 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
     let parent = project.join(".breg");
     let root = parent.join("dev");
     if !root.exists() {
-        bail!("no retained local development session exists; check the project path or first run bregctl dev");
+        bail!(
+            "no retained local development session exists; check the project path or first run bregctl dev"
+        );
     }
     private::check(&parent, true)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
@@ -36,6 +38,7 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
     if !config::identifier(&client.id) {
         bail!("retained client label is invalid; preserve the session for inspection");
     }
+    let subject = exported_subject(&state, &client.id)?;
     let credentials = root.join("credentials").join(&client.id);
     private::check(&root.join("credentials"), true)?;
     private::check(&credentials, true)?;
@@ -64,12 +67,38 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
         "clientIdFile":id_path,"assertionKeyFile":key_path,
         "bregUrl":state.breg_origin(),
         "issuer":state.issuer_origin(),
+        "subject":subject,
         "tokenEndpoint":format!("{}/oauth2/token",state.issuer_origin()),
         "clientAssertionAudience":state.issuer_origin(),
         "resource":resource,
         "scopes":client.scopes,
         "audience":resource}),
     )
+}
+
+/// Exporting retained credentials remains offline, including stopped sessions.
+/// A borrower still binds its identity to the exact retained owner and issuer.
+fn exported_subject(state: &State, client: &str) -> Result<String> {
+    let owner;
+    let namespace = if let Some(path) = &state.issuer_project {
+        let canonical = project(path)?;
+        if &canonical != path || canonical == state.project {
+            bail!("retained issuer project path changed");
+        }
+        owner = read_state(&canonical.join(".breg/dev"))?;
+        if owner.issuer_project.is_some()
+            || state.issuer_owner.as_deref() != Some(owner.owner.as_str())
+            || state.issuer_port != owner.issuer_port
+        {
+            bail!("retained issuer owner differs from the exported client's issuer");
+        }
+        &owner.instance_id
+    } else {
+        &state.instance_id
+    };
+    Ok(registry_thunderid_tooling::local::agent_id(
+        namespace, client,
+    ))
 }
 
 pub(super) fn validate_pair(id: &[u8], key: &[u8], label: &str) -> Result<()> {
@@ -127,12 +156,16 @@ impl Output {
             let metadata = file.metadata()?;
             private::check_metadata(&metadata, false)?;
             if !matches!(metadata.mode() & 0o7777, 0o400 | 0o600) {
-                bail!("existing credential outputs require mode 0400 or 0600; correct their permissions or choose fresh output paths; existing files were preserved");
+                bail!(
+                    "existing credential outputs require mode 0400 or 0600; correct their permissions or choose fresh output paths; existing files were preserved"
+                );
             }
             let mut existing = Zeroizing::new(Vec::new());
             (&mut file).take(MAX_BYTES + 1).read_to_end(&mut existing)?;
             if existing.as_slice() != bytes {
-                bail!("credential output conflicts with the retained pair; choose fresh output paths and update the consuming target; existing files were preserved");
+                bail!(
+                    "credential output conflicts with the retained pair; choose fresh output paths and update the consuming target; existing files were preserved"
+                );
             }
         }
         Ok(Self { entry, exists })

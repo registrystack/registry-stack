@@ -16,8 +16,9 @@ holding several products can be read without guessing which tool is talking.
 
 | Family | A directory is a root when it holds | Diagnostic source |
 |---|---|---|
-| Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
+| Evidence | `evidence.yaml` | `evidence` |
 | BReg | `registry.yaml`: `BRegProject` or BReg `apiVersion` | `breg` |
+| Coordinator | `workflow.yaml`: `CoordinatorProject` or its exact current `apiVersion` | `coordinator` |
 | Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
 | Scheduling | `scheduling.yaml`: `SchedulingProject` or Scheduling `apiVersion` | `scheduling` |
 | Messaging | `messaging.yaml`: `MessagingProject` or Messaging `apiVersion` | `messaging` |
@@ -26,65 +27,38 @@ holding several products can be read without guessing which tool is talking.
 | Render | `manifest.yaml`: `RenderBundle` or Render `apiVersion` | `render` |
 | Evidence OID4VCI | an explicit project marker | `evidence-oid4vci` |
 
-Evidence accepts the second marker because an authoring project has always carried one OpenAPI
-description and a directory of questions. A project written before the marker file existed is still
-an authoring project, and requiring a migration before an editor would open it would be a demand
-made of authors for the editor's convenience.
-
-A symbolic link declares nothing at either name. A link is how a directory borrows a shape it does
-not have, and a borrowed shape must not anchor a root the loader will then read files from.
-
 ### Evidence
 
-The edges below are the names one authoring document writes and another spells back. Each one is
-navigable in both directions and reported when the name has nothing behind it.
+`evidence.yaml` uses the normalized `EvidenceProject` v1alpha1 model. The server reads the same
+project and governed target-authority documents as `evidencectl check`, including unsaved buffers,
+and maps shared diagnostic codes, messages, and field positions into UTF-16 editor ranges.
+Former question envelopes and inline operation sources are rejected.
 
 | Written in | Field | Resolves to |
 |---|---|---|
-| `questions/<id>.yaml` | `id` | the question itself, which has to be the file stem |
-| `questions/<id>.yaml` | `source.ref` | `sources/<id>.yaml` |
-| `questions/<id>.yaml` | `subject.profile`, `subjects[].profile` | `selectors/<id>.yaml` |
-| `questions/<id>.yaml` | `answers[].concept` | the concept that answer defines, within this question |
-| `questions/<id>.yaml` | `disclosure.allow[]` | an `answers[].concept` of the same question |
-| `questions/<id>.yaml` | `answers[].schema` | a file under `schemas/` |
-| `questions/<id>.yaml` | `derivation` | a file under `derivations/` |
-| `questions/<id>.yaml` | `governance.fixtures` | a file under `fixtures/` |
-| `sources/<id>.yaml` | `request.selectorInputs[].alternatives[].profile` | `selectors/<id>.yaml` |
-| `sources/<id>.yaml` | `request.adapterParametersSchema`, `responseSchema`, `factSchema` | a file under `schemas/` |
-| `access/policies/<id>.yaml` | `id` | the policy itself, which has to be the file stem |
-| `access/policies/<id>.yaml` | `questions[]` | `questions/<id>.yaml` |
+| `assertionDefinitions` | acquisition `source`, `search`, and `fetch` | named `sources` |
+| definitions and sources | selector profile references | `selectorProfiles` |
+| definitions | `derive.function` | an `assertion-derive/v1` named Function |
+| sources | `prepare.function`, `extract.function` | a Function with the matching interface |
+| named Functions | `source` | the contained Rhai function asset |
+| definition outputs | `schema` | the contained schema asset |
+| definitions | `fixtures` | the contained fixture asset |
+| target authority grants | `definition`, subject `selectorProfile` | project definitions and selector profiles |
+| derivation function release entries | `output` | the calling definition's declared outputs |
+| generated TypeScript and Python project types | definition and output names | the same normalized declarations |
 
-A concept belongs to the question that answers it, because two questions may answer the same
-concept. One question's `disclosure.allow` never reaches another question's answer.
+Navigation, references, completion and hover use these indexed names. Function completion offers
+only the matching interface. Output names are scoped to the calling assertion definition; private
+facts never become output candidates. Generated files are recognized by the shared generator's
+header and per-definition markers, at any contained `.ts` or `.py` path.
 
-`source.operation`, `source.facts[].path`, `subject.selector`, and `source.collectionBounds` resolve
-against the project's OpenAPI description rather than against another authoring document.
+File completion enumerates bounded contained siblings with the same extension. No function or
+generated code is executed. Missing assets are reported at their path references. Function
+signature diagnostics use the shared pure authoring check.
 
-## Completion and hover
-
-Both answer from the index the navigation above answers from, so there is no second model of which
-field takes which kind. Completion on a value offers every name that reference could have held: the
-kind is the reference's own, and a scoped name such as `disclosure.allow[]` offers only the names of
-its own scope. A candidate replaces the whole value already written. `source.facts[].path` is the
-one field whose candidates are not names another document declares: those are the selectable leaves
-of the operation's `200 application/json` response, taken from the set the compiler selects against,
-and they are offered whether or not the path written there resolves yet.
-
-An author who invokes completion by hand gets the same list as one who typed a trigger character.
-The context is read from the document rather than from the request, because whether a client sends a
-trigger at all inside a YAML value depends on client settings this server has no say in.
-
-Hover on a reference names what it resolves to and the project-relative file it is defined in; hover
-on a declaration names the declaration. A reference that resolves to nothing describes nothing: the
-diagnostic that owns the mistake is already speaking for that field.
-
-A value slot that holds nothing yet holds no scalar for the index to find a reference in, so a list
-requested at a bare `key: ` is empty. The server marks every list incomplete, so the client asks
-again on the next keystroke and the list appears as soon as one character is there to place it on.
-
-Beyond those edges, the server deserializes each question with the same reader the compiler uses and
-runs `registry-evidence-authoring`'s own validation, placing each finding at the field it names. A
-question the reader cannot parse at all is reported once, carrying the reader's message.
+A value slot that holds no scalar has no semantic completion yet. Hover on a reference names its
+resolved declaration and project-relative file. Symbolic links, multiply linked files, paths outside
+the project, `secrets/`, and dot-prefixed tooling state are excluded.
 
 ### Current product authoring
 
@@ -94,8 +68,9 @@ symbols, completion, and hover for their modeled local authoring edges.
 
 | Product | Indexed relationships |
 |---|---|
-| BReg | Authored modules, entities and extensions, fields including implicit `id`, selectors, constraints, read paths, entity and project access profiles, action inputs/effects, vocabularies, Manifest projection names, and governed script/WASM/SQL files. Module assets resolve relative to the module. |
-| Casework | Queues, access profiles, review kinds/stages/outcomes/producers, clocks/calendars, source bindings and imported request fields, task templates, runtime source names, and development directory clients. |
+| BReg | Authored modules, record types and extensions, value types, fields including implicit `id`, selectors, constraints, read paths, record and project access profiles, Action inputs/plans/commit guards, Proposal permissions/attachments/review context, review authorities, datasets, vocabularies, and governed function/hook/SQL files. Module assets resolve relative to the module. |
+| Coordinator | Local workflow types, named Functions and source assets, generated contract import aliases and asset paths, Operation aliases, Step names/edges and preceding-step reads, declared outcomes and Review outcome keys, event triggers, and whole-schema aliases at declared signature/input/output positions. |
+| Casework | Queues, access profiles, teams, review policies with policy-scoped stages, outcomes and inline routing fields, trusted producers, read-only context providers and runtime deployment bindings, clocks, calendars and holiday sets, task templates, current fixtures, schema files, and development directory clients. Source namespaces remain opaque external names. |
 | Scheduling | Services/offerings/openings/holiday sets, local location/pool/window records, exception reopening targets scoped to location, and fixture offering names. |
 | Messaging | Providers, sender profiles, template identities and version-specific metadata files, access profiles, runtime providers, locale and part names and their Jinja body files, provider scripts, and fixed template schema/sample file symbols. |
 | Discovery | Origin, mapping, requirement, and evidence-type-list declarations. External evidence type identifiers are not treated as local references. |
@@ -109,12 +84,20 @@ or the product `evidence-oid4vci`. The document must be an existing regular `.ya
 inside the project, using a relative path without traversal or symbolic links. The shared
 `python3 editors/configure.py` command writes this marker and configures both editors.
 
-Name scopes follow the owning document contract. An entity field does not complete fields from a
-different entity, and Manifest fields also retain their dataset scope. References to separately
+Name scopes follow the owning document contract. A BReg Record field does not complete fields from a
+different Record type, and Manifest fields also retain their dataset and entity scope. References to separately
 deployed records or remote identifiers do not produce invented missing-local-name errors. Product
 validation remains the owning CLI's responsibility; these new indexes report syntax and modeled
 local reference errors, rather than claiming full compiler validation. Rhai, Jinja, Typst, SQL, and
 private-key contents remain with their native tooling.
+
+Coordinator indexes `workflow.yaml`; it does not index runtime connections, scenario replies,
+Rhai contents, or generated product-contract contents. External operation catalog identifiers,
+imported Action IDs, completion names and producer event identifiers remain opaque. Nested JSON
+Schema contents remain with schema tooling, while whole-schema aliases in declared Function
+signatures, operation response schemas, workflow input/outcomes and event envelope positions
+resolve to local declarations. `coordinatorctl check` owns type resolution, graph dominance,
+completion contracts, runtime binding validation and complete project validation.
 
 For ordinary asset paths, completion can repair a missing filename using contained sibling files
 with the same extension. It checks at most 1,024 directory entries and reads no candidate contents.
@@ -124,17 +107,10 @@ module directory, including modules awaiting a lock entry; `bregctl check` owns 
 ## Diagnostics
 
 Most diagnostics this server publishes have severity `Error`. A warning the shared configuration reader raises on an accepted document is published with severity `Warning`. Evidence semantic diagnostics carry what its authoring reader or compiler refuses.
-Evidence source and selector documents (`sources/<id>.yaml`, `selectors/<id>.yaml`) get navigation but no editor diagnostics; `evidencectl check` is what checks them.
-The additional products diagnose their explicitly modeled local authoring relationships. The separately named indexing-ceiling diagnostics explain when the editor cannot
-safely build an index and do not claim that the compiler applies the same operational budget.
-
-Evidence diagnostics carry a code naming the rule. A marker, question, or access policy the shared
-configuration reader refuses carries the reader's own code and sentence, such as
-`config.unknown-key` or `yaml.unexpected-end`, at the line and column `evidencectl check` reports.
-The authoring library's findings carry codes under `evidence.<area>.`, such as
-`evidence.question.answer-concept-identifier`, and the editor's cross-document rules carry codes such
-as `evidence.project.unknown-source` and `evidence.question.file-name`. A client that disagrees with
-one rule can filter that rule rather than the whole server.
+Other products diagnose their explicitly modeled local authoring relationships. Indexing-ceiling
+diagnostics explain the editor's operational budgets and do not claim compiler validation.
+Shared Evidence parser diagnostics keep their own codes, such as `config.unknown-key` and
+`evidence.project.function-interface`. Missing asset diagnostics use `evidence.project.missing-*`.
 
 ## Discovery
 
@@ -147,8 +123,7 @@ resolve on this filesystem accepts nothing.
 
 Only regular files admitted by a family's authoring layout or declared file references are indexed.
 Symbolic links, files outside the project root, and unrelated documents are excluded. Evidence
-retains its authoring form's per-role byte ceilings and 128-document limits for `questions/` and
-`access/policies/`. The additional products use a 1 MiB editor ceiling per indexed
+uses bounded per-document and aggregate indexing budgets. The additional products use a 1 MiB editor ceiling per indexed
 document. Every root also applies an editor-only aggregate budget of 1,024 indexed documents or 16
 MiB across the YAML and JSON documents it parses. A project past either aggregate limit gets one
 project-ceiling diagnostic and no partial index, so the editor does not invent unresolved-reference

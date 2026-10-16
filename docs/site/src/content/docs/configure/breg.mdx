@@ -1,6 +1,6 @@
 ---
 title: Author a registry project
-description: Model your own registry in the project bregctl init writes, from the registry file and its entities to references, validity time, location, modules, and hook declarations, and compile it without a database.
+description: Declare native Record types, typed Actions, Proposals, and explicit grants, then inspect the compiled project offline.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,524 +14,120 @@ standards_referenced:
   - geojson
 ---
 
-You have a project from the first tutorials, or you are starting one, and you want to model your own registry.
-This page covers the model: the registry file, the entities and fields that describe your records, references between records, validity time and location, the modules that carry reusable parts of the model, and the events an entity declares.
-At the end, `bregctl check` compiles a project that describes your records instead of the placeholders `bregctl init` wrote.
+If you are authoring a Base Registry Engine (BReg) project, declare your Record
+types, typed Actions, access profiles, and events in one governed model. Compile
+that model offline before provisioning a database.
 
-This phase, Model your registry, is four pages read in order.
-This page shapes the records.
-[Control access per profile](../breg-access/) decides which operations, fields, and rows each caller may touch.
-[Declare change requests and actions](../breg-change-control/) adds reviewed changes and writes that touch several records at once.
-[Test with journeys](../breg-journeys/) proves the model behaves, with `check`, `explain`, `generate`, and journeys that run against a database.
-
-Everything on these four pages runs without a database.
-Database setup, packaging, and activation belong to [Deploy a registry](../../operate/breg/), and if you have never run a registry, [Create and query your first registry](../../tutorials/first-breg/) comes first.
-
-If `bregctl` is not installed yet, the release installer places `breg` and `bregctl` together in `~/.local/bin` on Linux amd64, Linux arm64, and macOS on Apple Silicon:
-
-```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
-bregctl --version
-```
-
-Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
-Every command accepts `--format json` for machine-readable output.
-Every error and every finding names the document path that caused it, so a message at `entities[id=record].fields[id=label]` points at one member of one file, and you never have to guess where to look.
-
-{/* Evidence: crates/registry-breg/install.sh; crates/registry-bregctl/src/lib.rs; crates/registry-breg/src/compiler.rs. */}
-
-## Create a project
+## Start from a complete project
 
 ```sh
 bregctl init ./my-registry
+bregctl check ./my-registry
 ```
 
-The destination must be a new path.
-`init` refuses an existing directory, even an empty one, with `output.destination.invalid`, so it can never overwrite a project you have edited; choose another path or remove the directory first.
+The destination must be new. The default `minimal-directory` includes a `contact`
+Record type, a jurisdiction-bound editor profile, explicit local clients, journey
+fixtures, a resumable scenario, and a runtime example. Read its generated README
+before changing identities or grants.
 
-The command writes a working example project rather than a blank one:
-
-| File | What it holds |
-|---|---|
-| `registry.yaml` | Registry and package identity, a Registry Manifest projection, one closed vocabulary, two entities, and three access profiles. |
-| `modules/record-notes/module.yaml` | One module adding an optional field to an entity the project owns, pinned by content digest in the project's `modules` list. |
-| `tests/journeys.yaml` | A journey that creates a group and a record, reads it under both profiles, patches it, and lists it. |
-| `dev-clients.yaml` | Two local clients bound to the `operator` and `record-reader` profiles, for `bregctl dev` to issue tokens to. It holds no secret. |
-| `runtime.example.yaml` | An example of the runtime configuration an operator supplies. No command reads it; copy it out of the project and replace every value. |
-| `README.md` | What each file holds and which command to run next. |
-
-Every block in those files carries a comment saying what it does and what an adopter changes.
-Replace the placeholder identifiers with your own; they are deliberately generic.
-
-[Derive a registry from PublicSchema](../../tutorials/derive-a-registry-from-publicschema/) starts a project from named concepts instead of placeholders.
-
-`init` then compiles the project, prints the compiled revision, and reports two findings:
-
-```text
-Initialized a registry project. 6 artifacts written.
-  revision  sha256:<digest>
-
-  README.md
-  dev-clients.yaml
-  modules/record-notes/module.yaml
-  registry.yaml
-  runtime.example.yaml
-  tests/journeys.yaml
-
-  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-0 errors, 2 findings.
-
-Next:
-  1. read ./my-registry/README.md, then run 'bregctl check ./my-registry'
-  2. leave the findings above as they are; the example operator profile lists a whole
-     collection and the example evidence-source profile looks up any record, both on
-     purpose, and ./my-registry/README.md says where to narrow them
-  3. replace canonicalBaseIri in ./my-registry/registry.yaml before you build a
-     production package; the example value is a reserved .invalid name that never
-     resolves
-```
-
-A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-warnings` and `--production`.
-The first says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
-The second says the `evidence-source` profile can look up any record by its code, which is right for a source that vouches for the whole registry.
-The project's `record-reader` profile shows the row boundary that closes either one.
-The steps under `Next:` name the command to run after the README, the findings the example keeps on purpose, and the placeholder `canonicalBaseIri` that has to be replaced before a production package. Only `init` prints them.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init() and write_files_with_before_publish(); products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
-
-## The registry file
-
-This page describes the Base Registry Engine (BReg)
-[registry document](../../reference/glossary/#registry-document) and its product-owned grammar.
-
-`registry.yaml` is one document with these top-level members:
-
-| Member | What it holds |
-|---|---|
-| `apiVersion`, `kind` | `id.registrystack.org/formats/breg/project/v1alpha1` and `BRegProject`. |
-| `project` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
-| `package` | Production identity: `sourceRevision`. Required for a production package. The environment and instance belong in the runtime file's `identity`. |
-| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `breg.manifest-projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. |
-| `modules` | Included modules by `id`, `version`, and `digest`. A production compilation requires a digest on every lock, and a lock and a loaded source for every module. |
-| `entities` | Entities declared in this file. |
-| `accessProfiles` | Every profile a token can select. |
-| `vocabularies` | Closed code lists that `vocabulary-code` fields reference. |
-
-Configure the OpenID Connect (OIDC) issuer to include `registry_actor_kind` on every BReg access
-token. The value must be exactly `human`, `agent`, or `service`; a missing or malformed value causes
-authentication to fail before BReg selects an access profile. An `actorKind` on an access profile
-further restricts that profile to the matching token kind and must be paired with
-`requesterClients`. Omit `actorKind` only when the profile deliberately accepts all three declared
-actor kinds. A token that acts for someone else, carrying a trusted `act` claim, is the exception:
-only a profile that declares `actorKind: agent` admits it. Such a profile without a `taskGrant` is a
-standing agent: it may read and author change-request drafts, and `check` refuses it any lifecycle
-operation with `breg.access-profile.standing-agent-operation-forbidden`, any direct write with
-`breg.access-profile.standing-agent-direct-mutation-forbidden`, any immediate action with
-`breg.access-profile.standing-agent-action-forbidden`, and `publish` on a statistical dataset with
-`breg.access-profile.standing-agent-publish-forbidden`. The person submits each draft through a profile
-they use directly.<DocsetProduct product="registry-breg-services"> The
-[citizen chat assistant](../../configure/breg-mcp/) is built on such a profile.</DocsetProduct>
-
-{/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
-    crates/registry-breg/src/api/mod.rs, authorize_profile_claims();
-    crates/registry-breg/src/compiler.rs;
-    crates/registry-breg/src/compiler/statistics.rs, compile(). */}
-
-Identifiers follow a closed grammar: a lowercase ASCII letter first, then lowercase letters, digits, hyphens, or underscores, at most 64 bytes.
-`check` refuses anything else where it reads the file, as `config.invalid-value` at the line of the `id`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
-The project convention is kebab-case for entity ids, field ids, profile ids, and vocabulary ids.
-The API exposes field ids in camelCase, so `asset-code` becomes `assetCode`, unless a field sets `apiName`.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject; crates/registry-breg/src/compiler.rs, validate_id(), validate_project_header(), and validate_module_locks(); crates/registry-breg/src/package.rs, add_compiled_artifacts(). */}
-
-## Entities and fields
-
-```yaml
-entities:
-  - id: asset-item
-    primaryDataset: asset-registry
-    route: assets
-    mutationMode: mutable
-    batch:
-      maximumItems: 100
-      maximumBytes: 262144
-    fields:
-      - id: asset-code
-        type: string
-        required: true
-        maximumLength: 64
-        classification: internal
-      - id: label
-        type: string
-        required: true
-        maximumLength: 200
-        classification: internal
-      - id: asset-class
-        type: vocabulary-code
-        vocabulary: asset-classification
-        required: true
-        classification: internal
-    constraints:
-      - type: unique
-        id: asset-code-unique
-        fields: [asset-code]
-vocabularies:
-  - id: asset-classification
-    values: [equipment, vehicle, furniture]
-```
-
-An entity needs an `id`, a `primaryDataset` that names the dataset its records belong to, a `route` that becomes the path segment under `/v1/records/`, and a `mutationMode`.
-`mutable` allows patches; `create-only` refuses them, which suits event-like records such as inspections.
-`tombstone: true` enables the tombstone operation.
-`batch` sets the item and byte limits of one batch request for the entity.
-
-Every field carries `id`, `type`, `required`, and `classification`, one of `public`, `internal`, or `restricted`.
-Classification never grants access on its own: the manifest projection uses it as a ceiling, and profiles still list the fields they can read.
-
-| Type | Field members | Notes |
-|---|---|---|
-| `boolean`, `int64`, `uuid` | None | `int64` holds whole numbers. |
-| `string` | `maximumLength`, `minimumLength` | Single-line, bounded text. |
-| `text` | `maximumLength` | Longer text; not filterable. |
-| `decimal` | `precision`, `scale`, `minimum`, `maximum` | Exact decimals, exposed as strings. |
-| `date`, `timestamp` | None | ISO 8601; timestamps are UTC. |
-| `vocabulary-code` | `vocabulary` or `values` | A code from a declared vocabulary or an inline list. |
-| `reference` | `target`, `onDelete` | The identifier of a record in another entity. `onDelete` defaults to `restrict`. |
-| `crs84-point` | `precision`, `bbox` | A GeoJSON Point in CRS84 longitude and latitude. |
-| `structured` | `schema`, `maximumBytes` | A JSON value validated by an inline JSON Schema. |
-
-Constraints are evaluated on every write:
-
-| `type` | Members | Checks |
-|---|---|---|
-| `unique` | Optional `id`, `fields`, optional `when` | No two live records share the values. `when` narrows the rule to rows where a field equals a value, is null, is not null, or the record is in an active lifecycle. |
-| `compare` | Optional `id`, `left`, `operator`, `right` | Two fields of one record compare as `less-than`, `less-than-or-equal`, `greater-than`, or `greater-than-or-equal`. |
-| `int-range` | Optional `id`, `field`, `minimum`, `maximum` | An `int64` field stays within bounds. |
-| `vocabulary` | Optional `id`, `field`, `values` | A field takes one of the listed values. |
-| `temporal-non-overlap` | Optional `id`, `startField`, `endField`, `scopeFields` | No two records with equal scope fields have overlapping validity. |
-
-Give each constraint an `id` that is unique within its entity. The ID stays stable in
-`explain model`, migration statements, and operator diagnostics when the constraint's fields or
-bounds change. If you omit `id`, the compiler derives a content-based fallback that can repeat on
-another entity and changes when the constraint changes.
-
-`indexes[]` declares btree indexes, each with an `id` and ordered `fields`, such as
-`{id: asset-class, fields: [asset-class]}`. Every list orders by the record id last, so the
-compiler appends the record id as the last column of each declared index: list the fields a
-list compares with `eq` first, then the field it sorts by, and the index serves that page in order.
-A leading field filtered any other way, such as with `gt`, `ne`, or `in`, still narrows the read,
-but the filtered set is then ordered for each page.
-The compiler indexes every `reference` field
-unless a declared index or a unique constraint without `when` already leads with it.
-`bregctl check` reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
-filterable or sortable list field that no index leads with. The finding fails a check only under
-`--deny-warnings`; declare an index for an entity that will hold more than a few thousand rows.
-
-{/* Evidence: crates/registry-breg/src/compiler.rs, derived_constraint_id(), compile_entities(), and unindexed_list_findings(); crates/registry-breg/src/generated_ddl.rs; products/breg/generated/authoring/registry-module.schema.json. */}
-
-The compiler refuses field names that collide with Registry Record envelope members, so no field can be called `recordIdentifier`, `revisionIdentifier`, `snapshot`, `request`, or `requestPresence`.
-[Base Registry Engine API reference](../../reference/breg-api/) lists the wire encoding of every type.
-
-{/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-breg/src/compiler.rs, reserved_logical_name(). */}
-
-## Encrypt restricted fields
-
-A field whose classification is `restricted` and whose type is one of `string`, `text`, `date`,
-`decimal`, or `structured` can declare `encrypted: true`. Base Registry Engine then stores every
-value of the field as an AES-256-GCM envelope in a dedicated `bytea` column and decrypts it only at
-the response edge, so a database reader of dumps, replicas, and backups sees no plaintext. What the
-key custody behind that promise requires, and what the blind index still reveals, is the model in
-[Field encryption for restricted fields](../../explanation/breg-field-encryption/); the deployment
-binding that carries the key is configured as [Deploy a registry](../../operate/breg/) describes.
-
-```yaml
-fields:
-  - id: national-identifier
-    type: string
-    required: true
-    maximumLength: 32
-    classification: restricted
-    encrypted: true
-    lookup:
-      normalization: [trim, remove-separators]
-      unique: true
-```
-
-Phase 1 refuses `pattern` on an encrypted field with `breg.field.encrypted-pattern-refused`, because
-native patterns are PostgreSQL checks and encrypted plaintext must not reach PostgreSQL. Remove
-`pattern`, or keep the field in plaintext storage when the native pattern is required.
-
-The `lookup` block declares the blind index that equality lookups resolve through.
-`normalization` lists the transformations applied to the value in declared order, from a closed
-vocabulary: `trim`, `uppercase`, `lowercase`, `collapse-whitespace`, and `remove-separators`.
-`unique: true` adds a uniqueness rule over the normalized value. For a national identifier, prefer
-the narrow `trim` and `remove-separators` pair over Unicode case conversion, because case folding
-decides which values collide and a registry identifier rarely needs it.
-
-An encrypted field gives up the query shapes a sealed column cannot answer, and the compiler
-refuses them at authoring time with a message naming the field: filtering and sorting on the field,
-any comparison other than equality, a change request that targets it, derived SQL over it, and
-event projection of it. Declare a `lookup` block when the registry must find records by the field's
-exact value.
-
-{/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
-    crates/registry-breg/src/contract.rs, FieldSource, FieldLookupSource, and
-    NormalizationStep; crates/registry-breg/src/compiler.rs,
-    breg.field.encrypted-classification-invalid, breg.field.encrypted-type-unsupported, and
-    breg.field.encrypted-pattern-refused;
-    crates/registry-breg/src/change_request.rs, breg.change-request.effect-field-encrypted;
-    crates/registry-breg/src/derived_sql.rs, refuse_encrypted_columns(). */}
-
-## Related records
-
-A `reference` field stores another record's identifier, and the server checks that the target exists and that the caller may read it.
-For a many-to-many relationship, declare a relationship entity with two references, then let readers walk it with a read path:
-
-```yaml
-  - id: household
-    primaryDataset: household-registry
-    route: households
-    mutationMode: mutable
-    fields:
-      - id: household-code
-        type: string
-        required: true
-        maximumLength: 64
-        classification: internal
-      - id: administrative-area
-        type: string
-        required: true
-        maximumLength: 64
-        classification: internal
-      - id: local-household-number
-        type: int64
-        required: true
-        classification: internal
-    selectorProfiles:
-      - id: by-local-reference
-        fields: [administrative-area, local-household-number]
-      - id: by-household-code
-        fields: [household-code]
-    readPaths:
-      - id: people
-        through: group-membership
-        to: person
-        route: people
-  - id: group-membership
-    primaryDataset: household-registry
-    route: group-memberships
-    mutationMode: mutable
-    fields:
-      - id: household
-        type: reference
-        target: household
-        required: true
-        classification: internal
-      - id: person
-        type: reference
-        target: person
-        required: true
-        classification: internal
-```
-
-A selector profile names the fields a caller can present to find one record without knowing its identifier.
-The lookup route accepts the selector values and returns the single matching record or a `lookup.unresolved` problem.
-A read path exposes the records reachable through a relationship entity at `/v1/records/households/{id}/people`, paged and filtered like a list.
-Both are inert until a profile grants them, which [Control access per profile](../breg-access/) covers under `lookups` and `readPaths`.
-
-{/* Evidence: products/breg/acceptance/publicschema-household/modules/publicschema-household-core/module.yaml; crates/registry-breg/src/api/mod.rs. */}
-
-## Time and place
-
-A temporal entity declares which fields bound a record's validity:
-
-```yaml
-  - id: membership-record
-    primaryDataset: household-registry
-    route: memberships
-    mutationMode: mutable
-    fields:
-      - id: subject
-        type: reference
-        target: person
-        required: true
-        classification: internal
-      - id: group
-        type: reference
-        target: household
-        required: true
-        classification: internal
-      - id: valid-from
-        type: date
-        required: true
-        classification: internal
-      - id: valid-to
-        type: date
-        required: false
-        classification: internal
-    temporal:
-      startField: valid-from
-      endField: valid-to
-    constraints:
-      - type: temporal-non-overlap
-        id: subject-validity-non-overlap
-        scopeFields: [subject]
-        startField: valid-from
-        endField: valid-to
-```
-
-The server then answers `asOf` reads by valid time, and callers can ask which membership was in force on a date.
-A profile that needs to re-read records as they were recorded at an earlier mutation holds the `snapshot` operation.
-
-A `crs84-point` field stores a location.
-Add a `bbox` limit on the field and a `spatialQueries.bbox` grant on the profile, and the list route accepts a bounding box.
-The GIS routes described in the API reference publish the same records as GeoJSON for desktop clients.
-
-{/* Evidence: products/breg/acceptance/household-history/registry.yaml; products/breg/acceptance/spatial-service-sites/registry.yaml. */}
-
-## Modules
-
-A module is a reusable file under `modules/<id>/module.yaml` that contributes entities, vocabularies, events, and extensions to entities declared elsewhere, so a part of the model can be reviewed and versioned separately from the project that adopts it.
-The module `init` wrote adds one optional field to the project's `record` entity:
-
-```yaml
-apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
-kind: BRegModule
-id: record-notes
-version: 0.1.0
-extendEntities:
-  - entity: record
-    fields:
-      - id: internal-note
-        type: string
-        maximumLength: 500
-        classification: internal
-```
-
-A module opens with its own `apiVersion` and `kind`, which are not part of the content the digest pins.
-`registry.yaml` includes it under `modules` with its `id`, `version`, and content `digest`.
-An `extendEntities` entry may add `fields`, `constraints`, `events`, `selectorProfiles`, `readPaths`, `accessRequirements`, and change control to an entity the module does not own.
-Adding a field to the model grants nobody access to it; a profile still has to list it before a caller can read or set it.
-
-Recompute the digests after any module edit, because a stale digest is a compile error, which is how a reviewed project stays pinned to the module content it was reviewed with:
+For atomic writes and durable work, use a separate destination:
 
 ```sh
-bregctl project lock ./my-registry
+bregctl init ./facility-registry --template facility-registry
+bregctl check ./facility-registry
 ```
 
-`project lock ./my-registry --check` reports each module's digest and whether it changed, without writing the file, which suits a review gate.
-Review a digest change together with the module diff that caused it.
+This project includes facilities, operators, assignments, directory entries,
+reusable value types, a named Rhai Function, and immediate and Proposal Actions.
+Its operator setup grant is authored in the project. Tooling adds no seed authority.
 
-{/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-bregctl/src/lib.rs, project_lock(). */}
+{/* Evidence: crates/registry-bregctl/src/starters.rs;
+    products/breg/examples/minimal/registry.yaml;
+    products/breg/examples/facility/registry.yaml. */}
 
-## Hooks
+## Declare Record types and fields
 
-A hook projects chosen fields of a committed change to a destination the deployment binds by name.
-Hooks are declared on entities, in the registry file or in a module, and the project carries no receiver URL and no secret:
+`registry.yaml` starts with `apiVersion:
+id.registrystack.org/formats/breg/project/v1alpha1` and `kind: BRegProject`.
+`project` supplies identity, version, language, and canonical base IRI. `datasets`
+supplies the datasets each Record type references through `primaryDataset`.
+
+Use `recordTypes` for stored records:
 
 ```yaml
-  - id: record
-    primaryDataset: generic-registry
-    route: records
+recordTypes:
+  - id: contact
+    route: contacts
+    primaryDataset: directory
     mutationMode: mutable
-    classification: internal
     fields:
-      - id: code
+      - id: name
         type: string
         required: true
-        maximumLength: 64
+        minimumLength: 1
+        maximumLength: 160
         classification: internal
-      - id: status
-        type: vocabulary-code
-        vocabulary: record-status
-        classification: internal
-    hooks:
-      - id: record-status-changed-v1
-        phase: after
-        trigger: patched
-        projection: [code, status]
-        when:
-          type: fields
-          changed: [status]
-        handler:
-          type: url
-          destinationId: record-receiver
 ```
 
-| Member | Values |
-|---|---|
-| `id` | The event contract identifier, sent to receivers as the CloudEvents `ce-type`. Use a new id for a payload change receivers must notice. |
-| `phase` | `after`. An entity hook runs after the triggering transaction commits; the engine refuses any other phase. |
-| `trigger` | `created`, `patched`, `tombstoned`, or `request-lifecycle` for change-request state changes. |
-| `when` | Optional. `type: fields` with `changed`, `beforeEquals`, `afterEquals`, `beforeIsNull`, and `afterIsNull`; or `type: request-lifecycle` with `transitions`, `toStates`, and `stages`. Every listed test must hold. |
-| `projection` | The field ids copied into the event payload's `values`. Restricted fields cannot be projected. |
-| `handler.type` | `url`, `rhai`, or `wasm`. A `url` hook delivers to a bound destination; a `rhai` or `wasm` hook runs a reviewed local program in the post-commit worker. |
-| `handler.destinationId` | The key the runtime configuration binds to a receiver URL and signing key. Required for a `url` hook; a local handler names its reviewed `script` or `module` path instead. |
+Keep the complete generated project around this fragment. Every field declares
+its type, bounds, requiredness, and classification. Reference fields name another
+Record type. Use `apiName` for a deliberate public property name and `typeRef`
+for a reusable project-local value type. Stable IDs carry identity; `display`
+labels, descriptions, and safe titles carry presentation.
 
-Field ids in `when` and `projection` are the authored ids, and the payload keeps them.
-`changed` is valid only with the `patched` trigger, `beforeEquals` and `beforeIsNull` with `patched` and `tombstoned`, and `afterEquals` and `afterIsNull` with `created` and `patched`.
-A comparison value is a boolean, a number, or text. To require that a field holds no value, list it in `beforeIsNull` or `afterIsNull`; `null` is not a comparison value.
+A Record type's `mutationPolicy` can require a Proposal for an operation. An
+Action cannot bypass that requirement merely because a profile grants writes.
+[Actions and Proposals](../breg-change-control/) supplies the durable write model.
 
-Render the exact HTTP request a receiver will get, with synthetic values, so you can build the receiver before the registry exists:
+## Grant authority explicitly
+
+`accessProfiles` binds verified scopes, purpose, principal, operations, fields,
+and row boundaries. `permissions.records`, `permissions.actions`, and
+`permissions.proposals` grant separate powers. A local client merely requests a
+profile; declaring it in `dev-clients.yaml` creates no profile grant.
+
+Start with the generated jurisdiction boundary. Keep a boundary field writable
+for Create so a caller can supply the exact value its claim permits. Review any
+Patch grant with an `in` boundary that can move a record between allowed values. Filters never replace row
+authorization. [Control access per profile](../breg-access/) owns the grant model.
+
+## Reuse and compose
+
+Modules reuse governed project assets. Named `valueTypes` and `functions` keep
+local types and plan code in one place. A Function's declared runtime, source,
+entrypoint, ABI, capabilities, and limits remain part of the compiled contract.
+Its write ceiling and refusals belong to the Action that calls it.
+
+Record hooks describe committed events. Bind outbound destinations and secrets
+in deployment configuration. [Bind webhook receivers](../../operate/breg-webhooks/) for outbound delivery.
+External consumers receive no registry authority
+from a delivery. Registry Manifest remains a one-way portable metadata projection;
+its independently versioned entity vocabulary is separate from BReg authoring.
+
+## Inspect the contract
 
 ```sh
-bregctl webhook sample ./my-registry --event record-status-changed-v1
+bregctl --format json explain model ./my-registry
+bregctl --format json explain access ./my-registry
+bregctl --format json explain actions ./my-registry
+bregctl --format json explain proposals ./my-registry
 ```
 
-The sample prints the request line, the CloudEvents headers, and the body; only the placeholders for values the deployment supplies vary:
+These commands need no database. Diagnostics identify the document and member
+that needs repair. Use `bregctl check --help` for production and warning policy;
+review warnings rather than treating them as extra grants. For a function, use
+`project action-test --help` to test bounded synthetic inputs offline.
 
-```text
-Built the sample delivery. The canonical request follows.
-  event  record-status-changed-v1
+Database journeys prove current authorization, concurrency, and transactional
+behavior beyond what compilation can establish. Test the exact candidate before
+packaging it, and keep migration credentials with the operator.
 
-POST <configured-webhook-request-target> HTTP/1.1
-Content-Type: application/json
-X-Registry-Signature: v1=<computed-at-delivery>
-ce-specversion: 1.0
-ce-type: record-status-changed-v1
-
-{"causation":{"hop":0,"root":"<event-uuid>"},"data":{"entity":"record","packageRevision":"sha256:<digest>","recordId":"<uuid>","revision":1,"trigger":"patched","values":{"code":"x","status":"draft"}},"dataschema":"urn:breg:event-schema:generic-registry:record:record-status-changed-v1:sha256:<digest>","id":"<event-uuid>","source":"urn:registrystack:registry:generic-registry:instance:<configured-instance>","subject":{"recordReference":"hmac-sha256:<64-hex>","recordRevision":1},"time":"2026-01-01T00:00:00Z","type":"record-status-changed-v1"}
-```
-
-The remaining headers are omitted.
-An event id the project does not deliver fails with `webhook.sample.event-refused`, and the message lists the ids the project delivers.
-`explain events` prints every compiled delivery with its trigger, `when` tests, projection fields, destination, and the retry schedule the runtime will follow.
-Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../../operate/breg-webhooks/); [Send events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) walks through a delivery end to end, and [Base Registry Engine API reference](../../reference/breg-api/#events-and-webhooks) documents the headers, signature, and retry contract.
-
-{/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-breg/src/contract.rs, HookSource and EventConditionSource; crates/registry-breg/src/webhook.rs; crates/registry-bregctl/src/lib.rs, webhook_sample(). */}
-
-## Declare count datasets
-
-Add root `statisticalDatasets` when your registry needs exact operational counts and separate disclosure-controlled releases, and grant each dataset in the access profiles that use it with a `{dataset, operations}` permission. The compiler checks the population's typed filter, dimension domains, ordinary count grants, and caller-independent publisher visibility across every derived source dependency. Modules cannot contribute dataset declarations.
-
-Follow [publish a statistical series](../breg-statistics/) to declare a dataset and read its released CSV, or review [live counts and statistical releases](../../explanation/breg-statistical-datasets/) before choosing disclosure parameters.
-
-{/* Evidence: crates/registry-breg/src/contract.rs;
-    crates/registry-breg/src/compiler/statistics.rs. */}
-
-## Troubleshooting
-
-| Symptom | Cause and next move |
-|---|---|
-| `init` fails with `output.destination.invalid`. | The destination exists or contains a parent-directory component. Give a new path, or remove the directory if it holds nothing you want. |
-| An error or finding names a path such as `entities[id=record].fields[id=label]`. | The path is a document path into `registry.yaml` or the module file the message names. Fix the member it points at. |
-| `check` reports `config.invalid-value` on an `id`, or `breg.identifier.invalid` on a route or a reference. | An identifier breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
-| A module digest does not match. | Run `project lock` after editing a module, then review the digest change together with the module diff. |
-| `check` refuses a filter, sort, comparison, change request, or projection that uses an encrypted field. | An encrypted field answers equality lookups only. Declare a `lookup` block for exact-value lookups, or move the comparison to a field that is not sealed; [Encrypt restricted fields](#encrypt-restricted-fields) lists what is refused. |
-| `check` refuses the manifest projection's singular `dataset` or `dataService`. | The projection takes only the plural keys. Declare `datasets[]` and `dataServices[]`, each with an `id`, and point every entity's `primaryDataset` at one of them. |
+{/* Evidence: crates/registry-breg/src/contract.rs; crates/registry-breg/src/compiler.rs;
+    crates/registry-bregctl/src/lib.rs; products/breg/examples/facility/plans/correct-address.rhai. */}
 
 ## Next
 
-- [Control access per profile](../breg-access/): profiles, permissions, row boundaries, and the offline admission preview.
-- [Declare change requests and actions](../breg-change-control/): reviewed changes and writes that touch several records at once.
-- [Test with journeys](../breg-journeys/): `check`, `explain`, `generate`, findings, and journeys.
-- [Modeling patterns for registries](../../explanation/registry-modeling-patterns/): how to shape entities, references, and history.
-- [Base Registry Engine configuration reference](../../reference/breg-configuration/): every project and runtime key.
+- [Control access per profile](../breg-access/)
+- [Declare Actions and Proposals](../breg-change-control/)
+- [Test with journeys](../breg-journeys/)
+- [Deploy a registry](../../operate/breg/)

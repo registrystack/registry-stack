@@ -66,10 +66,12 @@ def expected_files() -> dict[Path, bytes]:
         ROOT / "crates" / "registry-casework-client-node",
         ROOT / "crates" / "registry-messaging-client-node",
         ROOT / "crates" / "registry-scheduling-client-node",
+        ROOT / "crates" / "registry-coordinator-client-node",
         ROOT / "crates" / "registry-breg-client-py",
         ROOT / "crates" / "registry-casework-client-py",
         ROOT / "crates" / "registry-messaging-client-py",
         ROOT / "crates" / "registry-scheduling-client-py",
+        ROOT / "crates" / "registry-coordinator-client-py",
         ROOT / "crates" / "registry-stack-client-py",
     ):
         files[destination / "LICENSE"] = license_text

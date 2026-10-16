@@ -5,7 +5,7 @@ use std::sync::Arc;
 use registry_casework::{AuthenticationError, CaseworkAuthenticator, HumanIdentityConfig};
 use registry_casework_core::{
     AccessProfile, CaseworkProject, CaseworkRole, InboxPolicy, ProjectIdentity, QueuePolicy,
-    SourcePolicy, SourceRequestPolicy, CASEWORK_API_VERSION, CASEWORK_KIND,
+    CASEWORK_API_VERSION, CASEWORK_KIND,
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
@@ -250,11 +250,11 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
         [
             (
                 "casework.access-profile.shared-scopes",
-                "/accessProfiles/0/requiredScopes".to_owned()
+                "/accessProfiles/staff/requiredScopes".to_owned()
             ),
             (
                 "casework.access-profile.shared-scopes",
-                "/accessProfiles/4/requiredScopes".to_owned()
+                "/accessProfiles/staff-by-employee/requiredScopes".to_owned()
             ),
         ]
     );
@@ -349,6 +349,10 @@ fn token(idp: &MockIdp, scope: &str, asserted_kind: Option<Value>) -> String {
 }
 
 fn project() -> CaseworkProject {
+    let starter = CaseworkProject::from_slice(include_bytes!(
+        "../../../products/casework/examples/standalone-decision/casework.yaml"
+    ))
+    .expect("canonical review fixture");
     CaseworkProject {
         task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.to_owned(),
@@ -380,23 +384,10 @@ fn project() -> CaseworkProject {
             id: "decisions".to_owned(),
             label: "Decisions".to_owned(),
         }],
-        sources: vec![SourcePolicy {
-            id: "source".to_owned(),
-            adapter: "test".to_owned(),
-            description: "source.json".to_owned(),
-            requests: vec![SourceRequestPolicy {
-                entity: "request".to_owned(),
-                queue: "decisions".to_owned(),
-                display_reference: None,
-                projection: Vec::new(),
-                context_projection: Vec::new(),
-                routing: Vec::new(),
-                clock: None,
-                target: None,
-            }],
-        }],
-        review_kinds: Vec::new(),
-        review_producers: Vec::new(),
+        teams: starter.teams,
+        context_providers: Vec::new(),
+        review_policies: starter.review_policies,
+        trusted_producers: starter.trusted_producers,
         calendars: Vec::new(),
         clocks: Vec::new(),
         inbox: InboxPolicy::default(),

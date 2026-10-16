@@ -41,6 +41,22 @@ properties:
           Optional `sha256:` digest of the package's `SHA256SUMS` file. When set, startup is
           refused unless the verified package found at `package.root` has exactly this digest.
         $ref: '#/$defs/Digest'
+  authority:
+    description: >-
+      Selects the separately governed target authority store captured at startup. Required
+      for a normalized project package and forbidden as an authority override of a legacy
+      package. Activation commits one validated snapshot and durable history atomically;
+      the running process keeps its captured authority until a controlled restart.
+    type: object
+    additionalProperties: false
+    required: [root, target]
+    properties:
+      root:
+        description: Absolute owned directory containing the committed authority-state.json.
+        $ref: '#/$defs/absolute-path'
+      target:
+        description: Exact governed target identifier matched by the activated authority document.
+        $ref: '#/$defs/LocalId'
   listener:
     description: >-
       Groups the network binding and per-request admission limits for the process's evidence

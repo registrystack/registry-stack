@@ -31,8 +31,7 @@ pub(crate) const MAX_INDEXED_ROOTS: usize = 32;
 pub(crate) const MAX_INDEXED_PROJECT_DOCUMENTS: usize = 1024;
 pub(crate) const MAX_INDEXED_PROJECT_BYTES: usize = 16 * 1024 * 1024;
 
-pub(crate) const PROJECT_CEILING_MESSAGE: &str =
-    "This project exceeds the editor's aggregate limit of 1024 documents or 16 MiB; no project documents are indexed until it is reduced";
+pub(crate) const PROJECT_CEILING_MESSAGE: &str = "This project exceeds the editor's aggregate limit of 1024 documents or 16 MiB; no project documents are indexed until it is reduced";
 
 /// The first path, in project order, that crosses the editor's aggregate document or byte budget.
 pub(crate) fn project_ceiling_path(documents: &BTreeMap<PathBuf, String>) -> Option<PathBuf> {
@@ -105,6 +104,7 @@ impl ProjectFamily {
         Self::Evidence,
         Self::Product(crate::products::ProductKind::Breg),
         Self::Product(crate::products::ProductKind::Casework),
+        Self::Product(crate::products::ProductKind::Coordinator),
         Self::Product(crate::products::ProductKind::Scheduling),
         Self::Product(crate::products::ProductKind::Messaging),
         Self::Product(crate::products::ProductKind::Discovery),
@@ -235,7 +235,9 @@ impl ProjectFamily {
     /// Whether a document contributes a YAML syntax tree for its product.
     pub(crate) fn parses_as_yaml(self, path: &Path) -> bool {
         match self {
-            Self::Evidence => true,
+            Self::Evidence => path
+                .extension()
+                .is_some_and(|extension| extension == "yaml" || extension == "yml"),
             Self::Product(_) => path
                 .extension()
                 .is_some_and(|value| value == "yaml" || value == "yml" || value == "json"),
@@ -923,80 +925,31 @@ fn canonical_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
-    use crate::refs::DOCUMENT_START;
-    use registry_evidence_authoring::{
-        layout::{
-            ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, MAX_QUESTIONS, MAX_QUESTION_BYTES,
-            MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY,
-        },
-        marker::{default_project_marker_document, PROJECT_MARKER_FILE},
-    };
-    use tempfile::TempDir;
-
-    /// Enough of a question for the tests here, which are about which root owns which file. What a
-    /// whole question has to say for itself is `crates/registry-language-server/tests/`.
-    const QUESTION: &str = "version: 1\nid: adult-status\n";
-
-    /// An authoring project as `evidencectl` leaves it: a marker over the description and the
-    /// questions.
-    fn evidence_project_in(directory: &Path) {
-        evidence_project_without_marker_in(directory);
-        fs::write(
-            directory.join(PROJECT_MARKER_FILE),
-            default_project_marker_document(),
-        )
-        .unwrap();
+    use std::fs;
+    use tempfile::tempdir;
+    const PROJECT: &str = "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nid: synthetic\nselectorProfiles: {}\nfunctions: []\nsources: {}\nassertionDefinitions: {}\n";
+    fn project(root: &Path) {
+        fs::write(root.join("evidence.yaml"), PROJECT).unwrap();
     }
-
-    /// The same project as written before the marker existed.
-    fn evidence_project_without_marker_in(directory: &Path) {
-        fs::create_dir_all(directory.join(QUESTIONS_DIRECTORY)).unwrap();
-        fs::write(directory.join(OPENAPI_FILE), "openapi: 3.1.0\n").unwrap();
-        fs::write(
-            directory
-                .join(QUESTIONS_DIRECTORY)
-                .join("adult-status.yaml"),
-            QUESTION,
-        )
-        .unwrap();
+    fn state() -> (tempfile::TempDir, RootState, PathBuf) {
+        let temp = tempdir().unwrap();
+        project(temp.path());
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("evidence.yaml");
+        let state = RootState::load(&root, ProjectFamily::Evidence).unwrap();
+        (temp, state, path)
     }
-
-    fn workspace_over(folders: &[&Path]) -> Workspace {
-        let mut workspace = Workspace::default();
-        workspace.set_folders(folders.iter().map(|path| path.to_path_buf()).collect());
-        workspace.adopt_folder_roots();
-        workspace
+    fn ceiling(state: &RootState) -> bool {
+        state
+            .index
+            .diagnostics()
+            .iter()
+            .any(|d| d.code.as_deref() == Some("evidence.project.document-ceiling"))
     }
-
-    /// A project marked inside an already indexed root stays undiscovered, and says nothing about
-    /// itself.
-    ///
-    /// This pins a decision that is deferred rather than a behavior that is wanted.
-    /// [`Workspace::ensure_root_for`] stops as soon as [`Workspace::root_for`] answers, and that
-    /// answer is drawn from the roots this session has indexed rather than from the directories
-    /// above the document, so a nearer marked root under an indexed one is never walked to. The
-    /// consequence is silence: the containing root's family does not own the inner project's
-    /// documents, so the document is indexed by nobody, reported on by nobody, and contributes
-    /// nothing to the root it sits under. Silence is what this server is allowed to answer with,
-    /// because its one invariant is one-sided: the editor may stay quiet where the compiler
-    /// speaks, and may never speak where the compiler is quiet.
-    ///
-    /// Walking to the nearer root at every notification would mean replacing the [`RootState`] of
-    /// the root that answers now, and that state is where the session knows which documents the
-    /// client holds unsaved and which of those sit over paths the project has lost. Dropping a
-    /// root without losing that bookkeeping is root eviction, which nothing else in this design
-    /// asks for.
-    ///
-    /// The control below is the other half of the property. The same project on disk, opened as
-    /// the root it is, is indexed and reports the sentence its question earns, so what is pinned
-    /// above is a project left undiscovered and not a project nothing can read.
-
     #[test]
     fn a_retired_relay_marker_does_not_declare_a_supported_root() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         fs::write(
             temp.path().join("registry.yaml"),
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n",
@@ -1006,887 +959,161 @@ mod tests {
             .iter()
             .all(|family| !family.declares_root(temp.path())));
     }
-
     #[test]
-    fn an_evidence_marker_declares_an_evidence_root() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-
-        let workspace = Workspace::default();
-
-        assert_eq!(
-            workspace.root_at(temp.path()),
-            Some((temp.path().canonicalize().unwrap(), ProjectFamily::Evidence))
-        );
-    }
-
-    #[test]
-    fn an_evidence_project_without_a_marker_is_declared_by_its_description_and_questions() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_without_marker_in(temp.path());
-        assert!(
-            !temp.path().join(PROJECT_MARKER_FILE).exists(),
-            "the fixture must leave the project unmarked"
-        );
-
-        let workspace = Workspace::default();
-
-        assert_eq!(
-            workspace.root_at(temp.path()),
-            Some((temp.path().canonicalize().unwrap(), ProjectFamily::Evidence))
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_evidence_marker_does_not_declare_a_root() {
-        let temp = TempDir::new().unwrap();
-        let real = temp.path().join("real");
-        let decoy = temp.path().join("decoy");
-        evidence_project_in(&real);
-        fs::create_dir_all(&decoy).unwrap();
-        std::os::unix::fs::symlink(
-            real.join(PROJECT_MARKER_FILE),
-            decoy.join(PROJECT_MARKER_FILE),
-        )
-        .unwrap();
-
-        let workspace = Workspace::default();
-
-        assert_eq!(workspace.root_at(&decoy), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn an_unmarked_evidence_project_reached_through_a_symbolic_link_does_not_declare_a_root() {
-        let temp = TempDir::new().unwrap();
-        let real = temp.path().join("real");
-        evidence_project_without_marker_in(&real);
-
-        let linked_questions = temp.path().join("linked-questions");
-        fs::create_dir_all(&linked_questions).unwrap();
-        fs::write(linked_questions.join(OPENAPI_FILE), "openapi: 3.1.0\n").unwrap();
-        std::os::unix::fs::symlink(
-            real.join(QUESTIONS_DIRECTORY),
-            linked_questions.join(QUESTIONS_DIRECTORY),
-        )
-        .unwrap();
-
-        let linked_description = temp.path().join("linked-description");
-        fs::create_dir_all(linked_description.join(QUESTIONS_DIRECTORY)).unwrap();
-        std::os::unix::fs::symlink(
-            real.join(OPENAPI_FILE),
-            linked_description.join(OPENAPI_FILE),
-        )
-        .unwrap();
-
-        let workspace = Workspace::default();
-
-        assert_eq!(workspace.root_at(&linked_questions), None);
-        assert_eq!(workspace.root_at(&linked_description), None);
-    }
-
-    #[test]
-    fn an_evidence_root_loads_its_documents_and_declares_what_they_name() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-
-        let workspace = workspace_over(&[temp.path()]);
-
-        let root = workspace.roots().next().expect("the project is a root");
-        let question = temp
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join(QUESTIONS_DIRECTORY)
-            .join("adult-status.yaml");
-        assert!(root.index().document_paths().any(|path| path == question));
-        assert_eq!(
-            root.index()
-                .workspace_symbols("adult-status")
-                .into_iter()
-                .map(|symbol| symbol.location.path.clone())
-                .collect::<Vec<_>>(),
-            vec![question],
-            "the question document declares the question its file is named for"
-        );
-        // The stub above is not a whole question, and the authoring form says so once.
-        assert_eq!(
-            root.index()
-                .diagnostics()
-                .iter()
-                .map(|diagnostic| diagnostic.code.as_deref())
-                .collect::<Vec<_>>(),
-            vec![Some("config.missing-envelope")]
-        );
-    }
-
-    #[test]
-    fn an_evidence_component_is_discovered_under_an_ordinary_parent_workspace() {
-        let temp = TempDir::new().unwrap();
-        let component = temp.path().join("evidence");
-        fs::create_dir(&component).unwrap();
-        evidence_project_in(&component);
-        let registry = temp.path().join("registry");
-        fs::create_dir(&registry).unwrap();
-        let registry_yaml = registry.join("registry.yaml");
-        fs::write(&registry_yaml, "kind: registry.breg.project\n").unwrap();
-        let notes = temp.path().join("notes.yaml");
-        fs::write(&notes, "notes: unrelated\n").unwrap();
-        let question = component
-            .canonicalize()
-            .unwrap()
-            .join(QUESTIONS_DIRECTORY)
-            .join("adult-status.yaml");
-
-        let mut workspace = workspace_over(&[temp.path()]);
-        assert_eq!(workspace.roots().count(), 0);
-        workspace.ensure_root_for(&question).unwrap();
-        let root = workspace
-            .root_for(&question)
-            .expect("nested Evidence root discovered");
-        assert_eq!(root.family, ProjectFamily::Evidence);
-        assert!(root.index().document_paths().any(|path| path == question));
-        for unrelated in [registry_yaml, notes] {
-            let unrelated = unrelated.canonicalize().unwrap();
-            workspace.ensure_root_for(&unrelated).unwrap();
-            assert!(workspace.root_for(&unrelated).is_none());
-        }
-        assert_eq!(workspace.roots().count(), 1);
-    }
-
-    #[test]
-    fn a_document_outside_every_root_is_served_without_an_index() {
-        let temp = TempDir::new().unwrap();
-        let loose = temp.path().join("notes.yaml");
-        fs::write(&loose, "id: loose\n").unwrap();
-
-        let mut workspace = workspace_over(&[temp.path()]);
-        workspace
-            .ensure_root_for(&loose.canonicalize().unwrap())
-            .unwrap();
-        workspace.update(loose.canonicalize().unwrap(), "id: loose\n".to_owned(), 1);
-
-        assert_eq!(workspace.roots().count(), 0);
-        assert!(workspace.root_for(&loose).is_none());
-        assert_eq!(
-            workspace
-                .roots()
-                .flat_map(|state| state.index().diagnostics())
-                .count(),
-            0
-        );
-    }
-
-    /// The role ceilings are the authoring form's, so the fixtures below build a question past
-    /// `MAX_QUESTION_BYTES`, which is the shared reader's one-mebibyte bound.
-    fn oversized_question() -> String {
-        let mut text = String::from("version: 1\nid: adult-status\n#");
-        text.push_str(&" ".repeat(MAX_QUESTION_BYTES as usize));
-        text
-    }
-
-    fn evidence_root_with_a_question(directory: &Path) -> (RootState, PathBuf) {
-        evidence_project_in(directory);
-        let state = RootState::load(directory, ProjectFamily::Evidence).unwrap();
-        let question = directory
-            .join(QUESTIONS_DIRECTORY)
-            .join("adult-status.yaml")
-            .canonicalize()
-            .unwrap();
-        (state, question)
-    }
-
-    fn ceiling_messages(state: &RootState) -> Vec<&str> {
-        state
-            .index
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.message.contains("limit the editor indexes"))
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect()
-    }
-
-    /// Every ceiling this root reports, as the rule it names and the sentence an author reads.
-    fn ceiling_rules(state: &RootState) -> Vec<(Option<&str>, &str)> {
-        state
-            .index
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.message.contains("the editor indexes"))
-            .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.message.as_str()))
-            .collect()
-    }
-
-    #[test]
-    fn an_open_buffer_past_its_role_s_ceiling_is_dropped_and_reported() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, question) = evidence_root_with_a_question(temp.path());
-        let written = state.index.workspace_symbols("adult-status");
-        assert_eq!(written.len(), 1);
-        assert_ne!(
-            written[0].location.range, DOCUMENT_START,
-            "a question the root reads is anchored at the identifier it writes"
-        );
-
-        state.update(question.clone(), oversized_question(), 2);
-
-        assert!(!state.documents.contains_key(&question));
-        let declared = state.index.workspace_symbols("adult-status");
-        assert_eq!(
-            declared
-                .iter()
-                .map(|symbol| symbol.location.range)
-                .collect::<Vec<_>>(),
-            vec![DOCUMENT_START],
-            "the file still declares the question, and nothing is answered from the text the buffer no longer holds"
-        );
-        assert_eq!(
-            ceiling_messages(&state),
-            vec!["This question exceeds the 1048576-byte limit the editor indexes"]
-        );
-    }
-
-    #[test]
-    fn a_change_on_disk_past_its_role_s_ceiling_is_refused_and_reported() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, question) = evidence_root_with_a_question(temp.path());
-
-        fs::write(&question, oversized_question()).unwrap();
-        state.reload_from_disk(&question);
-
-        assert!(!state.documents.contains_key(&question));
-        assert_eq!(
-            ceiling_messages(&state),
-            vec!["This question exceeds the 1048576-byte limit the editor indexes"]
-        );
-    }
-
-    #[test]
-    fn an_aggregate_overflow_reports_once_without_dependent_diagnostics_and_recovers() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, question) = evidence_root_with_a_question(temp.path());
+    fn evidence_root_requires_the_normalized_project_file() {
+        let temp = tempdir().unwrap();
+        fs::create_dir(temp.path().join("questions")).unwrap();
+        fs::write(temp.path().join("source.openapi.yaml"), "openapi: 3.1.0\n").unwrap();
         fs::write(
-            temp.path().join(OPENAPI_FILE),
-            r#"openapi: 3.1.0
-info: {title: Test, version: 1.0.0}
-paths:
-  /check:
-    get:
-      operationId: published-operation
-      responses:
-        '200': {description: ok}
-"#,
+            temp.path().join("evidence-project.yaml"),
+            "kind: EvidenceAuthoringProject\n",
         )
         .unwrap();
+        assert!(Workspace::default().root_at(temp.path()).is_none());
+        project(temp.path());
+        assert_eq!(
+            Workspace::default().root_at(temp.path()).unwrap().1,
+            ProjectFamily::Evidence
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_cannot_declare_an_evidence_root() {
+        let temp = tempdir().unwrap();
+        let other = tempdir().unwrap();
+        project(other.path());
+        std::os::unix::fs::symlink(
+            other.path().join("evidence.yaml"),
+            temp.path().join("evidence.yaml"),
+        )
+        .unwrap();
+        assert!(Workspace::default().root_at(temp.path()).is_none());
+    }
+    #[test]
+    fn a_normalized_component_is_discovered_below_a_workspace_folder() {
+        let parent = tempdir().unwrap();
+        let child = parent.path().join("component");
+        fs::create_dir(&child).unwrap();
+        project(&child);
+        let mut workspace = Workspace::default();
+        workspace.set_folders(vec![parent.path().canonicalize().unwrap()]);
+        workspace.adopt_folder_roots();
+        assert!(workspace.roots.is_empty());
+        workspace
+            .ensure_root_for(&child.join("evidence.yaml"))
+            .unwrap();
+        assert_eq!(workspace.roots.len(), 1);
+    }
+    #[test]
+    fn an_open_project_buffer_uses_the_shared_reader_without_saving() {
+        let (_temp, mut state, path) = state();
+        state.update(path.clone(),"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\n".to_owned(),2);
+        assert!(state.index.diagnostics().iter().any(|d| d.path == path));
+        assert!(state.index.symbols().is_empty());
+    }
+    #[test]
+    fn oversized_open_buffer_is_dropped_and_recovers() {
+        let (_temp, mut state, path) = state();
+        state.update(path.clone(), " ".repeat(1_048_577), 2);
+        assert!(!state.documents.contains_key(&path));
+        assert!(ceiling(&state));
+        state.update(path.clone(), PROJECT.to_owned(), 3);
+        assert!(!ceiling(&state));
+        assert!(state.documents.contains_key(&path));
+    }
+    #[test]
+    fn oversized_disk_document_reports_on_load_and_reload() {
+        let (_temp, mut state, path) = state();
+        fs::write(&path, " ".repeat(1_048_577)).unwrap();
+        state.reload_from_disk(&path);
+        assert!(ceiling(&state));
+        let loaded = RootState::load(&state.root, ProjectFamily::Evidence).unwrap();
+        assert!(ceiling(&loaded));
+        state.close(&path);
+        assert!(ceiling(&state));
+    }
+    #[test]
+    fn aggregate_overflow_reports_once_and_a_watched_reload_recovers() {
+        let (_temp, mut state, path) = state();
         for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS {
             state.documents.insert(
-                state
-                    .root
-                    .join("selectors")
-                    .join(format!("profile-{index:04}.yaml")),
-                "kind: exact\n".to_owned(),
+                state.root.join(format!("functions/{index}.rhai")),
+                "// bounded\n".to_owned(),
             );
         }
-
         state.rebuild();
-
         assert!(state.documents.is_empty());
         assert_eq!(state.index.diagnostics().len(), 1);
         assert_eq!(
             state.index.diagnostics()[0].code.as_deref(),
             Some("evidence.project.ceiling")
         );
-        assert!(state.index.workspace_symbols("adult-status").is_empty());
-        assert!(state.index.workspace_symbols("profile-").is_empty());
-        assert!(state
-            .index
-            .workspace_symbols("published-operation")
-            .is_empty());
-
-        state
-            .reload_watched_batch(std::slice::from_ref(&question))
-            .unwrap();
-
+        state.reload_watched_batch(&[path]).unwrap();
         assert!(state.indexing_ceiling_path.is_none());
-        assert_eq!(state.index.workspace_symbols("adult-status").len(), 1);
-        assert!(state
-            .index
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence.project.ceiling")));
     }
-
     #[test]
-    fn reducing_the_open_buffer_that_crossed_the_aggregate_budget_recovers_immediately() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, question) = evidence_root_with_a_question(temp.path());
-        let mut remaining = MAX_INDEXED_PROJECT_BYTES - MAX_QUESTION_BYTES as usize / 2;
-        let mut index = 0usize;
+    fn reducing_an_open_buffer_recovers_the_aggregate_byte_budget() {
+        let (_temp, mut state, path) = state();
+        let mut remaining = MAX_INDEXED_PROJECT_BYTES - 524_288;
+        let mut index = 0;
         while remaining > 0 {
-            let bytes = remaining.min(MAX_SOURCE_ARTIFACT_BYTES as usize);
+            let bytes = remaining.min(1_048_576);
             state.documents.insert(
-                state
-                    .root
-                    .join("selectors")
-                    .join(format!("profile-{index:02}.yaml")),
-                "x".repeat(bytes),
+                state.root.join(format!("functions/{index}.rhai")),
+                " ".repeat(bytes),
             );
             remaining -= bytes;
             index += 1;
         }
-
-        state.update(question.clone(), "x".repeat(MAX_QUESTION_BYTES as usize), 2);
+        state.update(path.clone(), " ".repeat(1_048_576), 2);
         assert!(state.indexing_ceiling_path.is_some());
-
-        state.update(question, QUESTION.to_owned(), 3);
-
+        state.update(path, PROJECT.to_owned(), 3);
         assert!(state.indexing_ceiling_path.is_none());
-        assert_eq!(state.index.workspace_symbols("adult-status").len(), 1);
     }
-
     #[test]
-    fn project_recovery_preserves_another_open_buffer_s_ceiling_report() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-        let selectors = temp.path().join("selectors");
-        fs::create_dir_all(&selectors).unwrap();
-        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS {
-            fs::write(
-                selectors.join(format!("profile-{index:04}.yaml")),
-                "kind: exact\n",
-            )
+    fn deleting_and_returning_a_function_preserves_the_unsaved_buffer() {
+        let (temp, mut state, _) = state();
+        let path = state.root.join("functions/derive.rhai");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "fn derive(a,b,c) {}\n").unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&path))
             .unwrap();
-        }
-        let question = temp
-            .path()
-            .join(QUESTIONS_DIRECTORY)
-            .join("adult-status.yaml")
-            .canonicalize()
+        state.update(path.clone(), "// unsaved\n".to_owned(), 2);
+        fs::remove_file(&path).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&path))
             .unwrap();
-        let second_buffer = selectors.join("profile-1023.yaml").canonicalize().unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
-        assert!(state.indexing_ceiling_path.is_some());
-
-        state.update(question.clone(), oversized_question(), 1);
-        state.update(second_buffer.clone(), "kind: exact\n".to_owned(), 1);
-        assert!(state.indexing_ceiling_path.is_some());
-
-        fs::remove_file(selectors.join("profile-0000.yaml")).unwrap();
-        fs::remove_file(selectors.join("profile-0001.yaml")).unwrap();
-        state.update(second_buffer, "kind: exact\n".to_owned(), 2);
-
-        assert!(state.indexing_ceiling_path.is_none());
-        assert!(!state.documents.contains_key(&question));
-        assert_eq!(
-            reported_at(&state, &question),
-            vec!["This question exceeds the 1048576-byte limit the editor indexes"]
-        );
-        assert!(state
-            .index
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence.project.ceiling")));
+        assert!(!state.documents.contains_key(&path));
+        assert_eq!(state.absent_buffers.get(&path).unwrap(), "// unsaved\n");
+        fs::write(&path, "// disk\n").unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&path))
+            .unwrap();
+        assert_eq!(state.documents.get(&path).unwrap(), "// unsaved\n");
+        drop(temp);
     }
-
     #[test]
-    fn the_ceiling_the_first_scan_reported_survives_opening_and_closing_the_file() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-        let question = temp.path().join(QUESTIONS_DIRECTORY).join("large.yaml");
-        fs::write(&question, oversized_question()).unwrap();
-        let question = question.canonicalize().unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
-        assert_eq!(ceiling_messages(&state).len(), 1);
-
-        state.update(question.clone(), oversized_question(), 1);
-        assert_eq!(ceiling_messages(&state).len(), 1, "opening it keeps it");
-
-        state.close(&question);
-        assert_eq!(ceiling_messages(&state).len(), 1, "closing it keeps it");
-    }
-
-    /// An authoring project whose questions directory holds exactly the [`MAX_QUESTIONS`] documents
-    /// the authoring form allows, and one access policy admitting `admitted`.
-    ///
-    /// `admitted` need not exist yet: the tests below move it in and out of the directory, and the
-    /// policy is there so that a question the root fails to hold shows up twice, once as the
-    /// refusal and once as the unresolved name.
-    fn full_questions_project(directory: &Path, admitted: &str) -> (RootState, PathBuf) {
-        evidence_project_in(directory);
-        let questions = directory.join(QUESTIONS_DIRECTORY);
-        for index in 0..MAX_QUESTIONS - 1 {
-            write_question(&questions, &format!("filler-{index:03}"));
-        }
-        let policies = directory
-            .join(ACCESS_DIRECTORY)
-            .join(ACCESS_POLICIES_DIRECTORY);
-        fs::create_dir_all(&policies).unwrap();
-        fs::write(
-            policies.join("admissions.yaml"),
-            format!(
-                "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
-                 kind: EvidenceAccessPolicy\nid: admissions\nquestions: [{admitted}]\n"
-            ),
-        )
-        .unwrap();
-        let state = RootState::load(directory, ProjectFamily::Evidence).unwrap();
-        let questions = questions.canonicalize().unwrap();
-        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
-        (state, questions)
-    }
-
-    fn write_question(questions: &Path, name: &str) {
-        fs::write(
-            questions.join(format!("{name}.yaml")),
-            format!("version: 1\nid: {name}\n"),
-        )
-        .unwrap();
-    }
-
-    fn questions_held(state: &RootState, questions: &Path) -> usize {
+    fn closing_a_deleted_buffer_releases_retained_text() {
+        let (_temp, mut state, path) = state();
+        state.update(path.clone(), PROJECT.to_owned(), 2);
+        fs::remove_file(&path).unwrap();
         state
-            .documents
-            .keys()
-            .filter(|path| path.parent() == Some(questions))
-            .count()
+            .reload_watched_batch(std::slice::from_ref(&path))
+            .unwrap();
+        assert!(state.absent_buffers.contains_key(&path));
+        state.close(&path);
+        assert!(!state.absent_buffers.contains_key(&path));
+        assert!(!state.open_versions.contains_key(&path));
     }
-
-    fn documents_not_indexed(state: &RootState) -> Vec<&str> {
-        state
-            .index
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.message.contains("not indexed"))
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect()
-    }
-
-    fn unresolved_questions(state: &RootState) -> Vec<&str> {
-        state
-            .index
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| {
-                diagnostic.code.as_deref() == Some("evidence.project.unknown-question")
-            })
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect()
-    }
-
-    /// Every sentence this root reports against one path.
-    fn reported_at<'a>(state: &'a RootState, path: &Path) -> Vec<&'a str> {
-        state
-            .index
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.path == path)
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect()
-    }
-
-    /// A question pointing at a derivation and a fixture no directory of the project holds.
-    ///
-    /// Both pointers are unresolved, so a root reading this text says two things about it, and a
-    /// root that no longer holds the file says nothing at all. The question is written in full
-    /// because that is what makes it say them: the names inside a question the authoring form
-    /// refuses are resolved for navigation and reported to nobody, so a stub here would prove the
-    /// silence this fixture exists to tell apart from the real one.
-    fn question_naming_absent_files(name: &str) -> String {
-        format!(
-            r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: {name}
-question: Is the person at least 18 years old?
-purpose: fixture-eligibility
-subject:
-  role: subject
-  selector: person_id
-source:
-  ref: people
-answers:
-  - concept: is_adult
-    uri: urn:example:concepts:is-adult
-    type: boolean
-derivation: derivations/{name}.rhai
-disclosure:
-  allow: [is_adult]
-governance:
-  requirement: urn:example:requirements:{name}:v1
-  kind: criterion
-  referenceFrameworks: [urn:example:frameworks:{name}:v1]
-  evidenceType: urn:example:evidence-types:{name}:v1
-  validitySeconds: 86400
-  observationTimezone: Etc/UTC
-  fixtures: fixtures/{name}.yaml
-  disclosureFamilies: [urn:example:disclosure-families:{name}]
-"#
-        )
-    }
-
-    /// A rename inside a full bounded directory, delivered the way a client delivers one: a single
-    /// batch holding the arrival and the departure, in whatever order the client chose.
-    ///
-    /// The project holds exactly the documents the authoring form allows both before and after the
-    /// rename, so `evidencectl` builds it either way and the editor has nothing to report. Applying
-    /// the batch a path at a time cannot hold that: the arrival is refused for a directory the
-    /// departure is about to leave room in.
     #[test]
-    fn a_rename_inside_a_full_bounded_directory_reports_nothing() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "aaa-renamed");
-        let arrived = questions.join("aaa-renamed.yaml");
-        let departed = questions.join("filler-126.yaml");
-        assert!(
-            arrived < departed,
-            "the arrival has to sort first for the order inside the batch to matter"
-        );
-
-        fs::remove_file(&departed).unwrap();
-        write_question(&questions, "aaa-renamed");
+    fn watched_batches_preserve_a_surviving_unsaved_project() {
+        let (_temp, mut state, path) = state();
+        let edited = PROJECT.replace("id: synthetic", "id: unsaved");
+        state.update(path.clone(), edited.clone(), 2);
         state
-            .reload_watched_batch(&[arrived.clone(), departed.clone()])
+            .reload_watched_batch(&[state.root.join("functions/changed.rhai")])
             .unwrap();
-
-        assert!(state.documents.contains_key(&arrived));
-        assert!(!state.documents.contains_key(&departed));
-        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
-        assert_eq!(documents_not_indexed(&state), Vec::<&str>::new());
-        assert_eq!(unresolved_questions(&state), Vec::<&str>::new());
-    }
-
-    /// The same rename spread over two batches, which a client is equally free to deliver: the
-    /// author writes a question the directory has no room for, and deletes another one afterwards.
-    /// The first batch is a project the authoring form refuses and the editor says so, and the
-    /// second one is a project it accepts, so the refusal has to lift on its own.
-    #[test]
-    fn a_document_a_full_directory_refused_is_taken_once_a_later_batch_frees_room() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "zzz-arrived");
-        let arrived = questions.join("zzz-arrived.yaml");
-        write_question(&questions, "zzz-arrived");
-        state
-            .reload_watched_batch(std::slice::from_ref(&arrived))
-            .unwrap();
-        assert!(
-            !state.documents.contains_key(&arrived),
-            "129 questions is a project the authoring form refuses"
-        );
-        assert_eq!(documents_not_indexed(&state).len(), 1);
-
-        let departed = questions.join("filler-000.yaml");
-        fs::remove_file(&departed).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&departed))
-            .unwrap();
-
-        assert!(state.documents.contains_key(&arrived));
-        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
-        assert_eq!(documents_not_indexed(&state), Vec::<&str>::new());
-        assert_eq!(unresolved_questions(&state), Vec::<&str>::new());
-    }
-
-    /// A directory that really does overflow keeps reporting it, and reports it about the first
-    /// document it stopped reading rather than about whichever one happened to arrive last.
-    #[test]
-    fn a_bounded_directory_that_overflows_reports_the_first_document_it_stopped_reading() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
-        let extra = questions.join("zzz-extra.yaml");
-        write_question(&questions, "zzz-extra");
-        state
-            .reload_watched_batch(std::slice::from_ref(&extra))
-            .unwrap();
-
-        assert!(!state.documents.contains_key(&extra));
-        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
-        assert!(
-            state.index.diagnostics().iter().any(|diagnostic| {
-                diagnostic.path == extra
-                    && diagnostic.message
-                        == "This project directory holds more than the 128 documents the editor indexes; this file and the ones after it are not indexed"
-            }),
-            "{:?}",
-            documents_not_indexed(&state)
-        );
-    }
-
-    #[test]
-    fn a_directory_the_authoring_form_does_not_bound_keeps_taking_documents_from_disk() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-        let selectors = temp.path().join("selectors");
-        fs::create_dir_all(&selectors).unwrap();
-        for index in 0..MAX_QUESTIONS {
-            fs::write(
-                selectors.join(format!("profile-{index:03}.yaml")),
-                "kind: exact\n",
-            )
-            .unwrap();
-        }
-        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
-
-        let extra = selectors.join("profile-999.yaml");
-        fs::write(&extra, "kind: exact\n").unwrap();
-        let extra = extra.canonicalize().unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&extra))
-            .unwrap();
-
-        assert!(
-            state.documents.contains_key(&extra),
-            "the compiler reads every selector, so the editor does too"
-        );
-        assert!(state
-            .index
-            .workspace_symbols("profile-999")
-            .iter()
-            .any(|symbol| symbol.name == "profile-999"));
-    }
-
-    #[test]
-    fn an_add_before_delete_rename_at_the_project_ceiling_recovers_in_the_same_batch() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-        let selectors = temp.path().join("selectors");
-        fs::create_dir_all(&selectors).unwrap();
-        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS - 2 {
-            fs::write(
-                selectors.join(format!("profile-{index:04}.yaml")),
-                "kind: exact\n",
-            )
-            .unwrap();
-        }
-        let selectors = selectors.canonicalize().unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
-        assert_eq!(state.documents.len(), MAX_INDEXED_PROJECT_DOCUMENTS);
-
-        let departed = selectors.join("profile-0000.yaml");
-        let arrived = selectors.join("profile-9999.yaml");
-        fs::rename(&departed, &arrived).unwrap();
-        state
-            .reload_watched_batch(&[arrived.clone(), departed.clone()])
-            .unwrap();
-
-        assert!(state.indexing_ceiling_path.is_none());
-        assert_eq!(state.documents.len(), MAX_INDEXED_PROJECT_DOCUMENTS);
-        assert!(state.documents.contains_key(&arrived));
-        assert!(!state.documents.contains_key(&departed));
-        assert!(state
-            .index
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence.project.ceiling")));
-    }
-
-    /// Both ceilings the editor applies name the rule they report under.
-    ///
-    /// The code is how an author silences one rule instead of everything the server says, and these
-    /// two are the rules a finished project meets: a question that grew, a directory that filled.
-    /// A sentence published without a code leaves that author nothing to name. The sentences
-    /// themselves are pinned here beside the codes, because they are what an author reads.
-    #[test]
-    fn the_ceilings_the_editor_applies_name_the_rules_they_report_under() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
-        state.update(questions.join("filler-000.yaml"), oversized_question(), 2);
-
-        let extra = questions.join("zzz-extra.yaml");
-        write_question(&questions, "zzz-extra");
-        state
-            .reload_watched_batch(std::slice::from_ref(&extra))
-            .unwrap();
-
-        assert_eq!(
-            ceiling_rules(&state),
-            vec![
-                (
-                    Some("evidence.project.document-ceiling"),
-                    "This question exceeds the 1048576-byte limit the editor indexes"
-                ),
-                (
-                    Some("evidence.project.directory-ceiling"),
-                    "This project directory holds more than the 128 documents the editor indexes; this file and the ones after it are not indexed"
-                ),
-            ]
-        );
-    }
-
-    /// A buffer left open over a file the project no longer holds says nothing about the project.
-    ///
-    /// A client keeps a tab open on a document that has been deleted, and the author goes on seeing
-    /// it after a branch switch or a rename in the explorer. What the editor may not do is go on
-    /// building the project around it: `evidence check` reads the directory and never sees the
-    /// file, so every sentence the buffer contributes is drawn over a project the compiler accepts.
-    /// A plain deletion is the shortest way to that disagreement, with no rename and no ceiling in
-    /// it.
-    #[test]
-    fn a_buffer_over_a_deleted_file_reports_nothing_against_the_project() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
-        let departed = questions.join("filler-000.yaml");
-        state.update(
-            departed.clone(),
-            question_naming_absent_files("filler-000"),
-            2,
-        );
-        assert!(
-            reported_at(&state, &departed)
-                .contains(&"Unknown derivation file reference 'derivations/filler-000.rhai'"),
-            "the project holds this question, so the editor reads its pointers: {:?}",
-            reported_at(&state, &departed)
-        );
-
-        fs::remove_file(&departed).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&departed))
-            .unwrap();
-
-        assert_eq!(
-            reported_at(&state, &departed),
-            Vec::<&str>::new(),
-            "the compiler reads 127 questions here and refuses none of them"
-        );
-        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS - 1);
-    }
-
-    /// The same buffer, under a rename delivered as one batch.
-    ///
-    /// This is the case a client really delivers: the arrival and the departure together, with the
-    /// old path still open because the client closes the tab afterwards. The directory holds the
-    /// documents the authoring form allows before and after, so `evidencectl` builds the project
-    /// either way, and the editor has to reach the silence a session opened on the settled tree
-    /// reaches.
-    #[test]
-    fn a_rename_delivered_under_an_open_buffer_reports_nothing_on_the_departed_path() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "aaa-renamed");
-        let arrived = questions.join("aaa-renamed.yaml");
-        let departed = questions.join("filler-126.yaml");
-        state.update(
-            departed.clone(),
-            question_naming_absent_files("filler-126"),
-            2,
-        );
-
-        fs::remove_file(&departed).unwrap();
-        write_question(&questions, "aaa-renamed");
-        state
-            .reload_watched_batch(&[arrived.clone(), departed.clone()])
-            .unwrap();
-
-        assert_eq!(reported_at(&state, &departed), Vec::<&str>::new());
-        assert!(state.documents.contains_key(&arrived));
-        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
-        assert_eq!(documents_not_indexed(&state), Vec::<&str>::new());
-        assert_eq!(unresolved_questions(&state), Vec::<&str>::new());
-    }
-
-    /// A file that comes back under an open buffer is read again.
-    ///
-    /// Dropping a departed path is only right while it is gone. A branch switched back, or an
-    /// undone delete, puts the document in the project again, and from that moment the compiler
-    /// reads it; a root that stayed quiet would be answering from a tree neither the author nor the
-    /// compiler has.
-    #[test]
-    fn a_buffer_over_a_path_that_comes_back_is_read_again() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
-        let question = questions.join("filler-000.yaml");
-        state.update(
-            question.clone(),
-            question_naming_absent_files("filler-000"),
-            2,
-        );
-        fs::remove_file(&question).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&question))
-            .unwrap();
-        assert_eq!(reported_at(&state, &question), Vec::<&str>::new());
-
-        fs::write(&question, question_naming_absent_files("filler-000")).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&question))
-            .unwrap();
-
-        assert!(state.documents.contains_key(&question));
-        assert!(state
-            .index
-            .workspace_symbols("filler-000")
-            .iter()
-            .any(|symbol| symbol.name == "filler-000"));
-        assert!(
-            reported_at(&state, &question)
-                .contains(&"Unknown fixture file reference 'fixtures/filler-000.yaml'"),
-            "the project holds the question again, and its pointers with it: {:?}",
-            reported_at(&state, &question)
-        );
-    }
-
-    /// A tab closed over a departed path leaves nothing of it behind.
-    ///
-    /// This one was written after the change it covers rather than before it. The two defects that
-    /// prompted the change are pinned over the protocol in `tests/evidence_open_buffers.rs`; this
-    /// holds the store to the retention rule they imply. A buffer held aside is the author's text,
-    /// kept for one reason: to give it back when the file returns. A client that closes the document
-    /// ends that reason, and the text stops being this root's to keep.
-    #[test]
-    fn a_buffer_closed_over_a_departed_path_is_not_kept() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
-        let departed = questions.join("filler-000.yaml");
-        state.update(
-            departed.clone(),
-            question_naming_absent_files("filler-000"),
-            2,
-        );
-        fs::remove_file(&departed).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&departed))
-            .unwrap();
-        assert_eq!(
-            state.absent_buffers.keys().collect::<Vec<_>>(),
-            vec![&departed],
-            "the client still holds the tab, so the root holds the revision it would give back"
-        );
-
-        state.close(&departed);
-
-        assert!(state.absent_buffers.is_empty());
-        assert!(!state.open_versions.contains_key(&departed));
-        assert!(!state.documents.contains_key(&departed));
-    }
-
-    /// A settle keeps the unsaved text of a buffer whose file is still there.
-    ///
-    /// A buffer over a departed path stops being one this root answers from. A buffer over a
-    /// document the project still holds does not: its unsaved revision is what the author is
-    /// looking at and what every request about that document is answered from, and a batch settling
-    /// the directory around it changes nothing about that.
-    #[test]
-    fn a_settle_keeps_the_unsaved_text_of_a_buffer_whose_file_is_still_there() {
-        let temp = TempDir::new().unwrap();
-        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
-        let open = questions.join("filler-000.yaml");
-        state.update(
-            open.clone(),
-            "version: 1\nid: filler-000\nanswers: [{ concept: unsaved-concept }]\n".to_owned(),
-            2,
-        );
-
-        let departed = questions.join("filler-001.yaml");
-        fs::remove_file(&departed).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&departed))
-            .unwrap();
-
-        assert!(
-            state
-                .index
-                .workspace_symbols("unsaved-concept")
-                .iter()
-                .any(|symbol| symbol.name == "unsaved-concept"),
-            "the file is still on disk, so the buffer is still what the root answers from"
-        );
+        assert_eq!(state.documents.get(&path), Some(&edited));
     }
 }

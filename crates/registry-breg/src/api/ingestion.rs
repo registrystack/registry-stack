@@ -226,6 +226,14 @@ async fn list_runs(
         )
         .await;
     };
+    // Refused only after authority, so an unauthorized caller still sees the
+    // same concealment as any other refused query.
+    if query.renamed_after {
+        return problem_with_detail(
+            ProblemCode::QueryInvalid,
+            "An ingestion run listing takes `cursor` for its keyset cursor; `after` is not accepted.",
+        );
+    }
     match mutations
         .list_ingestion_runs(
             &surface.context,
@@ -850,6 +858,7 @@ struct IngestionListQuery {
     input_digest: Option<String>,
     after_run_id: Option<Uuid>,
     limit: i64,
+    renamed_after: bool,
 }
 
 /// The query an ingestion listing admits: the access profile every ingestion
@@ -861,6 +870,7 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
     let mut limit = crate::ingestion_store::DEFAULT_RUN_PAGE_SIZE;
     let mut limit_seen = false;
     let mut after_run_id = None;
+    let mut renamed_after = false;
     let mut status = None;
     let mut input_digest = None;
     if let Some(raw) = raw {
@@ -885,11 +895,12 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
                     limit_seen = true;
                     limit = parsed;
                 }
-                "after" => {
+                "cursor" => {
                     if after_run_id.replace(parse_run_cursor(&value)?).is_some() {
                         return Err(QueryParseError::Invalid);
                     }
                 }
+                "after" => renamed_after = true,
                 "status" => {
                     if crate::ingestion_store::IngestionRunStatus::parse(&value).is_none()
                         || status.replace(value).is_some()
@@ -915,13 +926,13 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
                     strict_query::ReadQueryOptions::default(),
                 ),
             },
-            request_history_after_proposal_version: None,
             historical: None,
         },
         status,
         input_digest,
         after_run_id,
         limit,
+        renamed_after,
     })
 }
 
@@ -1072,7 +1083,7 @@ pub(super) fn append_openapi(
                         }
                     },
                     {
-                        "name": "after",
+                        "name": "cursor",
                         "in": "query",
                         "required": false,
                         "description": "The keyset cursor: only runs ordered before this run id.",
@@ -1272,14 +1283,14 @@ fn list_runs_answer() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["runs", "hasMore", "nextAfter"],
+        "required": ["runs", "hasMore", "nextCursor"],
         "properties": {
             "runs": {
                 "type": "array",
                 "items": {"$ref": "#/components/schemas/IngestionRun"}
             },
             "hasMore": {"type": "boolean"},
-            "nextAfter": {"type": ["string", "null"], "format": "uuid"}
+            "nextCursor": {"type": ["string", "null"], "format": "uuid"}
         }
     })
 }
@@ -1419,7 +1430,7 @@ fn ingestion_run_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "runId", "status", "blockedReason", "entityId", "operation", "profileId",
+            "runId", "status", "blockedReason", "recordType", "operation", "profileId",
             "packageRevision", "schemaFingerprint", "inputDigest", "inputLength", "itemCount",
             "chunkCount", "chunkAlgorithmVersion", "maximumItems", "maximumBytes",
             "nextChunkIndex", "committedItems", "committedPrefixDigest", "lastAttempt",
@@ -1434,7 +1445,7 @@ fn ingestion_run_schema() -> Value {
                     {"type": "string", "enum": ["activePackageChanged", "importAuthorityClosed"]}
                 ]
             },
-            "entityId": {"type": "string"},
+            "recordType": {"type": "string"},
             "operation": {"type": "string", "enum": ["create", "patch"]},
             "profileId": {"type": "string"},
             "packageRevision": {"type": "string"},

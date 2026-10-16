@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
+
 use std::collections::BTreeSet;
 
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
@@ -13,7 +16,7 @@ use registry_breg::tooling::{classify_registry_diff, DiffClassification};
 use serde_json::{json, Value};
 
 fn source() -> Value {
-    serde_json::from_value(json!({
+    serde_json::from_value(json!({"datasets":[{"id": "statistics-test"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -22,7 +25,7 @@ fn source() -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://statistics.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "record",
             "primaryDataset": "statistics-test",
             "route": "records",
@@ -38,16 +41,16 @@ fn source() -> Value {
         }],
         "accessProfiles": [
             {
-                "id":"analyst","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                    "entity":"record","operations":["list"],
+                "id":"analyst","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                    "recordType":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
                 }], "datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}
             },
             {
-                "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                    "entity":"record","operations":["list"],
+                "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                    "recordType":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
@@ -90,17 +93,17 @@ fn grant(value: &mut Value, profile: usize, operations: &[&str]) {
 
 fn source_with_swappable_population_fields() -> Value {
     let mut value = source();
-    value["entities"][0]["fields"]
+    value["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"archived","apiName":"archived","type":"boolean","required":true,
             "classification":"internal"
         }));
-    value["entities"][0]["fields"][0]["apiName"] = json!("active");
+    value["recordTypes"][0]["fields"][0]["apiName"] = json!("active");
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            value["accessProfiles"][profile]["permissions"]["entities"][0][member]
+            value["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("archived"));
@@ -111,8 +114,8 @@ fn source_with_swappable_population_fields() -> Value {
 }
 
 fn swap_population_api_names(value: &mut Value) {
-    value["entities"][0]["fields"][0]["apiName"] = json!("archived");
-    value["entities"][0]["fields"][5]["apiName"] = json!("active");
+    value["recordTypes"][0]["fields"][0]["apiName"] = json!("archived");
+    value["recordTypes"][0]["fields"][5]["apiName"] = json!("active");
 }
 
 fn compile(
@@ -267,9 +270,23 @@ fn dataset_permissions_compile_to_the_dataset_grants() {
 fn access_explanation_states_who_holds_each_dataset_operation() {
     let audience = |value: &Value| {
         let compiled = compile(value).expect("the project compiles");
-        serde_json::to_value(registry_breg::access::explain_access(&compiled))
+        let mut datasets = serde_json::to_value(registry_breg::access::explain_access(&compiled))
             .expect("the explanation serializes")["statisticalDatasets"]
-            .clone()
+            .clone();
+        for dataset in datasets
+            .as_array_mut()
+            .expect("dataset inventory is an array")
+        {
+            let profiles = dataset
+                .as_object_mut()
+                .unwrap()
+                .remove("accessProfiles")
+                .unwrap();
+            for profile in profiles.as_array().unwrap() {
+                assert_eq!(profile["principalClaim"], "principal");
+            }
+        }
+        datasets
     };
     assert_eq!(
         audience(&source()),
@@ -479,10 +496,10 @@ fn a_dataset_permission_is_written_with_dataset_operations_and_nothing_else() {
             "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/entities/0/operations",
+            "/accessProfiles/0/permissions/records/0/operations",
             json!(["list", "read-releases"]),
             "config.unknown-variant",
-            "project.accessProfiles[0].permissions.entities[0].operations[1]".to_owned(),
+            "project.accessProfiles[0].permissions.records[0].operations[1]".to_owned(),
             "`get`, `lookup`, `list`",
         ),
     ];
@@ -516,7 +533,7 @@ fn an_unknown_permission_operation_is_refused_with_the_vocabulary_of_its_group()
             ["list", "invoke"].as_slice(),
         ),
         (
-            "entities",
+            "records",
             ["get", "list", "invoke"].as_slice(),
             ["read-live", "publish", "read-releases"].as_slice(),
         ),
@@ -586,7 +603,8 @@ fn a_profile_writes_its_dataset_permissions_back_into_its_permissions() {
     assert_eq!(
         written["accessProfiles"][READER]["permissions"],
         json!({
-            "entities":[],
+            "records":[],
+            "proposals":[],
             "actions":[],
             "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]
         })
@@ -594,7 +612,7 @@ fn a_profile_writes_its_dataset_permissions_back_into_its_permissions() {
     assert!(written["accessProfiles"][ANALYST]
         .get("datasetPermissions")
         .is_none());
-    let reread = parse_project_json(&serde_json::to_vec(&written).expect("it serializes"))
+    let reread = parse_project_json(&source_bytes::source_bytes(&written))
         .expect("the written project parses");
     assert_eq!(reread, project);
 }
@@ -692,20 +710,20 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"]["entities"][0]["allowCount"] = json!(false)
+                v["accessProfiles"][0]["permissions"]["records"][0]["allowCount"] = json!(false)
             }),
             "breg.statistical-dataset.count-grant-count-required",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
+                v["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
                     json!(["snapshot"])
             }),
             "breg.statistical-dataset.count-grant-list-required",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"]["entities"][0]["filterableFields"] =
+                v["accessProfiles"][0]["permissions"]["records"][0]["filterableFields"] =
                     json!(["active", "category"])
             }),
             "breg.statistical-dataset.count-grant-field-not-filterable",
@@ -716,7 +734,7 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][1]["permissions"]["entities"][0]["rowBoundaries"] =
+                v["accessProfiles"][1]["permissions"]["records"][0]["rowBoundaries"] =
                     json!([{"field":"category","claim":"categories","operator":"in"}])
             }),
             "breg.statistical-dataset.publisher-caller-dependent",
@@ -757,14 +775,14 @@ fn statistical_disclosure_bounds_are_refused_when_the_project_is_read() {
 fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
     assert_refused(
         |value| {
-            value["entities"][0]["fields"]
+            value["recordTypes"][0]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
                     "id":"organization","type":"reference","target":"organization",
                     "required":true,"classification":"internal"
                 }));
-            value["entities"].as_array_mut().unwrap().extend([
+            value["recordTypes"].as_array_mut().unwrap().extend([
                 json!({
                     "id":"organization","primaryDataset":"statistics-test","route":"organizations",
                     "mutationMode":"mutable","fields":[
@@ -784,48 +802,21 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                 }),
             ]);
             value["accessProfiles"][1]["requiredScopes"] = json!(["membership:use"]);
-            value["accessProfiles"][1]["permissions"]["entities"][0]["membershipBoundaries"] = json!([{
-                "field":"organization","membershipEntity":"membership",
+            value["accessProfiles"][1]["permissions"]["records"][0]["membershipBoundaries"] = json!([{
+                "field":"organization","membershipRecordType":"membership",
                 "membershipKeyField":"organization","principalField":"principal","activeField":"active"
             }]);
         },
         "breg.statistical-dataset.publisher-caller-dependent",
     );
-    assert_refused(
-        |value| {
-            value["entities"][0]["fields"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({
-                    "id":"target","type":"reference","target":"target-record",
-                    "required":true,"classification":"internal"
-                }));
-            value["entities"][0]["changeRequest"] = json!({
-                "effects":[{
-                    "id":"apply-active","target":{"fromField":"target"},"operation":"patch",
-                    "set":{"active":{"fromField":"active"}}
-                }],
-                "review":{"type":"none"},"onApproved":{"mode":"manual"}
-            });
-            value["entities"].as_array_mut().unwrap().push(json!({
-                "id":"target-record","primaryDataset":"statistics-test","route":"target-records",
-                "mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-                "fields":[
-                    {"id":"active","type":"boolean","required":true,"classification":"internal"}
-                ]
-            }));
-            value["accessProfiles"][1]["permissions"]["entities"][0]["requestVisibility"] =
-                json!("owner");
-        },
-        "breg.statistical-dataset.publisher-caller-dependent",
-    );
+
     assert_refused(
         |value| {
             let boundary = json!({"field":"category","claim":"categories","operator":"in"});
-            value["entities"][0]["accessRequirements"] =
+            value["recordTypes"][0]["accessRequirements"] =
                 json!({"rowBoundaries":[boundary.clone()]});
             for profile in [0_usize, 1] {
-                value["accessProfiles"][profile]["permissions"]["entities"][0]["rowBoundaries"] =
+                value["accessProfiles"][profile]["permissions"]["records"][0]["rowBoundaries"] =
                     json!([boundary.clone()]);
             }
         },
@@ -837,7 +828,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
 fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_count_grants() {
     assert_refused(
         |value| {
-            value["entities"][0]["fields"]
+            value["recordTypes"][0]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -845,7 +836,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                         "classification":"restricted"
                 }));
             for profile in [0_usize, 1] {
-                value["accessProfiles"][profile]["permissions"]["entities"][0]["readableFields"]
+                value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!("secret"));
@@ -868,7 +859,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                 json!({"id":"data-use-purpose","values":["statistics"]}),
                 json!({"id":"consent-decision","values":["given","refused","withdrawn"]}),
             ]);
-            value["entities"].as_array_mut().unwrap().push(json!({
+            value["recordTypes"].as_array_mut().unwrap().push(json!({
                 "id":"consent-decision","primaryDataset":"statistics-test",
                 "route":"consent-decisions","mutationMode":"create-only","classification":"restricted",
                 "fields":[
@@ -889,7 +880,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
             value["accessProfiles"][1]["actorKind"] = json!("service");
             value["accessProfiles"][1]["requesterClients"] = json!(["publisher-client"]);
             value["accessProfiles"][1]["requiredPurposes"] = json!(["statistics"]);
-            value["accessProfiles"][1]["permissions"]["entities"][0]["requireConsent"] =
+            value["accessProfiles"][1]["permissions"]["records"][0]["requireConsent"] =
                 json!([{"record":"consent-decision","on":"id"}])
         },
         "breg.statistical-dataset.count-grant-consent",
@@ -906,7 +897,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
     for id in ["period", "value", "status"] {
         assert_refused(
             |value| {
-                value["entities"][0]["fields"]
+                value["recordTypes"][0]["fields"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!({
@@ -928,7 +919,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                 .as_array_mut()
                 .unwrap()
                 .push(json!({"id":"category-two","values":codes}));
-            value["entities"][0]["fields"]
+            value["recordTypes"][0]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -937,7 +928,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                 }));
             for profile in [0_usize, 1] {
                 for member in ["readableFields", "filterableFields"] {
-                    value["accessProfiles"][profile]["permissions"]["entities"][0][member]
+                    value["accessProfiles"][profile]["permissions"]["records"][0][member]
                         .as_array_mut()
                         .unwrap()
                         .push(json!("category-two"));
@@ -953,7 +944,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
 fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
     let mut value = source();
     for id in ["period-start", "period-end"] {
-        value["entities"][0]["fields"]
+        value["recordTypes"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -961,7 +952,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
             }));
         for profile in [0_usize, 1] {
             for member in ["readableFields", "filterableFields"] {
-                value["accessProfiles"][profile]["permissions"]["entities"][0][member]
+                value["accessProfiles"][profile]["permissions"]["records"][0][member]
                     .as_array_mut()
                     .unwrap()
                     .push(json!(id));
@@ -981,7 +972,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
 
     assert_refused(
         |value| {
-            value["entities"][0]["fields"]
+            value["recordTypes"][0]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -1006,7 +997,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                     .as_array_mut()
                     .unwrap()
                     .push(json!({"id":field,"values":[code]}));
-                value["entities"][0]["fields"]
+                value["recordTypes"][0]["fields"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!({
@@ -1015,7 +1006,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                     }));
                 for profile in [0_usize, 1] {
                     for member in ["readableFields", "filterableFields"] {
-                        value["accessProfiles"][profile]["permissions"]["entities"][0][member]
+                        value["accessProfiles"][profile]["permissions"]["records"][0][member]
                             .as_array_mut()
                             .unwrap()
                             .push(json!(field));
@@ -1092,19 +1083,13 @@ fn a_period_tagged_by_kind_is_refused_with_its_replacement_named() {
         .collect::<Vec<_>>();
     assert_eq!(
         refused,
-        vec![
-            (
-                "config.missing-key",
-                "project.statisticalDatasets[0].period"
-            ),
-            (
-                "config.removed-key",
-                "project.statisticalDatasets[0].period.kind"
-            ),
-        ],
+        vec![(
+            "config.removed-key",
+            "project.statisticalDatasets[0].period.kind"
+        ),],
         "{failure:?}"
     );
-    let removed = &failure.diagnostics()[1];
+    let removed = &failure.diagnostics()[0];
     assert!(
         removed.message.contains("`type`"),
         "the refusal names the member that replaces kind: {removed:?}"
@@ -1152,7 +1137,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
         compile(&value).expect("stock validity compiles");
     }
     assert_refused(
-        |value| value["entities"][0]["fields"][2]["type"] = json!("timestamp"),
+        |value| value["recordTypes"][0]["fields"][2]["type"] = json!("timestamp"),
         "breg.statistical-dataset.period-field-type",
     );
     assert_refused(
@@ -1194,7 +1179,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
             value["statisticalDatasets"][0]["period"] = json!({
                 "type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"
             });
-            value["entities"][0]
+            value["recordTypes"][0]
                 .as_object_mut()
                 .unwrap()
                 .remove("temporal");
@@ -1258,7 +1243,7 @@ fn definition_digest_binds_population_api_names_to_logical_fields() {
 #[test]
 fn definition_digest_binds_referenced_stored_field_definitions() {
     let mut baseline_source = source();
-    baseline_source["entities"][0]["fields"]
+    baseline_source["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -1272,7 +1257,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
         ]);
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            baseline_source["accessProfiles"][profile]["permissions"]["entities"][0][member]
+            baseline_source["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .extend([json!("score"), json!("unused-score")]);
@@ -1283,7 +1268,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
     let baseline_digest = &baseline.statistical_datasets()["records-by-category"].definition_digest;
 
     let mut changed_type_source = baseline_source.clone();
-    changed_type_source["entities"][0]["fields"][5] = json!({
+    changed_type_source["recordTypes"][0]["fields"][5] = json!({
         "id":"score","type":"text","maximumLength":20,"required":true,
         "classification":"internal"
     });
@@ -1306,7 +1291,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
     );
 
     let mut unrelated_type_source = baseline_source;
-    unrelated_type_source["entities"][0]["fields"][6] = json!({
+    unrelated_type_source["recordTypes"][0]["fields"][6] = json!({
         "id":"unused-score","type":"decimal","precision":10,"scale":2,"required":true,
         "classification":"internal"
     });
@@ -1322,7 +1307,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
 #[test]
 fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     let mut baseline_source = source();
-    baseline_source["entities"][0]["fields"]
+    baseline_source["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -1334,7 +1319,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
                 "classification":"internal"
             }),
         ]);
-    baseline_source["entities"][0]["derived"] = json!([{
+    baseline_source["recordTypes"][0]["derived"] = json!([{
         "id":"statistics-score","sql":"sql/statistics.sql","key":"id",
         "fields":[{
             "id":"score","type":"int64","classification":"internal"
@@ -1342,7 +1327,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     }]);
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            baseline_source["accessProfiles"][profile]["permissions"]["entities"][0][member]
+            baseline_source["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .extend([json!("score"), json!("amount"), json!("unused-amount")]);
@@ -1356,7 +1341,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     let baseline_relation = &baseline.entities()["record"].derived_relations["statistics-score"];
 
     let mut changed_output_source = baseline_source.clone();
-    changed_output_source["entities"][0]["derived"][0]["fields"][0] = json!({
+    changed_output_source["recordTypes"][0]["derived"][0]["fields"][0] = json!({
         "id":"score","type":"text","maximumLength":20,
         "classification":"internal"
     });
@@ -1373,7 +1358,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     );
 
     let mut changed_source_type = baseline_source.clone();
-    changed_source_type["entities"][0]["fields"][5] = json!({
+    changed_source_type["recordTypes"][0]["fields"][5] = json!({
         "id":"amount","type":"decimal","precision":10,"scale":2,"required":true,
         "classification":"internal"
     });
@@ -1386,7 +1371,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     );
 
     let mut unrelated_source_type = baseline_source;
-    unrelated_source_type["entities"][0]["fields"][6] = json!({
+    unrelated_source_type["recordTypes"][0]["fields"][6] = json!({
         "id":"unused-amount","type":"decimal","precision":10,"scale":2,"required":true,
         "classification":"internal"
     });
@@ -1402,7 +1387,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
 #[test]
 fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
     let mut value = source();
-    value["entities"][0]["fields"]
+    value["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1410,7 +1395,7 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
         }));
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            value["accessProfiles"][profile]["permissions"]["entities"][0][member]
+            value["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("long-name"));
@@ -1454,7 +1439,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     compile(&vocabulary).expect("a partial vocabulary-code prefix compiles");
 
     let mut bounded_string = source();
-    bounded_string["entities"][0]["fields"]
+    bounded_string["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1463,7 +1448,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
         }));
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            bounded_string["accessProfiles"][profile]["permissions"]["entities"][0][member]
+            bounded_string["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("label"));
@@ -1810,29 +1795,29 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
 #[test]
 fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let mut value = source();
-    value["entities"][0]["derived"] = json!([{
+    value["recordTypes"][0]["derived"] = json!([{
         "id":"statistics","sql":"sql/statistics.sql","key":"id",
         "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"internal"}]
     }]);
-    value["entities"].as_array_mut().unwrap().push(json!({
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
         "id":"lookup","primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
         "fields":[{"id":"flag","type":"boolean","required":true,"classification":"internal"}]
     }));
     for profile in [0_usize, 1] {
-        value["accessProfiles"][profile]["permissions"]["entities"][0]["readableFields"]
+        value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!("evaluated-category"));
-        value["accessProfiles"][profile]["permissions"]["entities"][0]["filterableFields"]
+        value["accessProfiles"][profile]["permissions"]["records"][0]["filterableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!("evaluated-category"));
     }
-    value["accessProfiles"][1]["permissions"]["entities"]
+    value["accessProfiles"][1]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity":"lookup","operations":["list"],"readableFields":["flag"],
+            "recordType":"lookup","operations":["list"],"readableFields":["flag"],
             "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
         }));
     value["statisticalDatasets"][0]["dimensions"] = json!(["evaluated-category"]);
@@ -1853,7 +1838,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let baseline_digest = dataset.definition_digest.clone();
 
     let mut additional_read = value.clone();
-    additional_read["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]["operations"] =
+    additional_read["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["operations"] =
         json!(["get", "list"]);
     let additional_read = compile_with_sql(&additional_read, sql)
         .expect("another ordinary dependency read operation compiles");
@@ -1864,9 +1849,9 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     );
 
     let mut batch_select = value.clone();
-    batch_select["entities"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
-    batch_select["accessProfiles"][PUBLISHER]["permissions"]["entities"][1] = json!({
-        "entity":"lookup","operations":["patch","batch"],"writableFields":["flag"],
+    batch_select["recordTypes"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
+    batch_select["accessProfiles"][PUBLISHER]["permissions"]["records"][1] = json!({
+        "recordType":"lookup","operations":["patch","batch"],"writableFields":["flag"],
         "rowBoundaries":"unrestricted"
     });
     let batch_select = compile_with_sql(&batch_select, sql)
@@ -1878,9 +1863,9 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     );
 
     let mut additional_mutation = value.clone();
-    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]["operations"] =
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["operations"] =
         json!(["list", "patch"]);
-    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["records"][1]
         ["writableFields"] = json!(["flag"]);
     let additional_mutation = compile_with_sql(&additional_mutation, sql)
         .expect("an unrelated dependency mutation grant compiles");
@@ -1892,16 +1877,16 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
 
     for permission in [
         json!({
-            "entity":"lookup","operations":["create"],"writableFields":["flag"],
+            "recordType":"lookup","operations":["create"],"writableFields":["flag"],
             "rowBoundaries":"unrestricted"
         }),
         json!({
-            "entity":"lookup","operations":["patch"],"writableFields":["flag"],
+            "recordType":"lookup","operations":["patch"],"writableFields":["flag"],
             "rowBoundaries":"unrestricted"
         }),
     ] {
         let mut mutation_only_dependency = value.clone();
-        mutation_only_dependency["accessProfiles"][PUBLISHER]["permissions"]["entities"][1] =
+        mutation_only_dependency["accessProfiles"][PUBLISHER]["permissions"]["records"][1] =
             permission;
         let failure = compile_with_sql(&mutation_only_dependency, sql)
             .expect_err("a publisher needs an ordinary read operation on every derived dependency");
@@ -1912,7 +1897,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     }
 
     let mut missing_dependency_grant = value.clone();
-    missing_dependency_grant["accessProfiles"][1]["permissions"]["entities"]
+    missing_dependency_grant["accessProfiles"][1]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .pop();
@@ -1939,9 +1924,9 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     }));
 
     let long_entity = "l".repeat(64);
-    value["entities"][1]["id"] = json!(long_entity.clone());
-    value["entities"][1]["route"] = json!("long-lookups");
-    value["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]["entity"] =
+    value["recordTypes"][1]["id"] = json!(long_entity.clone());
+    value["recordTypes"][1]["route"] = json!("long-lookups");
+    value["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["recordType"] =
         json!(long_entity.clone());
     let long_sql = sql.replace(
         "registry_source.lookup",

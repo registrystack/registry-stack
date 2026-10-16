@@ -1,6 +1,6 @@
 ---
-title: Declare change requests and actions
-description: Declare change-request entities with external review, approved application behavior, and retention, plan their effects with a Rhai script, and declare immediate actions that write several records in one transaction.
+title: Declare Actions and Proposals
+description: Choose generated CRUD, immediate Actions, or durable Proposals, with separate review and application authority.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,586 +11,152 @@ locale: en
 standards_referenced: []
 ---
 
-You are authoring a Base Registry Engine (BReg) project whose profiles already check, and some
-writes need more than one caller holding the right grant.
-A registry has three write paths.
-A direct mutation is a create, patch, or tombstone that a profile performs on a record and that commits at once.
-A change request is a record of its own that proposes a change to another entity's record, waits for review, and is applied later by a profile that holds apply authority.
-An immediate action writes several records in one transaction from one typed input, with no review step.
-[How a configured registry works](../../explanation/configuration-defined-registry/) explains why all three are declared in the project rather than coded.
+If you are authoring Base Registry Engine (BReg) writes, use generated CRUD for
+ordinary record maintenance, an immediate Action for atomic effects, and a
+Proposal Action for durable work that applies later.
 
-Choose a change request when someone other than the caller must agree before the target changes, when the proposal itself must remain as a record with its own state, or when the write must wait for a later application.
-Choose an immediate action when the caller already holds the authority to write every target and the point is that several records change together or not at all.
-At the end of this page you have declared either or both, split the roles across profiles, and evaluated a planner script offline.
-
-## Change requests
-
-A change request is an entity of its own whose records propose a change to another entity.
-Three declarations connect them: the request entity's `changeRequest` block, the target entity's `changeControl` block, and the profiles that submit, read, and apply.
-
-```yaml
-entities:
-  - id: asset-placement
-    primaryDataset: asset-registry
-    route: placements
-    mutationMode: mutable
-    changeControl:
-      requiredFor: [patch]
-    fields:
-      - id: asset
-        type: reference
-        target: asset-item
-        required: true
-        classification: internal
-      - id: site
-        type: reference
-        target: asset-site
-        required: true
-        classification: internal
-  - id: placement-correction-request
-    primaryDataset: asset-registry
-    route: placement-corrections
-    mutationMode: mutable
-    fields:
-      - id: placement
-        type: reference
-        target: asset-placement
-        required: true
-        classification: internal
-      - id: proposed-site
-        type: reference
-        target: asset-site
-        required: true
-        classification: internal
-      - id: reason
-        type: text
-        required: true
-        maximumLength: 2000
-        classification: internal
-    changeRequest:
-      effects:
-        - target:
-            fromField: placement
-          operation: patch
-          set:
-            site:
-              fromField: proposed-site
-      review:
-        type: required
-        authority: casework
-        policyId: asset-placement-correction
-      onApproved:
-        mode: manual
-      retention:
-        mode: operator-erase
-```
-
-| Member | Effect |
-|---|---|
-| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary permissions, and only applying a request performs it. A profile that still holds an operation `requiredFor` names, or holds `batch` on an entity controlled for `create` or `patch`, is refused by `check` with `breg.change-control.direct-write-grant`. `import` is not a direct write and stays allowed (see below). |
-| `changeRequest.effects` | What applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null. A request entity declares either `effects` or a `planner`, never both. |
-| `review` | The logical external review authority and policy frozen into the submitted proposal. Casework owns the policy, review stages, reviewer independence, and terminal result. A request that intentionally needs no external review declares `review: {type: none}`. |
-| `onApproved` | What happens after BReg has reconciled an exact approved result. `manual` waits for a currently authorized caller to use `apply-request`. `automatic` requires a logical `executor`; runtime configuration binds that executor to a separate ordinary credential that uses the same source action and guards. |
-| `application` | Optional application preconditions over frozen request facts, current target facts, or signed Evidence. It does not choose review or application authority. |
-| `retention.mode` | `retain` or `operator-erase`. With `operator-erase`, an operator can erase the proposal detail of an applied or canceled request while the record and its state remain. |
-
-A governed entity still needs a way to receive its initial records, and a later district or
-program adds many more. Grant `import` on the entity for that, never `batch`:
-
-```yaml
-accessProfiles:
-  - id: loader
-    operations: [import]
-```
-
-`import` is create only and is served only by the durable ingestion-run routes: it declares no
-item route and no raw batch route, so it can never change an existing record, and change control
-does not count it as a direct write. It loads nothing until an operator opens an import authority
-for the entity and profile, bounded by volume, expiry, and optionally the input digests a run may
-announce, as
-[move data in bulk](../../operate/breg-data/#load-a-governed-entity-through-an-import-window)
-describes. The profile needs an authenticated principal and the entity needs `batch` bounds;
-`import` is refused beside `batch` on the same entity, on a change-request or consent-record
-entity, and for a task-grant profile. Declaring `import` before change control is added keeps the
-same route when the successor package governs the entity, so the package diff reports no route
-removal.
-
-Decide `retention.mode` before the first request is submitted, because a proposal stored under `retain` keeps its detail for as long as the record exists; [retain, erase, and audit](../../operate/breg-retention/) covers what an operator can erase later.
-
-### Connect the Casework authority
-
-Use `caseworkctl source add` from the paired Casework project instead of copying compiled metadata
-or writing integration glue. Preview first, then apply the exact reviewed changes:
+## Inspect a complete model
 
 ```sh
-caseworkctl source add ./my-registry \
-  --project ./casework --source-id asset-registry
-caseworkctl source add ./my-registry \
-  --project ./casework --source-id asset-registry --apply
+bregctl init ./facility-registry --template facility-registry
+bregctl check ./facility-registry
+bregctl --format json explain actions ./facility-registry
+bregctl --format json explain proposals ./facility-registry
 ```
 
-The source id must equal `project.id`. The command verifies the Casework approval kind and
-producer admission, adds the lifecycle hook and least-privilege reader profile, and writes a
-candidate `reviewAuthorities.<authority>` runtime binding. Manual application adds no executor.
-For `onApproved.mode: automatic`, it also writes a candidate
-`reviewExecutors.<executor>` binding for the request's single ordinary apply profile. Review the
-endpoints and secret references before merging the fragment into the launcher-owned runtime file.
-The command never activates a package or provisions a credential.
+Read the generated project's README and `registry.yaml`. `register-facility`
+creates a facility and assignment together. `correct-address` uses a named Rhai
+Function and external review. `deactivate-facility` uses an explicit no-review,
+manual Proposal. Callers cannot select or change an Action's execution mode.
 
-For automatic application, give Casework staff and supervisors a separate human
-`get` profile on the request for source context. The service executor's apply
-profile is not added to human clients. Its deployment credential can renew
-through `privateKeyJwt`, using the same token endpoint and client assertion
-fields as a review-authority binding. Choose exactly one `privateKeyJwt` or
-`tokenRef`; the latter remains a static credential that you rotate and restart.
+{/* Evidence: products/breg/examples/facility/registry.yaml;
+    crates/registry-bregctl/src/starters.rs. */}
+
+## Choose a plan and guards
+
+An Action declares `inputs`, `execution`, and `plan`. A fixed plan declares ordered
+effects. A function plan names a local Function and bounds its inputs, writes,
+and refusals. Values come from `fromInput`, an earlier `fromEffect`, or an explicit
+literal `value`; clearing a field is explicit. Forward references and conflicting
+writes refuse compilation. A function computes effects within its write ceiling.
+
+`commitGuards` checks current target facts and revision requirements. Every
+existing target requires current authority, including link-only references.
+All effects, revisions, receipt, audit, and outbox commit atomically.
+
+Require durable work on a Record type independently of grants:
 
 ```yaml
-reviewExecutors:
-  registry-automatic:
-    endpoint: https://registry.example.test/
-    registryId: asset-registry
-    accessProfile: automatic-applier
-    privateKeyJwt:
-      tokenEndpoint: https://identity.example.test/oauth2/token
-      clientIdRef: secret:file/executor-client-id
-      clientAssertionKeyRef: secret:file/executor-private-jwk
-      assertionAudience: https://identity.example.test
-      resource: urn:example:registry
-      scopes: [requests:apply]
+mutationPolicy:
+  patch: proposal-required
 ```
 
-Use the scopes, resource and profile from your own authored executor grant.
-Token acquisition failures are retried without discarding the approved job.
-For local sessions, author `reviewExecutors` in `dev-clients.yaml` with the
-executor's `accessProfile` and service `client`; `bregctl dev` supplies the
-local endpoint, registry id and renewing client credential.
+Direct Patch and immediate Actions cannot bypass this policy.
 
-{/* Evidence: crates/registry-breg/src/runtime_config.rs; crates/registry-breg/src/review_store.rs; crates/registry-bregctl/src/dev/config.rs; crates/registry-caseworkctl/src/source_add.rs */}
-
-Result polling is the default. A Casework producer `completion` block explicitly enables
-completion delivery and causes the candidate authority binding to include `completionTokenRef`
-and `completionRecipient`. The BReg completion receiver acknowledges only an empty HTTP `204 No
-Content`; other success statuses and a `204` with response bytes are retried. The notification is
-a wake-up. BReg still reads and correlates the retained result before it records approval.
-
-### Split the roles across profiles
+## Declare Proposal review and application
 
 ```yaml
-accessProfiles:
-  - id: correction-submitter
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: [registry:corrections:submit]
-    requiredPurposes: [asset-correction]
-    permissions:
-      entities:
-        - entity: placement-correction-request
-          rowBoundaries: unrestricted
-          operations: [create, get, patch, submit-request, revise-request, cancel-request]
-          readableFields: [placement, proposed-site, reason]
-          writableFields: [placement, proposed-site, reason]
-          requestVisibility: owner
-  - id: correction-reader
-    principalClaim: registry_principal
-    requiredScopes: [registry:corrections:read]
-    requiredPurposes: [asset-correction-review]
-    permissions:
-      entities:
-        - entity: placement-correction-request
-          rowBoundaries: unrestricted
-          operations: [get, list]
-          readableFields: [placement, proposed-site, reason]
-          readableRequestFields: [reason, review-state]
-  - id: correction-applier
-    principalClaim: registry_principal
-    requiredScopes: [registry:corrections:apply]
-    requiredPurposes: [asset-correction-apply]
-    permissions:
-      entities:
-        - entity: placement-correction-request
-          rowBoundaries: unrestricted
-          operations: [get, apply-request]
-          readableFields: [placement, proposed-site, reason]
-          applyTargets:
-            - entity: asset-placement
-              rowBoundaries: unrestricted
+execution:
+  mode: proposal
+  proposal:
+    review:
+      type: required
+      authority: casework
+      source: facility-registry
+      policy:
+        id: facility-address-review
+    retention:
+      mode: retain
 ```
 
-The submitter is the default for shared request reads.
-The reader can inspect BReg's source-owned review projection because its `readableRequestFields` includes `review-state`; this is disclosure authority, not authority to decide the review.
-Casework policy `asset-placement-correction` defines the reviewers, stages, independence rules, and fields disclosed for the review task.
-The manual applier is a separate current source authorization check, not an additional review decision.
+Select a policy by ID. The review authority freezes its concrete version and digest
+when it accepts the submission. Add both `version` and `digest` to `policy` when you
+require an exact independently compiled binding. BReg freezes inputs, effects, target
+revisions, Action revision, and effect digest at submission. A later planner or policy
+change cannot silently reinterpret the approved work.
 
-An applier's `applyTargets` names the entities the profile may write when it applies, with row boundaries of its own.
-Give the profiles that read the target entity a `requestPresence` entry so they can see that a correction is pending.
-A permission's `requestVisibility: owner` restricts reads of the request entity to the requests the caller's own principal created, which suits a submitter.
+Automatic application is the default. The built-in executor receives restricted
+system authority for that exact frozen submission. It uses no self-HTTP call,
+OAuth executor client, or general record permission. To wait for a separately
+authorized caller, declare `application.mode: manual` inside `proposal`.
+Use `review.type: none` when external review is intentionally unnecessary.
 
-The source request record is stored as `draft`, `submitted`, `cancelled`, or `applied`, and `bregctl explain lifecycle` reports every one of them as reachable.
-The external result status is projected separately and never substitutes for the source lifecycle state.
-A settled result does not move the request, but it decides what its owner and applier are offered.
-After a rejection the owner can only cancel.
-After a send-back, or an approval whose `availableUntil` passed before anyone applied it, the owner can revise the request or cancel it, and `apply-request` is not offered; the `revise-request` action then carries `rebase: false`, so the new draft is recorded as a revision.
-BReg refuses what it does not offer, and `bregctl explain lifecycle` reports that check as its `review-outcome` layer.
-Applying writes the target the way a direct mutation would, so the target gains a revision and the request moves to `applied`.
-[Base Registry Engine API reference](../../reference/breg-api/#change-requests) describes each action, its route, and the states it accepts.
+## Split the powers
 
-To see everything the compiler derived, including the routes each profile receives and which request types may write each controlled entity:
+`permissions.actions` grants Invoke or Start. `permissions.proposals` grants
+Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, Apply, or review operations
+independently, with ownership and target boundaries. List needs its own grant.
+A reader's target context still follows current record disclosure.
+External recovery of automatic application requires a verified human with an
+explicit grant. It never inherits the built-in executor's authority.
 
-```sh
-bregctl explain change-requests ./my-registry
-```
+Deployment `reviewAuthorities` binds each logical authority to its endpoint,
+producer identity, selected profile, and credential. Missing optional bindings
+disable only dependent operations. An unavailable authority never means approval.
+Every uncommitted application requires fresh authenticated and unexpired approval
+when review is required. [Connect a review authority](../../tutorials/review-breg-changes-in-casework/)
+explains that boundary.
 
-The JSON report carries a `controlledWrites` list, one entry per target entity with its `requiredFor` operations and `eligibleRequestTypes`, and a `requests` list with the actions and routes of each request entity.
+## Pair Casework review context
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/lifecycle.rs, request-lifecycle and every_state_is_reachable_and_only_applied_and_cancelled_are_terminal; crates/registry-breg/src/access.rs. */}
+A BReg Proposal can require a ReviewPolicy from a separate Casework service.
+Use the Casework policy ID in the BReg review declaration. Add its actual compiled
+version and digest together when you require an exact pin.
+BReg owns the frozen Proposal, sends its bound review request as the trusted producer, and consumes
+only the exact correlated result before its own independently authorized application step.
 
-### Require submitter authority over targets
+Expose the Proposal's bounded native review-context contract in the tested BReg package.
+Vendor that exact schema and contract in the Casework policy, then use
+`caseworkctl provider pair` to verify and retain the provider export.
+[Pair BReg review context with Casework](../../tutorials/review-breg-changes-in-casework/) gives the
+preview, apply, and package checks.
+Pairing modifies no BReg grant and activates neither runtime.
 
-A change request that reaches into another record, a licence correction that names the licence it corrects, can require the submitter to still hold read authority over that record, not merely to have created the request. Add `submitterTargets` to the request entity's grant, naming the entities its native reference fields target:
+A Casework Review holds the policy-bound human review, and its immutable Decision
+records the outcome. BReg remains responsible for source application.
+Give the Casework status service only native `get-review-status` authority.
+A human separately selects a profile authorized for `get-review-context`; the provider forwards the
+human's current bearer for that read. Neither read confers Proposal application authority.
+Bind transport and credential references in each product's operator runtime configuration.
+A configured completion destination sends a payload-free wake so the producer can fetch and
+correlate the retained result; it carries no decision payload or application authority.
 
-```yaml
-entities:
-  - id: professional-license
-    primaryDataset: directory
-    route: professional-licenses
-    mutationMode: mutable
-    fields:
-      - id: person-reference
-        type: string
-        required: true
-        classification: restricted
-      - id: licensed-activities
-        type: structured
-        required: true
-        classification: restricted
-        maximumBytes: 512
-        schema:
-          type: array
-          items:
-            type: string
-            enum: [example-assessment, example-advisory-services, example-practical-services]
-          minItems: 1
-          maxItems: 3
-          uniqueItems: true
-  - id: scope-correction
-    primaryDataset: directory
-    route: scope-corrections
-    mutationMode: mutable
-    fields:
-      - id: record
-        type: reference
-        target: professional-license
-        required: true
-        classification: restricted
-      - id: licensed-activities
-        type: structured
-        required: true
-        classification: restricted
-        maximumBytes: 512
-        schema:
-          type: array
-          items:
-            type: string
-            enum: [example-assessment, example-advisory-services, example-practical-services]
-          minItems: 1
-          maxItems: 3
-          uniqueItems: true
-    changeRequest:
-      effects:
-        - target:
-            fromField: record
-          operation: patch
-          set:
-            licensed-activities:
-              fromField: licensed-activities
-      review:
-        type: required
-        authority: casework
-        policyId: scope-correction
-      onApproved:
-        mode: manual
-      retention:
-        mode: operator-erase
-accessProfiles:
-  - id: holder
-    principalClaim: registry_principal
-    requiredScopes: [starter:holder]
-    requiredPurposes: [starter-learning]
-    permissions:
-      entities:
-        - entity: professional-license
-          operations: [get, list]
-          readableFields: [person-reference, licensed-activities]
-          rowBoundaries:
-            - field: person-reference
-              claim: person_reference
-              operator: equals
-        - entity: scope-correction
-          operations: [create, get, patch, submit-request, revise-request, cancel-request, list]
-          readableFields: [record, licensed-activities]
-          writableFields: [record, licensed-activities]
-          requestVisibility: owner
-          rowBoundaries: unrestricted
-          submitterTargets: [professional-license]
-```
+{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
+    crates/registry-casework-breg/src/lib.rs;
+    crates/registry-casework/tests/breg_review_journey.rs;
+    products/breg/examples/facility/registry.yaml. */}
 
-`submitterTargets` must name exactly the request's target entities: one entry for every entity its `effects` write, no more and no fewer. Each field the effects read a target from, `record` above, must be `required` on the request entity and readable through the permission, so admission can always read the target id it names, and writable through it wherever the profile holds `create` or `patch` on the request, so the submitter can supply the reference its own request needs. `onApproved.mode` must stay `manual`; an automatically applied request cannot declare submitter target grants. No target may itself be a change-request entity, since a request's own read authority is the thing being checked. The profile itself cannot hold `batch` on the request entity. And the same profile id must carry a permission on the target entity with `get` in its `operations` and no `membershipBoundaries`; a `rowBoundaries` restriction is fine, and the holder's own row boundary on `person-reference` above is what actually limits which licences a holder may target. `check` refuses a permission that cannot honour all of this, with `breg.change-request.submitter-targets-invalid`.
+## Observe and recover an exact submission
 
-At runtime the engine reuses that same target permission's current `get` authority, never the request entity's own boundaries. Two checks carry it. The route itself refuses `create`, a draft `patch`, `submit-request`, and `revise-request` unless the caller's claims resolve to target authority under that permission: a claim that carries no matching value, or one a boundary cannot reduce to the single value it needs, leaves the route unauthorized and answers `404`, the same concealment an unrelated caller gets. Then `submit-request` and `revise-request` admit the named target rows inside the request transaction, under a share lock on each target table, and an exact idempotent replay admits them again before it replays: a target row the caller can no longer read through that permission answers `412` and `precondition.failed`. Reads are symmetric: once the request is retained, its target links appear only to a reader who currently holds that same `get` authority.
+Use caller-filtered Action metadata to Start, then use promoted Proposal links
+for transitions. Refetch after a transition. Record ETags and Proposal lifecycle
+conditions are separate.
 
-{/* Evidence: products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/contract.rs, EntityPermissionSource; crates/registry-breg/src/change_request.rs; crates/registry-breg/src/mutation/request.rs, admit_submitter_targets(); crates/registry-breg/src/api/mod.rs, authorize_direct_route_base(); crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/postgres/request_read.rs, target_get_is_authorized(); crates/registry-breg/src/problem.rs. */}
+An authorized Get identifies the Proposal, Action revision, submission version,
+effect digest, state, and local application status. Preserve that exact binding.
+Revise or Rebase invalidates the earlier observation; do not follow a successor
+implicitly. Applied work includes retained application evidence. Blocked work
+includes a safe reason, recovery hint, and authorized transitions. `turn` says
+whether the party, an official or nobody acts next.
 
-### Plan effects with a Rhai script
+A Review rejection of the current submission is final: the Proposal moves to
+the terminal `rejected` state with a `rejected` lifecycle event, and Revise is
+no longer offered. Changes requested keep the Proposal `submitted`, record a
+`review-returned` event, and promote Revise. The Proposal's `decision` carries
+the outcome, its time and the reviewer's public reason, if any.
 
-When the effects depend on the request's content, a request entity declares a `planner` instead of `effects`.
-The YAML still owns the ceiling: which request fields the script may read and which targets and fields it may write.
-The script only fills in values within that ceiling.
+For an uncertain command, retain and replay its original prepared request and
+idempotency key. A later Get does not establish whether that command executed.
+Replay recovers retained results without replanning. Expired or erased receipts
+refuse execution and keep the key spent.
 
-```yaml
-entities:
-  - id: person-name-change-request
-    primaryDataset: person-registry
-    route: person-name-change-requests
-    mutationMode: mutable
-    fields:
-      - id: person
-        type: reference
-        target: person
-        required: true
-        classification: internal
-      - id: given-name
-        type: string
-        required: true
-        maximumLength: 80
-        classification: internal
-      - id: family-name
-        type: string
-        required: true
-        maximumLength: 80
-        classification: internal
-      - id: handling
-        type: vocabulary-code
-        vocabulary: name-change-handling
-        required: true
-        classification: internal
-    changeRequest:
-      planner:
-        kind: rhai
-        script: scripts/person-name-change.rhai
-        abi: registry.change-request-plan/v1
-        requestFields: [person, given-name, family-name, handling]
-        writes:
-          - target:
-              fromField: person
-            operation: patch
-            fields: [display-name]
-      review:
-        type: none
-      onApproved:
-        mode: manual
-      retention:
-        mode: operator-erase
-```
-
-The script at `scripts/person-name-change.rhai` builds the display name and returns the frozen effect:
-
-```rust
-fn plan(ctx) {
-    let given = ctx.request["given-name"];
-    given.trim();
-    let family = ctx.request["family-name"];
-    family.trim();
-    let effect = #{
-        target: #{fromField: "person"},
-        operation: "patch",
-        set: #{"display-name": given + " " + family}
-    };
-    #{effects: [effect]}
-}
-```
-
-| Member | Meaning |
-|---|---|
-| `requestFields` | The request fields the script receives as `ctx.request`, keyed by their authored ids. Nothing else reaches the script: no target record, no caller identity, no other request. |
-| `writes` | Every target the script may touch, with the operation and the fields it may set or clear. `target` is `fromField: <reference field>` for an existing record or `entity: <id>` for a record the script creates. |
-| `script` | A path relative to the document that declares it, the project root or a module directory, ending in `.rhai`. The compiler reads it at `check` and `package` time, and its digest is part of the compiled contract, so editing the script changes the contract fingerprint. |
-| `abi` | The planner contract, which must be `registry.change-request-plan/v1`. |
-
-The script defines `fn plan(ctx)` and returns a map whose `effects` is a non-empty list within the declared `writes`.
-Each effect carries `target`, `operation`, and `set`, plus `clear` for a patch; a `create` effect also needs an `id`, and a later effect refers to the created record with `fromEffect: <id>`.
-A reference field in `set` takes `fromField` or `fromEffect`, never a literal identifier; other values are checked against the target field's type.
-The planner never selects review or application authority. `review` and `onApproved` remain explicit authored configuration, and a script that returns an application disposition is refused.
-
-The server runs the script once, when the request is submitted, and freezes its effects and script digest in the proposal.
-Review, retry, and apply never rerun it, so a later package with an edited script leaves an already frozen proposal untouched.
-The engine is closed: the script cannot import modules, evaluate strings, print, or reach a file, the database, or the network, and it runs within fixed bounds (64 KiB of source, 100,000 operations, and bounded call depth, strings, arrays, and maps).
-A script that fails, leaves the ceiling, or breaks a bound refuses the submit with `request.invalid`.
-`check` reports an invalid planner, review binding, or approved-application binding as `breg.change-request.*` errors; it does not run the script.
-
-Evaluate the script offline, with no database and no credentials, from a JSON file of request field values keyed by their authored ids:
-
-```json
-{
-  "person": "11111111-1111-4111-8111-111111111111",
-  "given-name": "  Ada  ",
-  "family-name": "  Lovelace  ",
-  "handling": "routine"
-}
-```
-
-```sh
-bregctl project planner-test ./my-registry \
-  --entity person-name-change-request --request ./routine-request.json
-```
-
-```text
-Ran the planner. 1 effect.
-  compiled revision       sha256:<digest>
-  request entity          person-name-change-request
-  planner kind            rhai
-  planner ABI             registry.change-request-plan/v1
-  planner script SHA-256  sha256:<digest>
-  effects                 1
-  field mutations         1
-  dependencies            0
-
-  effect effect-1
-    target        existing
-    operation     patch
-    fields        display-name
-    dependencies  none
-```
-
-The report names the planner identity and each effect's target kind, operation, and fields; it never repeats the request values.
-The request file is limited to 64 KiB.
-A journey against a database remains the proof for authorization, freezing, and application.
-
-{/* Evidence: products/breg/acceptance/person-name-change-rhai/registry.yaml;
-    products/breg/acceptance/person-name-change-rhai/scripts/person-name-change.rhai;
-    products/breg/acceptance/person-name-change-rhai/examples/routine-request.json;
-    crates/registry-breg/src/rhai_planner.rs;
-    crates/registry-breg/src/change_request.rs;
-    crates/registry-bregctl/src/lib.rs, planner_test() and MAX_PLANNER_TEST_REQUEST_BYTES. */}
-
-## Immediate actions
-
-An action writes several records in one transaction from one typed input, without a review step:
-
-```yaml
-actions:
-  - id: register-asset-with-inspection
-    inputs:
-      - id: asset-code
-        apiName: assetCode
-        type: string
-        required: true
-        maximumLength: 64
-        classification: internal
-      - id: label
-        type: string
-        required: true
-        maximumLength: 200
-        classification: internal
-      - id: jurisdiction
-        type: string
-        required: true
-        maximumLength: 80
-        classification: internal
-      - id: observed-at
-        apiName: observedAt
-        type: timestamp
-        required: true
-        classification: internal
-      - id: inspection-result
-        apiName: initialResult
-        type: vocabulary-code
-        vocabulary: inspection-result
-        required: true
-        classification: internal
-    effects:
-      - id: asset
-        target:
-          entity: asset
-        operation: create
-        set:
-          asset-code:
-            fromField: asset-code
-          label:
-            fromField: label
-          jurisdiction:
-            fromField: jurisdiction
-      - id: initial-inspection
-        target:
-          entity: asset-inspection
-        operation: create
-        set:
-          asset:
-            fromEffect: asset
-          observed-at:
-            fromField: observed-at
-          result:
-            fromField: inspection-result
-          jurisdiction:
-            fromField: jurisdiction
-```
-
-`inputs` use the same types and members as fields, except that an input cannot declare `validTimeRole`.
-Each effect has an `id`, a `target` that is either a fixed `entity` or a record named by an input reference through `fromField`, `set` values that come `fromField` or `fromEffect`, so a later effect can reference a record an earlier effect created, and an optional `clear` list for a patch.
-
-The permission names the action, the targets it may write, and the effect results the caller gets back:
-
-```yaml
-  - id: asset-registrar
-    principalClaim: registry_principal
-    requiredScopes: [registry:asset:register]
-    requiredPurposes: [asset-registration]
-    permissions:
-      actions:
-        - action: register-asset-with-inspection
-          operations: [invoke]
-          targets:
-            - entity: asset
-              rowBoundaries:
-                - field: jurisdiction
-                  claim: jurisdiction
-                  operator: equals
-            - entity: asset-inspection
-              rowBoundaries:
-                - field: jurisdiction
-                  claim: jurisdiction
-                  operator: equals
-          results: [asset]
-```
-
-Row boundaries on action targets apply to the records the action writes, so a registrar bound to one jurisdiction cannot register an asset in another.
-Actions that patch existing records take preconditions: the caller first asks for target conditions, then invokes with the ETags it received, and the action fails with `precondition.failed` if a target moved in between.
-An invocation either commits every effect or none, so a refused effect leaves no partial record behind.
-
-```sh
-bregctl explain actions ./my-registry
-```
-
-The report lists every compiled action with its inputs, effects, grants, contract fingerprint, and the bounds an invocation stays within.
-[Base Registry Engine API reference](../../reference/breg-api/#immediate-actions) documents the invoke route, the target-conditions request, and the result envelope.
-
-{/* Evidence: products/breg/fixtures/asset-registration-actions/registry.yaml; products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml; crates/registry-breg/src/contract.rs, ActionInputSource and ActionEffectSource; crates/registry-breg/src/mutation/action.rs. */}
-
-## Troubleshooting
-
-| Symptom | Cause and next move |
-|---|---|
-| `check` reports a `breg.change-request.*` error. | `effects` and `planner` are exclusive; `review` must be either `{type: none}` or `type: required` with an authority and policy id; manual application must omit an executor; automatic application must name one. `check` does not run the script; evaluate it with `project planner-test`. |
-| A direct patch of a controlled entity is refused although the profile holds `patch`. | The entity's `changeControl.requiredFor` includes `patch`, so the write must arrive as an applied request. Submit a request of one of the `eligibleRequestTypes` that `explain change-requests` lists. |
-| `check` reports `breg.change-control.direct-write-grant`. | A profile still holds a controlled operation, or `batch` on an entity controlled for `create` or `patch`. Remove it; for bulk loads of new records, grant `import` in its place and load through an import authority. |
-| `check` reports `breg.import.batch-bounds-required` or `breg.import.batch-redundant`. | An `import` grant needs the entity's `batch` bounds and no `batch` grant on the same entity in any profile. A run belongs to the caller the profile's `principalClaim` names. |
-| `project planner-test` fails, or a submit is refused with `request.invalid`. | The script failed, returned an effect outside `writes`, attempted to return an obsolete disposition, or broke a bound. Read the message, fix the script or the ceiling, and rerun `project planner-test` with the same request file. |
-| `revise-request` answers `409 mutation.conflict`. | The settled review result rules the shape out: a rejected request can only be cancelled, and a send-back or an expired approval is answered by a revision, not a rebase. Read the request again and follow the action it offers. |
-| An invoke fails with `precondition.failed`. | A target changed between the target-conditions request and the invoke. Ask for target conditions again and invoke with the new ETags. |
+{/* Evidence: crates/registry-breg/src/proposal_prepare.rs;
+    crates/registry-breg/src/proposal_store.rs; crates/registry-breg/src/api/proposals.rs;
+    crates/registry-breg/src/runtime_config.rs; crates/registry-breg-client/src/proposal.rs. */}
 
 ## Next
 
-- [Review changes before updating a registry](../../tutorials/review-registry-changes/): submit, review, and apply a request against a running registry.
-- [Test with journeys](../breg-journeys/): write the submit, external-result reconciliation, apply, and refusal steps that prove the workflow.
-- [Control access per profile](../breg-access/): the permission members every role on this page depends on.
-- [Base Registry Engine API reference](../../reference/breg-api/#change-requests): each request action, its route, and the states it accepts.
-- [Retain, erase, and audit](../../operate/breg-retention/): what `operator-erase` lets an operator remove later.
+- [Inspect a reviewed Proposal](../../tutorials/review-registry-changes/)
+- [Connect a review authority](../../tutorials/review-breg-changes-in-casework/)
+- [Base Registry Engine API reference](../../reference/breg-api/#proposals)
+- [Retain, erase, and audit](../../operate/breg-retention/)

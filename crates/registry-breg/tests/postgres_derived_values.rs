@@ -326,11 +326,11 @@ fn read_context(registry: &registry_breg::CompiledRegistry) -> ClaimContext {
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(br#"{
+    let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"derived-values","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"scenario","type":"string","required":true,"minimumLength":1,"maximumLength":64,"classification":"internal"}],
             "derived":[{
@@ -346,8 +346,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         }],
         "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-                "entity":"entry","operations":["create","get","list"],
+            "permissions":{"records":[{
+                "recordType":"entry","operations":["create","get","list"],
                 "readableFields":["scenario","short-code","description","amount","count","state"],
                 "writableFields":["scenario"],
                 "rowBoundaries":"unrestricted"

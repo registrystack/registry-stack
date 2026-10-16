@@ -106,34 +106,6 @@ pub(crate) async fn retain_descriptor(
 }
 
 #[cfg(feature = "runtime")]
-pub(crate) async fn retain_verified_descriptor(
-    migration: &impl GenericClient,
-    descriptor: &HistorySchemaDescriptor,
-) -> Result<(), HistoryStoreError> {
-    validate_package_revision(&descriptor.package_revision)?;
-    let canonical = serialize_descriptor(descriptor)?;
-    let inserted = migration
-        .execute(
-            "INSERT INTO registry_internal.registry_history_schemas
-                 (package_revision, descriptor)
-             VALUES ($1, $2)
-             ON CONFLICT (package_revision) DO NOTHING",
-            &[&descriptor.package_revision, &canonical],
-        )
-        .await
-        .map_err(|_| HistoryStoreError::Unavailable)?;
-    if inserted == 1 {
-        return Ok(());
-    }
-
-    let stored = load_descriptor_bytes(migration, &descriptor.package_revision).await?;
-    if stored != canonical {
-        return Err(HistoryStoreError::DescriptorConflict);
-    }
-    Ok(())
-}
-
-#[cfg(feature = "runtime")]
 pub(crate) async fn load_descriptor(
     client: &impl GenericClient,
     package_revision: &str,

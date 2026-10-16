@@ -505,7 +505,7 @@ fn validate_ingestion_run(
         .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
     let (committed_items, committed_prefix_digest) =
         expected_ingestion_commitment(plan, input, run.next_chunk_index())?;
-    if run.entity_id() != plan.entity_id()
+    if run.record_type() != plan.entity_id()
         || run.profile_id() != plan.profile_id()
         || run.package_revision() != inspected.package_revision
         || run.schema_fingerprint() != inspected.schema_fingerprint
@@ -694,10 +694,10 @@ fn submit_ingestion_chunks(
             BRegIngestionRunStatus::Blocked => {
                 return Err(DataLifecycleError::ImportRunBlocked(
                     started.run.blocked_reason(),
-                ))
+                ));
             }
             BRegIngestionRunStatus::Cancelled => {
-                return Err(DataLifecycleError::ImportRunCancelled)
+                return Err(DataLifecycleError::ImportRunCancelled);
             }
             BRegIngestionRunStatus::Complete => break,
         }
@@ -1728,7 +1728,8 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
-            "entities": [{
+            "datasets": [{"id":"test-dataset"}],
+            "recordTypes": [{
                 "id": ENTITY,
                 "primaryDataset": "test-dataset",
                 "route": "records",
@@ -1743,8 +1744,8 @@ mod tests {
                 "id": PROFILE,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "entity": ENTITY,
+                "permissions": {"records": [{
+                    "recordType": ENTITY,
                     "operations": operations,
                     "readableFields": ["code"],
                     "writableFields": ["code"],
@@ -1929,7 +1930,7 @@ mod tests {
             } else {
                 Value::Null
             },
-            "entityId": ENTITY,
+            "recordType": ENTITY,
             "operation": "create",
             "profileId": PROFILE,
             "packageRevision": PACKAGE,
@@ -2215,7 +2216,8 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
-            "entities": [{
+            "datasets": [{"id":"test-dataset"}],
+            "recordTypes": [{
                 "id": ENTITY,
                 "primaryDataset": "test-dataset",
                 "route": "records",
@@ -2233,8 +2235,8 @@ mod tests {
                 "id": PROFILE,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "entity": ENTITY,
+                "permissions": {"records": [{
+                    "recordType": ENTITY,
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["payload"],
                     "writableFields": ["payload"],

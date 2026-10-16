@@ -60,6 +60,22 @@ class ReleaseRosterTest(TestCase):
         with mock.patch.object(release_roster, "SCHEDULING_CLIENT_FIRST_RELEASE", None):
             self.assertFalse(release_roster.scheduling_client_in_release((1, 0, 0)))
 
+    def test_unified_clients_hold_coordinator_until_its_client_returns(self) -> None:
+        self.assertIsNone(release_roster.COORDINATOR_CLIENT_FIRST_RELEASE)
+        for version in ((0, 41, 0), (0, 42, 0), (1, 0, 0)):
+            self.assertFalse(release_roster.coordinator_client_in_release(version))
+        with mock.patch.object(release_roster, "COORDINATOR_CLIENT_FIRST_RELEASE", (0, 42, 0)):
+            self.assertFalse(release_roster.coordinator_client_in_release((0, 41, 99)))
+            self.assertTrue(release_roster.coordinator_client_in_release((0, 42, 0)))
+
+    def test_coordinator_runtime_is_held_until_release_prerequisites_are_ready(self) -> None:
+        self.assertIsNone(release_roster.COORDINATOR_FIRST_RELEASE)
+        for version in ((0, 41, 0), (0, 42, 0), (1, 0, 0)):
+            self.assertFalse(release_roster.coordinator_in_release(version))
+        with mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0)):
+            self.assertFalse(release_roster.coordinator_in_release((0, 41, 99)))
+            self.assertTrue(release_roster.coordinator_in_release((0, 42, 0)))
+
     def test_relay_is_retired_from_v0_39(self) -> None:
         self.assertEqual((0, 39, 0), release_roster.RELAY_RETIREMENT_RELEASE)
         self.assertTrue(release_roster.relay_in_release((0, 38, 0)))
@@ -98,6 +114,15 @@ class ReleaseRosterTest(TestCase):
                     result = release_roster.main(["scheduling-client-in-release", version])
                 self.assertEqual(0, result)
                 self.assertEqual(expected, stdout.getvalue())
+
+        for command in ("coordinator-client-in-release", "coordinator-in-release"):
+            for version, expected in (("0.41.9", "false\n"), ("v0.42.0", "false\n")):
+                with self.subTest(command=command, version=version):
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = release_roster.main([command, version])
+                    self.assertEqual(0, result)
+                    self.assertEqual(expected, stdout.getvalue())
 
         for version, expected in (("0.38.99", "true\n"), ("v0.39.0", "false\n")):
             with self.subTest(command="relay-in-release", version=version):

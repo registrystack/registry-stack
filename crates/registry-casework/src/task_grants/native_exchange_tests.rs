@@ -14,7 +14,6 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use registry_casework_core::*;
 use registry_evidence::{runtime::EvidenceRuntime, server as evidence_server};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
@@ -44,64 +43,45 @@ const AUTHORITY: &str = "https://casework.example";
 const SCHEDULING_AUTH_PROBE_ENV: &str = "SCHEDULING_AUTH_PROBE_BIN";
 const EVIDENCE_SIGNING_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
-fn binding() -> SourceBinding {
-    SourceBinding {
-        source_revision: "1".into(),
-        version: "proposal-1".into(),
-        integrity: None,
-        generation: "generation-1".into(),
-    }
-}
-/// Synthetic source fixture: only this governed selector is available.
+/// Synthetic purpose-bound provider for the three native grant resources.
 struct Source;
 #[async_trait]
-impl SourceAdapter for Source {
-    fn source_id(&self) -> &str {
+impl ReviewContextProvider for Source {
+    fn provider_id(&self) -> &str {
         "source"
     }
-    fn binding_generation(&self) -> &str {
-        "generation-1"
+    fn capabilities(&self) -> &[ReviewContextCapability] {
+        &[
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+            ReviewContextCapability::TaskGrantContext,
+        ]
     }
-    async fn verify_transition(
+    async fn human_display(
         &self,
-        _: EventRequest,
-    ) -> Result<TransitionHint, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
-    }
-    async fn read_authoritative(
-        &self,
-        _: &SubjectRef,
-    ) -> Result<AuthoritativeObservation, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
-    }
-    async fn discover_active(
-        &self,
-        _: Option<&DiscoveryCursor>,
-        _: usize,
-    ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
-    }
-    async fn read_for_caller(
-        &self,
-        subject: &SubjectRef,
-        _: &str,
-        _: EphemeralCredential<'_>,
-    ) -> Result<CallerSubjectView, SourceAdapterError> {
-        Ok(CallerSubjectView {
-            display_reference: None,
-            subject: subject.clone(),
-            binding: binding(),
-            disclosed: Default::default(),
-            permitted_operations: Vec::new(),
+        request: HumanDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
+        Ok(HumanDisplayObservation {
+            identity: request.identity.clone(),
+            reviewable: true,
+            display_reference: Some("Synthetic request".into()),
+            fields: BTreeMap::new(),
         })
     }
-    async fn read_task_context(
+    async fn service_status(
         &self,
-        _: &SubjectRef,
-        fields: &[String],
-        _: Option<(&str, EphemeralCredential<'_>)>,
-    ) -> Result<TaskSubjectContext, SourceAdapterError> {
-        let values = match fields {
+        identity: &ReviewContextIdentity,
+    ) -> Result<ServiceStatusObservation, ReviewContextError> {
+        Ok(ServiceStatusObservation {
+            identity: identity.clone(),
+            reviewable: true,
+        })
+    }
+    async fn task_grant_context(
+        &self,
+        request: &ServiceContextRequest,
+    ) -> Result<ServiceContextObservation, ReviewContextError> {
+        let values = match request.fields.as_slice() {
             [field] if field == "tenant" => BTreeMap::from([("tenant".into(), json!("tenant-a"))]),
             [birth_date, family_name, given_name]
                 if birth_date == "birth_date"
@@ -114,24 +94,13 @@ impl SourceAdapter for Source {
                     ("given_name".into(), json!("Amina")),
                 ])
             }
-            _ => panic!("unexpected governed task fields: {fields:?}"),
+            _ => panic!("unexpected governed task fields: {:?}", request.fields),
         };
-        Ok(TaskSubjectContext {
-            binding: binding(),
-            values,
+        Ok(ServiceContextObservation {
+            request: request.clone(),
+            reviewable: true,
+            fields: values,
         })
-    }
-    async fn prepare_action(
-        &self,
-        _: PrepareActionRequest<'_>,
-    ) -> Result<PreparedSourceAttempt, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
-    }
-    async fn execute_prepared(
-        &self,
-        _: ExecutePreparedRequest<'_>,
-    ) -> Result<SourceReceipt, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
     }
 }
 
@@ -743,7 +712,7 @@ fn prove_scheduling_authentication(token: &str, issuer: &Issuer) {
 }
 struct Fixture {
     app: Router,
-    item: Uuid,
+    review_task: Uuid,
     admin: tokio_postgres::Client,
     schema: String,
 }
@@ -804,11 +773,21 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
         .agent_id
         .clone();
     let breg: Value = serde_json::from_str(resource::PROJECT).unwrap();
-    let operations = breg["accessProfiles"][1]["permissions"]["entities"][0]["operations"].clone();
-    let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
-    let evidence_template:TaskTemplate=serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check adult status","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":evidence_agent},"client":"evidence-task-agent","resource":EVIDENCE_RESOURCE,"purpose":"fixture-eligibility","scopes":["evidence:invoke"],"bounds":{"type":"evidence","requirement":EVIDENCE_REQUIREMENT},"evidenceContext":{"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE},"subjects":{"birth_date":"birth_date","family_name":"family_name","given_name":"given_name"},"lifetimeSeconds":900})).unwrap();
-    let scheduling_template:TaskTemplate=serde_json::from_value(json!({"id":"schedule-update","version":"1","label":"Book a registry update","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":SCHEDULING_RESOURCE,"purpose":"schedule-registry-update","scopes":["scheduling:commit"],"bounds":{"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template,evidence_template,scheduling_template]})).unwrap();
+    let operations = breg["accessProfiles"][1]["permissions"]["actions"][0]["operations"].clone();
+    let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"action:file-correction","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
+    let evidence_template:TaskTemplate=serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check adult status","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":evidence_agent},"client":"evidence-task-agent","resource":EVIDENCE_RESOURCE,"purpose":"fixture-eligibility","scopes":["evidence:invoke"],"bounds":{"type":"evidence","requirement":EVIDENCE_REQUIREMENT},"evidenceContext":{"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE},"subjects":{"birth_date":"birth_date","family_name":"family_name","given_name":"given_name"},"lifetimeSeconds":900})).unwrap();
+    let scheduling_template:TaskTemplate=serde_json::from_value(json!({"id":"schedule-update","version":"1","label":"Book a registry update","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":SCHEDULING_RESOURCE,"purpose":"schedule-registry-update","scopes":["scheduling:commit"],"bounds":{"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
+    let context_schema = json!({"type":"object","additionalProperties":false,"properties":{"tenant":{"type":"string"},"birth_date":{"type":"string"},"family_name":{"type":"string"},"given_name":{"type":"string"}}});
+    let context_contract = ReviewContextContract {
+        id: "synthetic-review-context".into(),
+        revision: ContentDigest::for_bytes(b"synthetic-context-revision"),
+        schema_digest: ContentDigest::for_bytes(
+            &registry_platform_canonical_json::canonicalize_json(&context_schema).unwrap(),
+        ),
+    };
+    let mut project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"native-tasks","version":"1"},"accessProfiles":{"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},"supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},"administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},"producer":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}},"queues":{"review":{"label":"Review"}},"teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},"contextProviders":{"source":{"deploymentRef":"source","sourceNamespace":"source","capabilities":["human-display","service-status","task-grant-context"],"serviceProfiles":{"service-status":"status-reader","task-grant-context":"task-reader"}}},"reviewPolicies":{"external-review":{"version":"1","purpose":"approval","context":{"mode":"current-source","provider":"source","contract":context_contract},"stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},"displaySchema":context_schema,"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}},"trustedProducers":{"producer":{"profile":"producer","issuer":issuer.url(),"subject":"native-producer","trustedInitiatorIssuer":issuer.url(),"sourceNamespaces":["source"],"reviewPolicies":["external-review"],"retention":{"receiptRetentionDays":7}}}})).unwrap();
+    project.task_templates = vec![template, evidence_template, scheduling_template];
+    project.check().unwrap();
     store
         .activate_task_templates(&project.task_templates)
         .await
@@ -822,8 +801,11 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
         .unwrap();
     admin.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,$2,'staff')",&[&issuer.url(),&human]).await.unwrap();
     admin.execute("INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('review','team',1)",&[]).await.unwrap();
-    let item = Uuid::new_v4();
-    admin.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,holder_issuer,holder_subject,revision,first_observed_at,updated_at) VALUES($1,'source','request','synthetic-request','review','review-1',$2,'claimed','review',$3,$4,1,now(),now())",&[&item,&serde_json::to_value(binding()).unwrap(),&issuer.url(),&human]).await.unwrap();
+    let review_request = Uuid::new_v4();
+    let review_task = Uuid::new_v4();
+    let snapshot = project.compile_policy("external-review").unwrap();
+    admin.execute("INSERT INTO casework_review_requests(request_id,producer_id,producer_issuer,producer_subject,source_namespace,subject_source,subject_type,subject_id,subject_version,subject_digest,requester_reference,initiator_issuer,initiator_subject,context_strategy,context,policy_id,policy_version,policy_digest,policy_snapshot,submission_digest,lifecycle,active_stage_index,revision,created_at,updated_at) VALUES($1,'producer',$2,'producer','source','source','request','synthetic-request','proposal-1',$3,'native-review',$2,'initiator','current-source',$4,'external-review','1',$5,$6,$7,'reviewing',0,1,now(),now())",&[&review_request,&issuer.url(),&ContentDigest::for_bytes(b"synthetic-request").to_string(),&json!({"reference":"source:request:synthetic-request"}),&snapshot.identity.digest.to_string(),&serde_json::to_value(&snapshot).unwrap(),&ContentDigest::for_bytes(b"submission").to_string()]).await.unwrap();
+    admin.execute("INSERT INTO casework_review_tasks(task_id,request_id,stage_index,stage_id,slot,queue_id,state,holder_issuer,holder_subject,assignment_kind,assignment_owner_issuer,assignment_owner_subject,revision,created_at,updated_at) VALUES($1,$2,0,'review',0,'review','claimed',$3,$4,'claim',$3,$4,1,now(),now())",&[&review_task,&review_request,&issuer.url(),&human]).await.unwrap();
     let authority = TaskAuthority {
         config: crate::TaskAuthorityConfig {
             issuer: AUTHORITY.into(),
@@ -837,7 +819,7 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
     let service = crate::CaseworkService::new(
         store,
         project.clone(),
-        [Arc::new(Source) as Arc<dyn SourceAdapter>],
+        [Arc::new(Source) as Arc<dyn ReviewContextProvider>],
     )
     .unwrap()
     .with_task_authority(Some(authority));
@@ -869,7 +851,7 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
             authenticator: Arc::new(auth),
             project: Arc::new(project),
         }),
-        item,
+        review_task,
         admin,
         schema,
     }
@@ -953,11 +935,11 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         .await
         .unwrap(),
     );
-    let base = format!("/v1/work-items/{}/task-grants", f.item);
+    let base = format!("/v1/review-tasks/{}/task-grants", f.review_task);
     let (code, preview) = request(
         &f.app,
         "GET",
-        &format!("/v1/work-items/{}/task-templates", f.item),
+        &format!("/v1/review-tasks/{}/task-templates", f.review_task),
         &human,
         true,
         None,
@@ -1303,7 +1285,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     );
     let app = resource::app(
         &db,
-        registry,
+        registry.clone(),
         identity,
         &issuer.url(),
         issuer.jwks.clone(),
@@ -1346,10 +1328,18 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         json!({"tenant":"tenant-a","site":resource::id(&old)}),
     )
     .await;
-    let draft=resource::create(&app,"/v1/records/correction-requests?accessProfile=submitter",&token,"native-draft",json!({"tenant":"tenant-a","placement":resource::id(&placement),"proposedSite":resource::id(&next),"reason":"Synthetic task correction"})).await;
-    let id = resource::id(&draft);
-    let read = resource::get(&app, &id, "submitter", &token).await;
-    let before = resource::counts(&db).await;
+    let correction = resource::send(
+        &app,
+        axum::http::Method::POST,
+        "/v1/actions/file-correction?accessProfile=submitter",
+        &token,
+        Some("native-file-correction"),
+        None,
+        json!({"input":{"tenant":"tenant-a","placement":resource::id(&placement),"proposedSite":resource::id(&next),"reason":"Synthetic task correction"}}),
+    )
+    .await;
+    assert_eq!(correction.status, StatusCode::OK, "{}", correction.body);
+    let before = resource::counts(&db, &registry).await;
     let (code, _) = request(
         &f.app,
         "POST",
@@ -1363,16 +1353,16 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     assert_eq!(code, StatusCode::OK);
     let refused = resource::send(
         &app,
-        axum::http::Method::PATCH,
-        &format!("/v1/records/correction-requests/{id}?accessProfile=submitter"),
+        axum::http::Method::POST,
+        "/v1/actions/file-correction?accessProfile=submitter",
         &token,
         Some("revoked-write"),
-        Some(&read.etag),
-        json!([{"op":"replace","path":"/data/reason","value":"Must not persist"}]),
+        None,
+        json!({"input":{"tenant":"tenant-a","placement":resource::id(&placement),"proposedSite":resource::id(&next),"reason":"Must not persist"}}),
     )
     .await;
     assert_eq!(refused.status, StatusCode::PRECONDITION_FAILED);
-    assert_eq!(resource::counts(&db).await, before);
+    assert_eq!(resource::counts(&db, &registry).await, before);
     let (code, _) = request(
         &f.app,
         "POST",

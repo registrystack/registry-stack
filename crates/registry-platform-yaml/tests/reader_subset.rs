@@ -979,3 +979,32 @@ fn cfg_diag_5_an_envelope_member_refused_past_the_bound_is_not_refused_twice() {
     let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
     assert_eq!(rest.message, "21 more problems in this file are not shown");
 }
+
+#[test]
+fn flow_collection_spans_end_before_trailing_comments() {
+    for newline in ["\n", "\r", "\r\n"] {
+        let source = format!(
+            "sequence: [a] # retained ] comment{newline}mapping: {{a: b}} # retained }} comment{newline}"
+        );
+        let root = Reader::new(FILE)
+            .scan(source.as_bytes())
+            .expect("flow collections scan")
+            .expect("root mapping");
+        assert_eq!(
+            root.get("sequence").unwrap().value.span.end,
+            registry_platform_yaml::Position {
+                line: 1,
+                column: 14
+            },
+            "sequence span with {newline:?}"
+        );
+        assert_eq!(
+            root.get("mapping").unwrap().value.span.end,
+            registry_platform_yaml::Position {
+                line: 2,
+                column: 16
+            },
+            "mapping span with {newline:?}"
+        );
+    }
+}

@@ -22,6 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import release_candidate  # noqa: E402
+import release_roster  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,6 +105,25 @@ V2_PAYLOAD_TEMPLATES = (
     "schedulingctl-{tag}-linux-arm64",
     "schedulingctl-{tag}-macos-arm64.tar.gz",
 )
+# Profile v2.1 is the frozen v2.0 inventory plus Registry Coordinator, which
+# joins from the release that release_roster.COORDINATOR_FIRST_RELEASE names.
+# A manifest keeps the meaning of the profile it records, so a v2.0 nightly
+# built from the same base version before Coordinator joined stays readable.
+V2_1_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.1"
+V2_1_IMAGES = tuple(sorted((*V2_IMAGES, "coordinator")))
+V2_1_PAYLOAD_TEMPLATES = tuple(
+    sorted(
+        (
+            *V2_PAYLOAD_TEMPLATES,
+            "coordinator-{tag}-linux-amd64",
+            "coordinatorctl-{tag}-linux-amd64",
+        )
+    )
+)
+V2_ROSTER_PROFILES = {
+    V2_ROSTER_PROFILE: (V2_IMAGES, V2_INSTALLERS, V2_PAYLOAD_TEMPLATES),
+    V2_1_ROSTER_PROFILE: (V2_1_IMAGES, V2_INSTALLERS, V2_1_PAYLOAD_TEMPLATES),
+}
 
 
 class NightlyError(ValueError):
@@ -225,16 +245,24 @@ def historical_image_names(version: str) -> list[str]:
     return sorted(names)
 
 
+def frozen_roster(profile: str, tag: str) -> dict:
+    images, installers, templates = V2_ROSTER_PROFILES[profile]
+    return {
+        "profile": profile,
+        "images": list(images),
+        "installers": list(installers),
+        "payloads": [template.format(tag=tag) for template in templates],
+    }
+
+
 def current_roster(version: str, tag: str) -> dict:
     base, _ = identity(tag)
     if base != version:
         raise NightlyError("nightly roster version does not match its tag")
-    return {
-        "profile": V2_ROSTER_PROFILE,
-        "images": list(V2_IMAGES),
-        "installers": list(V2_INSTALLERS),
-        "payloads": [template.format(tag=tag) for template in V2_PAYLOAD_TEMPLATES],
-    }
+    parsed = tuple(int(part) for part in version.split("."))
+    if release_roster.coordinator_in_release(parsed):
+        return frozen_roster(V2_1_ROSTER_PROFILE, tag)
+    return frozen_roster(V2_ROSTER_PROFILE, tag)
 
 
 def validate_v2_roster(value: object, tag: str) -> dict:
@@ -245,7 +273,7 @@ def validate_v2_roster(value: object, tag: str) -> dict:
         "payloads",
     }:
         raise NightlyError("invalid nightly source roster")
-    if value["profile"] != V2_ROSTER_PROFILE:
+    if value["profile"] not in V2_ROSTER_PROFILES:
         raise NightlyError("unknown nightly source roster profile")
     for field in ("images", "installers", "payloads"):
         items = value[field]
@@ -256,7 +284,8 @@ def validate_v2_roster(value: object, tag: str) -> dict:
             or items != sorted(set(items))
         ):
             raise NightlyError(f"invalid nightly roster {field}")
-    expected = current_roster(identity(tag)[0], tag)
+    identity(tag)
+    expected = frozen_roster(value["profile"], tag)
     if value != expected:
         raise NightlyError("nightly source roster differs from its frozen profile")
     return value

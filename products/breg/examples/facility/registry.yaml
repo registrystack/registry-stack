@@ -1,0 +1,369 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: facility-registry
+  canonicalBaseIri: https://facility-registry.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Facility Registry
+    description: Facilities, operators, assignments, and an administrative directory.
+
+package:
+  sourceRevision: facility-registry-0.1.0
+
+datasets:
+  - id: facility-registry
+    display:
+      label: Facility Registry
+      description: Authoritative facility, operator, assignment, and directory records.
+
+reviewAuthorities:
+  - id: casework
+    protocol: id.registrystack.org/protocols/review/v1
+    display:
+      label: Casework review authority
+      description: Logical authenticated review authority resolved by deployment configuration.
+
+recordTypes:
+  - id: directory-entry
+    route: directory-entries
+    primaryDataset: facility-registry
+    mutationMode: mutable
+    display:
+      label: Directory entry
+      description: A contact entry maintained through generated record routes.
+    fields:
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: public}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+  - id: operator
+    route: operators
+    primaryDataset: facility-registry
+    mutationMode: mutable
+    display:
+      label: Operator
+      titleField: operator-code
+      description: An organization permitted to operate a facility.
+    fields:
+      - {id: operator-code, apiName: operatorCode, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: operator-status, required: true, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+  - id: facility
+    route: facilities
+    primaryDataset: facility-registry
+    mutationMode: mutable
+    readPaths:
+      - {id: operators, through: facility-assignment, to: operator, route: operators}
+    mutationPolicy:
+      patch: proposal-required
+    display:
+      label: Facility
+      titleField: name
+      description: A registered facility whose corrections require a durable Proposal.
+    fields:
+      - {id: facility-code, apiName: facilityCode, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: internal}
+      - {id: address-line, apiName: addressLine, typeRef: address-line, required: true, classification: internal}
+      - {id: city, typeRef: city, required: true, classification: internal}
+      - {id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: facility-status, required: true, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+  - id: facility-assignment
+    route: facility-assignments
+    primaryDataset: facility-registry
+    mutationMode: create-only
+    indexes:
+      - {id: by-facility, fields: [facility]}
+      - {id: by-operator, fields: [operator]}
+    display:
+      label: Facility assignment
+      description: The operator assigned when a facility is registered.
+    fields:
+      - {id: facility, type: reference, target: facility, required: true, classification: internal, relationship: {inverseName: assignments}}
+      - {id: operator, type: reference, target: operator, required: true, classification: internal, relationship: {inverseName: facilityAssignments}}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+
+valueTypes:
+  address-line: {type: string, minimumLength: 1, maximumLength: 240}
+  city: {type: string, minimumLength: 1, maximumLength: 120}
+  postal-code: {type: string, minimumLength: 1, maximumLength: 24}
+
+functions:
+  - id: correct-address-plan
+    runtime: rhai
+    source: plans/correct-address.rhai
+    entrypoint: plan
+    abi: registry.action-plan/v1
+    capabilities: []
+    limits: {maximumOperations: 10000, maximumOutputBytes: 8192}
+
+actions:
+  - id: register-facility
+    display:
+      label: Register facility
+      description: Create a facility and its initial operator assignment atomically.
+    execution: {mode: immediate}
+    inputs:
+      - {id: facility-code, apiName: facilityCode, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: internal}
+      - {id: address-line, apiName: addressLine, typeRef: address-line, required: true, classification: internal}
+      - {id: city, typeRef: city, required: true, classification: internal}
+      - {id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}
+      - {id: operator, apiName: operatorId, type: reference, target: operator, required: true, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+    commitGuards:
+      targets:
+        - {input: operator, field: status, equals: active}
+        - {input: operator, field: jurisdiction, equalsFromInput: jurisdiction}
+    plan:
+      type: fixed
+      effects:
+        - id: facility
+          target: {recordType: facility}
+          operation: create
+          set:
+            facility-code: {fromInput: facility-code}
+            name: {fromInput: name}
+            address-line: {fromInput: address-line}
+            city: {fromInput: city}
+            postal-code: {fromInput: postal-code}
+            status: {value: active}
+            jurisdiction: {fromInput: jurisdiction}
+        - id: assignment
+          target: {recordType: facility-assignment}
+          operation: create
+          set:
+            facility: {fromEffect: facility}
+            operator: {fromInput: operator}
+            jurisdiction: {fromInput: jurisdiction}
+  - id: correct-address
+    display:
+      label: Correct facility address
+      description: Submit a frozen address correction for independent review and later application.
+    execution:
+      mode: proposal
+      proposal:
+        review:
+          type: required
+          authority: casework
+          source: facility-registry
+          # The authority selects its current concrete policy when it first accepts
+          # this submission. Add version and digest only for a strict owner pin.
+          policy: {id: facility-address-review}
+        reviewContext:
+          id: facility-address-context
+          fields:
+            facilityId: {type: input, input: facility}
+            currentAddressLine: {type: record, input: facility, field: address-line}
+            changes: {type: changes, recordType: facility, fields: [address-line, city, postal-code]}
+            supportingDocument: {type: document, slot: supporting-document}
+        retention: {mode: retain}
+        attachments:
+          - {id: supporting-document, required: false, maximumBytes: 1048576, contentTypes: [application/pdf], classification: restricted}
+    commitGuards:
+      targets:
+        - {input: facility, revision: unchanged}
+        - {input: facility, field: status, equals: active}
+    inputs:
+      - {id: facility, apiName: facilityId, type: reference, target: facility, required: true, classification: internal}
+      - {id: address-line, apiName: addressLine, typeRef: address-line, required: true, classification: internal}
+      - {id: city, typeRef: city, required: true, classification: internal}
+      - {id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}
+    plan:
+      type: function
+      function: correct-address-plan
+      inputs: [facility, address-line, city, postal-code]
+      writes:
+        - id: facility-address
+          target: {fromInput: facility}
+          operation: patch
+          fields: [address-line, city, postal-code]
+      refusals:
+        - {code: invalid-postal-code, label: Postal code is invalid}
+  - id: deactivate-facility
+    display:
+      label: Deactivate facility
+      description: Submit a durable deactivation that requires no external review.
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        application: {mode: manual}
+        retention: {mode: retain}
+    commitGuards:
+      targets:
+        - {input: facility, revision: unchanged}
+        - {input: facility, field: status, equals: active}
+    inputs:
+      - {id: facility, apiName: facilityId, type: reference, target: facility, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: facility-status
+          target: {fromInput: facility}
+          operation: patch
+          set:
+            status: {value: inactive}
+
+accessProfiles:
+  - id: operator-editor
+    principalClaim: registry_principal
+    requiredScopes: ["registry:operator:write"]
+    requiredPurposes: [facility-administration]
+    permissions:
+      records:
+        - recordType: operator
+          operations: [create, get, list, patch]
+          readableFields: [operator-code, status, jurisdiction]
+          writableFields: [operator-code, status, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+  - id: facility-reader
+    principalClaim: registry_principal
+    requiredScopes: ["registry:facility:read"]
+    requiredPurposes: [facility-administration]
+    permissions:
+      records:
+        - recordType: operator
+          operations: [get, list]
+          readableFields: [operator-code, status, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - recordType: facility
+          operations: [get, list]
+          readableFields: [facility-code, name, address-line, city, postal-code, status, jurisdiction]
+          readPaths:
+            - {path: operators, readableFields: [operator-code, status, jurisdiction]}
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - recordType: facility-assignment
+          operations: [get, list]
+          readableFields: [facility, operator, jurisdiction]
+          filterableFields: [facility, operator]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+  - id: directory-editor
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: ["registry:directory:write"]
+    requiredPurposes: [directory-administration]
+    permissions:
+      records:
+        - recordType: directory-entry
+          operations: [create, get, list, patch]
+          readableFields: [name, email, jurisdiction]
+          writableFields: [name, email, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+  - id: facility-registrar
+    principalClaim: registry_principal
+    requiredScopes: ["registry:facility:register"]
+    requiredPurposes: [facility-administration]
+    permissions:
+      actions:
+        - action: register-facility
+          operations: [invoke]
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+            - recordType: facility-assignment
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+            - recordType: operator
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          results: [facility, assignment]
+  - id: facility-correction-author
+    principalClaim: registry_principal
+    requiredScopes: ["registry:facility:correction:submit"]
+    requiredPurposes: [facility-administration]
+    permissions:
+      actions:
+        - action: correct-address
+          operations: [start]
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - action: deactivate-facility
+          operations: [start]
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      proposals:
+        - action: correct-address
+          operations: [get, list, edit, submit, revise, rebase, retry, cancel, get-review-status]
+          readableInputs: [facility, address-line, city, postal-code]
+          readableAttachments: [supporting-document]
+          writableAttachments: [supporting-document]
+          ownership: caller
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - action: deactivate-facility
+          operations: [get, list, edit, submit, revise, rebase, retry, cancel, get-review-status]
+          readableInputs: [facility]
+          ownership: caller
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+  - id: facility-correction-applier
+    principalClaim: registry_principal
+    requiredScopes: ["registry:facility:correction:apply"]
+    requiredPurposes: [facility-administration]
+    permissions:
+      proposals:
+        - action: correct-address
+          operations: [get, list, apply]
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - action: deactivate-facility
+          operations: [get, list, apply]
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+  - id: proposal-reviewer
+    principalClaim: registry_principal
+    requiredScopes: ["registry:proposal:review"]
+    requiredPurposes: [facility-review]
+    permissions:
+      records:
+        - recordType: facility
+          operations: [get]
+          readableFields: [address-line, city, postal-code]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      proposals:
+        - action: correct-address
+          operations: [get-review-context]
+          readableContextFields: [facilityId, currentAddressLine, changes, supportingDocument]
+          targets:
+            - recordType: facility
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+
+  - id: casework-review-status
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [casework-service]
+    requiredScopes: ["registry:proposal:review-status"]
+    requiredPurposes: [facility-review]
+    permissions:
+      proposals:
+        - action: correct-address
+          operations: [get-review-status]
+          reviewAuthority: casework
+
+vocabularies:
+  - id: operator-status
+    values: [active, inactive]
+  - id: facility-status
+    values: [active, inactive]

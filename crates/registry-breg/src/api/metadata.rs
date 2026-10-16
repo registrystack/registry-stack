@@ -47,43 +47,15 @@ fn operation(
     } else {
         &empty
     };
-    // Attachment authority uses the patch grant but never authorizes JSON Patch slot values.
-    let create = create
-        .iter()
-        .filter(|id| !surface.entity.attachments.contains_key(*id))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let patch = patch
-        .iter()
-        .filter(|id| !surface.entity.attachments.contains_key(*id))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let attachment_writable = if surface.route.operation == Operation::Patch {
-        profile
-            .writable_fields
-            .iter()
-            .filter(|id| surface.entity.attachments.contains_key(*id))
-            .cloned()
-            .collect::<BTreeSet<_>>()
-    } else {
-        BTreeSet::new()
-    };
+    let create = create.clone();
+    let patch = patch.clone();
     let fields = surface
         .readable_fields
         .iter()
         .chain(&create)
         .chain(&patch)
-        .chain(&attachment_writable)
         .cloned()
         .collect::<BTreeSet<_>>();
-    // Request metadata disclosure is a separate grant. The projection repeats
-    // the rule the request read path applies: only a profile on a
-    // change-request entity receives the fields its grant names.
-    let readable_request_fields = if surface.entity.change_request.is_none() {
-        BTreeSet::new()
-    } else {
-        profile.readable_request_fields.clone().into()
-    };
     let query = surface
         .route
         .query_kind
@@ -93,16 +65,15 @@ fn operation(
         "method": surface.route.method,
         "path": surface.route.path,
         "operation": surface.route.operation,
-        "sourceEntity": surface.entity.id,
-        "responseEntity": surface.response_entity.id,
+        "sourceRecordType": surface.entity.id,
+        "responseRecordType": surface.response_entity.id,
         "accessProfile": surface.context.selected_profile(),
         "requiredCapabilities": required_capabilities(surface.route.operation),
-        "entityLabel": entity_label(service, surface),
+        "recordTypeLabel": entity_label(service, surface),
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": title_fields(service, surface),
         "fields": fields.iter().filter_map(|id| field(service, surface, surfaces, id, &patch)).collect::<Vec<_>>(),
         "readableFields": surface.readable_fields,
-        "readableRequestFields": readable_request_fields,
         "createWritableFields": create,
         "patchWritableFields": patch,
         "selectors": selectors(service, surface),
@@ -115,81 +86,8 @@ fn operation(
     value
 }
 
-fn attachment_request(surface: &AuthorizedSurface<'_>, slot_id: &str, method: &str) -> Value {
-    let mut request = json!({
-        "method": method,
-        "path": crate::artifacts::attachment_path(surface.entity, slot_id),
-        "accessProfile": surface.context.selected_profile(),
-        "authorizationOperation": if method == "GET" { "get" } else { "patch" },
-        "queryParameters": if method == "GET" { vec!["proposalVersion"] } else { Vec::<&str>::new() },
-        "body": if method == "PATCH" { "binary" } else { "none" },
-        "ifMatchRequired": method != "GET",
-        "idempotencyKeyRequired": method != "GET",
-    });
-    if method == "GET" {
-        request["proposalVersionRequired"] = json!(true);
-    } else {
-        request["requiredState"] = json!("draft");
-    }
-    request
-}
-
-pub(super) fn append_attachment_openapi(
-    service: &HttpService,
-    surfaces: &[AuthorizedSurface<'_>],
-    paths: &mut Map<String, Value>,
-) {
-    for surface in surfaces
-        .iter()
-        .filter(|surface| surface.read_path.is_none() && surface.context.principal().is_some())
-    {
-        let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
-        for slot in surface.entity.attachments.values() {
-            let methods = match surface.route.operation {
-                Operation::Get if surface.readable_fields.contains(&slot.id) => &["get"][..],
-                Operation::Patch if profile.writable_fields.contains(&slot.id) => {
-                    &["patch", "delete"][..]
-                }
-                _ => continue,
-            };
-            let path = paths
-                .entry(crate::artifacts::attachment_path(surface.entity, &slot.id))
-                .or_insert_with(|| json!({}));
-            for method in methods {
-                path[*method] = crate::artifacts::openapi_attachment_operation(
-                    OpenApiOperationSpec {
-                        registry_identifier: service.registry.registry_id(),
-                        route: surface.route,
-                        entity: surface.entity,
-                        response_entity: surface.entity,
-                        query: service.registry.queries(),
-                        schema_ref: &surface.entity.id,
-                        request_schema_ref: &surface.entity.id,
-                        readable_fields: Some(&surface.readable_fields),
-                        access_profiles: OpenApiAccessProfiles::Selected(
-                            surface.context.selected_profile(),
-                        ),
-                    },
-                    slot,
-                    method,
-                );
-            }
-        }
-    }
-}
-
-fn required_capabilities(operation: Operation) -> Vec<&'static str> {
-    if matches!(
-        operation,
-        Operation::SubmitRequest
-            | Operation::ReviseRequest
-            | Operation::CancelRequest
-            | Operation::ApplyRequest
-    ) {
-        vec!["change_request_lifecycle"]
-    } else {
-        Vec::new()
-    }
+fn required_capabilities(_operation: Operation) -> Vec<&'static str> {
+    Vec::new()
 }
 
 fn field(
@@ -200,38 +98,24 @@ fn field(
     patch: &BTreeSet<String>,
 ) -> Option<Value> {
     let entity = surface.response_entity;
-    if let Some(slot) = entity.attachments.get(id) {
-        let mut schema = crate::artifacts::attachment_metadata_schema(slot);
-        let capability = &mut schema["x-registry-attachment"];
-        for candidate in surfaces.iter().filter(|candidate| {
-            candidate.context.principal().is_some()
-                && candidate.entity.id == entity.id
-                && candidate.read_path.is_none()
-                && candidate.context.selected_profile() == surface.context.selected_profile()
-        }) {
-            let profile = &candidate.entity.access_profiles[candidate.context.selected_profile()];
-            if candidate.route.operation == Operation::Get && candidate.readable_fields.contains(id)
-            {
-                capability["download"] = attachment_request(candidate, id, "GET");
-            }
-            if candidate.route.operation == Operation::Patch && profile.writable_fields.contains(id)
-            {
-                capability["upload"] = attachment_request(candidate, id, "PATCH");
-                capability["remove"] = attachment_request(candidate, id, "DELETE");
-            }
-        }
-        return Some(json!({"id": id, "apiName": id, "label": humanize(id),
-            "schema": schema, "required": false, "nullable": true, "readOnly": true, "removable": false}));
-    }
+
     let logical = logical_field(entity, id)?;
     let stored = entity
         .stored_fields
         .iter()
         .find(|field| field.logical.id == id);
     let required = stored.is_some_and(|field| field.required);
+    let display = entity.fields.get(id).map(|field| &field.display);
+    let label = display
+        .and_then(|display| display.label.clone())
+        .unwrap_or_else(|| humanize(id));
+    let mut schema = field_value_schema(&logical.field_type, !required);
+    if let Some(description) = display.and_then(|display| display.description.as_ref()) {
+        schema["description"] = json!(description);
+    }
     let mut value = json!({
-        "id": id, "apiName": logical.api_name, "label": humanize(id),
-        "schema": field_value_schema(&logical.field_type, !required),
+        "id": id, "apiName": logical.api_name, "label": label,
+        "schema": schema,
         "required": required, "nullable": !required, "readOnly": stored.is_none(),
         "removable": patch.contains(id) && !required,
     });
@@ -267,7 +151,14 @@ fn field(
             })).collect::<Vec<_>>(),
         });
         if !targets.is_empty() {
-            reference["targetEntity"] = json!(target);
+            reference["targetRecordType"] = json!(target);
+            if let Some(relationship) = entity.relationships.get(&logical.api_name) {
+                reference["name"] = json!(relationship.name);
+                reference["cardinality"] = json!(relationship.cardinality);
+                if let Some(inverse) = &relationship.inverse_name {
+                    reference["inverseName"] = json!(inverse);
+                }
+            }
         }
         value["reference"] = reference;
     }
@@ -315,11 +206,9 @@ fn selectors(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<Valu
 
 fn query_metadata(surface: &AuthorizedSurface<'_>, query: &CompiledQueryOperation) -> Value {
     let entity = surface.response_entity;
-    // Attachment metadata is selectable without adding a scalar SQL column.
     let selectable_fields = query
         .projection_fields
         .iter()
-        .chain(entity.attachments.keys())
         .filter(|id| surface.readable_fields.contains(*id))
         .collect::<BTreeSet<_>>();
     let mut value = json!({
@@ -487,18 +376,6 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
             value["body"] = json!("selector_values");
             value["contentType"] = json!("application/json");
         }
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => {
-            value["body"] = json!("change_request_action");
-            value["contentType"] = json!("application/json");
-            value["ifMatchRequired"] = json!(true);
-            value["idempotencyKeyRequired"] = json!(true);
-            value["mutationSemantics"] = json!("change_request_lifecycle");
-            value["schema"] =
-                crate::artifacts::openapi_request_action_input_schema(surface.route.operation);
-        }
         _ => {}
     }
     value
@@ -508,7 +385,6 @@ fn profile_batch_writable_fields(surface: &AuthorizedSurface<'_>) -> BTreeSet<St
     surface.entity.access_profiles[surface.context.selected_profile()]
         .writable_fields
         .iter()
-        .filter(|id| !surface.entity.attachments.contains_key(*id))
         .cloned()
         .collect()
 }
@@ -523,14 +399,6 @@ fn logical_field<'a>(entity: &'a CompiledEntity, id: &str) -> Option<&'a Compile
 }
 
 fn field_identity(entity: &CompiledEntity, id: &str) -> Option<Value> {
-    if entity.attachments.contains_key(id) {
-        return Some(json!({"id": id, "apiName": id}));
-    }
-    if entity.change_request.is_some() {
-        if let Some(api_name) = crate::model::request_query_field_api_name(id) {
-            return Some(json!({"id": id, "apiName": api_name}));
-        }
-    }
     let field = if id == entity.canonical_id.id {
         &entity.canonical_id
     } else {
@@ -550,6 +418,19 @@ fn projection<'a>(
 }
 
 fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<String> {
+    if let Some(field) = &surface.response_entity.display.title_field {
+        return readable_text_or_string(surface, field)
+            .then(|| field.clone())
+            .into_iter()
+            .collect();
+    }
+    let native = surface
+        .response_entity
+        .display
+        .title_field
+        .as_ref()
+        .filter(|field| readable_text_or_string(surface, field))
+        .cloned();
     let authored = projection(service, surface)
         .and_then(|projection| {
             projection
@@ -564,7 +445,8 @@ fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<S
                 .find(|identifier| readable_string(surface, &identifier.field))
         })
         .map(|identifier| identifier.field.clone());
-    authored
+    native
+        .or(authored)
         .or_else(|| temporal_scope_title_field(surface))
         .or_else(|| unique_title_field(surface))
         .or_else(|| {
@@ -650,15 +532,22 @@ fn unique_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
 }
 
 fn entity_label(service: &HttpService, surface: &AuthorizedSurface<'_>) -> String {
-    projection(service, surface)
-        .and_then(|projection| {
-            projection
-                .entities
-                .iter()
-                .find(|entity| entity.id == surface.response_entity.id)
+    surface
+        .response_entity
+        .display
+        .label
+        .clone()
+        .or_else(|| {
+            projection(service, surface)
+                .and_then(|projection| {
+                    projection
+                        .entities
+                        .iter()
+                        .find(|entity| entity.id == surface.response_entity.id)
+                })
+                .and_then(|entity| entity.title.as_ref())
+                .map(text_label)
         })
-        .and_then(|entity| entity.title.as_ref())
-        .map(text_label)
         .unwrap_or_else(|| humanize(&surface.response_entity.id))
 }
 
@@ -685,42 +574,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_lifecycle_operations_require_an_explicit_workspace_capability() {
-        for operation in [
-            Operation::SubmitRequest,
-            Operation::ReviseRequest,
-            Operation::CancelRequest,
-            Operation::ApplyRequest,
-        ] {
-            assert_eq!(
-                required_capabilities(operation),
-                ["change_request_lifecycle"]
-            );
-        }
+    fn record_operations_do_not_require_retired_lifecycle_capabilities() {
         assert!(required_capabilities(Operation::Create).is_empty());
         assert!(required_capabilities(Operation::Patch).is_empty());
     }
 
     #[test]
-    fn lifecycle_request_schemas_are_operation_exact() {
-        let empty = crate::artifacts::openapi_request_action_input_schema(Operation::SubmitRequest);
-        assert_eq!(empty["additionalProperties"], false);
-        assert_eq!(empty["properties"], json!({}));
-
-        let decision =
-            crate::artifacts::openapi_request_action_input_schema(Operation::ApplyRequest);
+    fn proposal_apply_schema_binds_the_frozen_submission() {
+        let decision = crate::artifacts::proposal_apply_input_schema();
         assert_eq!(
             decision["required"],
-            json!(["proposalVersion", "effectDigest"])
+            json!(["submissionVersion", "effectDigest"])
         );
         assert_eq!(
             decision["properties"]["effectDigest"]["pattern"],
             "^sha256:[0-9a-f]{64}$"
         );
-
-        let revise =
-            crate::artifacts::openapi_request_action_input_schema(Operation::ReviseRequest);
-        assert_eq!(revise["required"], json!(["rebase"]));
-        assert_eq!(revise["properties"]["rebase"]["type"], "boolean");
     }
 }

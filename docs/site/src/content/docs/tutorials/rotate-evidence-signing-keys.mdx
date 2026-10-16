@@ -1,6 +1,6 @@
 ---
 title: Rotate Evidence Gateway signing keys
-description: Stage a new Evidence Gateway signing key, publish an overlap set through the runtime JWKS endpoint, and retire the old key after consumers can verify both generations.
+description: Distribute successor verification trust, deploy a new pinned Transit signer, and retire the predecessor after its validity window.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,160 +16,97 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key
 ---
 
-Use this procedure after
-[configuring Transit signing](../move-evidence-to-production-signing/). Coordinate the rotation with
-consumers through [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/) before
-activation. Evidence Gateway signs with one active ES256 P-256 key. Its service `kid` is the RFC
-7638 thumbprint. Rotation is a reviewed, startup-only configuration change.
+Use this procedure after [configuring Transit signing](../move-evidence-to-production-signing/).
+Evidence Gateway signs with one active ES256 P-256 key whose `kid` is its RFC 7638 thumbprint.
+The normalized target binds that key through `signer.publicJwkFile` and `signer.keyVersion`.
+Coordinate new verification trust with consumers before replacing the signer.
 
-## Prerequisites
+## Prepare the successor
 
-You need a checked strict deployment, provider authority to rotate the named Transit key, and an
-approved overlap period. There is no hot-rotation endpoint or standby-key field. Publishing a new
-public key makes the key discoverable, but does not make independent consumers trust the key.
+You need an approved strict deployment, provider authority to rotate its named Transit key, and a
+consumer trust rollout that accepts both generations during the assertion validity window.
+Publishing a JWK does not make an independent consumer trust it.
 
-## Stage a new key version
+Create a new version of the non-exportable P-256 Transit key. Keep export and plaintext backup
+disabled. Read the successor's public PEM and convert it with `evidencectl jwk from-pem`, as in
+[publish the exact public projections](../move-evidence-to-production-signing/#publish-the-exact-public-projections).
+Commit only the public JWK under `public-keys/<thumbprint>.jwk.json`. Do not overwrite the active file.
 
-Create the replacement as a new version of the non-exportable P-256 Transit key. Read that version's
-public PEM from Transit metadata, convert the public projection to the exact governed JWK with
-`evidencectl jwk from-pem`, as in
-[Publish the exact public projections](../move-evidence-to-production-signing/#publish-the-exact-public-projections),
-and commit only that JWK to the reviewed deployment repository. For local rehearsal, generate a disposable
-P-256 pair:
+:::caution
+The private Transit key stays with its provider. Do not export it or replace it with a disposable
+local key. A version whose private material has left provider custody must be replaced.
+:::
 
-```sh
-evidencectl keygen signing --output-dir "<owner-only-staging-directory>"
-```
+Distribute the successor public key, provider identity, `kid` and activation window through the
+approved onboarding channel. Consumers retain the predecessor and add the successor to their
+reviewed trust set. Confirm this rollout before activating the signer. The current normalized
+target selects one service key; it does not author a second published key set for a JWKS overlap.
+Consumers that rely only on cached service JWKS need a coordinated refresh or a cutover window.
 
-The command writes a private and public JWK without printing private bytes. It is for local mode;
-do not copy its private output to a strict deployment. Commit the production public JWK beneath
-`public-keys/` as `<thumbprint>.jwk.json`. The Transit provider retains the matching private key and
-has no export or plaintext-backup permission.
+## Build and activate the successor
 
-Do not overwrite an active public key file. A candidate revision must be complete and checkable
-before activation.
-
-Publishing, activating, retiring, and revoking a key each change the package digest you record at
-approval, but no requirement's `configurationRevision`. Which keys sign is trust consumers take from
-the JWKS and their own denylist, so they update their pinned key set and `revokedKeyIds`, not the
-revisions their verification policies pin.
-
-## Build the overlap revision
-
-In `governance.yaml`, add the next public JWK to the published set while the current key remains
-active:
+Set the successor's exact public-key reference and provider version together in `target.yaml`:
 
 ```yaml
-signing:
-  format: flattened-jws-json
+signer:
+  type: transit
   algorithm: ES256
-  activePublicJwkFile: public-keys/<current-thumbprint>.jwk.json
-  publishedPublicJwkFiles:
-    - public-keys/<next-thumbprint>.jwk.json
-  revokedKeyIds: []
-  jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 300
-  verifierClockSkewSeconds: 30
+  publicJwkFile: public-keys/<next-thumbprint>.jwk.json
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: <next-nonzero-version>
+  attemptTimeoutMilliseconds: 2000
 ```
 
-Every service JWK is an exact ES256 P-256 public JWK, and its `kid` is its derived 43-character
-thumbprint. Evidence Gateway assembles its JSON Web Key Set (JWKS) from the active and published
-files. Do not publish a separate operator-built JWKS.
-
-Build a new candidate, run its fixtures, and run `evidence check --require-runtime-dependencies` in
-the target execution context:
+Allow both old and new versions in the proxy policy during the rollout, and keep the provider's
+`min_encryption_version` low enough for replicas still pinned to the predecessor.
+Build a new candidate and run its fixtures:
 
 ```sh
 evidencectl package "<deployment-repository>/shared/evidence-project" \
   --target "<deployment-repository>/environments/<environment>/evidence" \
-  --output "<new-package-directory>"
+  --output "<new-candidate-directory>"
 evidencectl test "<deployment-repository>/shared/evidence-project" \
   --target "<deployment-repository>/environments/<environment>/evidence"
-evidence check --require-runtime-dependencies \
-  --runtime-config "<deployment-repository>/environments/<environment>/evidence/runtime.yaml"
 ```
 
-Give consumers the new public key, `kid`, provider identity, activation window, and overlap period
-through the governed onboarding channel. Consumers add the new key to a candidate pinned trust set
-and prove both old-key and new-key synthetic responses before accepting the change.
-
-## Publish the overlap set
-
-Deploy the checked overlap candidate and restart every replica. Confirm that every replica
-publishes both public keys before activating the new signer version:
+Install the exact `bundle/` at the emitted runtime's `package.root`, retain its runtime and compiled
+authority separately, and activate the complete authority before the target-host check:
 
 ```sh
-curl --fail --silent --show-error \
-  "https://<evidence-host>/.well-known/evidence/jwks.json"
+evidence authority activate --runtime-config "<candidate>/runtime.yaml" \
+  --document "<candidate>/compiled-authority.yaml"
+evidence check --require-runtime-dependencies --runtime-config "<candidate>/runtime.yaml"
 ```
 
-Before the overlap deployment, update the proxy policy's `allowed_parameters.key_version` to list
-both the old and new numeric versions. Keep the provider key's `min_encryption_version` low enough
-for both application versions during the rollout. No other signing versions should be permitted.
+Restart every replica to adopt the checked successor. Confirm readiness, send an authorized synthetic
+request, and verify the response with the consumer's approved overlap trust set. Missing or
+mismatched signing material refuses startup; signing never falls back to an unsigned success.
+Target signing changes do not alter a definition's `configurationRevision`.
 
-## Activate the new version
+## Retire the predecessor
 
-Build and check the next candidate with both coordinated changes:
+Count the longest assertion validity plus accepted verifier clock skew from the last instant any
+replica could sign with the predecessor. Keep its public key in consumer trust for at least that
+window, and longer when consumers must reverify retained decisions.
 
-1. Set `activePublicJwkFile` to the next public JWK.
-2. Move the old public JWK to `publishedPublicJwkFiles`.
-3. Pin `signer.keyVersion` to the new nonzero Transit version.
+After every replica uses the successor and the window has elapsed, remove the old version from the
+proxy policy and raise `min_encryption_version` to the successor. Coordinate removal of the old
+public key from consumer trust. Keep prior approved candidates and audit history according to the
+operator's retention policy.
 
-Deploy that exact candidate and restart every replica. Confirm readiness and the JWKS, then send one
-authorized synthetic request and verify its `kid` with the consumer's approved overlap set.
+## Revoke a compromised version
 
-Missing, unreadable, or mismatched signing material fails closed. Evidence Gateway never falls back
-to an unsigned success.
+Disable provider signing for the compromised version immediately, using `min_encryption_version`
+or removing the proxy identity's signing capability. Distribute its thumbprint through the emergency
+onboarding channel so every consumer denies it before resuming decisions. Deploy a checked successor
+or keep the service unavailable. The current normalized target does not author a service signing-key
+denylist; do not invent a target field or edit immutable bundle bytes to add one.
 
-A replica that refuses to start names the cause after `evidence: runtime signing initialization
-failed:`. The two version causes are the ones a rotation reaches:
-
-- `the runtime keyVersion is above the Transit key's latest_version`: the provider has not created
-  the version `signer.keyVersion` pins yet. Rotate the Transit key first, or pin the version it has.
-- `the runtime keyVersion is below the Transit key's min_encryption_version and can no longer sign`:
-  the provider has retired the pinned version. Pin a version at or above the minimum, or lower the
-  minimum through the provider-administration identity.
-
-After every replica uses the new version and the validity-plus-skew window has elapsed, remove the
-old version from `allowed_parameters.key_version` as part of retiring the old public key.
-
-## Retire the old version
-
-Keep the old public key published and keep its provider version usable for at least:
-
-```text
-maximumAssertionValiditySeconds + verifierClockSkewSeconds
-```
-
-Count from the last instant the old private key could have signed. Retain the public key longer when
-consumers must re-verify historical decisions.
-
-After the overlap period, build a later candidate that removes the old public JWK and its
-`publishedPublicJwkFiles` entry. Raise the named Transit key's `min_encryption_version` to the new
-version through a privileged provider-administration identity, not through the application proxy.
-The provider then refuses new signing operations with the old version. Run fixtures and `evidence
-check`, coordinate consumer removal, deploy, and confirm the JWKS no longer carries the old key.
-
-## Revoke an exposed version
-
-For an emergency rotation:
-
-1. Disable provider signing authority immediately. Raise `min_encryption_version` to an existing
-   uncompromised later version, or remove the proxy identity's sign capability until a replacement
-   exists.
-2. Remove its public JWK and add its thumbprint to `signing.revokedKeyIds`.
-3. Activate a checked replacement or leave Evidence Gateway unavailable.
-4. Deploy and restart every affected issuer and consumer.
-
-A key identifier in `signing.revokedKeyIds` leaves every requirement's `configurationRevision`
-unchanged, so consumers keep their pinned policies. Give them the revoked thumbprint through the
-emergency onboarding channel so they add it to their own denylist before they resume decisions.
-
-For an exposed OIDC issuer key, add the thumbprint to Evidence Gateway
-`authentication.revokedKeyIds` before restarting Evidence Gateway. This is service-key revocation,
-not an Evidence credential-status or lifecycle feature. It changes which caller tokens Evidence
-Gateway accepts, not any requirement's `configurationRevision`, so consumers keep their pinned
-policies.
+For a compromised caller-token issuer key, use `authentication.oidc.revokedKeyIds` in `target.yaml`,
+build a new candidate and restart Evidence Gateway. This changes token acceptance, not an Evidence
+credential-status or lifecycle feature.
 
 ## Next
 

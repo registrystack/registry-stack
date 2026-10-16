@@ -10,15 +10,14 @@ use std::time::Duration;
 
 use casework_client_sdk::{
     AbsenceInput, AbsencesQuery, AssignmentRequest, BearerToken, BootstrapDirectoryRequest,
-    CaseloadApplyRequest, CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
-    CaseworkClient as RustClient, CaseworkClientConfig, CaseworkClientError as RustClientError,
-    CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClockRecomputeApplyRequest,
-    ClockRecomputeRequest, DecideRequest, DelegateRequest, DirectoryTargetsQuery,
-    DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, ListWorkItemsQuery,
-    NextWorkItemQuery, OwnReviewDecisionQuery, RecoverAttemptRequest, ReviewCancelRequest,
-    ReviewCreateRequest, ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted,
-    ReviewResultResponse, ReviewTaskDecisionRequest, ReviewTaskDraftInput, ReviewTaskQuery,
-    SaveDraftRequest, SubmissionDigest, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
+    CaseworkAuth, CaseworkClient as RustClient, CaseworkClientConfig,
+    CaseworkClientError as RustClientError, CaseworkComplete, CaseworkProblemCode,
+    CaseworkProtocolFailure, DelegateRequest, DirectoryTargetsQuery, DirectoryTeamUpdateRequest,
+    HolidaySetRevisionInput, OwnReviewDecisionQuery, ReviewCancelRequest,
+    ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest, ReviewClockRecomputeApplyRequest,
+    ReviewClockRecomputeRequest, ReviewCreateRequest, ReviewNoteRequest, ReviewPageQuery,
+    ReviewRequestAccepted, ReviewResultResponse, ReviewStaffingQuery, ReviewTaskDecisionRequest,
+    ReviewTaskDraftInput, SubmissionDigest, SupervisoryReviewTaskQuery,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -48,7 +47,6 @@ struct MappedError {
     detail: Option<String>,
     status: Option<u16>,
     trace_id: Option<String>,
-    original_attempt_id: Option<String>,
     validation: Option<serde_json::Value>,
     transport_kind: Option<String>,
     protocol_failure: Option<&'static str>,
@@ -72,9 +70,6 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("trace_id", mapped.trace_id)
-        .expect("fresh exception accepts attributes");
-    instance
-        .setattr("original_attempt_id", mapped.original_attempt_id)
         .expect("fresh exception accepts attributes");
     let validation = mapped
         .validation
@@ -152,18 +147,17 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             code,
             detail,
             trace_id,
-            original_attempt_id,
             validation,
         } => {
             mapped.status = Some(status);
             mapped.code = Some(code.code().to_owned());
             mapped.detail = detail;
             mapped.trace_id = trace_id;
-            mapped.original_attempt_id = original_attempt_id.map(|value| value.to_string());
             mapped.validation = validation.map(|value| {
                 serde_json::json!({
                     "path": value.path,
                     "reason": validation_reason(value.reason),
+                    "allowed": value.allowed,
                 })
             });
         }
@@ -336,10 +330,10 @@ fn auth<'a>(
 /// Every validation reason the binding can answer, in the order the mapping
 /// below names them. A reason the client adds stops that mapping compiling, so
 /// a new reason is named here before it can reach a caller.
-const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 14] = {
+const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 17] = {
     use casework_client_sdk::ReviewValidationReason;
     [
-        ReviewValidationReason::KindNotAllowed,
+        ReviewValidationReason::PolicyNotAllowed,
         ReviewValidationReason::ReferenceInvalid,
         ReviewValidationReason::ObjectRequired,
         ReviewValidationReason::MaximumBytesExceeded,
@@ -353,13 +347,16 @@ const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 14] = {
         ReviewValidationReason::FieldNotDeclared,
         ReviewValidationReason::ConstraintInvalid,
         ReviewValidationReason::ConstraintViolated,
+        ReviewValidationReason::PublicReasonRequired,
+        ReviewValidationReason::PublicReasonNotDeclared,
+        ReviewValidationReason::ApprovalOutcomeDiffers,
     ]
 };
 
 fn validation_reason(value: casework_client_sdk::ReviewValidationReason) -> &'static str {
     use casework_client_sdk::ReviewValidationReason;
     match value {
-        ReviewValidationReason::KindNotAllowed => "kind-not-allowed",
+        ReviewValidationReason::PolicyNotAllowed => "policy-not-allowed",
         ReviewValidationReason::ReferenceInvalid => "reference-invalid",
         ReviewValidationReason::ObjectRequired => "object-required",
         ReviewValidationReason::MaximumBytesExceeded => "maximum-bytes-exceeded",
@@ -373,6 +370,9 @@ fn validation_reason(value: casework_client_sdk::ReviewValidationReason) -> &'st
         ReviewValidationReason::FieldNotDeclared => "field-not-declared",
         ReviewValidationReason::ConstraintInvalid => "constraint-invalid",
         ReviewValidationReason::ConstraintViolated => "constraint-violated",
+        ReviewValidationReason::PublicReasonRequired => "public-reason-required",
+        ReviewValidationReason::PublicReasonNotDeclared => "public-reason-not-declared",
+        ReviewValidationReason::ApprovalOutcomeDiffers => "approval-outcome-differs",
     }
 }
 
@@ -567,7 +567,7 @@ impl CaseworkClient {
         )
     }
 
-    fn review_kinds<'py>(
+    fn review_policies<'py>(
         &self,
         py: Python<'py>,
         token: &str,
@@ -578,24 +578,26 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime
-                    .block_on(self.inner.review_kinds(auth(&token, profile, None)))
+                    .block_on(self.inner.review_policies(auth(&token, profile, None)))
             }),
         )
     }
 
-    fn review_kind<'py>(
+    fn review_policy<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
-        kind_id: &str,
+        policy_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime
-                    .block_on(self.inner.review_kind(auth(&token, profile, None), kind_id))
+                self.runtime.block_on(
+                    self.inner
+                        .review_policy(auth(&token, profile, None), policy_id),
+                )
             }),
         )
     }
@@ -632,13 +634,57 @@ impl CaseworkClient {
         source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
-        let query: ReviewTaskQuery = optional_input(py, query)?;
+        let query: ReviewStaffingQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
                         .review_tasks(auth(&token, profile, source_profile), &query),
+                )
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    fn next_review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: Option<&Bound<'_, PyAny>>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: ReviewStaffingQuery = optional_input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .next_review_task(auth(&token, profile, source_profile), &query),
+                )
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    fn review_task_holdings<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: Option<&Bound<'_, PyAny>>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: ReviewStaffingQuery = optional_input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_task_holdings(auth(&token, profile, source_profile), &query),
                 )
             }),
         )
@@ -710,35 +756,14 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, task_id, *, source_profile=None))]
     fn preview_review_task_templates<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
-        source_profile: &str,
         task_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let token = bearer(py, token)?;
-        let task_id = uuid(py, task_id)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime
-                    .block_on(self.inner.preview_review_task_templates(
-                        auth(&token, profile, Some(source_profile)),
-                        task_id,
-                    ))
-            }),
-        )
-    }
-
-    fn list_review_task_grants<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        task_id: &str,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -746,8 +771,8 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(
-                    self.inner.list_review_task_grants(
-                        auth(&token, profile, Some(source_profile)),
+                    self.inner.preview_review_task_templates(
+                        auth(&token, profile, source_profile),
                         task_id,
                     ),
                 )
@@ -755,17 +780,40 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, task_id, *, source_profile=None))]
+    fn list_review_task_grants<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .list_review_task_grants(auth(&token, profile, source_profile), task_id),
+                )
+            }),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, approval, source_profile=None))]
     fn approve_review_task_grant<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
-        source_profile: &str,
         task_id: &str,
         expected_revision: i64,
         idempotency_key: &str,
         approval: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -774,7 +822,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.approve_review_task_grant(
-                    auth(&token, profile, Some(source_profile)),
+                    auth(&token, profile, source_profile),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -1123,164 +1171,6 @@ impl CaseworkClient {
         )
     }
 
-    fn list_work_items<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        query: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query: ListWorkItemsQuery = input(py, query)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .list_work_items(auth(&token, profile, Some(source_profile)), &query),
-                )
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, source_profile, query=None))]
-    fn next_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        query: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query: NextWorkItemQuery = optional_input(py, query)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .next_work_item(auth(&token, profile, Some(source_profile)), &query),
-                )
-            }),
-        )
-    }
-
-    fn get_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .get_work_item(auth(&token, profile, Some(source_profile)), item_id),
-                )
-            }),
-        )
-    }
-
-    fn preview_task_templates<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner.preview_task_templates(
-                        auth(&token, profile, Some(source_profile)),
-                        item_id,
-                    ),
-                )
-            }),
-        )
-    }
-    fn list_task_grants<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .list_task_grants(auth(&token, profile, Some(source_profile)), item_id),
-                )
-            }),
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn approve_task_grant<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        expected_revision: i64,
-        idempotency_key: &str,
-        approval: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let approval: casework_client_sdk::TaskApprovalRequest = input(py, approval)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.approve_task_grant(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    expected_revision,
-                    idempotency_key,
-                    &approval,
-                ))
-            }),
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn revoke_task_grant<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        grant_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let grant_id = uuid(py, grant_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.revoke_task_grant(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    grant_id,
-                ))
-            }),
-        )
-    }
     fn task_assertion<'py>(
         &self,
         py: Python<'py>,
@@ -1316,259 +1206,6 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime
                     .block_on(self.inner.task_grant_status(&token, grant_id))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn claim_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        action: &Bound<'_, PyAny>,
-        idempotency_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action: CaseworkAction = input(py, action)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.claim_work_item(
-                    auth(&token, profile, Some(source_profile)),
-                    &action,
-                    idempotency_key,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn release_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        action: &Bound<'_, PyAny>,
-        idempotency_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action: CaseworkAction = input(py, action)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.release_work_item(
-                    auth(&token, profile, Some(source_profile)),
-                    &action,
-                    idempotency_key,
-                ))
-            }),
-        )
-    }
-
-    fn get_draft<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .get_draft(auth(&token, profile, Some(source_profile)), item_id),
-                )
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn save_draft<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        expected_revision: i64,
-        idempotency_key: &str,
-        draft: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let draft: SaveDraftRequest = input(py, draft)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.save_draft(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    expected_revision,
-                    idempotency_key,
-                    &draft,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn delete_draft<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        expected_revision: i64,
-        idempotency_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.delete_draft(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    expected_revision,
-                    idempotency_key,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn decide_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        action: &Bound<'_, PyAny>,
-        idempotency_key: &str,
-        decision: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action: CaseworkAction = input(py, action)?;
-        let decision: DecideRequest = input(py, decision)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.decide_work_item(
-                    auth(&token, profile, Some(source_profile)),
-                    &action,
-                    idempotency_key,
-                    &decision,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn recover_decision<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        attempt_id: &str,
-        recovery: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let attempt_id = uuid(py, attempt_id)?;
-        let recovery: RecoverAttemptRequest = input(py, recovery)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.recover_decision(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    attempt_id,
-                    &recovery,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn recover_decision_by_key<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        idempotency_key: &str,
-        recovery: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let recovery: RecoverAttemptRequest = input(py, recovery)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.recover_decision_by_key(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    idempotency_key,
-                    &recovery,
-                ))
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, source_profile, item_id, query=None))]
-    fn work_item_history<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-        query: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let query: WorkItemHistoryQuery = optional_input(py, query)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.work_item_history(
-                    auth(&token, profile, Some(source_profile)),
-                    item_id,
-                    &query,
-                ))
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, source_profile, query=None))]
-    fn holdings<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        query: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query: HoldingsQuery = optional_input(py, query)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .holdings(auth(&token, profile, Some(source_profile)), &query),
-                )
             }),
         )
     }
@@ -1767,67 +1404,7 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, item_id, expected_revision, idempotency_key, request, source_profile=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn assign_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        item_id: &str,
-        expected_revision: i64,
-        idempotency_key: &str,
-        request: &Bound<'_, PyAny>,
-        source_profile: Option<&str>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let request: AssignmentRequest = input(py, request)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.assign_work_item(
-                    auth(&token, profile, source_profile),
-                    item_id,
-                    expected_revision,
-                    idempotency_key,
-                    &request,
-                ))
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, item_id, expected_revision, idempotency_key, request, source_profile=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn delegate_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        item_id: &str,
-        expected_revision: i64,
-        idempotency_key: &str,
-        request: &Bound<'_, PyAny>,
-        source_profile: Option<&str>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let request: DelegateRequest = input(py, request)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.delegate_work_item(
-                    auth(&token, profile, source_profile),
-                    item_id,
-                    expected_revision,
-                    idempotency_key,
-                    &request,
-                ))
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, movement, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, movement, source_profile=None))]
     #[allow(clippy::too_many_arguments)]
     fn preview_caseload_move<'py>(
         &self,
@@ -1835,20 +1412,17 @@ impl CaseworkClient {
         token: &str,
         profile: &str,
         movement: &Bound<'_, PyAny>,
-        query: Option<&Bound<'_, PyAny>>,
         source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let movement: CaseloadMoveRequest = input(py, movement)?;
-        let query: CaseloadPreviewQuery = optional_input(py, query)?;
+        let movement: ReviewCaseloadMoveRequest = input(py, movement)?;
         let token = bearer(py, token)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(self.inner.preview_caseload_move(
-                    auth(&token, profile, source_profile),
-                    &movement,
-                    &query,
-                ))
+                self.runtime.block_on(
+                    self.inner
+                        .preview_caseload_move(auth(&token, profile, source_profile), &movement),
+                )
             }),
         )
     }
@@ -1864,7 +1438,7 @@ impl CaseworkClient {
         request: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request: CaseloadApplyRequest = input(py, request)?;
+        let request: ReviewCaseloadApplyRequest = input(py, request)?;
         let token = bearer(py, token)?;
         complete(
             py,
@@ -1874,27 +1448,6 @@ impl CaseworkClient {
                     idempotency_key,
                     &request,
                 ))
-            }),
-        )
-    }
-
-    fn work_item_clocks<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        source_profile: &str,
-        item_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let token = bearer(py, token)?;
-        let item_id = uuid(py, item_id)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .work_item_clocks(auth(&token, profile, Some(source_profile)), item_id),
-                )
             }),
         )
     }
@@ -1949,7 +1502,7 @@ impl CaseworkClient {
         profile: &str,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request: ClockRecomputeRequest = input(py, request)?;
+        let request: ReviewClockRecomputeRequest = input(py, request)?;
         let token = bearer(py, token)?;
         complete(
             py,
@@ -1970,7 +1523,7 @@ impl CaseworkClient {
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request: ClockRecomputeApplyRequest = input(py, request)?;
+        let request: ReviewClockRecomputeApplyRequest = input(py, request)?;
         let token = bearer(py, token)?;
         complete(
             py,
@@ -1985,9 +1538,30 @@ impl CaseworkClient {
     }
 }
 
+/// Compute the canonical producer submission digest locally, without I/O.
+#[pyfunction]
+fn submission_digest(
+    py: Python<'_>,
+    producer: &str,
+    source_namespace: &str,
+    request: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let request: ReviewCreateRequest = input(py, request)?;
+    casework_client_sdk::submission_digest(producer, source_namespace, &request)
+        .map(|digest| digest.as_str().to_owned())
+        .map_err(|_| {
+            binding_error(
+                py,
+                "invalid-request",
+                "Casework client arguments are invalid",
+            )
+        })
+}
+
 #[pymodule]
 fn registry_casework_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<CaseworkClient>()?;
+    module.add_function(wrap_pyfunction!(submission_digest, module)?)?;
     module.add(
         "CaseworkClientError",
         module.py().get_type::<CaseworkClientError>(),

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha5.schema.json",
   "title": "ModelExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain model`. Nested compiled-model trees (entities, package, manifestProjection, physicalNames) are declared opaque because bregctl serializes them by passing a compiled-model value straight to serde, so their shape can change without any corresponding line changing in bregctl.",
+  "description": "Wire shape of the native compiled model inspector and module closure.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,14 +12,16 @@
     "version",
     "moduleOrder",
     "moduleClosure",
-    "entities",
-    "physicalNames",
-    "package",
-    "manifestProjection"
+    "revision",
+    "recordTypes",
+    "actions",
+    "statisticalDatasets",
+    "display",
+    "reviewAuthorities"
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha5"
     },
     "kind": {
       "const": "BRegModelExplanation"
@@ -41,36 +43,184 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "digest", "version"],
+        "required": [
+          "id",
+          "digest",
+          "version"
+        ],
         "properties": {
-          "id": { "$ref": "#/$defs/LocalId" },
-          "digest": { "$ref": "#/$defs/Digest" },
-          "version": { "type": "string" }
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "version": {
+            "type": "string"
+          }
         }
       }
     },
-    "entities": {
-      "type": "object",
-      "description": "Compiled entity table, keyed by entity id. Passthrough of the compiled model; shape follows CompiledEntity and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the compiled entity table as the engine holds it; its shape follows CompiledEntity and is outside this contract version."
+    "revision": {
+      "$ref": "#/$defs/Digest"
     },
-    "physicalNames": {
-      "type": "object",
-      "description": "Compiled physical-name mapping. Passthrough of the compiled model; shape follows the runtime's physical-name projection and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the runtime's physical-name projection as it stands; its shape and is outside this contract version."
+    "recordTypes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "apiName",
+          "revision",
+          "display",
+          "fields",
+          "relationships",
+          "sourceModule",
+          "primaryDataset",
+          "route",
+          "mutationMode",
+          "mutationPolicy",
+          "classification",
+          "canonicalId",
+          "tombstone",
+          "batch",
+          "temporal",
+          "geojson",
+          "accessLog",
+          "constraints",
+          "indexes",
+          "selectorProfiles",
+          "readPaths",
+          "hooks",
+          "derivedRelations"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "revision": {
+            "$ref": "#/$defs/Digest"
+          },
+          "mutationMode": {
+            "enum": [
+              "mutable",
+              "create-only"
+            ]
+          },
+          "mutationPolicy": {
+            "type": "object",
+            "additionalProperties": {
+              "const": "proposal-required"
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            }
+          },
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "apiName",
+                "schema",
+                "fieldType",
+                "required",
+                "classification"
+              ],
+              "properties": {
+                "fieldType": {
+                  "type": "object",
+                  "x-registry-passthrough": "The compiled FieldTypeSource, as in query field summaries; its internal shape follows the engine's field type contract."
+                }
+              },
+              "x-registry-passthrough": "Normalized logical field schema and effective classification; compiler-owned metadata."
+            }
+          },
+          "readPaths": {
+            "type": "object",
+            "x-registry-passthrough": "Compiler-resolved read paths, separate from relationship edges."
+          },
+          "hooks": {
+            "type": "object",
+            "x-registry-passthrough": "Compiled hook declarations, with empty condition tests omitted."
+          }
+        },
+        "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
+      }
     },
-    "package": {
-      "type": ["object", "null"],
-      "description": "Compiled package identity, or null when the project declares no package. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the runtime's package projection as it stands; its shape and is outside this contract version."
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "execution",
+          "inputs",
+          "plan",
+          "bounds"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "revision": {
+            "$ref": "#/$defs/Digest"
+          }
+        },
+        "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
+      }
     },
-    "manifestProjection": {
-      "type": ["object", "null"],
-      "description": "Registry Manifest projection of this registry, or null when the project declares none. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the runtime's Registry Manifest projection as it stands; its shape and is outside this contract version."
+    "statisticalDatasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "unitEntityId",
+          "population",
+          "period",
+          "dimensions",
+          "disclosure"
+        ],
+        "x-registry-passthrough": "Normalized compiled statistical dataset inventory, including authority requirements; no source bytes."
+      }
+    },
+    "display": {
+      "$ref": "#/$defs/Display"
+    },
+    "reviewAuthorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "protocol",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "protocol": {
+            "const": "id.registrystack.org/protocols/review/v1"
+          },
+          "display": {
+            "$ref": "#/$defs/Display"
+          }
+        }
+      }
     }
-  }
-,
+  },
   "$defs": {
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
@@ -81,6 +231,21 @@
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "Display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "titleField": {
+          "type": "string"
+        }
+      }
     }
   }
 }

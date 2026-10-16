@@ -4,22 +4,18 @@ use registry_breg::{compile_project, parse_project_json, CompileProfile, Compile
 use serde_json::{json, Value};
 
 pub fn source(root: &str) -> Value {
-    let authored = registry_breg::parse_project_yaml(
-        include_str!(
-            "../../../../products/breg/fixtures/organization-membership-access/registry.yaml"
-        )
-        .as_bytes(),
-    )
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../../products/breg/fixtures/organization-membership-access/registry.yaml"
+    ))
     .unwrap();
-    let mut value = serde_json::to_value(authored).unwrap();
-    value["entities"][2]["id"] = json!(root);
-    value["entities"][2]["route"] = json!(if root == "facility" {
+    value["recordTypes"][2]["id"] = json!(root);
+    value["recordTypes"][2]["route"] = json!(if root == "facility" {
         "facilities".to_owned()
     } else {
         format!("{root}s")
     });
-    value["accessProfiles"][0]["permissions"]["entities"][0]["entity"] = json!(root);
-    value["accessProfiles"][1]["permissions"]["entities"][2]["entity"] = json!(root);
+    value["accessProfiles"][0]["permissions"]["records"][0]["recordType"] = json!(root);
+    value["accessProfiles"][1]["permissions"]["records"][2]["recordType"] = json!(root);
     value
 }
 

@@ -15,17 +15,24 @@ const page = read('../src/content/docs/reference/breg-api.mdx');
 const webhookGuide = read('../src/content/docs/operate/breg-webhooks.mdx');
 const configurationGuide = read('../src/content/docs/configure/breg.mdx');
 
-test('event fields reuse the complete module schema selection without changing definitions', () => {
+test('event fields reuse both complete native schema selections without changing definitions', () => {
   const before = structuredClone(configuration);
-  const [event] = eventConfiguration(configuration);
-  const module = configuration.contracts.find((contract) => contract.id === 'module');
-  const source = module.fields.filter((field) => field.key_path.startsWith('entities[].hooks[].'));
-  assert.equal(event.field_count, source.length);
-  assert.ok(event.field_count > 0);
-  assert.equal(event.file, module.file);
-  assert.deepEqual(event.fields, source.map((field) => ({
-    ...field, key_path: field.key_path.slice('entities[].hooks[].'.length),
-  })));
+  const selected = eventConfiguration(configuration);
+  const cases = [
+    ['module', 'recordTypes[].hooks[].'],
+    ['project', 'actions[].execution.proposal.hooks[].'],
+  ];
+  assert.equal(selected.length, cases.length);
+  for (const [index, [contractId, prefix]] of cases.entries()) {
+    const contract = configuration.contracts.find((entry) => entry.id === contractId);
+    const source = contract.fields.filter((field) => field.key_path.startsWith(prefix));
+    assert.ok(source.length > 0);
+    assert.equal(selected[index].file, contract.file);
+    assert.deepEqual(selected[index].fields, source.map((field) => ({
+      ...field, key_path: field.key_path.slice(prefix.length),
+    })));
+    assert.equal(selected[index].field_count, source.length);
+  }
   assert.deepEqual(configuration, before);
   assert.throws(() => eventConfiguration({ contracts: [] }), /missing/);
   assert.throws(() => eventConfiguration({ contracts: [{ id: 'module', fields: [] }] }), /empty/);
@@ -55,9 +62,19 @@ test('trigger matrix covers the schema enum and the trigger-specific snapshot ru
   assert.deepEqual(rows.map((row) => row.slice(1)), [
     ['Not allowed', 'Not allowed', 'Allowed', 'After'],
     ['Allowed', 'Allowed', 'Allowed', 'After'],
-    ['Not allowed', 'Not allowed', 'Not allowed', 'Request at transition'],
     ['Not allowed', 'Allowed', 'Not allowed', 'Before'],
   ]);
+});
+
+test('Proposal payload fields match the closed native schema and omit retired request data', () => {
+  const schema = JSON.parse(read('../../../products/breg/generated/event-schemas/proposal-lifecycle.schema.json'));
+  const documented = tables.find((table) => table.id === 'proposal-payload').rows
+    .flatMap((row) => [...row[0].matchAll(/`([^`]+)`/g)].map((match) => match[1]));
+  assert.deepEqual(documented.sort(), [...schema.required].sort());
+  const recordPayload = tables.find((table) => table.id === 'payload').rows.map((row) => row[0]);
+  assert.ok(recordPayload.includes('`recordType`'));
+  assert.ok(!recordPayload.includes('`entity`'));
+  assert.ok(!JSON.stringify(tables).includes('request-lifecycle'));
 });
 
 test('header lookup covers the exact platform event request header inventory', () => {

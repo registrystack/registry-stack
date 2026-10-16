@@ -58,7 +58,7 @@ surfaces before a single request is sent:
 ```sh
 bregctl data validate \
   --package /srv/registry/build-1/package \
-  --entity record --profile operator --operation create \
+  --record-type record --profile operator --operation create \
   --input /srv/registry/import/records.jsonl
 ```
 
@@ -83,7 +83,7 @@ bregctl data import \
   --package /srv/registry/build-1/package \
   --breg-url https://registry.example.org \
   --access-token-file /srv/registry/private/import-token \
-  --entity record --profile operator --operation create \
+  --record-type record --profile operator --operation create \
   --input /srv/registry/import/records.jsonl \
   --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
 ```
@@ -130,7 +130,7 @@ volume is the bound the server enforces.
 ```sh
 bregctl import-authority open \
   --runtime-config /etc/registry/runtime.yaml \
-  --entity record --profile loader --max-items 10000 --expires-in 2d \
+  --record-type record --profile loader --max-items 10000 --expires-in 2d \
   --input-sha256 <inputDigest from data validate> \
   --operator-reference change-1482 --reason "District 4 initial load"
 ```
@@ -222,7 +222,7 @@ bregctl data export \
   --package /srv/registry/build-1/package \
   --breg-url https://registry.example.org \
   --access-token-file /srv/registry/private/export-token \
-  --entity record --profile operator --field code --field label \
+  --record-type record --profile operator --field code --field label \
   --output /srv/registry/export/records.jsonl \
   --checkpoint /srv/registry/export/records.checkpoint --max-pages 50
 ```

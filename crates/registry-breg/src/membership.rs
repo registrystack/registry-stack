@@ -19,7 +19,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 continue;
             }
             let location = format!(
-                "entities[id={}].accessProfiles[id={}].membershipBoundaries",
+                "recordTypes[id={}].accessProfiles[id={}].membershipBoundaries",
                 entity.id, profile.id
             );
             if profile.operations.iter().any(|operation| {
@@ -32,9 +32,6 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                         | Operation::Snapshot
                 )
             }) || !profile.writable_fields.is_empty()
-                || !profile.apply_targets.is_empty()
-                || !profile.request_presence.is_empty()
-                || profile.request_visibility.is_some()
             {
                 errors.push(Diagnostic::error("breg.access.membership-read-only", &location,
                     "membership boundaries support get, lookup, list, revisions and snapshot only; use a separate directly authorized profile for writes and proposal application"));
@@ -42,10 +39,6 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
             if profile.spatial_queries.is_some() {
                 errors.push(Diagnostic::error("breg.access.membership-spatial-unsupported", &location,
                     "spatial bbox uses a separate database authority role; use a directly authorized bbox profile or ordinary membership-filtered reads"));
-            }
-            if entity.change_request.is_some() {
-                errors.push(Diagnostic::error("breg.access.membership-request-unsupported", &location,
-                    "membership boundaries do not authorize change-request lifecycle or retained request data; use a direct profile"));
             }
             if profile.membership_boundaries.len() > 8 {
                 errors.push(Diagnostic::error(
@@ -67,7 +60,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                     errors.push(Diagnostic::error(
                         "breg.access.membership-entity-unknown",
                         &path,
-                        "membershipEntity must name a governed entity",
+                        "membershipRecordType must name a governed Record type",
                     ));
                     continue;
                 };
@@ -121,7 +114,6 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 // A membership source is a leaf authorization fact. Its own RLS must
                 // never traverse back into the protected root, even through an OR arm.
                 if membership.id == entity.id
-                    || membership.change_request.is_some()
                     || membership
                         .access_profiles
                         .iter()
@@ -160,7 +152,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                             .any(|candidate| !candidate.membership_boundaries.is_empty())
                     })
                 }) {
-                    errors.push(Diagnostic::error("breg.access.membership-read-path-target", format!("entities[id={}].accessProfiles[id={}].readPaths", entity.id, profile.id),
+                    errors.push(Diagnostic::error("breg.access.membership-read-path-target", format!("recordTypes[id={}].accessProfiles[id={}].readPaths", entity.id, profile.id),
                         "relationship target membership boundaries are not inherited from the root profile; use the protected entity's direct read route"));
                 }
             }
@@ -314,11 +306,17 @@ pub(crate) fn predicate(
 }
 
 pub(crate) fn source_predicate(boundary: &CompiledMembershipBoundary, alias: &str) -> String {
-    format!("{alias}.record_lifecycle = 'active' AND {alias}.{} = NULLIF(current_setting('registry.principal', true), '') AND {alias}.{} IS TRUE",
-        quote_identifier(&boundary.principal_column), quote_identifier(&boundary.active_column))
+    format!(
+        "{alias}.record_lifecycle = 'active' AND {alias}.{} = NULLIF(current_setting('registry.principal', true), '') AND {alias}.{} IS TRUE",
+        quote_identifier(&boundary.principal_column),
+        quote_identifier(&boundary.active_column)
+    )
 }
 
 pub(crate) fn source_guard(entity: &str, profile: &str, index: usize) -> String {
-    format!("NULLIF(current_setting('registry.membership_probe', true), '') = {} AND NULLIF(current_setting('registry.access_profile', true), '') = {}",
-        quote_literal(&function_name(entity, profile, index)), quote_literal(profile))
+    format!(
+        "NULLIF(current_setting('registry.membership_probe', true), '') = {} AND NULLIF(current_setting('registry.access_profile', true), '') = {}",
+        quote_literal(&function_name(entity, profile, index)),
+        quote_literal(profile)
+    )
 }

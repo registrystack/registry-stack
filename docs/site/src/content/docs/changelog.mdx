@@ -133,9 +133,10 @@ relevant product pages on this site rather than duplicating release notes.
   linking, and program enrollment through configured BReg actions. It proves an adopter
   composition across existing product boundaries and adds no built-in business model or runtime.
 
-{/* Evidence: products/breg/acceptance/citizen-self-registration/README.md;
-    products/breg/acceptance/citizen-self-registration/tests/run-live.py;
-    release/notes/v0.41.0.md, "Acceptance projects and release operation". */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [products/breg/acceptance/citizen-self-registration/README.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/acceptance/citizen-self-registration/README.md);
+    [products/breg/acceptance/citizen-self-registration/tests/run-live.py](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/acceptance/citizen-self-registration/tests/run-live.py);
+    [release/notes/v0.41.0.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/release/notes/v0.41.0.md). */}
 
 - Registry Casework task templates can use `authorizationMode: deferred` with a lifetime of up to
   seven days. Immediate grants keep their 900-second ceiling. A deferred review grant is bound to
@@ -412,9 +413,10 @@ relevant product pages on this site rather than duplicating release notes.
   access for its Rhai handler. Replace the v2 value, keep the `evidence` declaration, re-lock
   affected modules, and rebuild the package. Evidence consumption by an action remains a trial.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V1;
-    products/breg/CHANGELOG.md;
-    release/notes/v0.40.0.md, "Base Registry Engine authorization and action handlers". */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/contract.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/contract.rs);
+    [products/breg/CHANGELOG.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/breg/CHANGELOG.md);
+    [release/notes/v0.40.0.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/release/notes/v0.40.0.md). */}
 
 - Registry Casework adds reviewer and Supervisor discovery. Active review-task lists accept
   `ownership=assigned-to-me` and `ownership=unclaimed`, a decided single-task read includes
@@ -477,8 +479,9 @@ relevant product pages on this site rather than duplicating release notes.
   `authenticated-context` bindings for a borrowed BReg issuer. A retained local session keeps the
   mode it started in: stop and clean it before you start it in the other mode.
 
-{/* Evidence: crates/registry-evidencectl/src/dev.rs, preserve_target_authenticated_context;
-    products/evidence/CHANGELOG.md. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-evidencectl/src/dev.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/dev.rs);
+    [products/evidence/CHANGELOG.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/evidence/CHANGELOG.md). */}
 
 - The BReg, Registry Casework, Registry Scheduling, and Registry Messaging clients report an
   unknown mutation outcome and resend a keyed mutation under the same key, with the same
@@ -573,9 +576,10 @@ relevant product pages on this site rather than duplicating release notes.
   package whose project declares a change-request `planner` is now accepted as the predecessor,
   where earlier releases refused it and no successor of it could be built or applied.
 
-{/* Evidence: products/breg/CHANGELOG.md;
-    crates/registry-bregctl/src/test_lifecycle.rs, baseline_fingerprint_drift;
-    crates/registry-breg/src/artifacts.rs, restore_effective_model_planner_origins. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [products/breg/CHANGELOG.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/breg/CHANGELOG.md);
+    [crates/registry-bregctl/src/test_lifecycle.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-bregctl/src/test_lifecycle.rs);
+    [crates/registry-breg/src/artifacts.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/artifacts.rs). */}
 
 - BReg adds governed statistical datasets. A root project declares count datasets under
   `statisticalDatasets`; a live profile reads exact counts its own list grant could already
@@ -671,9 +675,8 @@ relevant product pages on this site rather than duplicating release notes.
   --casework-endpoint URL` sets the Casework endpoint of the local BReg review authority, and
   `caseworkctl dev` reports a local session failure under `caseworkctl.dev.*` codes.
 
-{/* Evidence: crates/registry-casework/src/store.rs, fresh_within;
-    crates/registry-caseworkctl/src/source_add.rs, casework_endpoint;
-    products/casework/CHANGELOG.md. */}
+{/* Historical release evidence: products/casework/CHANGELOG.md.
+    Evidence: products/casework/CHANGELOG.md. */}
 
 - BREAKING: Registry Discovery service search accepts `serviceKind=evidence` only and no longer
   takes the `semanticClass` and `operationFamily` filters. A search that sends
@@ -888,11 +891,12 @@ relevant product pages on this site rather than duplicating release notes.
   written for people using BReg directly. Tokens without `act` are admitted
   as before.
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_profile_claims;
-    crates/registry-breg/src/api/actions.rs, authorize_action;
-    crates/registry-breg/src/api/tests/change_request_action_tests.rs;
-    crates/registry-breg/src/api/tests/immediate_action_tests.rs;
-    products/breg/TASK_GRANTS.md. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/api/mod.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/api/mod.rs);
+    [crates/registry-breg/src/api/actions.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/api/actions.rs);
+    [crates/registry-breg/src/api/tests/change_request_action_tests.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/api/tests/change_request_action_tests.rs);
+    [crates/registry-breg/src/api/tests/immediate_action_tests.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/api/tests/immediate_action_tests.rs);
+    [products/breg/TASK_GRANTS.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/breg/TASK_GRANTS.md). */}
 
 - BReg's audit journal records the agent behind a delegated request. A
   request carrying a trusted `act` writes the shared `authorization` object
@@ -901,18 +905,20 @@ relevant product pages on this site rather than duplicating release notes.
   the principal and client pseudonyms. The raw actor identifier is never
   stored, and task-grant records without `act` are unchanged.
 
-{/* Evidence: crates/registry-breg/src/audit.rs, GrantAuditContext;
-    crates/registry-breg/tests/postgres_task_grants.rs;
-    products/breg/TASK_GRANTS.md. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/audit.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/audit.rs);
+    [crates/registry-breg/tests/postgres_task_grants.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_task_grants.rs);
+    [products/breg/TASK_GRANTS.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/breg/TASK_GRANTS.md). */}
 
 - BReg's audit journal records delegated authority on reads. A read's
   terminal record, for records, lists, lookups, revisions, history, and
   snapshots, now carries the `authorization` object for a task-grant or
   delegated token. Direct tokens record no such object, as before.
 
-{/* Evidence: crates/registry-breg/src/postgres/read.rs;
-    crates/registry-breg/tests/postgres_task_grants.rs;
-    products/breg/TASK_GRANTS.md. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/postgres/read.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/postgres/read.rs);
+    [crates/registry-breg/tests/postgres_task_grants.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_task_grants.rs);
+    [products/breg/TASK_GRANTS.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/breg/TASK_GRANTS.md). */}
 
 - `registry-platform-ratelimit` is a new shared crate with two in-memory
   keyed limiters, `TokenBucketLimiter` and `FixedWindowCounter`, each capped
@@ -976,10 +982,10 @@ relevant product pages on this site rather than duplicating release notes.
   400 `source-profile.required`. See
   [Revisions, actions, and recovery](../reference/client-api/#revisions-actions-and-recovery).
 
-{/* Evidence: crates/registry-casework-core/src/http.rs, DecideRequest and RecoverAttemptRequest;
-    crates/registry-caseworkctl/src/dev/mod.rs, header_file();
-    crates/registry-casework/tests/review_http.rs,
-    an_inbox_emptied_only_by_the_missing_source_profile_says_so. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework-core/src/http.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-core/src/http.rs);
+    [crates/registry-caseworkctl/src/dev/mod.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/dev/mod.rs);
+    [crates/registry-casework/tests/review_http.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/tests/review_http.rs). */}
 
 - BREAKING: every Casework mutating route parses its JSON body strictly: a duplicate object member at
   any depth, or a raw integer IEEE 754 binary64 cannot represent exactly, is refused with 422
@@ -993,13 +999,13 @@ relevant product pages on this site rather than duplicating release notes.
   `request.limit-out-of-range`, and `ReviewTaskPage` carries a required `status`. A plain item,
   history, or clocks read across a moved source binding returns the retained item without actions
   instead of 409 `work-item.proposal-changed`. A source binding or policy field an adapter refuses
-  is named by its key path. See [Problem codes](../reference/apis/registry-casework/#problem-codes).
+  is named by its key path. See [Problem codes](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/reference/apis/registry-casework.mdx#problem-codes).
 
-{/* Evidence: crates/registry-casework-core/src/http.rs, REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM;
-    crates/registry-casework-core/src/review.rs, ReviewTaskPage;
-    crates/registry-casework/src/service.rs, retained_without_actions();
-    crates/registry-casework-breg/src/config.rs, validate_binding_input() and
-    check_description_input(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework-core/src/http.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-core/src/http.rs);
+    [crates/registry-casework-core/src/review.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-core/src/review.rs);
+    [crates/registry-casework/src/service.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/service.rs);
+    [crates/registry-casework-breg/src/config.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-breg/src/config.rs). */}
 
 - Registry Scheduling starts a hold's time to live once its capacity transaction takes its locks,
   so a hold created under contention keeps its whole `holdPolicy.ttlMinutes`, and answers
@@ -1088,10 +1094,11 @@ relevant product pages on this site rather than duplicating release notes.
   blocks startup until it is dropped. See
   [plan, apply, and serve](../operate/casework/#plan-apply-and-serve).
 
-{/* Evidence: crates/registry-casework/src/activation.rs, plan_activation() and
-    apply_activation(); crates/registry-casework/src/runtime.rs,
-    check_source_revisions(); crates/registry-caseworkctl/src/breg_package.rs,
-    compare(); crates/registry-casework/tests/activation_postgres.rs. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/src/activation.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/activation.rs);
+    [crates/registry-casework/src/runtime.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/runtime.rs);
+    [crates/registry-caseworkctl/src/breg_package.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/breg_package.rs);
+    [crates/registry-casework/tests/activation_postgres.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/tests/activation_postgres.rs). */}
 
 - BREAKING: Registry Scheduling activates a package with `schedulingctl plan`
   and `schedulingctl apply`, recorded in an activation ledger, and
@@ -1132,7 +1139,7 @@ relevant product pages on this site rather than duplicating release notes.
   overriding the entrypoint, or from a Kubernetes Job `command:`. The Scheduling runtime stays an
   image-only artifact and has no installer. See
   [Activate from the image](../operate/breg/#activate-from-the-image) and
-  [Run plan, apply, and status from the image](../operate/casework/#run-plan-apply-and-status-from-the-image).
+  [Run plan, apply, and status from the image](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/operate/casework.mdx#run-plan-apply-and-status-from-the-image).
 
 {/* Evidence: release/docker/Dockerfile.breg; release/docker/Dockerfile.casework;
     release/docker/Dockerfile.scheduling; release/scripts/release_candidate.py,
@@ -1247,7 +1254,7 @@ relevant product pages on this site rather than duplicating release notes.
   `min_encryption_version`, a public key that is not the governed one, or a
   failed self-test. No cause carries a path, provider response, or key
   material. See
-  [activate the new version](../tutorials/rotate-evidence-signing-keys/#activate-the-new-version).
+  [build and activate the successor](../tutorials/rotate-evidence-signing-keys/#build-and-activate-the-successor).
 
 {/* Evidence: crates/registry-evidence/src/runtime.rs, SigningInitializationFault::cause();
     crates/registry-platform-crypto/src/lib.rs, TransitInitializationError and transit_signer_initialization_names_the_fault_it_met;
@@ -1261,7 +1268,7 @@ relevant product pages on this site rather than duplicating release notes.
   HTTP `jwksUri` cannot name a profile. A profile bound on one side only is
   refused, and `evidence check --require-runtime-dependencies` fetches the key
   set through it before the listener binds. See
-  [an issuer behind a private CA](../configure/evidence/#an-issuer-behind-a-private-ca).
+  [an issuer behind a private CA](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/configure/evidence.mdx#an-issuer-behind-a-private-ca).
 
 {/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
     crates/registry-evidence/src/bundle.rs, the_issuer_trust_profile_is_bound_exactly_like_a_source_profile;
@@ -1304,11 +1311,12 @@ relevant product pages on this site rather than duplicating release notes.
   between names passes when any of them is declared. See
   [evidencectl](../reference/evidencectl/#project-workflow).
 
-{/* Evidence: crates/registry-evidence-authoring/src/derivation.rs, validate_answer_fact_reads();
-    crates/registry-evidencectl/src/authoring.rs, declared_fact_names() and read_inputs();
-    crates/registry-evidence-authoring/tests/derivation_fact_reads.rs;
-    crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
-    products/breg/evidence/tests/verify-composition.py, verify(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-evidence-authoring/src/derivation.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidence-authoring/src/derivation.rs);
+    [crates/registry-evidencectl/src/authoring.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/authoring.rs);
+    [crates/registry-evidence-authoring/tests/derivation_fact_reads.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidence-authoring/tests/derivation_fact_reads.rs);
+    [crates/registry-evidencectl/src/source_cli.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/source_cli.rs);
+    [products/breg/evidence/tests/verify-composition.py](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/evidence/tests/verify-composition.py). */}
 
 - BREAKING: `bregctl test --baseline-runtime-config` rehearses the successor
   migration before it writes a receipt. It rebuilds the active package's
@@ -1371,11 +1379,12 @@ relevant product pages on this site rather than duplicating release notes.
   reviewed migration. See
   [review and apply changes](../operate/breg-changes/#test-and-package-the-successor).
 
-{/* Evidence: crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::FieldLengthWidened;
-    crates/registry-breg/src/generated_ddl.rs, replace_length_check_statement();
-    crates/registry-breg/tests/package_change_plan.rs, text_length_widening_is_additive_and_replaces_the_length_check;
-    crates/registry-breg/tests/action_vocabulary_codes.rs, a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts;
-    crates/registry-breg/tests/postgres_compiled_schema.rs, text_length_widening_replaces_the_length_check_and_keeps_existing_rows. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/package.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/package.rs);
+    [crates/registry-breg/src/generated_ddl.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/generated_ddl.rs);
+    [crates/registry-breg/tests/package_change_plan.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/package_change_plan.rs);
+    [crates/registry-breg/tests/action_vocabulary_codes.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/action_vocabulary_codes.rs);
+    [crates/registry-breg/tests/postgres_compiled_schema.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_compiled_schema.rs). */}
 
 - Lowering a `string` field's `minLength` under the same `maxLength` is also
   `field_length_widened`, applied live: the successor replaces the column's
@@ -1386,11 +1395,12 @@ relevant product pages on this site rather than duplicating release notes.
   migration. See
   [review and apply changes](../operate/breg-changes/#test-and-package-the-successor).
 
-{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource::lowers_string_min_length_of();
-    crates/registry-breg/src/generated_ddl.rs, replace_length_check_statement();
-    crates/registry-breg/tests/package_change_plan.rs, string_minimum_lowering_is_additive_and_replaces_or_drops_the_length_check;
-    crates/registry-breg/tests/action_vocabulary_codes.rs, a_lowered_string_minimum_on_a_targeted_entity_keeps_the_action_contracts;
-    crates/registry-breg/tests/postgres_compiled_schema.rs, string_minimum_lowering_replaces_or_drops_the_length_check_and_keeps_existing_rows. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/contract.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/contract.rs);
+    [crates/registry-breg/src/generated_ddl.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/generated_ddl.rs);
+    [crates/registry-breg/tests/package_change_plan.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/package_change_plan.rs);
+    [crates/registry-breg/tests/action_vocabulary_codes.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/action_vocabulary_codes.rs);
+    [crates/registry-breg/tests/postgres_compiled_schema.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_compiled_schema.rs). */}
 
 - `bregctl diff` reports every removed field or entity as
   `diff.history.removed_values_retained`. Removing one from the package drops
@@ -1433,10 +1443,11 @@ relevant product pages on this site rather than duplicating release notes.
   never answer, reporting `operator-closed`. See
   [operate Base Registry Engine](../operate/breg/#resubmit-or-close-a-review-the-authority-lost).
 
-{/* Evidence: crates/registry-breg/src/review_store.rs, poll_one_result and receive_completion;
-    crates/registry-breg/src/review_recovery.rs;
-    crates/registry-breg/tests/postgres_review_executor.rs, a_live_review_is_polled_before_one_its_authority_does_not_know and a_webhook_completion_makes_its_review_due_and_first_in_the_poll_queue;
-    crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/review_store.rs);
+    [crates/registry-breg/src/review_recovery.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/review_recovery.rs);
+    [crates/registry-breg/tests/postgres_review_executor.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_review_executor.rs);
+    [crates/registry-breg/tests/postgres_change_requests.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_change_requests.rs). */}
 
 - BREAKING: Evidence Gateway reads `runtime.yaml` through the shared
   runtime configuration loader and declares its access-token issuer and
@@ -1465,7 +1476,7 @@ relevant product pages on this site rather than duplicating release notes.
   `runtime.yaml` with the new keys, rebuild the candidate with the matching
   `evidencectl`, and replace `--runtime FILE` with
   `<subcommand> --runtime-config FILE` in service definitions. See
-  [configure Evidence Gateway](../configure/evidence/#the-runtime-file).
+  [configure Evidence Gateway](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/configure/evidence.mdx#the-runtime-file).
 
 {/* Evidence: crates/registry-evidence/src/config.rs, EVIDENCE_RUNTIME_REMOVED_KEYS,
     every_removed_runtime_key_is_refused_with_its_replacement_named,
@@ -1499,13 +1510,9 @@ relevant product pages on this site rather than duplicating release notes.
   `casework.yaml`. See
   [configure the runtime](../operate/casework/).
 
-{/* Evidence: crates/registry-casework/src/config.rs, the_runtime_configuration_is_read_through_the_shared_loader,
-    a_removed_jwks_uri_names_its_replacement, the_oidc_issuer_and_clients_are_the_shared_blocks,
-    production_names_its_allowed_clients_while_loopback_may_leave_them_empty,
-    environment_expressions_substitute_values_but_never_secret_references and
-    an_authored_project_carrying_an_environment_expression_is_refused;
-    crates/registry-caseworkctl/src/lib.rs, removed_runtime_keys_name_the_replacement_path_and_action and
-    check_refuses_an_environment_expression_in_the_authored_project. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/src/config.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/config.rs);
+    [crates/registry-caseworkctl/src/lib.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/lib.rs). */}
 
 - BREAKING: Base Registry Engine reads `runtime.yaml` through the shared
   runtime configuration loader and declares its OpenID Connect issuer, audit
@@ -1724,10 +1731,11 @@ relevant product pages on this site rather than duplicating release notes.
   the same package again. See
   [retain, erase, and audit](../operate/breg-retention/#restore-snapshot-coverage-after-an-erasure).
 
-{/* Evidence: crates/registry-breg/src/migration.rs, MigrationError::HistoryCoverage and apply_verified_package();
-    crates/registry-breg/src/postgres/interlock.rs, verify_history_coverage_can_begin_successor();
-    crates/registry-breg/tests/postgres_history_migration.rs, unrecorded_coverage_gap_still_freezes_the_next_package;
-    crates/registry-bregctl/src/lib.rs, apply_reports_a_history_coverage_refusal_with_its_recovery. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-breg/src/migration.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-breg/src/migration.rs);
+    [crates/registry-breg/src/postgres/interlock.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-breg/src/postgres/interlock.rs);
+    [crates/registry-breg/tests/postgres_history_migration.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-breg/tests/postgres_history_migration.rs);
+    [crates/registry-bregctl/src/lib.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-bregctl/src/lib.rs). */}
 
 - `bregctl apply` reports a successor package with nothing to apply as
   `apply.package.empty_plan`, with the suggested action
@@ -1750,8 +1758,9 @@ relevant product pages on this site rather than duplicating release notes.
   `result-recovery-expired`. See
   [operate Base Registry Engine](../operate/breg/).
 
-{/* Evidence: crates/registry-breg/src/review_store.rs, poll_one_result and run_one;
-    crates/registry-breg/tests/postgres_review_executor.rs, a_review_the_authority_keeps_pending_outlives_the_poll_budget_and_recovery_deadline. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/review_store.rs);
+    [crates/registry-breg/tests/postgres_review_executor.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_review_executor.rs). */}
 
 - BReg clears a submission's recorded error when it reconciles the terminal
   review result, so the review projection of a settled review reports
@@ -1759,8 +1768,8 @@ relevant product pages on this site rather than duplicating release notes.
   that failed before the result arrived. See
   [operate Base Registry Engine](../operate/breg/).
 
-{/* Evidence: crates/registry-breg/src/review_store.rs, reconcile_result and read_projection;
-    crates/registry-breg/src/review_store.rs, a_reconciled_result_clears_the_lookup_failure_it_outlived_from_the_projection. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/review_store.rs). */}
 
 - BREAKING: `caseworkctl source add --apply` writes one lifecycle hook per
   paired BReg request entity, `casework-lifecycle-v1-<entity>`, because BReg
@@ -1770,19 +1779,21 @@ relevant product pages on this site rather than duplicating release notes.
   from the BReg `registry.yaml`, then repeat `caseworkctl source add --apply`.
   See [deploy Registry Casework](../operate/casework/#write-the-runtime-file).
 
-{/* Evidence: crates/registry-casework-breg/src/lib.rs, LIFECYCLE_EVENT_TYPE_PREFIX;
-    crates/registry-caseworkctl/src/source_add.rs, apply_breg_candidate(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework-breg/src/lib.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-breg/src/lib.rs);
+    [crates/registry-caseworkctl/src/source_add.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/source_add.rs). */}
 
 - BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
   state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or
   `applied`; the `bregState` enum in generated OpenAPI and the Rust, Node.js,
   and Python clients loses the value, and a hook `when` condition naming
   `superseded` no longer compiles. The review result status `superseded` is
-  unchanged. See [change requests](../reference/breg-api/#change-requests).
+  unchanged. See [change requests](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/docs/site/src/content/docs/reference/breg-api.mdx#change-requests).
 
-{/* Evidence: crates/registry-breg/src/request_workflow.rs, RequestState;
-    crates/registry-breg/src/request_store.rs, install();
-    crates/registry-breg/src/compiler.rs, REQUEST_LIFECYCLE_STATES. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/request_workflow.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_workflow.rs);
+    [crates/registry-breg/src/request_store.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_store.rs);
+    [crates/registry-breg/src/compiler.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/compiler.rs). */}
 
 - BReg decides the change-request actions it offers from the settled review
   result. A rejected request offers only `cancel_request`. A send-back, or an
@@ -1804,14 +1815,15 @@ relevant product pages on this site rather than duplicating release notes.
   binding with durable work outstanding no longer counts it, so an operator
   may remove a binding an expired, queued job no longer needs. `bregctl
   explain lifecycle` reports the check as its `review_outcome` layer. See
-  [change requests](../reference/breg-api/#change-requests).
+  [change requests](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/docs/site/src/content/docs/reference/breg-api.mdx#change-requests).
 
-{/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
-    crates/registry-breg/src/mutation/request.rs, execute_request_action_transaction;
-    crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
-    crates/registry-breg/src/review_store.rs, run_one, run_one_application, and verify_retained_bindings;
-    crates/registry-breg/src/lifecycle.rs, request_lifecycle;
-    crates/registry-breg-client/src/lifecycle.rs, BRegExternalReviewApplicationState. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/postgres/request_read.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/postgres/request_read.rs);
+    [crates/registry-breg/src/mutation/request.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/mutation/request.rs);
+    [crates/registry-breg/src/postgres/read.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/postgres/read.rs);
+    [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/review_store.rs);
+    [crates/registry-breg/src/lifecycle.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/lifecycle.rs);
+    [crates/registry-breg-client/src/lifecycle.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client/src/lifecycle.rs). */}
 
 - BREAKING: BReg refuses to compile an access profile with a `taskGrant`
   that holds `apply_request`, with
@@ -1829,8 +1841,9 @@ relevant product pages on this site rather than duplicating release notes.
   in the audit journal. The apply itself was already refused under such a
   grant, so this closes an early outbound call, not an authorization bypass.
 
-{/* Evidence: crates/registry-breg/src/postgres/mutation.rs, request_reviewed_apply;
-    crates/registry-breg/tests/postgres_task_grants.rs, review_apply_checks_original_task_before_authority_and_before_commit. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/postgres/mutation.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/postgres/mutation.rs);
+    [crates/registry-breg/tests/postgres_task_grants.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/postgres_task_grants.rs). */}
 
 - Base Registry Engine (BReg) read permissions can require the subject's
   recorded consent with
@@ -1857,9 +1870,10 @@ relevant product pages on this site rather than duplicating release notes.
   `bregctl diff` attaches a review `reason` to consent-related access changes.
   See [change an active registry](../operate/breg-changes/).
 
-{/* Evidence: crates/registry-breg/src/package.rs, FieldVocabularyCodesAdded and ActionVocabularyCodesAdded;
-    crates/registry-breg/src/immediate_actions.rs, contract_only_widens();
-    crates/registry-breg/src/tooling.rs, ACTION_CODES_ADDED. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/package.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/package.rs);
+    [crates/registry-breg/src/immediate_actions.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/immediate_actions.rs);
+    [crates/registry-breg/src/tooling.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/tooling.rs). */}
 
 - BREAKING: `bregctl init --from publicschema` and the four BReg starters
   follow PublicSchema `main` at commit `e5cfbbc`, version 0.3.0. The
@@ -1877,14 +1891,15 @@ relevant product pages on this site rather than duplicating release notes.
   a period applies, so a period includes its end date. See
   [derive a registry from PublicSchema](../tutorials/derive-a-registry-from-publicschema/).
 
-{/* Evidence: crates/registry-linkml/publicschema/PIN.yaml;
-    crates/registry-linkml/tests/snapshot.rs;
-    crates/registry-linkml/publicschema/schema/common.yaml, slots.end_date;
-    products/breg/starters/agricultural-holdings/core/registry.yaml;
-    products/breg/starters/seed-lots/core/registry.yaml;
-    products/breg/starters/public-organizations/core/registry.yaml;
-    products/breg/starters/public-organizations/core/MODEL.md;
-    products/breg/starters/README.md. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-linkml/publicschema/PIN.yaml](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-linkml/publicschema/PIN.yaml);
+    [crates/registry-linkml/tests/snapshot.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-linkml/tests/snapshot.rs);
+    [crates/registry-linkml/publicschema/schema/common.yaml](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-linkml/publicschema/schema/common.yaml);
+    [products/breg/starters/agricultural-holdings/core/registry.yaml](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/starters/agricultural-holdings/core/registry.yaml);
+    [products/breg/starters/seed-lots/core/registry.yaml](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/starters/seed-lots/core/registry.yaml);
+    [products/breg/starters/public-organizations/core/registry.yaml](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/starters/public-organizations/core/registry.yaml);
+    [products/breg/starters/public-organizations/core/MODEL.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/starters/public-organizations/core/MODEL.md);
+    [products/breg/starters/README.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/starters/README.md). */}
 
 - A `--selection` document for `bregctl init --from publicschema` may now name
   a `modelRevision` alongside `modelVersion`. PublicSchema can keep one
@@ -1923,9 +1938,10 @@ relevant product pages on this site rather than duplicating release notes.
   hosted tables without carrying their data forward. See
   [review BReg changes in Casework](../tutorials/review-breg-changes-in-casework/).
 
-{/* Evidence: crates/registry-casework/migrations/0015_unified_reviews.sql;
-    crates/registry-casework/src/review.rs;
-    crates/registry-breg/src/review_store.rs. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/migrations/0015_unified_reviews.sql](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/migrations/0015_unified_reviews.sql);
+    [crates/registry-casework/src/review.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/review.rs);
+    [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-breg/src/review_store.rs). */}
 
 - BREAKING: BReg entity `events` are now shared `hooks`, and deliveries carry a
   signed hook envelope instead of the earlier bare body. Rewrite each entity
@@ -1967,10 +1983,11 @@ relevant product pages on this site rather than duplicating release notes.
   runs. `bregctl explain` and `caseworkctl` machine-readable output now use
   versioned, closed JSON report contracts.
 
-{/* Evidence: crates/registry-breg-client/src/lifecycle.rs;
-    crates/registry-breg-client/src/ingestion.rs;
-    products/breg/contracts/explain/;
-    products/casework/contracts/cli/. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg-client/src/lifecycle.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client/src/lifecycle.rs);
+    [crates/registry-breg-client/src/ingestion.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client/src/ingestion.rs);
+    [products/breg/contracts/explain](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/breg/contracts/explain);
+    [products/casework/contracts/cli](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/products/casework/contracts/cli). */}
 
 ## v0.32.0 beta-44
 
@@ -1987,8 +2004,9 @@ relevant product pages on this site rather than duplicating release notes.
   `privateKeyJwt` to refresh credentials instead of a static `tokenRef`. See
   [operate Base Registry Engine](../operate/breg/).
 
-{/* Evidence: crates/registry-breg/src/request_workflow.rs, FrozenApplicationPreconditions;
-    crates/registry-breg/src/action_evidence_config.rs, EvidencePrivateKeyJwtConfig. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/request_workflow.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_workflow.rs);
+    [crates/registry-breg/src/action_evidence_config.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/action_evidence_config.rs). */}
 
 - Evidence questions can answer with a governed `bounded-identifier` value.
   The Rust, Node.js, and Python Evidence clients can authenticate through token
@@ -2038,16 +2056,18 @@ relevant product pages on this site rather than duplicating release notes.
   `registry_grant_source_issuer`; ThunderID derives the source issuer from the
   verified `iss`.
 
-{/* Evidence: crates/registry-casework/src/task_grants.rs, task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit();
-    crates/registry-thunderid-tooling/src/description.rs, GRANT_ATTRIBUTES;
-    crates/registry-thunderid-tooling/src/render.rs, render(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/src/task_grants.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/task_grants.rs);
+    [crates/registry-thunderid-tooling/src/description.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-thunderid-tooling/src/description.rs);
+    [crates/registry-thunderid-tooling/src/render.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-thunderid-tooling/src/render.rs). */}
 
 - Local dev databases holding grants or drafts from before #1044 no longer load;
   reset local dev state.
 
-{/* Evidence: crates/registry-casework-core/src/task_grant.rs, TaskGrant;
-    crates/registry-casework/src/task_grants.rs, PostgresStore::task_grant();
-    crates/registry-breg/src/request_workflow.rs, RequestWorkflow. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-casework-core/src/task_grant.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-casework-core/src/task_grant.rs);
+    [crates/registry-casework/src/task_grants.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-casework/src/task_grants.rs);
+    [crates/registry-breg/src/request_workflow.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_workflow.rs). */}
 
 - `@registrystack/client` exposes `breg.verifyWebhookDelivery()` for Node
   receivers. The helper delegates the Version 1 signature contract to the
@@ -2126,8 +2146,9 @@ relevant product pages on this site rather than duplicating release notes.
   entity without a change request, lists no request fields. See
   [Base Registry Engine API](../reference/breg-api/).
 
-{/* Evidence: crates/registry-breg/src/api/metadata.rs, readable_request_fields;
-    crates/registry-breg/tests/http_read_only.rs, workspace_metadata_projects_request_field_disclosure_per_caller_profile. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/api/metadata.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/api/metadata.rs);
+    [crates/registry-breg/tests/http_read_only.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/http_read_only.rs). */}
 
 - The Rust, Node.js, and Python Base Registry Engine clients accept the
   `action.refused` problem an immediate action answers a declared business rule
@@ -2160,10 +2181,10 @@ relevant product pages on this site rather than duplicating release notes.
   independent of `readableRequestFields`. See
   [Base Registry Engine API](../reference/breg-api/).
 
-{/* Evidence: crates/registry-breg/src/contract.rs, RequestMetadataFieldSource;
-    crates/registry-breg/src/postgres/request_read.rs, may_disclose_review_state
-    and may_disclose_actor_references;
-    crates/registry-breg/src/artifacts.rs, request_record_metadata_schema. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/contract.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/contract.rs);
+    [crates/registry-breg/src/postgres/request_read.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/postgres/request_read.rs);
+    [crates/registry-breg/src/artifacts.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/artifacts.rs). */}
 
 ## v0.29.0 beta-41
 
@@ -2175,8 +2196,9 @@ relevant product pages on this site rather than duplicating release notes.
   [Base Registry Engine API](../reference/breg-api/) and
   [deliver declared events](../operate/breg-webhooks/).
 
-{/* Evidence: crates/registry-breg/src/postgres/request_read.rs;
-    crates/registry-breg/src/request_events.rs. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/postgres/request_read.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/postgres/request_read.rs);
+    [crates/registry-breg/src/request_events.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_events.rs). */}
 
 - Base Registry Engine adds governed request attachment slots, PostgreSQL or
   operator-bound S3 storage, and asynchronous external verification. Select
@@ -2193,15 +2215,19 @@ relevant product pages on this site rather than duplicating release notes.
   captured values available only through `--include-payload`. See
   [deliver declared events](../operate/breg-webhooks/).
 
-{/* Evidence: crates/registry-breg/src/{attachment_storage,attachment_verification,request_retention,request_workflow}.rs;
-    crates/registry-bregctl/src/dev/events.rs. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/attachment_storage.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/attachment_storage.rs);
+    [crates/registry-breg/src/attachment_verification.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/attachment_verification.rs);
+    [crates/registry-breg/src/request_retention.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_retention.rs);
+    [crates/registry-breg/src/request_workflow.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/request_workflow.rs);
+    [crates/registry-bregctl/src/dev/events.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-bregctl/src/dev/events.rs). */}
 
 - `bregctl dev` reports the check that refused a start instead of only the
   private log directory. The rehearsal, package build, activation, and
   verification run inside a detached supervisor, so a refused journey step now
   reaches your terminal with its code, its `journeys[i].steps[j]` path, and its
   own message. See
-  [author journeys](../configure/breg-journeys/#troubleshooting).
+  [author journeys](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/docs/site/src/content/docs/configure/breg-journeys.mdx#troubleshooting).
 - `bregctl dev start` compares the `breg` it resolved against its own version
   before it starts anything, and refuses a binary from another release by name,
   giving both versions and the fix. The issuer runs from the pinned stock image.
@@ -2252,11 +2278,12 @@ relevant product pages on this site rather than duplicating release notes.
   The value is advisory: it grants and withholds no route. See
   [Base Registry Engine API](../reference/breg-api/).
 
-{/* Evidence: crates/registry-breg/src/artifacts.rs, attachment_metadata_schema();
-    crates/registry-breg/src/api/metadata.rs, field();
-    crates/registry-breg-client/src/attachment.rs, BRegAttachmentClassification;
-    crates/registry-breg-client-node/client.d.ts;
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/artifacts.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/artifacts.rs);
+    [crates/registry-breg/src/api/metadata.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/api/metadata.rs);
+    [crates/registry-breg-client/src/attachment.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client/src/attachment.rs);
+    [crates/registry-breg-client-node/client.d.ts](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client-node/client.d.ts);
+    [crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi). */}
 
 - The attachment download operation sends the bare `attachment` disposition in
   `Content-Disposition`. No stored slot metadata holds a filename, and the served
@@ -2304,10 +2331,12 @@ relevant product pages on this site rather than duplicating release notes.
   rounding at the JavaScript number boundary, and unsupported values refuse.
   Keep exact values as JSON text or use a lossless decoder.
 
-{/* Evidence: crates/registry-breg/src/{contract,change_request}.rs;
-    crates/registry-breg/tests/compiler_submitter_targets.rs;
-    crates/registry-breg-client-node/README.md;
-    crates/registry-breg-client-node/__test__/exact-json.test.js. */}
+{/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
+    [crates/registry-breg/src/contract.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/contract.rs);
+    [crates/registry-breg/src/change_request.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/change_request.rs);
+    [crates/registry-breg/tests/compiler_submitter_targets.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/tests/compiler_submitter_targets.rs);
+    [crates/registry-breg-client-node/README.md](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client-node/README.md);
+    [crates/registry-breg-client-node/__test__/exact-json.test.js](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg-client-node/__test__/exact-json.test.js). */}
 
 - `bregctl init --from publicschema` derives a project from the embedded model
   through a wizard, selection file, or starter. Four starter projects include
@@ -2324,11 +2353,12 @@ relevant product pages on this site rather than duplicating release notes.
   validating or republishing. Valid manifests retain their authored spelling
   and source digest. See [contracts](../reference/contracts/).
 
-{/* Evidence: crates/registry-bregctl/src/init_from_model/;
-    crates/registry-bregctl/src/dev/examples.rs;
-    products/breg/starters/professional-licences/core/MODEL.md;
-    crates/registry-evidencectl/src/source_add.rs;
-    products/manifest/CHANGELOG.md. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-bregctl/src/init_from_model](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-bregctl/src/init_from_model);
+    [crates/registry-bregctl/src/dev/examples.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-bregctl/src/dev/examples.rs);
+    [products/breg/starters/professional-licences/core/MODEL.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/starters/professional-licences/core/MODEL.md);
+    [crates/registry-evidencectl/src/source_add.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/source_add.rs);
+    [products/manifest/CHANGELOG.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/manifest/CHANGELOG.md). */}
 
 - Export, migration, local development, and Compose preflight failures report
   clearer recovery information. Evidence authoring validates source origins and
@@ -2491,7 +2521,7 @@ Relay identities:
   tooling, operational posture, security, and terminology against the V2
   contracts.
 - Recorded the [Relay V1 and registryctl retirement
-  decision](../decisions/relay-v1-and-registryctl-retirement-2026-08-11/) and
+  decision](https://github.com/registrystack/registry-stack/blob/24ea41203343f8d24b0a0a19d4902f21dfb62479/docs/site/src/content/docs/decisions/relay-v1-and-registryctl-retirement-2026-08-11.mdx) and
   redirected the retired routes.
 - Documented the Relay installer and the `ghcr.io/registrystack/relay:v0.19.0`
   image. `relayctl` has no installer; it is taken from the release assets or
@@ -2557,7 +2587,7 @@ Adopter-facing breaking change:
 - Required affected deployments to re-approve their baseline from the current
   lane bundles, because the removed cross-lane interface digests are no longer
   verified and the old approval's integrity claim is no longer enforced. See
-  [Approve the initial product baseline](../operate/approve-initial-baseline/).
+  [Approve the initial product baseline](https://github.com/registrystack/registry-stack/blob/f688b4f2580e1feea409cd561647d9ad42770d6b/docs/site/src/content/docs/operate/approve-initial-baseline.mdx).
 
 ## 2026-08-01
 
@@ -2902,7 +2932,7 @@ Documentation updates published:
 ## 2026-06-13
 
 Documentation set: the Latest docset published from the main branch, tracking main snapshots of
-[Registry Relay](../products/registry-relay/), [Registry Notary](../products/registry-notary/),
+[Registry Relay (retired)](../decisions/registry-relay-retirement-2026-10-03/), [Registry Notary](https://github.com/registrystack/registry-stack/blob/b8ed78f80562842d7de2c6e3eb388b85e334c8a9/products/notary/README.md),
 and [Registry Manifest](../products/registry-manifest/).
 
 ## 2026-06-12

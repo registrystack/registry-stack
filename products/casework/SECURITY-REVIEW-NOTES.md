@@ -1,5 +1,13 @@
 # Registry Casework security review notes
 
+The current review-only security contract is the maintained
+`contracts/security-invariant-matrix.yaml` and its executable
+`contracts/security-test-traceability.yaml`. The sections that follow preserve
+historical review decisions, including the retired WorkItem/source-action
+implementation. Their old symbols, migration numbers and recovery commands are
+not instructions for the current runtime. Use the product README, runtime
+configuration reference and current contract matrix for deployment behavior.
+
 Review notes for security-sensitive Registry Casework changes, held in tracked
 material because commit messages do not survive a squash. Each section names
 the change, the threat it answers, the defaults it ships, where Rust enforces
@@ -645,8 +653,8 @@ its decision-time label through `decisionReceipt`. The decision transaction
 stores the outcome code in the existing accountability row. The label and
 policy identity come only from the request's retained immutable policy
 snapshot, so a policy replacement cannot reinterpret an earlier selection.
-No submitted context or structured result is read to resolve it. Approval has
-no selected outcome. Fresh installation creates the outcome column directly;
+No submitted context or structured result is read to resolve it. Approval
+selects an outcome like every other decision. Fresh installation creates the outcome column directly;
 no earlier selection is reconstructed during installation.
 
 This remains the explicit audited Supervisor read, with current Supervisor
@@ -684,6 +692,63 @@ absence, author versus prior holder, current scope, source concealment, bounded
 continuation and minimal disclosure. Client regressions cover response scope,
 order, receipt interpretation and native query validation. These references do
 not assert that a live database or listener test has executed.
+
+## Decided outcomes and public reasons
+
+Threat: a producer reads a reviewer's private reasoning from the result it
+receives, or settles on an approval whose meaning the policy never declared.
+The private reason is accountability material; only the producer-facing
+`publicReason` is meant to leave Casework.
+
+Enforcement: every decision names a declared outcome of the pinned policy,
+approval included, and `caseworkctl check` refuses a `purpose: approval`
+policy without an approval outcome. A bare approval is refused with
+`400 request.invalid` at `$.outcome`, reason `outcome-not-declared`, and the
+`Registry-Casework-Validation-Allowed` header lists the declared IDs. Each
+outcome declares `publicReason` as `required`, `optional` or `none`, with no
+default. The runtime refuses a missing required public reason
+(`public-reason-required`) and one the outcome does not declare
+(`public-reason-not-declared`); a public reason over 2000 UTF-8 bytes is
+refused as `maximum-bytes-exceeded` and a blank one or one carrying control
+characters as `text-invalid`, as the private reason is, and the OpenAPI
+document publishes the bound. Every approval in one stage names the same
+outcome, so arrival order cannot pick the outcome released: an approval
+naming another outcome than an earlier approval in its stage is refused at
+`$.outcome`, reason `approval-outcome-differs`, with the chosen outcome in
+the `Registry-Casework-Validation-Allowed` header, and is not recorded. The
+final stage settles the request with that outcome and the public reason of
+the approval that meets its threshold. Earlier stages' outcomes and reasons,
+and the other approvers' public reasons, stay in the accountability record
+and are not released. The ReviewResult
+carries `outcome` and any `publicReason` on approved, rejected,
+changes-requested and answered results and neither on cancelled or
+superseded ones. The private reason stays in the accountability row and
+never enters the result. The audit journal records only `publicReasonGiven`;
+the published audit allow-list carries that flag and no reason text.
+
+Verification: `rejected_cancelled_and_superseded_results_commit_atomically`
+and `review_decisions_are_audited_after_the_decision_commits` in
+`crates/registry-casework/tests/review_postgres.rs`, and the canary checks in
+`crates/registry-casework/tests/review_http.rs`. They refuse a missing
+required public reason, prove the result carries the outcome and public
+reason without the private reason, and prove the audit text carries only the
+flag. `reasons_over_the_byte_bound_name_the_bound` and
+`input_bounds_name_the_byte_bound_before_the_text_rules` in
+`crates/registry-casework-core/src/review.rs` prove an oversized reason names
+the bound and a blank or control-character one stays `text-invalid`.
+`an_approval_naming_another_outcome_than_its_stage_already_chose_is_refused`
+and `approvals_in_one_stage_that_agree_settle_with_their_outcome` in the same
+file, and `approvals_in_one_stage_must_agree_on_the_outcome_they_release` in
+`crates/registry-casework/tests/review_acceptance_postgres.rs`, prove the
+refusal, that it records nothing, and the agreeing settlement. These
+references do not assert that a live database test has executed.
+
+Residual: the public reason is reviewer-written free text released to the
+producer; Casework bounds it but cannot judge its content. Approvers who
+agree on an outcome may still write different public reasons, and only the
+one from the approval meeting the threshold is released. BReg retains the
+full ReviewResult, including any public reason, in its proposal review result
+record until proposal retention erases it.
 
 ## Fresh schema and retained decisions
 
@@ -764,8 +829,9 @@ Proof obligations:
   matching `changes-requested`, refuses its underscore spelling, and refuses
   mismatched action and time.
 - `crates/registry-casework/tests/review_postgres.rs`:
-  `subject_clock_pauses_and_continues_across_review_rounds` reads a persisted
-  ChangesRequested receipt and checks its serialized `changes-requested` word.
+  `request_clock_completes_for_changes_requested_and_later_request_gets_fresh_budget`
+  reads a persisted ChangesRequested receipt and checks its serialized
+  `changes-requested` word.
 - `crates/registry-casework-client-node/src/lib.rs`:
   `protocol_failures_use_the_public_snake_case_vocabulary` asserts the current
   `header-bounds`, `trace-context`, `media-type` and other protocol words.

@@ -94,6 +94,10 @@ SCHEDULING_LICENCES = (
     "crates/registry-scheduling-client-node/LICENSE",
     "crates/registry-scheduling-client-py/LICENSE",
 )
+COORDINATOR_LICENCES = (
+    "crates/registry-coordinator-client-node/LICENSE",
+    "crates/registry-coordinator-client-py/LICENSE",
+)
 
 
 class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
@@ -139,6 +143,11 @@ class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
         # Both Scheduling bindings compare their licence copies with the root
         # LICENSE in their own checks, so the same gate holds them.
         for licence in SCHEDULING_LICENCES:
+            with self.subTest(licence=licence):
+                self.assertIn(licence, self.gated)
+
+    def test_the_coordinator_binding_licences_are_gated(self) -> None:
+        for licence in COORDINATOR_LICENCES:
             with self.subTest(licence=licence):
                 self.assertIn(licence, self.gated)
 

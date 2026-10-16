@@ -130,7 +130,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let table_name = quote_compiled_identifier(&table.physical_name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke};",
+                "REVOKE ALL ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke}; REVOKE UPDATE (record_id) ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke};",
             ))
             .await?;
         if !table.runtime_privileges.is_empty() {
@@ -143,6 +143,14 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
             client
                 .batch_execute(&format!(
                     "GRANT {privileges} ON TABLE registry_data.{table_name} TO {};",
+                    runtime_role.quoted(),
+                ))
+                .await?;
+        }
+        if table.runtime_lock_column {
+            client
+                .batch_execute(&format!(
+                    "GRANT UPDATE (record_id) ON TABLE registry_data.{table_name} TO {};",
                     runtime_role.quoted(),
                 ))
                 .await?;

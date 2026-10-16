@@ -648,11 +648,76 @@ fn action_pre_io_record(
     claims: &ActionClaimContext,
     event: &PreIoAudit<'_>,
 ) -> Result<Value, RegistryAuditError> {
+    if event.method != HttpMethod::Post {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    action_resource_pre_io_record(audit, expected, claims, event)
+}
+
+fn proposal_pre_io_record(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    event: &PreIoAudit<'_>,
+) -> Result<Value, RegistryAuditError> {
+    let prefix = format!("proposals.{}.", claims.action_id());
+    let operation = event
+        .operation_id
+        .strip_prefix(&prefix)
+        .ok_or(RegistryAuditError::InvalidContext)?;
+    let allowed = match event.method {
+        HttpMethod::Get => matches!(
+            operation,
+            "get" | "list" | "get-review-context" | "get-review-status"
+        ),
+        HttpMethod::Post => matches!(
+            operation,
+            "start" | "edit" | "submit" | "revise" | "rebase" | "retry" | "cancel" | "apply"
+        ),
+        HttpMethod::Patch | HttpMethod::Delete => operation == "edit",
+    };
+    if !allowed {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    action_resource_pre_io_record(audit, expected, claims, event)
+}
+
+pub(crate) async fn begin_proposal_pre_io_audit(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    event: PreIoAudit<'_>,
+) -> Result<AuditRequest, RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Attempt {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let record = proposal_pre_io_record(audit, expected, claims, &event)?;
+    begin_attempt(audit, event.correlation, record).await
+}
+
+pub(crate) async fn record_proposal_pre_io_audit(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    event: PreIoAudit<'_>,
+) -> Result<(), RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Refusal {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let record = proposal_pre_io_record(audit, expected, claims, &event)?;
+    audit
+        .append(pre_io_entry(event.kind, event.correlation, record))
+        .await
+}
+
+fn action_resource_pre_io_record(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    event: &PreIoAudit<'_>,
+) -> Result<Value, RegistryAuditError> {
     let profile = audit.profile();
-    if event.operation_id.is_empty()
-        || event.target_record.is_some()
-        || event.method != HttpMethod::Post
-        || !profile_is_keyed(profile)
+    if event.operation_id.is_empty() || event.target_record.is_some() || !profile_is_keyed(profile)
     {
         return Err(RegistryAuditError::InvalidContext);
     }
@@ -751,15 +816,6 @@ pub(crate) async fn record_http_refusal_audit(
     event: HttpRefusalAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
     record_http_refusal_audit_inner(audit, expected, event, None).await
-}
-
-pub(crate) async fn record_attachment_http_refusal_audit(
-    audit: &RegistryAudit,
-    expected: &ExpectedRegistryIdentity,
-    event: HttpRefusalAudit<'_>,
-    slot_id: &str,
-) -> Result<(), RegistryAuditError> {
-    record_http_refusal_audit_inner(audit, expected, event, Some(slot_id)).await
 }
 
 async fn record_http_refusal_audit_inner(
@@ -891,30 +947,6 @@ pub(crate) fn terminal_entry(
         correlation,
         terminal_record(terminal, profile)?,
     ))
-}
-
-/// Bind an attachment outcome to its exact request proposal without treating
-/// the slot as an independently declared action.
-pub(crate) fn attachment_terminal_entry(
-    profile: &AuditProfile,
-    terminal: TerminalAudit,
-    slot: &str,
-    proposal_version: i64,
-) -> Result<AuditEntry, RegistryAuditError> {
-    if terminal.entity_id.as_deref().is_none_or(str::is_empty)
-        || terminal.action_id.is_some()
-        || slot.is_empty()
-        || proposal_version <= 0
-    {
-        return Err(RegistryAuditError::InvalidContext);
-    }
-    let correlation = terminal.correlation.request_id().to_string();
-    let mut record = terminal_record(terminal, profile)?;
-    record.insert(
-        "attachment".to_owned(),
-        serde_json::json!({"slotId": slot, "proposalVersion": proposal_version}),
-    );
-    Ok(response_entry(correlation, record))
 }
 
 /// Link an action commit or replay to its retained application provenance.

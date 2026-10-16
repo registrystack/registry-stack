@@ -380,6 +380,48 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertNotIn("relay", dict(images_039))
 
+    @mock.patch.object(MODULE.release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    def test_coordinator_joins_the_core_shard_only_from_v0_42(self) -> None:
+        rosters_040, images_040 = MODULE.rosters("0.40.0")
+        self.assertFalse(
+            any(
+                name.startswith("coordinator")
+                for names in rosters_040.values()
+                for name in names
+            )
+        )
+        self.assertNotIn("coordinator", dict(images_040))
+        self.assertNotIn("coordinatorctl", dict(images_040))
+
+        rosters_042, images_042 = MODULE.rosters("0.42.0")
+        self.assertEqual(
+            [
+                "coordinator-v0.42.0-linux-amd64",
+                "coordinatorctl-v0.42.0-linux-amd64",
+            ],
+            [name for name in rosters_042["core"] if name.startswith("coordinator")],
+        )
+        self.assertEqual(
+            [
+                ("coordinator", "coordinator-v0.42.0-linux-amd64"),
+                ("coordinatorctl", "coordinatorctl-v0.42.0-linux-amd64"),
+            ],
+            [entry for entry in images_042 if entry[0].startswith("coordinator")],
+        )
+        with mock.patch.object(
+            MODULE.release_roster, "COORDINATOR_FIRST_RELEASE", None
+        ):
+            rosters_held, images_held = MODULE.rosters("0.42.0")
+        self.assertEqual(rosters_040.keys(), rosters_held.keys())
+        self.assertFalse(
+            any(
+                name.startswith("coordinator")
+                for names in rosters_held.values()
+                for name in names
+            )
+        )
+        self.assertNotIn("coordinator", dict(images_held))
+
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
         self,
     ) -> None:

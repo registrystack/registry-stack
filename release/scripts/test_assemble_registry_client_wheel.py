@@ -38,7 +38,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "0.40.0"
+        self.version = "0.42.0"
         self.facade = self.directory / "registry-stack-client-py"
         shutil.copytree(ROOT / "crates/registry-stack-client-py", self.facade)
         pyproject = self.facade / "pyproject.toml"
@@ -240,7 +240,7 @@ class AssembleRegistryClientWheelTest(TestCase):
     def test_local_messaging_override_assembles_without_admitting_a_release(self) -> None:
         module = load_module()
         with mock.patch.object(
-            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 41, 0)
+            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 43, 0)
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)
@@ -255,7 +255,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         with mock.patch.object(
             module.client_registry.release_roster,
             "SCHEDULING_CLIENT_FIRST_RELEASE",
-            (0, 41, 0),
+            (0, 43, 0),
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)

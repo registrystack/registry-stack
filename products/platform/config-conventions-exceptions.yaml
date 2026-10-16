@@ -42,18 +42,6 @@ apiVersion: id.registrystack.org/formats/platform/config-conventions-exceptions/
 kind: PlatformConfigConventionsExceptions
 exceptions:
 - rule: CFG-NAME-2
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/$defs/route/properties/method/const/POST
-  class: protocol-constant
-  reason: POST is written as HTTP methods (RFC 9110) defines it
-  resolution: Permanent.
-- rule: CFG-NAME-2
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/actions/items/properties/method/const/POST
-  class: protocol-constant
-  reason: POST is written as HTTP methods (RFC 9110) defines it
-  resolution: Permanent.
-- rule: CFG-NAME-2
   format: breg/mcp-runtime
   location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
   class: protocol-constant
@@ -145,25 +133,25 @@ exceptions:
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/DELETE
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/DELETE
   class: protocol-constant
   reason: DELETE is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/GET
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/GET
   class: protocol-constant
   reason: GET is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/PATCH
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/PATCH
   class: protocol-constant
   reason: PATCH is written as HTTP PATCH (RFC 5789) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/POST
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/POST
   class: protocol-constant
   reason: POST is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
@@ -310,4 +298,185 @@ exceptions:
   location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/2.0
   class: protocol-constant
   reason: 2.0 is written as the PDF specification (ISO 32000) numbers its versions
+  resolution: Permanent.
+- rule: CFG-ID-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/PolicySelectionSource/properties/id
+  class: exchange-model
+  reason: "PolicySelection.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
+  resolution: "Permanent for the Review v1 PolicySelection exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
+- rule: CFG-ID-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ProposalReviewContextSource/properties/fields
+  class: exchange-model
+  reason: "Review-context fields become member names in the published typed context schema. They use the public API camelCase grammar and reserved-name exclusions, not local identifier grammar; the generated schema states that grammar and the 64-field ceiling."
+  resolution: "Permanent for the BReg v1alpha1 review-context exchange model. native_source_conventions and refactor_contract verify public member names and exact context schema bytes."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionExecutionSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionInputSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/FieldSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ProposalApplicationSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-SEC-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionInputSource/anyOf/1/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+- rule: CFG-SEC-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/FieldSource/anyOf/12/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+- rule: CFG-ID-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/PolicySelectionSource/properties/id
+  class: exchange-model
+  reason: "PolicySelection.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
+  resolution: "Permanent for the Review v1 PolicySelection exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
+- rule: CFG-ID-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProposalReviewContextSource/properties/fields
+  class: exchange-model
+  reason: "Review-context fields become member names in the published typed context schema. They use the public API camelCase grammar and reserved-name exclusions, not local identifier grammar; the generated schema states that grammar and the 64-field ceiling."
+  resolution: "Permanent for the BReg v1alpha1 review-context exchange model. native_source_conventions and refactor_contract verify public member names and exact context schema bytes."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionExecutionSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionInputSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/FieldSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProposalApplicationSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-SEC-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionInputSource/anyOf/1/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+- rule: CFG-SEC-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/FieldSource/anyOf/12/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+
+- rule: "CFG-ID-1"
+  format: "casework/project"
+  location: "products/casework/generated/project/project.schema.json#/$defs/ReviewContextContract/properties/id"
+  class: "exchange-model"
+  reason: "ReviewContextContract.id is the native producer's exact opaque identifier under the Casework v1alpha1 review-context exchange model. Valid producer URNs are not authored LocalId values; the owning reader bounds and validates text without reshaping the identity."
+  resolution: "Permanent for the Casework v1alpha1 review-context contract. Current-source compiler, provider-agreement, and strict context tests verify exact producer identity and binding."
+
+- rule: "CFG-ID-7"
+  format: "casework/project"
+  location: "products/casework/generated/project/project.schema.json#/$defs/ReviewContextPolicy"
+  class: "exchange-model"
+  reason: "The published Casework v1alpha1 review-context exchange model uses mode: submitted or current-source across authored policy, compiled closure, and inspection output. The shared positioned tagged-union reader enforces the closed alternatives; adding type would introduce a second wire spelling."
+  resolution: "Permanent for the Casework v1alpha1 context-mode exchange model. Strict context and CLI schema-parity tests verify the accepted tags and unknown-member refusal."
+
+- rule: "CFG-SEC-1"
+  format: "casework/project"
+  location: "products/casework/generated/project/project.schema.json#/properties/contextProviders/additionalProperties/properties/deploymentRef"
+  class: "exchange-model"
+  reason: "deploymentRef is the published Casework v1alpha1 model's logical reference to a runtime contextProviders binding. It contains no credential, secret-provider expression, or endpoint. The runtime binding separately owns purpose-specific secret references."
+  resolution: "Permanent for the Casework v1alpha1 provider-binding exchange model. Provider agreement and runtime configuration checks resolve the logical binding and preserve separate credential custody."
+
+- rule: "CFG-ID-1"
+  format: "casework/report"
+  location: "products/casework/contracts/cli/report.schema.json#/$defs/ReviewContextContract/properties/id"
+  class: "exchange-model"
+  reason: "ReviewContextContract.id is the native producer's exact opaque identifier under the Casework v1alpha1 review-context exchange model. Valid producer URNs are not authored LocalId values; the owning reader bounds and validates text without reshaping the identity."
+  resolution: "Permanent for the Casework v1alpha1 review-context contract. Current-source compiler, provider-agreement, and strict context tests verify exact producer identity and binding."
+
+- rule: "CFG-ID-7"
+  format: "casework/report"
+  location: "products/casework/contracts/cli/report.schema.json#/$defs/ReviewContextPolicy"
+  class: "exchange-model"
+  reason: "The published Casework v1alpha1 review-context exchange model uses mode: submitted or current-source across authored policy, compiled closure, and inspection output. The shared positioned tagged-union reader enforces the closed alternatives; adding type would introduce a second wire spelling."
+  resolution: "Permanent for the Casework v1alpha1 context-mode exchange model. Strict context and CLI schema-parity tests verify the accepted tags and unknown-member refusal."
+
+- rule: "CFG-SEC-1"
+  format: "casework/report"
+  location: "products/casework/contracts/cli/report.schema.json#/$defs/ReviewContextProviderPolicy/properties/deploymentRef"
+  class: "exchange-model"
+  reason: "deploymentRef is the published Casework v1alpha1 model's logical reference to a runtime contextProviders binding. It contains no credential, secret-provider expression, or endpoint. The runtime binding separately owns purpose-specific secret references."
+  resolution: "Permanent for the Casework v1alpha1 provider-binding exchange model. Provider agreement and runtime configuration checks resolve the logical binding and preserve separate credential custody."
+
+- rule: "CFG-ID-7"
+  format: "casework/report"
+  location: "products/casework/contracts/cli/report.schema.json#"
+  class: "exchange-model"
+  reason: "The promised Casework v1alpha1 command-report exchange model is discriminated by the invoked command. Every typed command payload retains that exact CLI spelling; replacing it with type would change the public report contract without adding validation."
+  resolution: "Permanent for the Casework v1alpha1 command-report model. Real CLI parity tests validate successful, domain-refusal and usage reports against the generated closed schema."
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenType/enum/application~1at+jwt
+  class: protocol-constant
+  reason: application/at+jwt is the JWT access token media type defined by RFC 9068
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenType/enum/at+jwt
+  class: protocol-constant
+  reason: at+jwt is the JWT access token type defined by RFC 9068
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetSigningAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.

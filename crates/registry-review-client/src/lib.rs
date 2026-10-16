@@ -14,13 +14,16 @@ pub use error::{
     ReviewClientError, ReviewMutationErrorClass, ReviewProblem, ReviewProblemCode,
     ReviewProtocolFailure, ReviewValidationError, ReviewValidationReason,
 };
-pub use model::{ReviewAuth, ReviewComplete, ReviewResultResponse, ReviewResultsQuery};
+pub use model::{
+    ReviewAuth, ReviewComplete, ReviewResultObservation, ReviewResultResponse, ReviewResultsQuery,
+};
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_review_protocol::{
-    submission_digest, ContentDigest, HumanIdentity, PolicyBinding, ProtocolError,
+    submission_digest, ContentDigest, HumanIdentity, PolicyBinding, PolicySelection, ProtocolError,
     ReviewCancelRequest, ReviewCancelResponse, ReviewCompletion, ReviewCompletionType,
     ReviewContext, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestLifecycle,
     ReviewRequestView, ReviewResult, ReviewResultFeedEntry, ReviewResultFeedPage,
     ReviewResultLookup, ReviewResultStatus, SourceContextBinding, SubjectBinding, SubmissionDigest,
+    REVIEW_PROFILE_HEADER, REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 pub use uuid::Uuid;

@@ -1,6 +1,6 @@
 ---
 title: How Registry Casework works
-description: "The model behind Registry Casework: what a work item is, where it comes from, who may act on it, how a decision reaches the system that owns the record, and what the service keeps."
+description: How pinned review policy, current human authority, read-only context, decisions, and results fit together.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,266 +14,136 @@ persona:
   - operator
 ---
 
-You have run [Decide your first work item](../../tutorials/first-casework/) and want the model behind it.
-This page explains what a work item is, where one comes from, who is allowed to act on it, and how a decision reaches the system that owns the record, so that authoring a project and operating a deployment read as consequences of one model rather than as separate features.
-If you are still deciding whether the product fits, start with the [Registry Casework overview](../../start/casework/).
+When you integrate Registry Casework, your producer owns the subject and the business action;
+Casework owns the human review round. The same review model works with an admitted snapshot or
+current context disclosed by a source.
 
-{/* Evidence: crates/registry-casework-core/src/model.rs, WorkItem; crates/registry-casework-core/src/config.rs, CaseworkProject; products/casework/README.md. */}
+{/* Evidence: products/casework/README.md;
+    crates/registry-casework-core/src/review.rs;
+    crates/registry-review-protocol/src/lib.rs. */}
 
-## What a work item is
+## One review round
 
-A [work item](../../reference/glossary/#work-item) is one piece of human work that a team can see, claim, and finish.
-It carries the subject it concerns, the [queue](../../reference/glossary/#queue) it sits in, its lifecycle state, at most one holder, and the history of everything that has happened to it.
-Registry Casework owns that coordination record, and only that record.
+A `ReviewPolicy` declares context requirements, ordered stages, eligible profiles, independent
+reviewer thresholds, outcomes, routing, clocks, and retention.
+A trusted producer creates a `ReviewRequest` selecting the policy by ID, with an immutable subject
+binding and an idempotency key. The producer can also require an exact version and digest.
+Casework atomically binds acceptance to the selected policy's concrete ID, version, and digest.
+The producer cannot select a reviewer or invent a stage.
 
-{/* Evidence: crates/registry-casework-core/src/model.rs, WorkItem and OccurrenceState;
-    crates/registry-casework/src/store.rs, SourceBinding. */}
-
-Casework coordinates source-owned work items and unified review requests. A project that declares neither a source nor a review kind is refused because it describes no work.
-
-| What differs | Source-backed item | Unified review request |
-| ------ | ------ | ------ |
-| Where it starts | A governed [change request](../../reference/glossary/#change-request) that a [Base Registry Engine](../../reference/glossary/#base-registry-engine) already holds | An admitted producer creating one under a declared review kind |
-| What Casework holds | Assignment, routing, clocks, private drafts, attempts, and recovery | Immutable subject and policy bindings, context, tasks, decisions, result, and accountability |
-| What stays with the source | Eligibility, current visibility, and the record change itself | The producer's business object and correlation reference |
-| How it finishes | An accountable attempt against the source, made by a person | An approved, rejected, changes-requested, answered, cancelled, or superseded result |
-
-{/* Evidence: crates/registry-casework-core/src/config.rs, CaseworkProject and casework.project.no-work. */}
-
-A source-backed item mirrors work that a Base Registry Engine (BReg) already governs.
-Casework reaches that registry through one source adapter, and the adapter is the only place the registry's protocol exists: it verifies a lifecycle transition, reads authoritative state under a service reader profile, discovers active requests, reads one request as the calling person, prepares an action, and executes a prepared action.
-Everything a source-backed item shows a caller comes from a read made for that caller at that moment, so eligibility, visibility, and the mutation stay with the registry that owns them.
-
-{/* Evidence: crates/registry-casework-core/src/adapter.rs, SourceAdapter, discover_active, and read_for_caller;
-    crates/registry-casework-breg/src/lib.rs, read_authoritative. */}
-
-An admitted producer creates a unified review request with an immutable subject binding and either a submitted snapshot or a source-context reference.
-The review kind fixes the ordered stages, thresholds, reviewer exclusions, context strategy, schemas, outcomes, clocks, and retention.
-Casework pins the policy identity and canonical submission digest at creation, so publishing a changed policy later shapes new requests and never rewrites existing ones.
-The starter project ships one answer policy and admitted producer, which is enough to run without a registry.
-
-{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewKindPolicy and ReviewKindPolicySnapshot;
-    crates/registry-casework/src/review.rs, create_review_request and decide_review_task. */}
-
-A review decision may carry a structured result beside a configured rejected, changes-requested, or answer outcome.
-The kind's `resultSchema` types that result, and the producer's `resultConstraints` narrow fields to a subset the schema already admits.
-Casework validates the result against the pinned schema first and the narrowing second, then returns it through polling, the result feed, or an optional authenticated completion signal.
-An approved decision remains payload-free.
-
-{/* Evidence: crates/registry-casework-core/src/review.rs, validate_result_constraints and
-    validate_outcome; crates/registry-casework/src/review.rs, decide_review_task. */}
-
-## Who may act
-
-Four profiles exist, and a request selects exactly one of them.
-
-| Profile | What it may do |
-| --- | --- |
-| Staff | Work the queues their teams serve: claim an item, release it, keep a private draft, delegate an item they hold, and record a decision. |
-| Supervisor | Work those queues, assign visible work, maintain absence records for staff they supervise, move a caseload, and read protected review accountability. |
-| Administrator | Maintain the directory and publish holiday revisions while the service runs. |
-| Requester | Act as an admitted producer, read its own requests and results, page its result feed, and cancel an active request. It cannot claim or decide. |
-
-{/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and profiles_without_a_separate_scope;
-    products/casework/README.md. */}
-
-Staff, Supervisor, and Administrator are the three profiles a person holds, and Casework admits them only when the token carries the human-identity assertion the deployment names: one claim, one exact string value, set by the issuer for an interactive session.
-Every request is checked twice over, once for the scopes the selected profile requires and once for that assertion.
-Requester stands for a service integration and is exempt from the assertion, and a human value on a Requester token grants no Staff, Supervisor, or Administrator authority.
-
-{/* Evidence: crates/registry-casework/src/auth.rs, CaseworkAuthenticator and NotHuman;
-    products/casework/README.md. */}
-
-Scopes are the first authority check and the [directory](../../reference/glossary/#directory) is the second.
-The directory is runtime state the Administrator maintains through the authenticated API rather than policy you write in a file: which teams exist, who belongs to each as staff or supervisor, and which queues each team serves.
-A served queue belongs to one team at a time, and every mutation rechecks current membership inside the same transaction as the change, so removing a person from a team takes effect on their next request rather than at the next deployment.
-Bounded maintenance then releases held items whose holder is no longer eligible and records that release as a visible lifecycle event.
-
-{/* Evidence: crates/registry-casework-core/src/model.rs, TeamRecord and DirectoryMember;
-    crates/registry-casework/src/store.rs, can_view_item;
-    products/casework/README.md. */}
-
-Administrator authority covers the directory and the calendars, not the work.
-Reading an item is granted to a staff member or a supervisor of the team currently serving that item's queue, so an Administrator who can rename a team and reassign its queues still cannot open a single item sitting in them.
-The directory response itself contains no work-item identifiers.
-
-{/* Evidence: crates/registry-casework/src/store.rs, can_view_item and DirectoryMember;
-    products/casework/README.md. */}
-
-## The life of an item
-
-Work reaches a person as an inbox: the items in the queues their teams currently serve, filtered again by what that person may see right now.
-[Claiming](../../reference/glossary/#claim) an item makes that person its holder, and releasing it returns the item to its queue.
-One holder at a time is a fence rather than a courtesy, because the store checks the holder, the item's revision, and current membership in the same transaction as any change, so two people racing for one item produce one winner and one refusal.
-
-{/* Evidence: crates/registry-casework-core/src/transition.rs, transition();
-    crates/registry-casework/src/store.rs, OccurrenceState and AssignmentContext. */}
-
-A holder can keep a [private draft](../../reference/glossary/#private-draft) while thinking.
-A draft is keyed by the item and its author, so one person's draft is absent to everyone else, and it is bound to the exact source proposal it was written against.
-When that proposal moves on, the draft is retained and the person is told the proposal changed, which keeps a long piece of reasoning from being silently applied to a different request.
-
-{/* Evidence: crates/registry-casework/src/service.rs, source_draft and save_source_draft;
-    crates/registry-casework/src/problem.rs, WorkItemProposalChanged. */}
-
-Deciding a source-backed item is not a local state change.
-Casework re-reads the request as the acting person, under that person's own bearer token and the [source profile](../../reference/glossary/#casework-source-profile) the request selects, and promotes only an action the registry offers that person for that exact binding at that moment.
-It then reserves one [attempt](../../reference/glossary/#attempt) and executes an inert prepared capsule that holds the exact binding and the evidence needed to replay it, and no credential.
-Approval does not apply: completing a review and applying a request are separate actions, discovered separately, taken separately.
-The reason the person records with the decision travels with it: every promoted decision action and the apply action carry the bounded remark to the source, which records it beside the action under its own disclosure and retention rules.
-
-{/* Evidence: crates/registry-casework/src/service.rs, decide and prepare_action;
-    crates/registry-casework-breg/src/lib.rs, execute_prepared;
-    crates/registry-casework-core/src/adapter.rs, PreparedSourceAttempt. */}
+Casework creates `ReviewTask`s as the pinned stages become active.
+Eligible humans claim or receive tasks and record `Decision`s under the current task revision.
+A stage advances only when its pinned threshold and exclusion rules are satisfied.
+A terminal `ReviewResult` repeats the policy, subject, and submission digest so the producer can
+correlate the answer with the round it actually submitted.
 
 ```mermaid
 sequenceDiagram
-    participant S as Staff
-    participant C as Registry Casework
-    participant R as Base Registry Engine
-
-    S->>C: Claim the item, then record a decision
-    C->>R: Read the request as the acting person
-    R-->>C: Return the actions offered to that person now
-    C->>C: Reserve one attempt against the exact binding
-    C->>R: Execute the prepared action
-    R-->>C: Apply it, refuse it, or leave the result unknown
-    C-->>S: Complete the item, return it, or ask for recovery
-    Note over C,R: Every source call carries the person's own token
+    participant P as Producer
+    participant C as Casework
+    participant H as Human reviewer
+    participant S as Source system
+    P->>C: Submit policy selector and exact subject binding
+    C->>C: Pin policy and create review tasks
+    H->>C: Claim and decide current task revision
+    C-->>P: Return authenticated terminal result
+    P->>S: Request separately authorized business action
+    Note over C,S: A review result grants no source mutation authority
 ```
 
-Three outcomes follow, and the third one shapes the rest of the model.
-A definitive refusal from the registry returns the item to its holder, who can act on it again.
-A confirmed application completes the attempt and records a receipt.
-Anything else, including a timeout, is preserved as uncertain rather than retried: the item is fenced, and the next call receives a recovery problem that names the original attempt and nothing else.
-Recovery replays that exact prepared capsule under the same person, the same Casework profile, and the same source profile, so a lost response cannot become a second decision.
+Changing a policy does not reinterpret accepted requests.
+Activation refuses changes that would strand open reviews or replace their required authority.
+A producer may cancel its own pending request; a later round may supersede an older round under the
+same admitted producer and subject identity.
+Neither terminal status means that an external system applied a change.
 
-{/* Evidence: crates/registry-casework-core/src/adapter.rs, SourceAdapterError and PreparedExecution;
-    crates/registry-casework/src/problem.rs, WorkItemRecoveryPending;
-    crates/registry-casework-core/src/transition.rs, AttemptUncertain. */}
+{/* Evidence: crates/registry-casework/src/review.rs;
+    crates/registry-casework/src/pinned_work.rs;
+    crates/registry-casework/tests/review_acceptance_postgres.rs;
+    crates/registry-review-protocol/src/lib.rs, PolicySelection, ReviewRequestAccepted;
+    crates/registry-casework/tests/breg_review_journey.rs. */}
 
-When recovery still cannot observe what happened, the deployment operator settles the attempt after confirming the real outcome with the source owner.
-Settlement is reviewed before it is applied, records the reason and the person who decided, and names no actor as having decided inside Casework.
-Settling as not applied returns the item to its holder; settling as applied completes the attempt with no receipt and leaves the item synchronizing until Casework observes the source's next revision.
-[Deploy Registry Casework](../../operate/casework/) covers that operator path.
+## Two context custody choices
 
-{/* Evidence: crates/registry-casework-core/src/attempt_settlement.rs;
-    crates/registry-casework/src/store.rs, settle_attempt. */}
+Submitted context is a bounded immutable snapshot validated against the pinned display schema.
+It lets you run Casework without a source provider.
+The snapshot is review input, not current source authority.
 
-### Why refusal and absence look the same
+Current-source context is an exact provider and contract binding.
+Casework retains the reference and derived task metadata rather than the business projection.
+A human display read uses the person's current bearer token and selected source profile.
+A service-status credential can establish reviewability but cannot supply displayed fields.
+Routing and task-grant context are separate purpose-specific capabilities, required only by policies
+that actually use them.
 
-An item the caller may not see and an item that does not exist produce the same answer: one 404 carrying the `work-item.not-visible` problem, worded the same way in both cases.
-The inbox behaves the same way, skipping a candidate the source conceals or denies without saying that it did, which is also why a page can come back shorter than the limit you asked for.
-That is deliberate. A caller who could tell the two apart could enumerate the existence of requests it is not allowed to read, and an inbox is exactly the surface where that probing is cheap.
+If the source conceals the subject or its version no longer matches, Casework omits or refuses the
+task rather than releasing stale context.
+An unavailable provider does not become permission to use a service credential for human disclosure.
 
-{/* Evidence: crates/registry-casework/src/http.rs, HttpError and WorkItemNotVisible;
-    crates/registry-casework/src/service.rs, assemble_caller_visible_item. */}
+{/* Evidence: crates/registry-casework-core/src/adapter.rs;
+    crates/registry-casework-core/src/config.rs;
+    crates/registry-casework/src/review.rs;
+    crates/registry-casework-breg/src/lib.rs. */}
 
-## Assignment, cover, and caseload moves
+## Current authority around pinned behavior
 
-Assignment is explicit and is recorded as such.
-A Supervisor assigns visible work in a queue their team currently serves, and the person holding an item can delegate it.
-Casework records the assignment owner, the person who acted, and every absence record it traversed on the way, so a later reader sees who was accountable and how the item got there.
+The policy fixes what a review means; current authentication, Directory membership, queue service,
+reviewer exclusions, and source disclosure determine who can act now.
+Each request selects one access profile. Scopes from different profiles are not combined.
+Staff and Supervisors need the issuer's human-actor assertion; a producer is a separate calling system.
+Operator activation manages deployment. Administrator authority manages Directory and calendar
+state without granting a review decision.
 
-{/* Evidence: crates/registry-casework-core/src/assignment.rs, AbsenceRecord;
-    crates/registry-casework-core/src/model.rs, AssignmentContext;
-    crates/registry-casework/src/assignment.rs. */}
+Claims, assignments, delegation, decisions, and caseload moves check revisions and eligibility inside
+the committing transaction.
+An exact caseload preview applies atomically, so a stale selection cannot silently become a partial
+move. Absence cover is resolved under current eligibility, with retained accountability for the change.
+Private drafts remain private to their holder and do not become producer-visible result fields.
 
-An absence record sends one person's work to another for a period, and cover resolves when the assignment happens rather than when the absence was written down.
-Casework walks the chain, following the next link when a cover is also absent, and refuses self-cover, overlapping absences for one person, and cycles.
-When the chain ends with nobody eligible, the item stays open in its serving queue and reports a staffing diagnostic on the item itself instead of failing the request, which keeps an unstaffed queue visible rather than silent.
+{/* Evidence: crates/registry-casework/src/auth.rs;
+    crates/registry-casework/src/review.rs;
+    crates/registry-casework/src/review/staffing.rs;
+    crates/registry-casework/tests/review_acceptance_postgres.rs. */}
 
-{/* Evidence: crates/registry-casework-core/src/assignment.rs, resolve_absence_cover and validate_absence;
-    crates/registry-casework-core/src/model.rs, StaffingDiagnostic. */}
+## Clocks and operational recovery
 
-Moving a caseload is one operation in two halves: review, then apply.
-The review lists only the items the supervisor can currently see that the named person holds, omitting the ones the source conceals, and the apply step accepts between 1 and 100 of those reviewed items, each named with the revision it was reviewed at.
-Each selection commits in its own transaction and reports its own result, so one stale or newly concealed item cannot fail the rest of the move or disclose itself by failing differently.
+Clocks measure a subject or review activity against the pinned policy and calendar.
+Reminders and due steps change local review metadata or the serving queue; they decide no outcome and
+apply nothing at the source. Missing required source or holiday facts defer the affected calculation.
+An Administrator reviews and applies clock recomputation rather than silently changing a running
+calculation when holiday data changes.
 
-{/* Evidence: crates/registry-casework-core/src/assignment.rs, CaseloadMoveRequest, CaseloadApplyRequest, and CaseloadItemOutcome;
-    products/casework/README.md. */}
+Sensitive mutations and accountability disclosure use the audit destination as a release gate.
+A lost response is an unknown outcome, so a producer retries the same request and key or reads its
+accepted request. The original selector remains part of the submission identity; retrying an
+ID-only selection after a policy update recovers the original concrete binding.
+The producer still needs current authority. It does not create a new round merely to recover the
+old answer.
+Human mutations also retain keyed receipts; a stale revision requires a fresh read before a new action.
 
-## Routing and clocks
+{/* Evidence: crates/registry-casework/src/review/maintenance.rs;
+    crates/registry-casework/src/review/staffing.rs;
+    crates/registry-casework/src/audit.rs;
+    crates/registry-casework/tests/review_acceptance_postgres.rs. */}
 
-Routing decides which queue a source-backed item lands in.
-A source declares a bounded projection, up to 32 logical fields it copies from the registry as routing facts, and up to 64 ordered rules over those fields.
-A rule matches with closed `equals` or `oneOf` predicates, carries a `because` string an operator can read, and selects a declared queue; the first match wins and the request's own queue is the fallback.
-Projection grants nothing: a projected field is a routing fact, not a licence to display, decide, or apply.
+## Retained results and accountability
 
-{/* Evidence: crates/registry-casework-core/src/routing.rs, evaluate_routing, MAXIMUM_ROUTING_RULES, and MAXIMUM_ROUTING_PROJECTION_FIELDS;
-    products/casework/README.md. */}
+The producer receives a minimized terminal result without raw reviewer identity, private reasons,
+or drafts. A separately authorized Supervisor may resolve protected accountability while it is
+retained, and that disclosure is audited.
 
-Clocks say when work is late. A project declares at most 16 calendars and 32 clocks.
-A subject clock measures the whole review from first submission to completion and pauses while the subject is waiting on the applicant.
-An activity clock measures one stage against a calendar, in 1 to 3650 working days ending at a local time of day, with at most eight reminders and eight due steps.
-A calendar names a timezone and its working weekdays, and its holiday dates arrive as a separate immutable revision the Administrator publishes at runtime rather than as dates frozen into deployed policy.
-Republishing holidays never silently rewrites a running deadline: an Administrator previews the recompute in batches, reviews it, and applies the reviewed preview.
+`terminalRetentionDays` bounds producer-visible result retention; `accountabilityRetentionDays` bounds protected
+accountability and is at least as long. Maintenance erases expired state according to the pinned
+policy. Minimal replay state and independent audit retention have their own boundaries.
+[Retention in Casework](../../operate/casework-retention/) explains what expires and how you verify
+that maintenance is progressing.
 
-{/* Evidence: crates/registry-casework-core/src/policy.rs, MAXIMUM_CLOCKS, MAXIMUM_CALENDARS, and MAXIMUM_CLOCK_REMINDERS;
-    crates/registry-platform-calendar/src/working_day.rs, evaluate_working_day_deadline;
-    crates/registry-casework/src/clocks.rs, apply_clock_recompute. */}
-
-What a clock does when it fires is narrow and local.
-It records a reminder in the item's history, and a due step appends its own history entry, releases the holder, and moves the item to the queue the step names, with a system actor rather than a person.
-An effect commits only after a fresh authoritative read confirms the item the clock was computed against, so an unanswering registry makes the effect wait rather than fire on stale state, and the pinned calculation generation keeps a restart from repeating one.
-A clock reads the source and changes nothing there, decides no outcome, and sends nothing to anyone: its effect is a visible change to the item, and a person still has to open it.
-[Author a Casework policy](../../configure/casework/) carries the grammar for routing rules, calendars, and clocks.
-
-{/* Evidence: crates/registry-casework/src/clocks.rs, process_due_clocks, defer_clock_claim, apply_clock_claim, and ClockStepApplied;
-    crates/registry-casework-core/src/clock_runtime.rs, ClockNextEffect;
-    crates/registry-casework-core/src/policy.rs, ClockStepAction. */}
-
-## What Casework keeps
-
-A review kind sets two periods, and the second is at least as long as the first.
-The terminal period is how long a producer can read the result and associated request state.
-The accountability period is how long the protected record of who decided, when, and why survives.
-When both expire, Casework deletes accountability and its payload-free replay tombstone.
-
-{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewRetentionPolicy and ReviewAccountabilityRecord;
-    crates/registry-casework/src/review.rs, erase_expired_reviews_at. */}
-
-The result a producer reads names no person and carries no private reason.
-The identity behind one accountability event is reachable only by a Supervisor with current authority over the task's queue, only while the accountability period lasts, and every such read returns the identity only after the audit destination accepts the entry recording it.
-Accountability is therefore a deliberate, recorded act rather than a field on a response.
-
-{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewResult and ReviewAccountabilityRecord;
-    crates/registry-casework/src/review.rs, review_accountability. */}
-
-Idempotency outlives the payload it protected.
-When a review request is erased, Casework keeps a payload-free tombstone holding the original request hash and hashed binding metadata, which is enough to recognise a replayed key and refuse a changed body under the same key.
-After the accountability deadline, the tombstone goes too and the key becomes reusable, so a retry that arrives years late is answered as expired rather than answered from retained content.
-
-{/* Evidence: crates/registry-casework/src/review.rs, erase_expired_reviews_at;
-    crates/registry-casework/src/problem.rs, IdempotencyExpired;
-    products/casework/README.md. */}
-
-Source-backed copies erase on a different trigger.
-Casework holds only the copies it needed to coordinate the work, and it erases them when the source owner authorises erasure for one exact request, as an operator action against the database rather than a schedule.
-A pending or uncertain attempt blocks that erasure until the attempt is recovered or settled, so erasure can never be the reason an outcome is unknown.
-[Retention in Registry Casework](../../operate/casework-retention/) states what each period removes and what it leaves.
-
-{/* Evidence: crates/registry-casework/src/source_retention.rs;
-    crates/registry-casework-core/src/source_retention.rs;
-    crates/registry-caseworkctl/src/project.rs, retention_erase. */}
-
-## Where the product stops
-
-- Decisions are one item at a time, by one accountable person. There are no bulk decisions and no automatic outcomes.
-- There is no consultation step. An item has one holder, and a second opinion is a delegation or an assignment, both recorded.
-- Nothing is delivered outward. Casework records reminders and applies authored queue steps inside the item, and sends no message to a person or a system.
-- Casework serves an API and renders no interface of its own. The Registry App Kit is a separate project that provides a staff interface for BReg-backed work.
-- The API does not enable CORS, because a browser talks to its own host and that host calls Casework server to server on a private network.
-- Casework issues no tokens and stores no users. Identity belongs to your OpenID Connect provider.
-- A source-neutral core and generic clients hold no registry protocol types, and no registry depends on Casework.
-
-{/* Evidence: products/casework/CHANGELOG.md;
-    crates/registry-casework/src/http.rs, security_headers;
+{/* Evidence: crates/registry-casework/src/review/maintenance.rs;
+    crates/registry-casework/src/review.rs;
     products/casework/contracts/security-invariant-matrix.yaml. */}
 
 ## Next
 
-- [Author a Casework policy](../../configure/casework/): review kinds, producers, sources, routing rules, calendars, and clocks.
-- [Deploy Registry Casework](../../operate/casework/): database setup, the operator file, directory bootstrap, and the operator paths for recovery.
-- [Retention in Registry Casework](../../operate/casework-retention/): what each retention period removes and what survives it.
-- [Registry Casework API](../../reference/apis/registry-casework/): every route, header, and problem code.
+- [Author a Casework policy](../../configure/casework/) for stages and context requirements.
+- [Deploy Registry Casework](../../operate/casework/) for package activation and recovery.
+- [Registry Casework API](../../reference/apis/registry-casework/) for exact request contracts.

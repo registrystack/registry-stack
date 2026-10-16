@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: reviewed-notice
+  version: "1"
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required: [applicationId, applicationVersion, applicationDigest, email]
+    properties:
+      applicationId: {type: string, format: uuid}
+      applicationVersion: {type: string, minLength: 1, maxLength: 64}
+      applicationDigest: {type: string, pattern: "^sha256:[0-9a-f]{64}$"}
+      email: {type: string, format: email}
+functions:
+  review-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: review_request
+    inputs: {input: {typeRef: workflow-input}}
+    output: {operationInput: submit-review-request}
+  notice-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs:
+      input: {typeRef: workflow-input}
+      result: {completionOutput: {operation: submit-review-request, name: result}}
+    output: {operationInput: submit-message}
+operations:
+  submit-review-request: {uses: casework.submit-review-request/v1, connection: review}
+  cancel-review-request: {uses: casework.cancel-review-request/v1, connection: review}
+  submit-message: {uses: messaging.submit-message/v1, connection: notices}
+workflow:
+  input: {typeRef: workflow-input}
+  deadlineSeconds: 2592000
+  start: submit-review
+  steps:
+    submit-review:
+      type: call
+      operation: submit-review-request
+      input: {type: function, function: review-request, inputs: {input: {type: input}}}
+      next: await-review
+    await-review:
+      type: wait-for
+      completion: {step: submit-review, name: result}
+      timeoutSeconds: 1209600
+      next: decide
+      onTimeout: withdraw
+    decide:
+      type: choose
+      choose: {type: step, step: await-review, path: /status}
+      cases:
+        approved: notify
+        rejected: rejected
+        changes-requested: not-decided
+        answered: not-decided
+        cancelled: not-decided
+        superseded: not-decided
+    notify:
+      type: call
+      operation: submit-message
+      input: {type: function, function: notice-request, inputs: {input: {type: input}, result: {type: step, step: await-review}}}
+      next: notice-sent
+    notice-sent:
+      type: finish
+      outcome: notice-sent
+      output:
+        type: fields
+        fields:
+          messageId: {type: step, step: notify, path: /id}
+          resultId: {type: step, step: await-review, path: /resultId}
+    rejected:
+      type: finish
+      outcome: rejected
+      output:
+        type: fields
+        fields:
+          resultId: {type: step, step: await-review, path: /resultId}
+    not-decided:
+      type: finish
+      outcome: not-decided
+      output:
+        type: fields
+        fields:
+          status: {type: step, step: await-review, path: /status}
+    withdraw:
+      type: call
+      operation: cancel-review-request
+      input:
+        type: fields
+        fields:
+          request: {type: step, step: submit-review}
+          reason: {type: literal, value: "No decision within fourteen days."}
+      next: confirm-withdrawal
+    confirm-withdrawal:
+      type: choose
+      choose: {type: step, step: withdraw, path: /outcome}
+      cases:
+        cancelled: withdrawn
+        already-terminal: decided-late
+    withdrawn:
+      type: finish
+      outcome: withdrawn
+      output:
+        type: fields
+        fields:
+          resultId: {type: step, step: withdraw, path: /result/resultId}
+    decided-late:
+      type: finish
+      outcome: decided-late
+      output:
+        type: fields
+        fields:
+          status: {type: step, step: withdraw, path: /result/status}
+          resultId: {type: step, step: withdraw, path: /result/resultId}
+  outcomes:
+    notice-sent:
+      type: object
+      additionalProperties: false
+      required: [messageId, resultId]
+      properties:
+        messageId: {type: string, format: uuid}
+        resultId: {type: string, format: uuid}
+    rejected:
+      type: object
+      additionalProperties: false
+      required: [resultId]
+      properties:
+        resultId: {type: string, format: uuid}
+    not-decided:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {type: string}
+    withdrawn:
+      type: object
+      additionalProperties: false
+      required: [resultId]
+      properties:
+        resultId: {type: string, format: uuid}
+    decided-late:
+      type: object
+      additionalProperties: false
+      required: [status, resultId]
+      properties:
+        status: {type: string}
+        resultId: {type: string, format: uuid}

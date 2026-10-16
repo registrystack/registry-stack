@@ -1,6 +1,6 @@
 ---
 title: Explore SD-JWT VC locally
-description: Request, verify, inspect, and tamper with scalar and structured SD-JWT VC responses in the first Evidence Gateway project.
+description: Permit, request, verify, and tamper with an SD-JWT VC response from the normalized project.
 status: current
 owner: registry-docs
 source_repos:
@@ -21,95 +21,114 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting.
-You will reuse its local source mock and `adult-status` project to explore the SD-JWT VC serialization
-without adding a wallet or a credential lifecycle.
+You will permit SD-JWT VC in both the project ceiling and the target's complete grant, request one
+credential, verify it, and prove that a changed disclosure is refused.
 
 <QuickstartMeta
-  outcome="Two verified SD-JWT VC responses, a decoded view inspected only after verification, and a refused tampered credential."
-  time="About 25 minutes"
+  outcome="A verified SD-JWT VC adult-status response and a refused tampered credential."
+  time="About 15 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The completed first Evidence Gateway assertion tutorial',
-    'Its adult-status project and materialized source mock',
-    'Python 3',
-    'A shell with curl',
+    'The completed first Evidence assertion tutorial',
+    'Its normalized standalone project',
+    'Python 3 and curl',
   ]}
 />
 
-## Understand the two choices
+## Permit the representation twice
 
-Evidence Gateway can serialize one stateless Evidence response as signed JWS or SD-JWT VC. The
-question, authorization, source access, derivation, governed answer, audience, signing key, and
-audit boundary do not change.
-
-Two separate authoring choices matter:
-
-| Choice | Authoring field | Result |
-| --- | --- | --- |
-| Permit the serialization | `responseFormats: [signed-jws, sd-jwt-vc]` | The local bundle and the question's local grant allow either signed response format. |
-| Project a reviewed structure | `sdJwtVc` on a `reviewed-structured-value` answer | Each direct field becomes an independently encoded disclosure under the configured claim. |
-
-A scalar answer needs only the first choice. It becomes one root disclosure named by the governed
-concept URI. Omitting `responseFormats` keeps the project at signed JWS only.
-
-## Restart the source mock
-
-In one terminal, return to the `first-evidence-assertion` directory and serve the checked cases again:
-
-```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
-evidencectl source mock serve --config adult-status/mocks/source.yaml
-```
-
-Leave it running. In another terminal, enter the existing Evidence Gateway project:
+Enter the copied project:
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-The first tutorial added this explicit format permission to `questions/adult-status.yaml`:
+The definition's representation list is the governed package ceiling. Add `sd-jwt-vc` to
+`adult-status` while keeping signed JWS:
 
-```yaml
-responseFormats: [signed-jws, sd-jwt-vc]
+```diff lang="yaml" title="evidence.yaml" test-edit
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
++   - sd-jwt-vc
+    observationTimezone: Asia/Bangkok
 ```
 
-Signed JWS remains present and remains the default. The local authoring compiler applies the same
-closed list to the local bundle ceiling and this question's local authority grant.
+The target grant must also permit the representation. Add it to the complete `adult-status` grant
+in `dev-authority.yaml`:
 
-## Request a scalar credential
+```diff lang="yaml" title="dev-authority.yaml" test-edit
+    - definition: adult-status
+      purpose: age-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
++     - sd-jwt-vc
+      subjectBinding: audience-scoped
+```
 
-Start a fresh local generation:
+The project ceiling says what this definition may emit. The target grant says what this requester
+profile may receive. Both must include the format; a client cannot widen either list.
+
+Prove the edited project and target, then revoke the previous registration and create a new client
+against the changed profile digest:
 
 ```sh
-evidencectl dev start .
+evidencectl check . --target local-target.yaml
+evidencectl test . --target local-target.yaml
+evidencectl access client revoke tutorial-client
+evidencectl access client add sd-jwt-client \
+  --access-profile standalone-service \
+  --generate-local-key
+```
+
+## Start the local boundary
+
+In another terminal, start the synthetic source:
+
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
+```
+
+Back in the project terminal, start a fresh generation:
+
+```sh
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
 ```
 
 ```text test-excerpt
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
+Evidence ready at http://127.0.0.1:18080
 ```
 
-Prepare a request that records SD-JWT VC as the expected response format before any response
-exists:
+## Request and verify SD-JWT VC
+
+Record the required response format before a response exists:
 
 ```sh
 evidencectl request prepare adult-status \
+  --client sd-jwt-client \
   --purpose age-check \
-  --subject person_id=person-123 \
+  --subject subject:record-id=adult \
   --response-format sd-jwt-vc \
-  --name scalar-vc
+  --name adult-status-vc
 ```
 
-Send it with the exact SD-JWT VC media type:
+Send the request with the SD-JWT VC media type:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/scalar-vc/authorization.curl \
+  --config .evidence/requests/adult-status-vc/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/dc+sd-jwt' \
-  --data-binary @.evidence/requests/scalar-vc/request.json \
-  --output scalar.sd-jwt \
+  --data-binary @.evidence/requests/adult-status-vc/request.json \
+  --output adult-status.sd-jwt-vc \
   --write-out 'HTTP %{http_code}\n'
 ```
 
@@ -117,289 +136,64 @@ curl --silent --show-error --fail-with-body \
 HTTP 200
 ```
 
-Do not decode the compact response yet. Verify it against the expectations retained during
-request preparation:
+Verify before decoding or reading a disclosure:
 
 ```sh
-evidencectl verify scalar.sd-jwt \
-  --context .evidence/requests/scalar-vc/verification.json \
-  --output scalar.verified.json
+evidencectl verify adult-status.sd-jwt-vc \
+  --context .evidence/requests/adult-status-vc/verification.json \
+  --output adult-status-vc.verified.json
 ```
 
 ```text test-expect
 VERIFIED
 ```
 
-The verified payload contains the same `is_adult: true` governed answer you saw in the signed JWS
-tutorial.
-
-## Inspect the compact structure after verification
-
-Now that verification succeeded, decode only enough of the stored credential to see its layout:
-
-```sh
-python3 - <<'PY'
-import base64
-import json
-from pathlib import Path
-
-compact = Path("scalar.sd-jwt").read_text().strip()
-parts = compact.split("~")
-
-def decode(value):
-    padded = value + "=" * (-len(value) % 4)
-    return json.loads(base64.urlsafe_b64decode(padded))
-
-header_segment, payload_segment, _ = parts[0].split(".")
-print("typ:", decode(header_segment)["typ"])
-print("vct:", decode(payload_segment)["vct"])
-for disclosure in (part for part in parts[1:] if part):
-    decoded = decode(disclosure)
-    print("disclosure:", decoded[1])
-PY
-```
-
-```text test-expect
-typ: dc+sd-jwt
-vct: urn:registrystack:evidence:local:evidence-type:adult-status
-disclosure: urn:registrystack:evidence:local:concept:adult-status:is_adult
-```
-
-The script deliberately does not print the disclosure salt or value. The one scalar governed
-value is one root disclosure. The compact response ends with a trailing `~` and has no key-binding
-JWT.
-
-## Inspect issuer discovery
-
-Read the local JWT VC Issuer Metadata and local signing-key set:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  http://127.0.0.1:8080/.well-known/jwt-vc-issuer \
-  | python3 -m json.tool
-curl --silent --show-error --fail-with-body \
-  http://127.0.0.1:8080/.well-known/evidence/jwks.json \
-  | python3 -m json.tool
-```
-
-These endpoints publish identity and public keys. They are discovery, not a trust decision. The
-prepared verification context already pins the expected issuer, audience, request nonce, subject
-binding, and trusted key material for this local request.
+The verified payload contains the same Boolean adult-status output as signed JWS. The response
+format changes serialization, not the source, derivation, authorization, audience, or subject
+binding.
 
 ## Prove tampering is refused
 
-Change one encoded disclosure byte without touching the original credential:
+Change one encoded disclosure byte in a copy:
 
 ```sh
 python3 - <<'PY'
 from pathlib import Path
 
-parts = Path("scalar.sd-jwt").read_text().strip().split("~")
+parts = Path("adult-status.sd-jwt-vc").read_text().strip().split("~")
 assert len(parts) >= 3 and parts[1]
 parts[1] = ("A" if parts[1][0] != "A" else "B") + parts[1][1:]
-Path("scalar-tampered.sd-jwt").write_text("~".join(parts) + "\n")
+Path("adult-status-tampered.sd-jwt-vc").write_text("~".join(parts) + "\n")
 PY
 ```
 
-Verification must fail and must not create trusted output:
+Verification fails without publishing trusted output:
 
 ```sh test-exit="1"
-evidencectl verify scalar-tampered.sd-jwt \
-  --context .evidence/requests/scalar-vc/verification.json \
-  --output scalar-tampered.verified.json
+evidencectl verify adult-status-tampered.sd-jwt-vc \
+  --context .evidence/requests/adult-status-vc/verification.json \
+  --output adult-status-tampered.verified.json
 ```
 
 ```text test-expect
 evidencectl: Evidence response verification failed
 ```
 
-Verification refuses the changed credential and writes no `scalar-tampered.verified.json`.
-The disclosure digest is covered by the issuer signature. Altering the disclosure breaks the
-verified relationship between the signed digest and the disclosed value.
-
-## Model independently disclosed fields
-
-Next, add an illustrative reviewed structure containing the adult result and the criterion it was
-evaluated against. This is a second governed question, not a request-time option.
-
-Create `schemas/adult-assessment.yaml`:
-
-```yaml title="schemas/adult-assessment.yaml" test-file
-$schema: https://json-schema.org/draft/2020-12/schema
-$id: urn:registrystack:evidence:local:schema:adult-assessment:v1
-type: object
-additionalProperties: false
-required: [criterion, isAdult]
-properties:
-  criterion:
-    type: string
-    const: at-least-18
-  isAdult:
-    type: boolean
-```
-
-Create `questions/adult-assessment.yaml`:
-
-```yaml title="questions/adult-assessment.yaml" test-file
-apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: adult-assessment
-question: What adult assessment applies to this person?
-purpose: age-assessment-review
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: adult_assessment
-    type: reviewed-structured-value
-    schema: schemas/adult-assessment.yaml
-    maximumSerializedBytes: 256
-    sdJwtVc:
-      claim: adultAssessment
-      disclosure: top-level
-responseFormats: [signed-jws, sd-jwt-vc]
-derivation: derivations/adult-assessment.rhai
-disclosure:
-  allow: [adult_assessment]
-```
-
-`adultAssessment` is an authored claim name, not a built-in Evidence Gateway type. The schema is
-closed, and `top-level` makes the two direct fields independently encoded disclosures. A nested
-object would remain one atomic direct-field disclosure.
-
-Create `derivations/adult-assessment.rhai`:
-
-```rhai title="derivations/adult-assessment.rhai" test-file
-fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    let adult_on = add_calendar_years(born, 18);
-    #{adult_assessment: #{
-        form: "reviewed-structured-value",
-        schema: "urn:registrystack:evidence:local:schema:adult-assessment:v1",
-        fields: #{
-            criterion: "at-least-18",
-            isAdult: compare_dates(context.legal_local_date, adult_on) >= 0
-        }
-    }}
-}
-```
-
-Stop and clean the old immutable generation, then compile the updated project:
-
-```sh
-evidencectl dev stop
-evidencectl dev clean
-evidencectl dev start .
-```
-
-Prepare the structured request:
-
-```sh
-evidencectl request prepare adult-assessment \
-  --purpose age-assessment-review \
-  --subject person_id=person-123 \
-  --response-format sd-jwt-vc \
-  --name structured-vc
-```
-
-Send it:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/structured-vc/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/dc+sd-jwt' \
-  --data-binary @.evidence/requests/structured-vc/request.json \
-  --output structured.sd-jwt \
-  --write-out 'HTTP %{http_code}\n'
-```
-
-Verify before inspection:
-
-```sh
-evidencectl verify structured.sd-jwt \
-  --context .evidence/requests/structured-vc/verification.json \
-  --output structured.verified.json
-```
-
-```text test-expect
-VERIFIED
-```
-
-Inspect only the names of the verified disclosures:
-
-```sh
-python3 - <<'PY'
-import base64
-import json
-from pathlib import Path
-
-parts = Path("structured.sd-jwt").read_text().strip().split("~")
-names = []
-for disclosure in (part for part in parts[1:] if part):
-    padded = disclosure + "=" * (-len(disclosure) % 4)
-    decoded = json.loads(base64.urlsafe_b64decode(padded))
-    names.append(decoded[1])
-for name in sorted(names):
-    print("disclosure:", name)
-PY
-```
-
-```text test-expect
-disclosure: criterion
-disclosure: isAdult
-```
-
-Unlike the scalar root disclosure, the structured projection places the reviewed object under
-`adultAssessment` and gives each direct field its own digest and disclosure. Evidence Gateway's
-current verifier validates the complete stored credential. This tutorial does not create a
-selectively disclosed wallet presentation.
+The issuer signature covers the disclosure digest. Changing the disclosure breaks that verified
+relationship.
 
 ## Clean up
 
-Stop the services, inspect the last audit operation, and remove the generated local state:
-
 ```sh
-evidencectl dev stop
+evidencectl dev stop .
 evidencectl audit show --last-operation
-evidencectl dev clean
+evidencectl dev clean .
 ```
 
-```text test-expect
-Local Evidence stopped
-ACCESS AUTHORIZED adult-assessment age-assessment-review requester=<pseudonym>
-DISCLOSURE RELEASED adult_assessment
-Removed stopped local Evidence state
-```
-
-Return to the registry terminal and press `Ctrl+C`.
-
-The tutorial leaves the authored question, schema, derivation, request contexts, and signed
-responses in your working directory. Remove that directory with ordinary file commands when you
-no longer need it.
-
-## Know the boundary
-
-This local response has no OID4VCI offer or issuance session, status or revocation service, wallet
-onboarding, presentation exchange, or key-binding JWT. Its pseudonymous subject binding remains
-scoped to the request audience and purpose.
-
-For a deployment, format permission belongs to the governed bundle and exact authority grant.
-Continue with [Enable SD-JWT VC in a deployment](../../configure/enable-sd-jwt-vc/) for those two
-production gates and verifier trust requirements.
+The tutorial runner stops the source. If you started it by hand, press `Ctrl+C` in its terminal.
 
 ## Next
 
-- [Enable SD-JWT VC in a deployment](../../configure/enable-sd-jwt-vc/)
-- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)
-- [Issue a birth-certificate VC from the OpenCRVS demo](../issue-a-birth-certificate-vc-from-opencrvs/)
-- [Review disclosure modes and computed answers](../../explanation/disclosure-modes-and-computed-answers/)
+- [Configure the Evidence OID4VCI adapter](../../configure/evidence-oid4vci/)
+- [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/)
+- [Review the Evidence Gateway security model](../../security/evidence/)

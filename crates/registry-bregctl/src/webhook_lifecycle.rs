@@ -104,40 +104,88 @@ pub(crate) fn sample(
     registry: &CompiledRegistry,
     authored_event_id: &str,
 ) -> Result<WebhookSampleOutcome, WebhookLifecycleError> {
-    let delivery = registry
+    let mut matching = registry
         .event_deliveries()
         .deliveries
         .iter()
-        .find(|delivery| delivery.event_id == authored_event_id)
-        .ok_or(WebhookLifecycleError::Event)?;
-    let entity = registry
-        .entities()
-        .get(&delivery.entity_id)
-        .ok_or(WebhookLifecycleError::Sample)?;
-    let mut values = Map::new();
-    for field_id in &delivery.projection_fields {
-        let field = entity
-            .fields
-            .get(field_id)
-            .ok_or(WebhookLifecycleError::Sample)?;
-        let value = synthetic_field_value(&field.field_type)?;
-        values.insert(field_id.clone(), value);
+        .filter(|delivery| {
+            delivery.event_id == authored_event_id || delivery.id == authored_event_id
+        });
+    let delivery = matching.next().ok_or(WebhookLifecycleError::Event)?;
+    if matching.next().is_some() {
+        return Err(WebhookLifecycleError::Event);
     }
-    let data = json!({
-        "entity": delivery.entity_id,
-        "recordId": SAMPLE_RECORD_ID,
-        "revision": 1,
-        "trigger": trigger_name(delivery.trigger),
-        "packageRevision": SAMPLE_PACKAGE_REVISION,
-        "values": values,
-    });
+    let (data, event_type) = match &delivery.owner {
+        registry_breg::model::CompiledEventOwner::RecordType {
+            record_type,
+            trigger,
+        } => {
+            let entity = registry
+                .entities()
+                .get(record_type)
+                .ok_or(WebhookLifecycleError::Sample)?;
+            let mut values = Map::new();
+            for field_id in &delivery.projection_fields {
+                let field = entity
+                    .fields
+                    .get(field_id)
+                    .ok_or(WebhookLifecycleError::Sample)?;
+                values.insert(field_id.clone(), synthetic_field_value(&field.field_type)?);
+            }
+            (
+                json!({"recordType":record_type,"recordId":SAMPLE_RECORD_ID,"revision":1,"trigger":trigger_name(*trigger),"packageRevision":SAMPLE_PACKAGE_REVISION,"values":values}),
+                delivery.event_id.clone(),
+            )
+        }
+        registry_breg::model::CompiledEventOwner::ProposalAction { action } => {
+            let action = registry
+                .actions()
+                .actions
+                .iter()
+                .find(|entry| &entry.id == action)
+                .ok_or(WebhookLifecycleError::Sample)?;
+            let registry_breg::model::CompiledActionExecution::Proposal { proposal } =
+                &action.execution
+            else {
+                return Err(WebhookLifecycleError::Sample);
+            };
+            let hook = proposal
+                .hooks
+                .iter()
+                .find(|hook| hook.id == delivery.event_id)
+                .ok_or(WebhookLifecycleError::Sample)?;
+            let transition = registry_breg::proposal_hooks::matching_transitions(&hook.transitions)
+                .next()
+                .ok_or(WebhookLifecycleError::Sample)?;
+            use registry_breg::contract::ProposalEventTransition as Transition;
+            let (from, state, turn) = match transition {
+                Transition::Started => ("none", "draft", "party"),
+                Transition::Edited => ("draft", "draft", "party"),
+                Transition::Submitted => ("draft", "submitted", "official"),
+                Transition::Revised | Transition::Rebased => ("submitted", "draft", "party"),
+                Transition::Retried => ("submitted", "submitted", "official"),
+                Transition::Cancelled => ("draft", "cancelled", "nobody"),
+                Transition::Applied => ("submitted", "applied", "nobody"),
+                Transition::Rejected => ("submitted", "rejected", "nobody"),
+                Transition::ReviewReturned => ("submitted", "submitted", "party"),
+            };
+            let authority_kind = match transition {
+                Transition::Rejected | Transition::ReviewReturned => "review",
+                _ => "caller",
+            };
+            (
+                json!({"actionId":action.id,"actionRevision":action.definition_revision,"proposalId":SAMPLE_RECORD_ID,"submissionVersion":1,"revision":1,"fromState":from,"state":state,"transition":transition.as_str(),"effectDigest":null,"authorityKind":authority_kind,"systemApplyGrantRevision":null,"turn":turn}),
+                format!("proposal.{}", transition.as_str()),
+            )
+        }
+    };
     let source = format!(
         "urn:registrystack:registry:{}:instance:<configured-instance>",
         registry.registry_id()
     );
     let envelope = HookEnvelope {
         id: SAMPLE_EVENT_ID.to_owned(),
-        event_type: delivery.event_id.clone(),
+        event_type: event_type.clone(),
         source: source.clone(),
         time: sample_time()?,
         subject: EventSubject {
@@ -179,7 +227,7 @@ pub(crate) fn sample(
         ("ce-source".to_owned(), source),
         ("ce-specversion".to_owned(), "1.0".to_owned()),
         ("ce-time".to_owned(), SAMPLE_TIME.to_owned()),
-        ("ce-type".to_owned(), delivery.event_id.clone()),
+        ("ce-type".to_owned(), event_type),
     ]);
     Ok(WebhookSampleOutcome {
         event_id: delivery.event_id.clone(),
@@ -369,7 +417,6 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request-lifecycle",
     }
 }
 

@@ -1,242 +1,157 @@
 # Evidence
 
-Status: implemented Version 1 contracts, runtime, reference deployments, and
-reproducible Evidence-specific verification gates.
+Evidence evaluates fixed, authorized requests against authoritative sources and
+returns minimum-disclosure assertions. Callers select a public Requirement URI,
+a purpose and the subject selectors required by that definition. An optional
+`expectedConfigurationRevision` refuses a stale definition before protected
+source effects.
 
-Evidence is a greenfield, sector-neutral minimum-disclosure assertion service.
-Given authenticated authority, an authorized purpose, a predefined requirement,
-and the configured selector data needed by an authoritative provider, it returns
-the smallest sufficient JSON assertion in an authorized response format.
+One `evidence` process serves one operator-controlled trust domain. The immutable
+bundle contains compiled definitions, source contracts, reviewed Functions,
+schemas, signing identity and target bindings. A separate runtime file binds
+process resources, secret mounts, signer transport, audit storage and TLS trust.
+Complete target authority is activated separately with durable history. Its
+grants stay inside the package ceilings; a running process retains its activated
+snapshot until restart.
 
-The approved Version 1 product boundary is one `registry-evidence` crate, one
-`evidence` binary, one serving process, and one operator-controlled trust domain.
-The runtime depends on one portable library beside it,
-`registry-evidence-verifier`, which owns the response formats, the Evidence
-payload contract, and relying-party verification, so client tooling can verify a
-signed response without the runtime. A process may host multiple evidence
-definitions only when they share that trust domain. Governed configuration, Rhai
-scripts, schemas, codelists, and fixtures are one trusted, immutable,
-startup-only evidence bundle. A separate closed runtime file owns only
-process-local listener, filesystem, audit-storage, secret-mount, signer
-transport and pinned version, and TLS-trust bindings. It cannot override
-governed semantics or the governed active public key.
+Rust owns authentication, complete-grant authorization, selector minimization,
+fixed source execution, bounded Function execution, output validation, signing
+and audit. Reviewed Rhai Functions prepare requests, extract private facts and
+derive only declared outputs. Authorization and selector checks precede secret
+resolution and source access. Durable access audit precedes acquisition, and the
+terminal disclosure audit gates the exact serialized response.
 
-The following contracts define and verify the implemented Version 1 boundary:
+The default representation is signed flattened JWS. Unsigned JSON and SD-JWT VC
+require explicit package and matched-grant permission. Holder-bound assertions
+and bounded holder batches retain their separate key-confirmation and
+presentation-verification rules. `registry-evidence-verifier` provides portable
+offline verification without the serving runtime or source access. The optional
+OID4VCI adapter is a separate consumer; Evidence has no wallet or OID4VCI runtime
+dependency.
 
-- [Product concept](CONCEPT.md): product boundary, data model, trust and privacy
-  invariants, native API, and Version 1 acceptance set.
-- [Implementation schedule and Definition of Done](IMPLEMENTATION.md): phases,
-  exit gates, required tests, verification, and stop boundary.
-- [Source-testing contract](SOURCE-TESTING.md): deterministic mock matrix,
-  optional public-demo smoke tests, credential handling, and failure
-  interpretation.
-- [Operator contract](OPERATOR-CONTRACT.md): supported deployment shape,
-  requester authority and purpose duties, required configuration and secrets,
-  readiness, audit, key, and verification obligations.
-- [SD-JWT VC demo](SD-JWT-VC-DEMO.md): one deterministic local run that issues
-  the same assertion in both later-verifiable formats and re-verifies the
-  credential offline with `curl` and the `evidence` binary.
-- [Trusted request-adapter reference](reference/request-adapter/ADAPTER-API.md):
-  complete Rhai API, configuration and fixture contracts, and deployable DHIS2
-  and OpenCRVS-shaped reference projects.
+Sources use fixed HTTP JSON contracts or bounded SQLite extracts. Acquisition
+can be direct, search followed by fetch, or an explicitly bounded fetch set.
+Request and source batching preserve per-item authorization, disclosure and
+audit boundaries. Authenticated context and task grants establish only the
+explicit authority and selector origins their verified contracts permit.
+Evidence needs no Base Registry Engine (BReg), Casework or Coordinator service or database. Assertions
+establish claims and bindings, and confer no review approval or downstream write
+authority.
 
-Any normative schemas, examples, and generated public artifacts live in their
-own tracked contract directories. Generated files must be reproduced by their
-documented generator and never edited by hand.
+Adult status, residence region, professional licence status, legal-parent
+relationship and operator activity are example definitions. They are authored
+through the same model and execution path. Source-product names in sanitized
+compatibility fixtures grant no special production behavior.
 
-## Version 1 boundary
-
-Version 1 supports assertion evidence through one synchronous JSON operation
-with signed flattened JWS as the mandatory default format. Rust owns
-authentication, authorization, minimized preparation
-inputs, fixed source execution, response projection, bounded Rhai execution,
-output validation, evidence construction, response protection, and audit. Rhai owns
-reviewed request query/body rendering, source extraction, and
-requirement-specific derivation using only deterministic, bounded,
-domain-neutral primitives supplied by Rust.
-
-Adult status, residence region, professional licence status, and legal-parent
-relationship are coequal full-path acceptance definitions. All four must pass
-the same offline and production path on one revision before Version 1 can be
-called implemented. None may become a Rust domain type, built-in operation,
-special route, or preferred implementation phase.
-
-Version 1 serializes the same assertion as an SD-JWT VC when the bundle and the
-matched grant both permit that response format, under the frozen profile in
-`contracts/sd-jwt-vc-profile.yaml`. It does not include documents, credential
-lifecycle, status lists, OID4VCI, presentation verification,
-nonce or replay storage beyond stateless request-nonce echo and comparison,
-server-issued challenges, OOTS execution, federation, delegated agents, MCP,
-workflow, a public requester-entitlement or definition catalog, a searchable,
-mutable, aggregate, or federated catalog, runtime policy, runtime bundle mutation,
-multi-source fulfillment, source planning, an application database, a message
-broker, or workers. It may serve the closed public provider advertisement that
-another service indexes without treating the advertisement as trust or access.
-
-DHIS2 and OpenCRVS are compatibility-shaped test profiles only. Their names and
-behavior may appear in tests, sanitized fixtures, test-only bundles, and local
-smoke documentation. Production Rust, Cargo metadata, public configuration,
-routes, CLI options, and generated public contracts must remain source-product
-neutral.
+The maintained runtime contracts include the [operator contract](OPERATOR-CONTRACT.md),
+[source-testing contract](SOURCE-TESTING.md), [wire and security contracts](contracts/README.md)
+and [trusted Function ABI](reference/request-adapter/ADAPTER-API.md). Generated
+contracts and authoring schemas are reproduced by their documented generators.
+Use the normalized examples below for the current authoring journey.
 
 ## Adopter tooling
 
-`evidencectl`, built from the `registry-evidencectl` crate, is adopter tooling
-beside the runtime. It sits outside the frozen Version 1 runtime contract: it generates key material,
-starts OpenAPI-assisted workspaces and runnable synthetic SQLite starters,
-compiles a reviewed production candidate, and drives fixture runs for editable
-or complete deployment projects. It
-delegates runtime evaluation, signing, bundle validation, and fixture evaluation
-to the `evidence` binary, and reuses `registry-evidence-client` and
-`registry-evidence-verifier` for relying-party request preparation and offline
-response verification. It adds no Evidence semantics of its own. Its source
-remains covered by the same source-product and domain-neutrality checks as the
-runtime.
+Start with the runnable [standalone HTTP project](examples/standalone/README.md)
+or [operator activity project](examples/operator-active/README.md). They cover
+normalized authoring, complete access grants, local setup, signed requests,
+independent offline verification and a deployment handoff.
 
-`evidencectl init <dir> --openapi <file-or-url> --profile local` retains the
-OpenAPI document exactly as `source.openapi.yaml` and creates empty
-`questions/`, `derivations/`, and `fixtures/` directories. It always creates
-owner-only disposable local P-256 Evidence signing material plus distinct audit
-and subject-binding masters. The command does not select an API operation,
-invent a question, fixture, policy, production target, issuer configuration, or
-deployable bundle. `evidencectl dev start` additionally creates session-scoped P-256
-caller and holder keys and starts the pinned local issuer so the local happy path needs no key ceremony.
-For a composed local issuer, first author explicit Evidence access policies and
-active access clients, then register those exact clients in a Base Registry Engine (BReg) dev issuer
-owner with `assertionKeyRef`, a secret reference to each Evidence client's
-private key. Map each client to `urn:registrystack:evidence:local:gateway` with
-`evidence:invoke` and the exact `registry_actor_kind`, `evidence_tags`, and
-`evidence_audience` claims. Start the BReg owner, then run
-`evidencectl dev start ./evidence --issuer-project ./issuer-owner`. Evidence
-verifies the owner session, client keys, claims, scopes, and audience before
-starting, uses that issuer's loopback endpoint, and never stops its container.
-By default, `--target` reuses only the target's source connections and outbound
-TLS while local authority still binds selector values to the request. A human
-first-party rehearsal may add `--preserve-target-authenticated-context`; that
-explicit opt-in requires both `--target` and `--issuer-project`, compiles and
-validates the local target, and preserves its reviewed `authenticated-context`
-bindings only when its profiles differ from the generated local authority by
-those bindings and their exact selector-field `valueClaims`. The target's
-allowed clients and assertion issuers must exactly match the borrowed owner's
-active first-party registrations. Each preserved first-party client must be a
-local human fixture: its owner registration carries `registry_actor_kind:
-human` and `allowHumanFixture: true`. A retained session must be restarted
-with the same opt-in or cleaned before changing modes.
-An unavailable or replaced owner is refused on restart. The Evidence runtime
-still enforces its own issuer, audience, scope, and authority policy.
-An Evidence client the owner also registered as a token-exchange client is
-refused unless the authenticated-context opt-in above carries the target's
-exact first-party pairing. Institutional grant exchange remains governed by a
-task policy and is not a human authenticated-context substitute.
-The bundle a borrowed session compiles names the Evidence clients it admits, so
-the shared issuer's other clients are refused where Evidence enforces its own
-boundary rather than left to the issuer that holds them. It admits at most 32
-clients, and a project whose active clients change while that bundle compiles is
-refused rather than started against a boundary the bundle does not carry. A
-session that renders its own issuer writes `allowedClients: unrestricted` and
-leaves admission to it.
+`evidencectl` uses one `evidence.yaml` EvidenceProject containing
+AssertionDefinitions, named Sources, named Functions and selector profiles.
+Each definition declares its semantic URIs, subjects, acquisition plan, output
+allowlist, validity, binding and grant ceiling. Function assets use
+`source-prepare/v1`, `source-extract/v1` or `assertion-derive/v1`; their interfaces
+and typed call sites are available through `explain` and generated types.
 
-`evidencectl init <dir> --transport sqlite-extract --profile local` needs no
-OpenAPI document. It creates a source-neutral synthetic statement source,
-question, derivation, schemas, and 13-case fixture. First run
-`evidencectl check <dir>`, then `evidencectl test <dir> --explain`, which compiles a private
-bundle and delegates bundle validation and fixture evaluation to `evidence`.
-The starter creates no real extract, runtime, production target, or deployable
-bundle.
+A separate EvidenceTarget declares the deployment's connections, authentication,
+keys, secrets, audit destination and authority document. Its AccessProfiles match
+verified identities, and each AccessGrant supplies one complete tuple inside the
+package ceilings. Local development uses those same grants. Grants never combine
+to create broader authority.
 
-`evidencectl source suggest` drafts one source from an OpenAPI description:
-it derives a closed response schema, an extraction script, and the facts schema
-from the chosen operation, the projection the operator selects, and an optional
-sample response, leaving an explicit `TODO` wherever a bound cannot be derived
-so `evidence check` rejects the draft until a human resolves it.
-
-```bash
-evidencectl source suggest --openapi ./api.yaml
-```
-
-Inside an authoring project, `evidencectl source suggest ./deployment-project`
-drafts from the project's retained `source.openapi.yaml` instead.
-
-`--openapi` also takes the URL a description is published at, which is read
-under the same rule the runtime applies to the source URLs it will itself call:
-`https` anywhere, plain `http` only to a numeric loopback host, and never a
-credential in the URL. A description behind authentication is fetched with your
-own client and passed as a file.
-
-### Production build and handoff
-
-An authored question may include optional `governance` metadata. Local `dev`
-continues to work without it, using its explicit local defaults. When present,
-`dev` uses the declared requirement semantics while retaining local assurance
-and local authentication. A production build requires every question to carry
-that metadata, stable concept identifiers, and one project-relative fixture.
-It never invents requirement, framework, Evidence Type, concept, or
-disclosure-family URIs.
-
-Each explicit `deployment-targets/<environment>/` target contains a complete
-`governance.yaml`, `runtime.yaml`, and every governed public JWK referenced by
-that governance document under `public-keys/`. Governance contributes the
-bundle-owned service, authentication, audit, signing, rate-limit,
-response-format, and authority values; it may not override compiler-owned
-selectors, sources, or requirements. Runtime is copied unchanged and binds the
-completed candidate to one target host. Targets are independent complete
-inputs, not overlays. Secret values and absolute secret paths do not belong in
-authored governance input.
-
-`evidencectl check <editable-project>` validates authoring offline and reports
-incomplete work as field-addressed warnings. `--deny-warnings` refuses any
-warning. Add `--target <environment-target>` to validate that explicit target's
-governance, runtime structure, public keys, source connections, and governed
-bundle. Adding `--production` requires the target itself to declare
-`production` or `evidence-grade` assurance. The check does not resolve secrets,
-contact dependencies, or run fixtures. `evidencectl explain <editable-project>`
-applies the same authoring validation and reports its status, findings, and
-revision with the authored inventory. Add `--target <environment-target>` to
-include that target's governance.
-
-`evidencectl check --file <file>` checks one tooling file on its own, offline:
-a client profile, reviewed contracts, development state, a source-import
-baseline or journal, a source resolution file, or a source export manifest. The
-file's `kind` names the format. It exits 0 when the file passes, 1 when it is refused, and 3
-when it cannot be read; it cannot be combined with a project or `--target`.
-
-`evidencectl package <editable-project> --target <environment-target> --output <new-package-directory>`
-is create-only. It reads regular files
-without following symlinks, compiles one closed bundle, and delegates its
-internal bundle-only check and every referenced fixture to the real `evidence`
-binary. No temporary signing key or other validation secret is generated. The
-candidate is published atomically only on success. The build makes no network
-request, opens no listener, writes no production audit event, and never copies
-local `.evidence` state, credentials, tokens, responses, or private keys into
-the candidate.
-
-The package contains `SHA256SUMS` at its root and may contain adapters,
-derivations, schemas, codelists, fixtures, and public keys where referenced.
-Runtime configuration remains in the environment target. The operator independently provisions the Transit key and
-workload-local proxy, plus audit, subject-binding, and source secrets, then
-runs one grouped handoff:
+`evidencectl init <dir> --openapi <file-or-url> --profile local` retains the API
+description for source authoring. `source suggest` and the source import commands
+produce reviewed source contracts and named Function assets. The author supplies
+the fixed assertion semantics and resolves any reported review markers.
+`evidencectl init <dir> --transport sqlite-extract --profile local` creates a
+runnable synthetic SQLite project. `init --starter <dir> --profile local` copies
+a reviewed normalized project.
 
 ```sh
-evidencectl doctor --runtime-config '<environment-target>/runtime.yaml'
-evidencectl test '<editable-project>' --target '<environment-target>'
-evidence serve --runtime-config '<environment-target>/runtime.yaml'
+evidencectl check '<project>' --target '<target.yaml>'
+evidencectl test '<project>' --target '<target.yaml>'
+evidencectl explain '<project>' --target '<target.yaml>'
+evidencectl types '<project>' --language typescript --output '<new-file.ts>'
 ```
 
-Doctor delegates the runtime-owned live startup dependency preflight without
-opening the public listener or sending an Evidence request. It can briefly hold
-the audit destination's operational lock while checking it. Fixture testing is
-offline and does not establish source reachability. Evidencectl uses human
-output by default; add the global `--format json` for machine-readable reports.
-Its common exit classes are `0` success, `1` refusal, `2` usage, and `3`
-operational failure.
+`check` validates the same authoring model used by the compiler and editor.
+With a complete target public key it also compiles and delegates a static bundle
+check. Missing deployment inputs are reported explicitly. `--production` requires
+production or evidence-grade assurance; `--deny-warnings` refuses warnings.
+Checks resolve no secrets and make no dependency request. Fixtures execute the
+bounded source/extraction/derivation path using supplied synthetic responses.
 
-Configure an OIDC issuer with the exact issuer, JWKS URI, audience, allowed
-algorithms, token type, and claim mappings declared by the Evidence runtime.
-Register the workload's client, resource and scopes at that issuer. The maintained
-local development tooling uses pinned stock ThunderID; production issuer
-registration remains an operator responsibility. Inspect the deployment with
-`evidencectl artifact inspect <environment-target>` and verify its actual token and
-resource journey before handoff.
+`evidencectl check --file <file>` checks one tooling file offline, including a
+client profile, local access client registration, reviewed contracts, development state or source-import document.
+Diagnostics identify files, fields and available source spans. The common exit
+classes are `0` success, `1` refusal, `2` usage and `3` operational failure.
+Use global `--format json` for machine-readable reports.
+
+Register a local client with `access client add <id> --access-profile <profile>
+--generate-local-key`, then use `dev start <project> --target <target.yaml>`.
+The local lifecycle starts the pinned stock OAuth issuer and Evidence. Request
+preparation retains authorization privately and closes verifier expectations
+before the response exists. Stop and clean with `dev stop` and `dev clean`.
+An explicitly configured shared issuer can be selected with `--issuer-project`;
+Evidence still verifies its own clients, resources, scopes and complete grants.
+
+Source descriptions accept HTTPS or numeric loopback HTTP and reject embedded
+credentials, queries and fragments. Fetch an authenticated API description with
+your own client and pass its local file. Source credentials grant no Evidence
+caller authority.
+
+### Package and deployment handoff
+
+```sh
+evidencectl package '<project>' --target '<target.yaml>' --output '<new-candidate-directory>'
+```
+
+Packaging is create-only. It reads regular files without following symlinks,
+compiles the closed package, delegates static runtime validation and every
+referenced fixture, and publishes the candidate atomically after success.
+Fixture signing uses disposable validation material without accessing the
+operator signer. Compilation opens no public listener and performs no live
+source request. Private local state, credentials, tokens, responses and private
+keys stay outside the candidate.
+
+The candidate contains an immutable `bundle/` with `SHA256SUMS`, a compiled
+`runtime.yaml`, and a separate `compiled-authority.yaml`. The runtime declares a
+stable installed package path outside the build output. Install the bundle at
+that path and provision the referenced secrets and signer transport, then run:
+
+```sh
+evidence authority activate --runtime-config '<candidate>/runtime.yaml' --document '<candidate>/compiled-authority.yaml'
+evidencectl doctor --runtime-config /absolute/path/to/candidate/runtime.yaml
+evidence serve --runtime-config '<candidate>/runtime.yaml'
+```
+
+Authority activation derives its revision and digest, checks the package
+ceilings, and atomically records durable history. A serving process uses one
+captured authority snapshot; restart it to adopt a later activation. Each release
+audit binds the active authority revision and effective grant intersection.
+`explain --target` exposes the same values without secrets or identity values.
+
+Doctor performs the runtime-owned startup preflight without opening the public
+listener or requesting an assertion. It can briefly hold the audit writer lock;
+`--without-audit-lock` supports inspection beside a serving instance. Fixture
+success establishes deterministic behavior; deployment preflight checks the
+mounted runtime dependencies.
+
+Configure the external issuer with the exact issuer, JWKS URI, resource audience,
+algorithms, token type, scopes and claim mappings declared by the target.
+Production issuer registration remains an operator responsibility. Assertions
+carry verified claims, subject, purpose, validity and binding. Review approval
+and downstream write authority remain with their owning systems.
 
 Registry Stack publishes the `ghcr.io/registrystack/evidence` runtime image.
 Pin the digest from the selected release. The image runs as UID and GID 65532.

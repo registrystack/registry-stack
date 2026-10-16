@@ -913,6 +913,7 @@ impl EvidenceRuntime {
             let request = EvidenceRequest {
                 request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
                 requirement,
+                expected_configuration_revision: None,
                 purpose,
                 subjects: subjects
                     .into_iter()
@@ -1048,6 +1049,7 @@ impl EvidenceRuntime {
                 .copied()
                 .filter(|format| {
                     matched.response_formats().contains(format)
+                        && self.definition_permits_response_format(&request.requirement, *format)
                         && subject_binding_permits_response_format(
                             requirement.subject_binding_mode(),
                             *format,
@@ -1181,6 +1183,50 @@ impl EvidenceRuntime {
             .await
     }
 
+    fn definition_permits_response_format(
+        &self,
+        requirement: &str,
+        format: ResponseFormat,
+    ) -> bool {
+        self.kernel
+            .requirement(requirement)
+            .is_some_and(|definition| {
+                definition
+                    .representations
+                    .as_ref()
+                    .is_none_or(|formats| formats.contains(&format))
+            })
+    }
+
+    /// Check the independent caller pin before authority matching or effects.
+    fn validate_expected_configuration_revision(
+        &self,
+        requirement: &str,
+        expected: Option<&str>,
+    ) -> Result<(), RuntimeFailure> {
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        if expected.len() != 71
+            || !expected.starts_with("sha256:")
+            || !expected.as_bytes()[7..]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
+            return Err(failure(
+                ProblemCode::MalformedRequest,
+                "configuration-revision",
+            ));
+        }
+        if self.bundle().configuration_revision(requirement) != Some(expected) {
+            return Err(failure(
+                ProblemCode::NotAuthorized,
+                "configuration-revision",
+            ));
+        }
+        Ok(())
+    }
+
     async fn evaluate_request_batch_at(
         &self,
         operation: &str,
@@ -1204,6 +1250,11 @@ impl EvidenceRuntime {
         }) {
             return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
         }
+
+        self.validate_expected_configuration_revision(
+            &batch.requirement,
+            batch.expected_configuration_revision.as_deref(),
+        )?;
 
         let started = Instant::now();
         // Every logical item, physical source call, and signed assertion in
@@ -1303,6 +1354,7 @@ impl EvidenceRuntime {
             let request = EvidenceRequest {
                 request_nonce: item.request_nonce.clone(),
                 requirement: batch.requirement.clone(),
+                expected_configuration_revision: batch.expected_configuration_revision.clone(),
                 purpose: batch.purpose.clone(),
                 subjects: item.subjects.clone(),
                 holder_keys: Vec::new(),
@@ -1331,6 +1383,10 @@ impl EvidenceRuntime {
                 .config
                 .response_formats
                 .contains(&ResponseFormat::SignedJws)
+                || !self.definition_permits_response_format(
+                    &batch.requirement,
+                    ResponseFormat::SignedJws,
+                )
                 || !matched.permits_response_format(ResponseFormat::SignedJws)
                 || !matched.permits_subject_binding(binding_mode)
                 || !subject_binding_permits_response_format(binding_mode, ResponseFormat::SignedJws)
@@ -1412,6 +1468,8 @@ impl EvidenceRuntime {
             assurance_profile: self.bundle().config.assurance_profile,
             requirement: batch.requirement.clone(),
             bundle_revision: self.bundle().package_digest().to_owned(),
+            authority_revision: self.bundle().authority_revision().map(str::to_owned),
+            effective_grant_digest: self.bundle().effective_grant_digest().map(str::to_owned),
             purpose: batch.purpose.clone(),
             requester_pseudonym,
             actor_pseudonym,
@@ -1649,6 +1707,10 @@ impl EvidenceRuntime {
         if !request_nonce_is_canonical(&request.request_nonce) {
             return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
         }
+        self.validate_expected_configuration_revision(
+            &request.requirement,
+            request.expected_configuration_revision.as_deref(),
+        )?;
         // An unacceptable or repeated holder key fails before any credential
         // acquisition or source access. Keys are distinct by RFC 7638
         // thumbprint, so the same coordinates under a second key identifier or
@@ -1784,6 +1846,7 @@ impl EvidenceRuntime {
         // selection creates no permission, and the one denial does not reveal
         // which of the four layers withheld it.
         if !self.bundle().config.response_formats.contains(&format)
+            || !self.definition_permits_response_format(&request.requirement, format)
             || !matched.permits_response_format(format)
             || !matched.permits_subject_binding(binding_mode)
             || !subject_binding_permits_response_format(binding_mode, format)
@@ -2995,7 +3058,7 @@ impl EvidenceRuntime {
                     SourceStageLookup::Lookup(LookupResult::Match(facts)) => facts,
                     SourceStageLookup::DeclaredUnresolved
                     | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
-                        return Ok(None)
+                        return Ok(None);
                     }
                 };
                 let fetch_stage = self
@@ -3473,6 +3536,8 @@ impl EvidenceRuntime {
             assurance_profile: self.bundle().config.assurance_profile,
             requirement: resolved.requirement.clone(),
             bundle_revision: self.bundle().package_digest().to_owned(),
+            authority_revision: self.bundle().authority_revision().map(str::to_owned),
+            effective_grant_digest: self.bundle().effective_grant_digest().map(str::to_owned),
             purpose: resolved.purpose.clone(),
             requester_pseudonym,
             actor_pseudonym,
@@ -3647,6 +3712,8 @@ struct RequestBatchAuditMaterial {
     assurance_profile: AssuranceProfile,
     requirement: String,
     bundle_revision: String,
+    authority_revision: Option<String>,
+    effective_grant_digest: Option<String>,
     purpose: String,
     requester_pseudonym: String,
     actor_pseudonym: Option<String>,
@@ -3673,6 +3740,10 @@ impl RequestBatchAuditMaterial {
             self.requester_pseudonym.clone(),
             decision,
             duration_milliseconds,
+        );
+        event = event.with_authority_revision(
+            self.authority_revision.clone(),
+            self.effective_grant_digest.clone(),
         );
         event.actor_pseudonym = self.actor_pseudonym.clone();
         event.actor_kind = self.actor_kind;
@@ -3754,6 +3825,8 @@ struct AuditMaterial {
     assurance_profile: AssuranceProfile,
     requirement: String,
     bundle_revision: String,
+    authority_revision: Option<String>,
+    effective_grant_digest: Option<String>,
     purpose: String,
     requester_pseudonym: String,
     actor_pseudonym: Option<String>,
@@ -3785,6 +3858,10 @@ impl AuditMaterial {
             self.response_protection,
             decision,
             duration_milliseconds,
+        );
+        event = event.with_authority_revision(
+            self.authority_revision.clone(),
+            self.effective_grant_digest.clone(),
         );
         event.actor_pseudonym = self.actor_pseudonym.clone();
         event.actor_kind = self.actor_kind;

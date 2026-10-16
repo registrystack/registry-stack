@@ -1,0 +1,207 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+# The registry project: one document that decides the model, the access rules,
+# and the catalogue description of a single registry. Every bregctl
+# command reads it. Replace the identifiers, titles, and URLs below with your
+# own; every value here is a placeholder chosen to be obviously synthetic.
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+
+# Registry identity. `canonicalBaseIri` is the stable base of the IRIs this
+# registry publishes, so point it at a hostname you control before a production
+# package. Names under `.example.invalid` never resolve.
+project:
+  id: generic-registry
+  version: 0.1.0
+  defaultLanguage: en
+  canonicalBaseIri: https://generic-registry.example.invalid
+
+# Package identity names the reviewed source revision a package is built
+# from. A package carries no environment: the same package directory is
+# applied unchanged to every environment, and each runtime file names its own
+# `identity.environment` and `identity.instanceId`.
+package:
+  sourceRevision: generic-registry-0.1.0
+
+# The Registry Manifest projection is the catalogue description this registry
+# publishes about itself. `accessProfile` and `classificationCeiling` bound what
+# the projection may describe; they never grant access to a caller.
+manifestProjection:
+  accessProfile: operator
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://generic-registry.example.invalid
+    title: Generic Registry Catalogue
+    description: Placeholder catalogue description; replace it with your own.
+    publisher:
+      id: generic-registry-authority
+      name: Generic Registry Authority
+      iri: https://generic-registry.example.invalid/authority
+  datasets:
+    - id: generic-registry
+      title: Generic Registry
+      description: Placeholder dataset description; replace it with your own.
+      owner: Generic Registry Authority
+      status: under-development
+  dataServices:
+    - id: generic-registry-api
+      title: Generic Registry API
+      endpointUrl: https://generic-registry.example.invalid
+      servesDatasets: [generic-registry]
+  publicService:
+    id: generic-registry-service
+    title: Generic Registry Service
+
+# A vocabulary is a closed code list. A `vocabulary-code` field accepts only
+# these values, and the compiler refuses any other value at authoring time.
+vocabularies:
+  - id: record-status
+    values: [draft, active, retired]
+
+datasets:
+  - id: generic-registry
+
+recordTypes:
+  # Reference data the records point at. It is classified `public` because a
+  # list of group codes discloses nothing on its own; the records themselves
+  # stay `internal`.
+  - id: record-group
+    primaryDataset: generic-registry
+    route: record-groups
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: public}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: public}
+    constraints:
+      - {id: record-group-code-unique, type: unique, fields: [code]}
+
+  # The registry's records. `group` is a reference: the server stores the target
+  # record's identifier and refuses a value that names no `record-group`.
+  # `status` is a vocabulary code drawn from the `record-status` list above.
+  # Neither is `required`, so a create may omit it.
+  #
+  # A Record type may also declare `hooks`, which project chosen fields of a
+  # committed change to a URL destination the deployment binds by name. Each
+  # hook declares `phase: after` and a handler such as
+  # `{type: url, destinationId: registry-events}`. This project declares none:
+  # a package refuses to activate until the runtime configuration binds every
+  # destination its URL handlers name. `bregctl dev` supplies local receiver
+  # bindings; operated deployments bind their own.
+  - id: record
+    primaryDataset: generic-registry
+    route: records
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
+      - {id: group, type: reference, target: record-group, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
+    constraints:
+      - {id: record-code-unique, type: unique, fields: [code]}
+    # An index lets a list filtered or sorted by its leading field skip the
+    # rows that do not match. `check` reports a finding for a filterable or
+    # sortable field no index leads with. The unique constraint above already
+    # indexes `code`, and the compiler indexes every reference such as `group`.
+    indexes:
+      - {id: record-status, fields: [status]}
+    # A selector profile names an exact-match question a caller may ask by
+    # value, rather than a filter over a listing. Every field it names must
+    # refuse the empty value, which is why `code` declares `minimumLength: 1` above.
+    # `bregctl generate evidence-source` exports one Evidence source per
+    # selector an access profile grants a lookup on.
+    selectorProfiles:
+      - {id: by-code, fields: [code]}
+
+# A token selects one profile per request, and that profile decides everything
+# the request may touch. Profiles are never merged, and naming one in a request
+# grants nothing the profile does not already allow.
+accessProfiles:
+  # The registry-wide operator. `readableFields` decide what a response may
+  # carry, `writableFields` what a create or patch may set, and
+  # `filterableFields` which fields a caller may filter and sort a list by.
+  #
+  # `check` reports `breg.access.profile-unrestricted-collection` for this profile:
+  # it can list every record, and a caller-supplied filter is not authorization.
+  # That is intended for a single operations team running the whole registry.
+  # Close it by giving the grant a `rowBoundaries` entry, the way `record-reader`
+  # below does, or by removing `list` from its operations. Once the grant is
+  # row-bound, `breg.access.profile-writable-row-boundary` follows for a bound
+  # field the grant can write; it asks you to confirm that moving records
+  # between callers' rows is intended, or to drop the field from `writableFields`.
+  - id: operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:generic:operate]
+    requiredPurposes: [registry-operations]
+    permissions:
+      records:
+        - recordType: record-group
+          rowBoundaries: unrestricted
+          operations: [create, get, list]
+          readableFields: [code, label]
+          writableFields: [code, label]
+          filterableFields: [code]
+        - recordType: record
+          rowBoundaries: unrestricted
+          operations: [create, get, list, patch]
+          readableFields: [code, label, group, status]
+          writableFields: [code, label, group, status]
+          filterableFields: [code, status]
+
+  # A row-restricted reader. A row boundary compares a declared field against a
+  # verified claim on the caller's credentials, so this profile reads only the
+  # records whose `status` matches its own claim. `equals` compares against one
+  # claim value; `in` compares against a claim carrying a list of them, which
+  # the authorization server must then issue as a JSON array. Bind the boundary
+  # to whatever field carries your registry's tenancy: an owning office, a
+  # jurisdiction code, a programme. Decide deliberately which profiles may write
+  # that field, because a profile that can patch it moves records in and out of
+  # another caller's rows. Here the operator may, and `tests/journeys.yaml`
+  # shows a record leaving this reader's rows when its status changes.
+  - id: record-reader
+    principalClaim: registry_principal
+    requiredScopes: [registry:generic:read]
+    requiredPurposes: [registry-reporting]
+    permissions:
+      records:
+        - recordType: record
+          operations: [get, list]
+          readableFields: [code, label, group, status]
+          filterableFields: [code]
+          rowBoundaries:
+            - {field: status, claim: registry_record_status, operator: equals}
+
+  # A lookup-only source. It answers one exact-match question, by `code`, and
+  # reads only the fields that answer it. `valueOrigin: request` says the caller
+  # supplies the selector value. The profile grants no `list`, so it can confirm
+  # a record whose code it is given and cannot enumerate the registry.
+  # `bregctl generate evidence-source .` exports this grant as an Evidence
+  # source definition, so this operator fixture exports without another grant.
+  #
+  # `check` reports `breg.access.profile-unrestricted-rows` for this profile: any
+  # record's code answers it, and the value a caller supplies is not
+  # authorization. That is intended for a source that vouches for the whole
+  # registry. Close it by giving the grant a `rowBoundaries` entry, the way
+  # `record-reader` above does.
+  - id: evidence-source
+    principalClaim: registry_principal
+    requiredScopes: [registry:evidence:lookup]
+    requiredPurposes: [evidence-source-read]
+    permissions:
+      records:
+        - recordType: record
+          rowBoundaries: unrestricted
+          operations: [lookup]
+          readableFields: [code, status]
+          lookups:
+            - {selector: by-code, valueOrigin: request}
+
+# Modules contribute to the model from their own files under `modules/`.
+# `bregctl project lock` writes the version and content digest below;
+# a stale digest is a compile error, which keeps a reviewed project pinned to the
+# module content it was reviewed with. Re-run `project lock` after every module edit.
+modules:
+  - id: "record-notes"
+    version: "0.1.0"
+    digest: "sha256:b9caa4c6bcf444f5bc3681bfa4de67a09e3de5b428e43d01546466eeb1c03e0f"

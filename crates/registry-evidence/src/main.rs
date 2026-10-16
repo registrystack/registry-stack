@@ -201,6 +201,97 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
+        Command::Authority { command } => {
+            use registry_evidence::{authority, cli::AuthorityCommand};
+            let (runtime_path, document) = match command {
+                AuthorityCommand::Activate {
+                    runtime_config,
+                    document,
+                } => (runtime_config, Some(document)),
+                AuthorityCommand::History { runtime_config } => (runtime_config, None),
+            };
+            // Operator inspection and authority activation need the closed
+            // configuration, not source extracts, credentials or a signer.
+            let mut bytes = Vec::new();
+            File::open(&runtime_path)
+                .and_then(|file| {
+                    file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                        .read_to_end(&mut bytes)
+                })
+                .map_err(|_| CommandError::Cli(CliError("runtime configuration is unavailable")))?;
+            let runtime =
+                registry_evidence::config::RuntimeConfig::parse_yaml_with(&bytes, |name| {
+                    std::env::var(name).ok()
+                })
+                .map_err(
+                    |error| match error.in_file(&runtime_path.display().to_string()) {
+                        ConfigError::Refused(report) => CommandError::Refused(report),
+                        error => CommandError::Deployment(
+                            "runtime authority binding is invalid",
+                            ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
+                        ),
+                    },
+                )?
+                .config;
+            let binding = runtime
+                .authority
+                .as_ref()
+                .ok_or(CommandError::Cli(CliError(
+                    "runtime authority binding is required",
+                )))?;
+            let result = if let Some(document) = document {
+                let mut bytes = Vec::new();
+                File::open(&document)
+                    .and_then(|file| {
+                        file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                            .read_to_end(&mut bytes)
+                    })
+                    .map_err(|_| {
+                        CommandError::Cli(CliError("target authority document is unavailable"))
+                    })?;
+                match authority::AuthorityDocument::parse(&document.display().to_string(), &bytes) {
+                    Ok(document) => {
+                        let bundle =
+                            Bundle::load_pinned(&runtime.package).map_err(deployment_load_error)?;
+                        authority::activate(
+                            &binding.root,
+                            &binding.target,
+                            &bundle.config,
+                            bundle.package_digest(),
+                            &document,
+                        )
+                        .map(|snapshot| {
+                            println!(
+                                "ACTIVATED {} {} sequence={}",
+                                snapshot.revision(),
+                                snapshot.digest(),
+                                snapshot.sequence()
+                            )
+                        })
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                authority::history(&binding.root).map(|entries| {
+                    for entry in entries {
+                        println!(
+                            "{} {} {} {}",
+                            entry.sequence,
+                            entry.authority_revision,
+                            entry.authority_digest,
+                            entry.package_digest
+                        );
+                    }
+                })
+            };
+            match result {
+                Ok(()) => Ok(ExitCode::SUCCESS),
+                Err(error) => {
+                    eprintln!("evidence: {error}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
         Command::Check {
             runtime_config,
             format,
@@ -288,8 +379,37 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::BundleCheck { bundle, json } => {
-            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+        Command::BundleCheck {
+            bundle,
+            authority_document,
+            json,
+        } => {
+            let bundle = match Bundle::load(&bundle).map_err(deployment_load_error) {
+                Ok(bundle) => Arc::new(bundle),
+                Err(CommandError::Refused(report)) if json => {
+                    let document = CheckReport {
+                        ok: false,
+                        command: "bundle-check",
+                        status: "domain-refusal",
+                        api_version: CHECK_REPORT_API_VERSION,
+                        kind: CHECK_REPORT_KIND,
+                        package_digest: None,
+                        requirements: None,
+                        files_checked: report.files_checked().unwrap_or(1),
+                        diagnostics: report.to_json_value(),
+                    };
+                    println!(
+                        "{}",
+                        serde_json::to_string(&document)
+                            .map_err(|_| CliError("bundle check report could not be written"))?
+                    );
+                    return Ok(ExitCode::FAILURE);
+                }
+                Err(error) => return Err(error),
+            };
+            if let Some(path) = authority_document {
+                read_bundle_authority(&path, &bundle.config)?;
+            }
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let _source_plans = compile_bundle_source_plans(&bundle)?;
@@ -306,12 +426,23 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::BundleEvaluate {
             bundle,
+            authority_document,
             fixture,
             case,
             explain,
             explain_format,
         } => {
-            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
+            if let Some(path) = authority_document {
+                let document = read_bundle_authority(&path, &bundle.config)?;
+                // This copy can reach only the offline fixture kernel, never
+                // DeploymentInputs or serving initialization. No authority
+                // store, credential, source or operator signer is accessed.
+                bundle.config.authority_profiles = document.access_profiles;
+            } else if bundle.config.project.is_some() {
+                return Err(CliError("normalized fixtures require --authority-document with the compiled target grants").into());
+            }
+            let bundle = Arc::new(bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
@@ -326,7 +457,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 &source_plans,
                 &fixture,
                 case.as_deref(),
-                false,
+                true,
                 &mut trace,
             )
             .await;
@@ -479,6 +610,28 @@ const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
+
+/// Validate one compiled authority through the runtime's owning contract.
+/// This offline check neither activates grants nor initializes dependencies.
+fn read_bundle_authority(
+    path: &Path,
+    config: &registry_evidence::config::EvidenceConfig,
+) -> Result<registry_evidence::authority::AuthorityDocument, CliError> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| {
+            file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|_| CliError("compiled target authority is unavailable"))?;
+    let document =
+        registry_evidence::authority::AuthorityDocument::parse(&path.display().to_string(), &bytes)
+            .map_err(|_| CliError("compiled target authority document is invalid"))?;
+    document
+        .validate_for(&document.target, config)
+        .map_err(|_| CliError("compiled target authority exceeds the package ceilings"))?;
+    Ok(document)
+}
 
 /// Report a refused discovery configuration with the cause the parser carried.
 ///
@@ -1646,17 +1799,6 @@ fn declared_canaries(
         .collect())
 }
 
-/// Whether a fixture case identifier can be written into a trace as it stands.
-///
-/// The identifier is fixture-controlled and the text trace puts it on a line of
-/// its own, so a control character in one would let a fixture write lines that
-/// read as stages the run never reached. Refused here rather than escaped at the
-/// render, which would quote every ordinary identifier to contain the one kind
-/// that has no legitimate use in an authored name.
-fn is_renderable_case_identifier(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && !value.contains(char::is_control)
-}
-
 async fn evaluate_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
@@ -1696,12 +1838,12 @@ async fn evaluate_fixture(
     let object = fixture
         .as_object()
         .ok_or(CliError("fixture contract must be an object"))?;
-    if object.get("synthetic_only") != Some(&Value::Bool(true)) {
+    if object.get("syntheticOnly") != Some(&Value::Bool(true)) {
         return Err(CliError("fixture is not an approved synthetic definition"));
     }
     // A fixture that declares itself a coequal acceptance definition is run
     // as one; every other fixture is a reference fixture.
-    if object.get("coequal_acceptance_definition") != Some(&Value::Bool(true)) {
+    if object.get("coequalAcceptanceDefinition") != Some(&Value::Bool(true)) {
         return evaluate_reference_fixture(
             bundle,
             kernel,
@@ -1715,8 +1857,8 @@ async fn evaluate_fixture(
     }
     trace.declare_canaries(declared_canaries(
         object,
-        "privacy_expectation",
-        "diagnostics_exclude",
+        "privacyExpectation",
+        "diagnosticsExclude",
     )?);
     let common = object.get("common").and_then(Value::as_object);
     let cases = object
@@ -1743,7 +1885,6 @@ async fn evaluate_fixture(
         let id = case
             .get("id")
             .and_then(Value::as_str)
-            .filter(|value| is_renderable_case_identifier(value))
             .ok_or(CliError("fixture case identifier is invalid"))?;
         if selected_case.is_some_and(|selected| selected != id) {
             continue;
@@ -1763,6 +1904,9 @@ async fn evaluate_fixture(
                 Err(OfflineFixtureError::Purpose) => {
                     return Err(CliError(FIXTURE_PURPOSE_FAILURE));
                 }
+                Err(OfflineFixtureError::Audience) => {
+                    return Err(CliError(FIXTURE_AUDIENCE_FAILURE))
+                }
                 Err(OfflineFixtureError::Authorization(_)) => {}
             }
             trace.record(
@@ -1780,7 +1924,7 @@ async fn evaluate_fixture(
             trace.pass_case();
             continue;
         }
-        if let Some(expected_roles) = case.get("expected_subject_roles") {
+        if let Some(expected_roles) = case.get("expectedSubjectRoles") {
             let expected_roles = expected_roles
                 .as_array()
                 .ok_or(CliError("fixture subject-role expectation is invalid"))?
@@ -1883,7 +2027,7 @@ async fn evaluate_fixture(
             continue;
         }
 
-        if let Some(injected) = case.get("injected_derivation") {
+        if let Some(injected) = case.get("injectedDerivation") {
             validate_injected_rejection(kernel, requirement, injected, trace)?;
             require_expected(case, "output-gate-rejection")?;
             trace.diagnose(
@@ -1897,7 +2041,7 @@ async fn evaluate_fixture(
             continue;
         }
 
-        if let Some(source_failure) = case.get("source_failure") {
+        if let Some(source_failure) = case.get("sourceFailure") {
             validate_source_failure(case, source_failure)?;
             trace.record(
                 Stage::Acquire,
@@ -1918,7 +2062,7 @@ async fn evaluate_fixture(
             continue;
         }
 
-        if let Some(companion) = case.get("companion_bundle") {
+        if let Some(companion) = case.get("companionBundle") {
             validate_companion_rejection(bundle, requirement, case, companion)?;
             trace.record(
                 Stage::Prepare,
@@ -1974,10 +2118,14 @@ fn evaluate_fixture_acquisition(
     trace: &mut FixtureTrace,
 ) -> Result<Result<KernelOutcome, KernelError>, CliError> {
     let resolved = selectors.resolved;
+    let audience = resolved
+        .subject_scope
+        .audience()
+        .unwrap_or(OFFLINE_AUDIENCE);
     let derivation_selectors = selectors.derivation;
     let projection = || ValueProjection {
         scope: EvidenceScope::AudienceScoped {
-            audience: OFFLINE_AUDIENCE,
+            audience,
             request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
         },
         binding_key: &OFFLINE_BINDING_KEY,
@@ -2640,10 +2788,6 @@ async fn evaluate_reference_fixture(
     // this on its own and an author who has written an unprovable stage should
     // be told that, not that some key their case shape cannot supply is missing.
     refuse_replayed_statement_stages(&bundle.config, &requirement.acquisition)?;
-    require_exact_keys(
-        fixture,
-        &["synthetic_only", "common", "cases", "privacyExpectation"],
-    )?;
     trace.declare_canaries(declared_canaries(
         fixture,
         "privacyExpectation",
@@ -2653,23 +2797,8 @@ async fn evaluate_reference_fixture(
         .get("common")
         .and_then(Value::as_object)
         .ok_or(CliError("reference fixture common block is invalid"))?;
-    require_allowed_keys(
-        common,
-        &[
-            "observed_at",
-            "purpose",
-            "selectors",
-            "verified_token_claims",
-            "derivationSelectorInputs",
-            "extract",
-            "expectedRequestParts",
-            "expectedTransport",
-            "expectedFetchRequestParts",
-            "expectedFetchTransport",
-        ],
-    )?;
     let mut required_common = vec![
-        "observed_at",
+        "observedAt",
         "selectors",
         "expectedRequestParts",
         "expectedTransport",
@@ -2703,7 +2832,6 @@ async fn evaluate_reference_fixture(
         .and_then(Value::as_array)
         .filter(|cases| !cases.is_empty() && cases.len() <= 256)
         .ok_or(CliError("reference fixture case count is invalid"))?;
-    let mut identifiers = std::collections::BTreeSet::new();
     let mut successful_values = Vec::new();
     let mut summary = FixtureSummary::default();
 
@@ -2719,30 +2847,9 @@ async fn evaluate_reference_fixture(
         let case = case
             .as_object()
             .ok_or(CliError("reference fixture case is not an object"))?;
-        require_allowed_keys(
-            case,
-            &[
-                "id",
-                "purpose",
-                "response",
-                "responses",
-                "selectors",
-                "sourceFailure",
-                "declaredUnresolved",
-                "bundleMutation",
-                "statementMutation",
-                "requestMutation",
-                "derivationMutation",
-                "derivationParameterMutation",
-                "selectorOverrides",
-                "observed_at",
-                "expected",
-            ],
-        )?;
         let id = case
             .get("id")
             .and_then(Value::as_str)
-            .filter(|id| is_renderable_case_identifier(id) && identifiers.insert(*id))
             .ok_or(CliError("reference fixture case identifier is invalid"))?;
         if selected_case.is_some_and(|selected| selected != id) {
             continue;
@@ -2752,26 +2859,6 @@ async fn evaluate_reference_fixture(
             .get("expected")
             .and_then(Value::as_object)
             .ok_or(CliError("reference fixture expectation is invalid"))?;
-        require_allowed_keys(
-            expected,
-            &[
-                "lookup",
-                "facts",
-                "value",
-                "values",
-                "entityReferenceCount",
-                "rawReferencesDisclosed",
-                "signed",
-                "publicProblem",
-                "error",
-                "derivationRuns",
-                "bundle",
-                "outputGate",
-                "rejectedBefore",
-                "sourceRequestCount",
-                "expectedTransport",
-            ],
-        )?;
         // A case states either the one concept value or the complete concept map,
         // never both, so neither expectation can weaken the other.
         if expected.contains_key("value") && expected.contains_key("values") {
@@ -3654,6 +3741,10 @@ async fn sign_and_verify_fixture_evidence(
     values: ValidatedValues,
     observed_at: DateTime<Utc>,
 ) -> Result<Value, CliError> {
+    let audience = resolved
+        .subject_scope
+        .audience()
+        .unwrap_or(OFFLINE_AUDIENCE);
     let subjects = resolved
         .subjects
         .iter()
@@ -3665,7 +3756,7 @@ async fn sign_and_verify_fixture_evidence(
                         &OFFLINE_BINDING_KEY,
                         1,
                         &bundle.config.service.trust_domain,
-                        registry_evidence::binding::SubjectBindingScope::Audience(OFFLINE_AUDIENCE),
+                        registry_evidence::binding::SubjectBindingScope::Audience(audience),
                         &resolved.purpose,
                     )
                     .map_err(|_| CliError("fixture subject binding failed"))?,
@@ -3682,7 +3773,7 @@ async fn sign_and_verify_fixture_evidence(
                 evidence_id: &evidence_id,
                 purpose: &resolved.purpose,
                 scope: EvidenceScope::AudienceScoped {
-                    audience: OFFLINE_AUDIENCE,
+                    audience,
                     request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                 },
                 issued_at,
@@ -3714,7 +3805,7 @@ async fn sign_and_verify_fixture_evidence(
     policy.requirement = requirement.id.clone();
     policy.evidence_type = requirement.evidence_type.clone();
     policy.purpose = resolved.purpose.clone();
-    policy.audience = OFFLINE_AUDIENCE.to_owned();
+    policy.audience = audience.to_owned();
     policy.configuration_revision = bundle
         .configuration_revision(&requirement.id)
         .ok_or(CliError(
@@ -4297,6 +4388,7 @@ fn validate_reference_request_mutation(
     ) {
         Ok(_) => return Err(CliError("reference request mutation was authorized")),
         Err(OfflineFixtureError::Purpose) => return Err(CliError(FIXTURE_PURPOSE_FAILURE)),
+        Err(OfflineFixtureError::Audience) => return Err(CliError(FIXTURE_AUDIENCE_FAILURE)),
         Err(OfflineFixtureError::Authorization(_)) => {}
     }
     if expected.get("signed").and_then(Value::as_bool) != Some(false) {
@@ -4443,24 +4535,6 @@ fn validate_reference_privacy(
         .get("privacyExpectation")
         .and_then(Value::as_object)
         .ok_or(CliError("reference privacy expectation is invalid"))?;
-    require_exact_keys(
-        source,
-        &["evidenceContains", "evidenceExcludes", "diagnosticsExclude"],
-    )?;
-    let mut expectation = JsonMap::new();
-    for (source_name, target_name) in [
-        ("evidenceContains", "evidence_contains"),
-        ("evidenceExcludes", "evidence_excludes"),
-        ("diagnosticsExclude", "diagnostics_exclude"),
-    ] {
-        expectation.insert(
-            target_name.to_owned(),
-            source
-                .get(source_name)
-                .cloned()
-                .ok_or(CliError("reference privacy expectation is incomplete"))?,
-        );
-    }
     let projection = serde_json::json!({
         "supportsRequirement": requirement.id,
         "isConformantTo": requirement.evidence_type,
@@ -4471,9 +4545,11 @@ fn validate_reference_privacy(
             .collect::<Vec<_>>(),
         "successfulValues": successful_values,
     });
-    validate_privacy_projection(&expectation, &projection, diagnostics)
+    validate_privacy_projection(source, &projection, diagnostics)
 }
 
+const FIXTURE_AUDIENCE_FAILURE: &str =
+    "fixture must name one audience inside the definition ceiling when more than one is declared";
 const FIXTURE_PURPOSE_FAILURE: &str = "fixture does not select one of the requirement's purposes";
 
 /// Report an unselected fixture purpose as its own failure so a harness
@@ -4481,6 +4557,7 @@ const FIXTURE_PURPOSE_FAILURE: &str = "fixture does not select one of the requir
 fn fixture_failure(error: OfflineFixtureError, authorization: &'static str) -> CliError {
     match error {
         OfflineFixtureError::Purpose => CliError(FIXTURE_PURPOSE_FAILURE),
+        OfflineFixtureError::Audience => CliError(FIXTURE_AUDIENCE_FAILURE),
         OfflineFixtureError::Authorization(_) => CliError(authorization),
     }
 }
@@ -4572,10 +4649,10 @@ fn validate_case_outcome(
     // pipeline half of it is already recorded above this line.
     let declared = format!(
         "the case expects lookup {:?}, public problem {:?}, derivation run {}, signed success {}",
-        optional_string(case, "expected_lookup")?.unwrap_or("match"),
-        optional_string(case, "expected_public_problem")?.unwrap_or("none"),
-        stated_flag(optional_boolean(case, "derivation_runs")?),
-        stated_flag(optional_boolean(case, "signed_success")?)
+        optional_string(case, "expectedLookup")?.unwrap_or("match"),
+        optional_string(case, "expectedPublicProblem")?.unwrap_or("none"),
+        stated_flag(optional_boolean(case, "derivationRuns")?),
+        stated_flag(optional_boolean(case, "signedSuccess")?)
     );
     let compared = compare_case_outcome(case, outcome);
     trace.diagnose(
@@ -4604,8 +4681,8 @@ fn classify_expected_result(
     case: &serde_json::Map<String, Value>,
     categories: &[CategoryDiagnosticEntry],
 ) -> Result<ResultClassification, CliError> {
-    let expected_lookup = optional_string(case, "expected_lookup")?;
-    let expected_problem = optional_string(case, "expected_public_problem")?;
+    let expected_lookup = optional_string(case, "expectedLookup")?;
+    let expected_problem = optional_string(case, "expectedPublicProblem")?;
     let class = match expected_lookup {
         Some("no_match") => ResultClass::NoMatch,
         Some("ambiguous") => ResultClass::Ambiguous,
@@ -4621,7 +4698,7 @@ fn classify_expected_result(
     let mut values = Vec::new();
     let mut category_classes = Vec::new();
     if class == ResultClass::Match {
-        if let Some(value) = case.get("expected_value") {
+        if let Some(value) = case.get("expectedValue") {
             values.push(classify_json_value(value));
             if categories.len() == 1 {
                 if let Some(category) = classify_expected_category(&categories[0], value) {
@@ -4629,7 +4706,7 @@ fn classify_expected_result(
                 }
             }
         }
-        if let Some(map) = case.get("expected_values").and_then(Value::as_object) {
+        if let Some(map) = case.get("expectedValues").and_then(Value::as_object) {
             values.extend(map.values().map(classify_json_value));
             category_classes.extend(categories.iter().filter_map(|category| {
                 map.get(&category.concept_id)
@@ -4975,12 +5052,12 @@ fn compare_case_outcome(
     case: &serde_json::Map<String, Value>,
     outcome: Result<KernelOutcome, registry_evidence::kernel::KernelError>,
 ) -> Result<Option<ValidatedValues>, CliError> {
-    let derivation_runs = optional_boolean(case, "derivation_runs")?;
-    let signed_success = optional_boolean(case, "signed_success")?;
-    let expected_problem = optional_string(case, "expected_public_problem")?;
+    let derivation_runs = optional_boolean(case, "derivationRuns")?;
+    let signed_success = optional_boolean(case, "signedSuccess")?;
+    let expected_problem = optional_string(case, "expectedPublicProblem")?;
 
     if let Some(expected_lookup @ ("no_match" | "ambiguous")) =
-        optional_string(case, "expected_lookup")?
+        optional_string(case, "expectedLookup")?
     {
         let matches = matches!(
             (expected_lookup, &outcome),
@@ -5001,7 +5078,7 @@ fn compare_case_outcome(
         }
         return Ok(None);
     }
-    if optional_string(case, "expected_lookup")?.is_some_and(|lookup| lookup != "match") {
+    if optional_string(case, "expectedLookup")?.is_some_and(|lookup| lookup != "match") {
         return Err(CliError("fixture lookup expectation is invalid"));
     }
 
@@ -5049,7 +5126,7 @@ fn compare_case_outcome(
     else {
         return Err(CliError("fixture expected a unique match"));
     };
-    if optional_string(case, "expected_lookup")? != Some("match") {
+    if optional_string(case, "expectedLookup")? != Some("match") {
         return Err(CliError("matched fixture must require an exact match"));
     }
     if derivation_runs == Some(false) {
@@ -5061,8 +5138,8 @@ fn compare_case_outcome(
         ));
     }
 
-    let expected_value = case.get("expected_value");
-    let expected_values = case.get("expected_values");
+    let expected_value = case.get("expectedValue");
+    let expected_values = case.get("expectedValues");
     if expected_value.is_some() == expected_values.is_some() {
         return Err(CliError(
             "matched fixture must declare exactly one value expectation",
@@ -5115,8 +5192,8 @@ fn validate_source_failure(
         Some("wrong-media-type") => SourceError::WrongMediaType,
         _ => return Err(CliError("fixture source-failure category is invalid")),
     };
-    if optional_string(case, "expected_public_problem")? != Some("source.unavailable")
-        || optional_boolean(case, "signed_success")? != Some(false)
+    if optional_string(case, "expectedPublicProblem")? != Some("source.unavailable")
+        || optional_boolean(case, "signedSuccess")? != Some(false)
         || source_failure_problem(&failure) != ProblemCode::DependencyUnavailable
     {
         return Err(CliError("fixture source-failure mapping is invalid"));
@@ -5266,7 +5343,7 @@ fn validate_privacy_expectation(
     diagnostics: &[String],
 ) -> Result<(), CliError> {
     let expectation = fixture
-        .get("privacy_expectation")
+        .get("privacyExpectation")
         .and_then(Value::as_object)
         .ok_or(CliError("fixture privacy expectation is unavailable"))?;
     let projection = serde_json::json!({
@@ -5296,12 +5373,12 @@ fn validate_privacy_projection(
     let mut disclosed_strings = Vec::new();
     collect_strings(projection, &mut disclosed_strings);
 
-    for expected in expectation_strings(expectation, "evidence_contains")? {
+    for expected in expectation_strings(expectation, "evidenceContains")? {
         if !disclosed_strings.contains(&expected) {
             return Err(CliError("fixture required disclosure is absent"));
         }
     }
-    for prohibited in expectation_strings(expectation, "evidence_excludes")? {
+    for prohibited in expectation_strings(expectation, "evidenceExcludes")? {
         if disclosed_strings.contains(&prohibited) {
             return Err(CliError("fixture prohibited disclosure is present"));
         }
@@ -5323,7 +5400,7 @@ fn validate_privacy_projection(
         "Evidence fixture passed (0 evaluated cases)",
         "evidence: fixture evaluation failed",
     ];
-    for prohibited in expectation_strings(expectation, "diagnostics_exclude")? {
+    for prohibited in expectation_strings(expectation, "diagnosticsExclude")? {
         let disclosed = TEMPLATES.iter().any(|surface| surface.contains(prohibited))
             || diagnostics
                 .iter()
@@ -5459,18 +5536,18 @@ fn fixture_observed_at(
     common: Option<&serde_json::Map<String, Value>>,
     timezone: Option<&str>,
 ) -> Result<DateTime<Utc>, CliError> {
-    if let Some(observed) = case.get("observed_at").and_then(Value::as_str) {
+    if let Some(observed) = case.get("observedAt").and_then(Value::as_str) {
         return DateTime::parse_from_rfc3339(observed)
             .map(|value| value.with_timezone(&Utc))
             .map_err(|_| CliError("fixture observation time is invalid"));
     }
 
-    if let Some(local_date) = case.get("legal_local_date").and_then(Value::as_str) {
+    if let Some(local_date) = case.get("legalLocalDate").and_then(Value::as_str) {
         return local_date_at_noon(local_date, timezone);
     }
 
     if let Some(observed) = common
-        .and_then(|value| value.get("observed_at"))
+        .and_then(|value| value.get("observedAt"))
         .and_then(Value::as_str)
     {
         return DateTime::parse_from_rfc3339(observed)
@@ -5479,7 +5556,7 @@ fn fixture_observed_at(
     }
 
     if let Some(local_date) = common
-        .and_then(|value| value.get("legal_local_date"))
+        .and_then(|value| value.get("legalLocalDate"))
         .and_then(Value::as_str)
     {
         return local_date_at_noon(local_date, timezone);
@@ -5989,7 +6066,7 @@ mod tests {
 
     #[test]
     fn offline_dates_are_fixed_and_never_use_ambient_time() {
-        let case = serde_json::json!({"legal_local_date": "2026-08-03"});
+        let case = serde_json::json!({"legalLocalDate": "2026-08-03"});
         let observed = fixture_observed_at(case.as_object().expect("object"), None, None)
             .expect("date converts");
         assert_eq!(observed.to_rfc3339(), "2026-08-03T12:00:00+00:00");
@@ -5997,8 +6074,8 @@ mod tests {
 
     #[test]
     fn case_local_date_overrides_common_observation_time() {
-        let case = serde_json::json!({"legal_local_date": "2026-08-01"});
-        let common = serde_json::json!({"observed_at": "2026-08-02T00:00:00Z"});
+        let case = serde_json::json!({"legalLocalDate": "2026-08-01"});
+        let common = serde_json::json!({"observedAt": "2026-08-02T00:00:00Z"});
         let observed = fixture_observed_at(
             case.as_object().expect("case object"),
             common.as_object(),
@@ -6012,13 +6089,13 @@ mod tests {
     fn symbolic_source_failures_use_the_production_public_mapper() {
         for category in ["timeout", "redirect", "http-503", "wrong-media-type"] {
             let case = serde_json::json!({
-                "source_failure": category,
-                "expected_public_problem": "source.unavailable",
-                "signed_success": false
+                "sourceFailure": category,
+                "expectedPublicProblem": "source.unavailable",
+                "signedSuccess": false
             });
             let object = case.as_object().expect("object");
             assert_eq!(
-                validate_source_failure(object, &object["source_failure"]),
+                validate_source_failure(object, &object["sourceFailure"]),
                 Ok(())
             );
         }
@@ -6039,7 +6116,7 @@ mod tests {
             classify_observed_category(&category, &PublicValue::String("arbitrary".to_owned())),
             None
         );
-        let case = serde_json::json!({"expected_value": "arbitrary"});
+        let case = serde_json::json!({"expectedValue": "arbitrary"});
         let classified = classify_expected_result(case.as_object().expect("object"), &[])
             .expect("a generic string remains classifiable");
         assert_eq!(classified.value_classes, vec![ValueClass::String]);
@@ -6080,9 +6157,9 @@ mod tests {
     #[test]
     fn public_unavailability_requires_an_extraction_failure() {
         let case = serde_json::json!({
-            "expected_public_problem": "evidence.unavailable",
-            "derivation_runs": false,
-            "signed_success": false
+            "expectedPublicProblem": "evidence.unavailable",
+            "derivationRuns": false,
+            "signedSuccess": false
         });
         let case = case.as_object().expect("object");
         assert!(validate_case_outcome(
@@ -6113,9 +6190,9 @@ mod tests {
     #[test]
     fn service_unavailability_requires_an_internal_kernel_failure() {
         let case = serde_json::json!({
-            "expected_public_problem": "service.unavailable",
-            "derivation_runs": true,
-            "signed_success": false
+            "expectedPublicProblem": "service.unavailable",
+            "derivationRuns": true,
+            "signedSuccess": false
         });
         let case = case.as_object().expect("object");
         assert_eq!(
@@ -6140,14 +6217,14 @@ mod tests {
     fn unresolved_lookup_rejects_derivation_or_signed_success_claims() {
         for declaration in [
             serde_json::json!({
-                "expected_lookup": "no_match",
-                "expected_public_problem": "evidence.unavailable",
-                "derivation_runs": true
+                "expectedLookup": "no_match",
+                "expectedPublicProblem": "evidence.unavailable",
+                "derivationRuns": true
             }),
             serde_json::json!({
-                "expected_lookup": "no_match",
-                "expected_public_problem": "evidence.unavailable",
-                "signed_success": true
+                "expectedLookup": "no_match",
+                "expectedPublicProblem": "evidence.unavailable",
+                "signedSuccess": true
             }),
         ] {
             assert!(validate_case_outcome(
@@ -6779,9 +6856,9 @@ mod tests {
     #[test]
     fn privacy_expectations_check_exact_projected_strings() {
         let expectation = serde_json::json!({
-            "evidence_contains": ["urn:example:concept", "subject"],
-            "evidence_excludes": ["raw-source-value"],
-            "diagnostics_exclude": ["selector-value"]
+            "evidenceContains": ["urn:example:concept", "subject"],
+            "evidenceExcludes": ["raw-source-value"],
+            "diagnosticsExclude": ["selector-value"]
         });
         let projection = serde_json::json!({
             "subjectRoles": ["subject"],
@@ -6816,9 +6893,9 @@ mod tests {
     #[test]
     fn privacy_expectations_check_the_explained_trace_the_run_would_print() {
         let expectation = serde_json::json!({
-            "evidence_contains": [],
-            "evidence_excludes": [],
-            "diagnostics_exclude": ["selector-value"]
+            "evidenceContains": [],
+            "evidenceExcludes": [],
+            "diagnosticsExclude": ["selector-value"]
         });
         let expectation = expectation.as_object().expect("expectation object");
         let projection = serde_json::json!({});

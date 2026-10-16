@@ -1,7 +1,8 @@
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: absent-optional-action-inputs, version: "1", defaultLanguage: en, canonicalBaseIri: https://absent-optional-action-inputs.example.test}
-entities:
+datasets: [{id: test-dataset}]
+recordTypes:
   - id: entry
     primaryDataset: test-dataset
     route: entries
@@ -14,27 +15,33 @@ entities:
       - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
 actions:
   - id: create-entry
+    execution: {mode: immediate}
     inputs:
       - {id: label, type: string, maximumLength: 40, required: true, classification: internal}
       - {id: jurisdiction, type: string, maximumLength: 20, required: true, classification: internal}
       - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
       - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
-    effects:
-      - id: created
-        target: {entity: entry}
-        operation: create
-        set: {label: {fromField: label}, jurisdiction: {fromField: jurisdiction}, note: {fromField: note}, related-entry: {fromField: related-entry}}
+    plan:
+      type: fixed
+      effects:
+        - id: created
+          target: {recordType: entry}
+          operation: create
+          set: {label: {fromInput: label}, jurisdiction: {fromInput: jurisdiction}, note: {fromInput: note}, related-entry: {fromInput: related-entry}}
   - id: update-entry
+    execution: {mode: immediate}
     inputs:
       - {id: entry, apiName: entryId, type: reference, target: entry, required: true, classification: internal}
       - {id: status, type: string, maximumLength: 20, required: true, classification: internal}
       - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
       - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
-    effects:
-      - id: updated
-        target: {fromField: entry}
-        operation: patch
-        set: {status: {fromField: status}, note: {fromField: note}, related-entry: {fromField: related-entry}}
+    plan:
+      type: fixed
+      effects:
+        - id: updated
+          target: {fromInput: entry}
+          operation: patch
+          set: {status: {fromInput: status}, note: {fromInput: note}, related-entry: {fromInput: related-entry}}
 accessProfiles:
   - id: registrar
     default: true
@@ -44,9 +51,9 @@ accessProfiles:
       actions:
         - action: create-entry
           operations: [invoke]
-          targets: [{entity: entry, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
+          targets: [{recordType: entry, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
           results: [created]
         - action: update-entry
           operations: [invoke]
-          targets: [{entity: entry, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
+          targets: [{recordType: entry, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
           results: [updated]

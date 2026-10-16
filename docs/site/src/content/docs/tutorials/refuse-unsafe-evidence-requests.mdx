@@ -1,6 +1,6 @@
 ---
 title: See Evidence Gateway refuse unsafe requests
-description: Cross the HTTP boundary with an unauthorized request, then prove that a modified assertion cannot be trusted.
+description: Cross the HTTP boundary with an unauthorized request and refuse a response changed after signing.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,67 +19,61 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
-You will reuse that project to observe two boundaries: Evidence Gateway denies a purpose the provider did
-not authorize, and the verifier rejects a response changed after signing.
-
-The commands below assume the project as the governed-value tutorial leaves it, with no access
-policy of its own. [Control caller access](../control-who-can-request-evidence/) comes first in the
-navigation and adds `access/` policies to that same project. Once they exist, every preparation
-names its application, so add `--client service-router` to the `request prepare` command below if
-you completed that tutorial. Without it, preparation stops with
-`evidencectl: the active project requires a registered client selected with --client`.
+Complete [Return a governed value](../return-a-governed-value/) before starting. You will reuse its
+normalized project to observe both sides of the trust boundary: Evidence Gateway denies a purpose
+outside the complete target grant, and the verifier rejects a response changed after signing.
 
 <QuickstartMeta
-  outcome="Two unsafe changes are refused without producing trusted evidence."
+  outcome="An unauthorized request and a tampered response are both refused."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The adult-status project after completing the governed-value tutorial',
-    'The materialized source mock from the first Evidence Gateway tutorial',
+    'The completed governed-value tutorial',
+    'Its normalized standalone project',
     'Python 3 and curl',
   ]}
 />
 
-## Restart the local boundary
+## Start the local boundary
 
-In one terminal, return to the `first-evidence-assertion` directory and serve the checked cases:
+In another terminal, start the synthetic source:
 
-```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
-evidencectl source mock serve --config adult-status/mocks/source.yaml
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
 ```
 
-In another terminal, enter the existing project and start a fresh local generation:
+In the project terminal, start a fresh Evidence generation:
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
-evidencectl dev start .
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
 ```
 
 ```text test-excerpt
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
+Evidence ready at http://127.0.0.1:18080
 ```
 
 ## Prepare one authorized request
 
-Prepare a normal age-bracket request. This records the exact verification expectations before any
-response exists:
+Preparation records the exact verification expectations and obtains authorization for the
+registered client. It performs no Evidence Gateway request and no source access.
 
 ```sh
-evidencectl request prepare age-bracket \
-  --purpose service-path-selection \
-  --subject person_id=person-123 \
+evidencectl request prepare adult-status \
+  --client tutorial-client \
+  --purpose age-check \
+  --subject subject:record-id=adult \
   --name refusal-check
 ```
 
-The provider configured `service-path-selection` for this question. Preparation also obtained a
-short-lived local token carrying the tutorial caller's configured authority claims. The token does
-not authorize one exact request. Evidence Gateway applies those claims to the request it receives.
-
 ## Change the purpose after preparation
 
-Copy the request, then change only its purpose:
+Copy the prepared request and change only its purpose:
 
 ```sh
 cp .evidence/requests/refusal-check/request.json unauthorized-request.json
@@ -89,19 +83,18 @@ from pathlib import Path
 
 path = Path("unauthorized-request.json")
 request = json.loads(path.read_text())
-request["purpose"] = "age-check"
-path.write_text(json.dumps(request))
+request["purpose"] = "undeclared-purpose"
+path.write_text(json.dumps(request) + "\n")
 PY
 ```
 
-The retained authorization does not grant `age-check` for this requirement. Send the changed
-request across the same HTTP boundary:
+Send the changed body with the same valid authorization:
 
 ```sh
 curl --silent --show-error \
   --config .evidence/requests/refusal-check/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
   --data-binary @unauthorized-request.json \
@@ -113,42 +106,39 @@ curl --silent --show-error \
 HTTP 403
 ```
 
-Inspect the public problem:
+Inspect only the public problem code:
 
 ```sh
-python3 -m json.tool unauthorized-response.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+problem = json.loads(Path("unauthorized-response.json").read_text())
+print(problem["code"])
+PY
 ```
 
-The response identifies only the closed `evidence.denied` problem and public trace ID:
-
-```json test-excerpt
-{
-  "code": "evidence.denied"
-}
+```text test-expect
+evidence.denied
 ```
 
-It
-does not reveal source facts, selector values, grants, or credentials. The registry terminal shows
-no new `GET /people/person-123` because authorization failed before source access.
+The response does not reveal the missing grant, source facts, selector, or credentials. Evidence
+Gateway applies the target's complete grant and refuses the request before source access.
 
-## Obtain and verify the authorized response
+## Verify the unchanged control request
 
-Now send the unchanged prepared request:
+Send the unchanged prepared body and verify the signed response:
 
 ```sh
-curl --silent --show-error \
+curl --silent --show-error --fail-with-body \
   --config .evidence/requests/refusal-check/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
   --data-binary @.evidence/requests/refusal-check/request.json \
   --output authorized-response.jws.json
-```
 
-Verify it against the expectations retained during preparation:
-
-```sh
 evidencectl verify authorized-response.jws.json \
   --context .evidence/requests/refusal-check/verification.json \
   --output authorized-response.verified.json
@@ -158,27 +148,27 @@ evidencectl verify authorized-response.jws.json \
 VERIFIED
 ```
 
-This is the control case. The authorized, unchanged response is trusted.
+This control request matches the definition, purpose, audience, representation, subject role,
+selector profile, and value origin fixed by the complete grant.
 
 ## Change the signed response
 
-Copy the flattened JWS and change one character in its signed payload:
+Change one byte of the signed payload in a copy:
 
 ```sh
-cp authorized-response.jws.json tampered-response.jws.json
 python3 - <<'PY'
 import json
 from pathlib import Path
 
-path = Path("tampered-response.jws.json")
-document = json.loads(path.read_text())
+source = Path("authorized-response.jws.json")
+document = json.loads(source.read_text())
 payload = document["payload"]
 document["payload"] = ("A" if payload[0] != "A" else "B") + payload[1:]
-path.write_text(json.dumps(document))
+Path("tampered-response.jws.json").write_text(json.dumps(document) + "\n")
 PY
 ```
 
-Try to verify the changed response:
+Verification must fail and must not create trusted output:
 
 ```sh test-exit="1"
 evidencectl verify tampered-response.jws.json \
@@ -190,42 +180,20 @@ evidencectl verify tampered-response.jws.json \
 evidencectl: Evidence response verification failed
 ```
 
-Verification fails without publishing a trusted payload: no `tampered-response.verified.json`
-appears. Your application must make decisions only from the verifier output, never from an
-unverified response body.
+Application decisions must use verifier output, never an unverified response body.
 
 ## Clean up
 
-Stop the local services, then remove the stopped generation so the next tutorial starts from a
-clean project:
-
 ```sh
-evidencectl dev stop
-evidencectl dev clean
+evidencectl dev stop .
+evidencectl audit show --last-operation
+evidencectl dev clean .
 ```
 
-```text test-expect
-Local Evidence stopped
-Removed stopped local Evidence state
-```
-
-This preserves your editable questions, derivations, keys, and the request artifacts under
-`.evidence/requests/`, which [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
-reads. It also leaves `.evidence/failed-start`, where a start that never reached readiness keeps its
-logs, so a failure you have not read yet survives the cleanup.
-
-Return to the registry terminal and press `Ctrl+C`.
-
-## What you proved
-
-- A valid access token does not widen the provider's authorized purpose.
-- Authorization failure happens before the protected source is called.
-- A signed response cannot be changed without invalidating its signature.
-- Only verified output is safe for an application to consume.
+The tutorial runner stops the source. If you started it by hand, press `Ctrl+C` in its terminal.
 
 ## Next
 
-- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
-- [Connect an institution source](../connect-an-institution-source/)
+- [Control who can request Evidence](../control-who-can-request-evidence/)
 - [Configure Evidence Gateway](../../configure/evidence/)
 - [Review the Evidence Gateway security model](../../security/evidence/)

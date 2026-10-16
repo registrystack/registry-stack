@@ -67,6 +67,7 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 
 fn project_schema() -> Result<Value, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RegistryProject))?;
+    local_value_type_use_schemas(&mut derived);
     for (property, expected) in [
         ("apiVersion", AUTHORING_API_VERSION),
         ("kind", AUTHORING_KIND),
@@ -81,11 +82,86 @@ fn project_schema() -> Result<Value, serde_json::Error> {
     Ok(derived)
 }
 
+/// Local scalar constraints are resolved before typed decoding. Describe that
+/// authored alternative beside the inline field types the compiler normalizes.
+fn local_value_type_use_schemas(schema: &mut Value) {
+    let Some(definitions) = schema.get_mut("$defs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (name, definition) in definitions.iter_mut() {
+        if name.ends_with("FieldSourceSchema") {
+            if let Some(properties) = definition
+                .get_mut("properties")
+                .and_then(Value::as_object_mut)
+            {
+                properties.insert(
+                    "display".to_owned(),
+                    serde_json::json!({"$ref":"#/$defs/DisplaySource"}),
+                );
+                if name == "ReferenceFieldSourceSchema" {
+                    properties.insert("relationship".to_owned(), serde_json::json!({
+                        "type":"object","additionalProperties":false,
+                        "properties":{"inverseName":{"type":"string","pattern":"^[a-z][A-Za-z0-9]*$"}}
+                    }));
+                }
+            }
+        }
+    }
+    let named_field = serde_json::json!({
+        "type":"object", "additionalProperties":false,
+        "required":["id","typeRef","classification"],
+        "properties":{
+            "id":{"$ref":"#/$defs/LocalId"},
+            "apiName":{"type":"string"},
+            "typeRef":{"$ref":"#/$defs/LocalId"},
+            "required":{"type":"boolean","default":false},
+            "classification":{"$ref":"#/$defs/Classification"},
+            "display":{"$ref":"#/$defs/DisplaySource"}
+        }
+    });
+    if let Some(branches) = definitions
+        .get_mut("FieldSource")
+        .and_then(|field| field.get_mut("anyOf"))
+        .and_then(Value::as_array_mut)
+    {
+        let mut persisted = named_field.clone();
+        let properties = persisted["properties"]
+            .as_object_mut()
+            .expect("named field properties");
+        properties.insert("pattern".to_owned(), serde_json::json!({"type":"string"}));
+        properties.insert(
+            "encrypted".to_owned(),
+            serde_json::json!({"type":"boolean","default":false}),
+        );
+        properties.insert(
+            "lookup".to_owned(),
+            serde_json::json!({"$ref":"#/$defs/FieldLookupSource"}),
+        );
+        properties.insert(
+            "validTimeRole".to_owned(),
+            serde_json::json!({"$ref":"#/$defs/ValidTimeRole"}),
+        );
+        properties.insert(
+            "relationship".to_owned(),
+            serde_json::json!({
+                "type":"object","additionalProperties":false,
+                "properties":{"inverseName":{"type":"string","pattern":"^[a-z][A-Za-z0-9]*$"}}
+            }),
+        );
+        branches.push(persisted);
+    }
+    if let Some(input) = definitions.get_mut("ActionInputSource") {
+        let inline = input.take();
+        *input = serde_json::json!({"anyOf":[inline,named_field]});
+    }
+}
+
 /// The module schema with the header every `module.yaml` opens with. The
 /// header is checked by the reader and is not a member of the module the
 /// compiler reads, so the derived schema gains it here.
 fn module_schema() -> Result<Value, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RegistryModule))?;
+    local_value_type_use_schemas(&mut derived);
     let Some(object) = derived.as_object_mut() else {
         return Ok(derived);
     };
@@ -456,7 +532,7 @@ mod tests {
                     .expect("the schema is JSON");
             let mut found = Vec::new();
             embedded_schema_members(&document, "", &mut found);
-            assert_eq!(found.len(), 3, "{file}: {found:#?}");
+            assert_eq!(found.len(), 4, "{file}: {found:#?}");
             for (pointer, member) in found {
                 assert_eq!(
                     member.get("x-registry-foreign"),
@@ -539,7 +615,7 @@ mod tests {
         let mut extension = serde_json::json!({
             "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
             "id": "notifications", "version": "1.0.0",
-            "extendEntities": [{"entity": "record", "hooks": [{
+            "extendRecordTypes": [{"recordType": "record", "hooks": [{
                 "phase": "after",
                 "id": "record-labelled-v1", "trigger": "patched", "projection": ["label"],
                 "when": {"type": "fields", "changed": ["label"]},
@@ -547,20 +623,20 @@ mod tests {
             }]}]
         });
         assert!(schema.is_valid(&extension));
-        extension["extendEntities"][0]["hooks"][0]["handler"]["url"] =
+        extension["extendRecordTypes"][0]["hooks"][0]["handler"]["url"] =
             Value::String("https://example.com/events".into());
         assert!(!schema.is_valid(&extension));
 
         let mut module_with_entity = serde_json::json!({
             "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
             "id": "records", "version": "1",
-            "entities": [{
+            "recordTypes": [{
                 "id": "record", "primaryDataset": "records",
                 "route": "records", "mutationMode": "create-only"
             }]
         });
         assert!(schema.is_valid(&module_with_entity));
-        module_with_entity["entities"][0]
+        module_with_entity["recordTypes"][0]
             .as_object_mut()
             .expect("entity is an object")
             .remove("primaryDataset");
@@ -657,7 +733,7 @@ mod tests {
         assert!(!schema.is_valid(&missing_iri));
 
         let mut missing_dataset = fixture("asset-site-placement");
-        missing_dataset["entities"][0]
+        missing_dataset["recordTypes"][0]
             .as_object_mut()
             .expect("entity is an object")
             .remove("primaryDataset");
@@ -678,12 +754,12 @@ mod tests {
         assert!(!schema.is_valid(&old_purposes));
 
         let mut old_actions = fixture("asset-site-placement");
-        let operations = old_actions["accessProfiles"][0]["permissions"]["entities"][0]
+        let operations = old_actions["accessProfiles"][0]["permissions"]["records"][0]
             .as_object_mut()
             .expect("access permission is an object")
             .remove("operations")
             .expect("fixture uses canonical operations");
-        old_actions["accessProfiles"][0]["permissions"]["entities"][0]["actions"] = operations;
+        old_actions["accessProfiles"][0]["permissions"]["records"][0]["actions"] = operations;
         assert!(!schema.is_valid(&old_actions));
     }
 
@@ -692,7 +768,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("business");
-        instance["entities"][0]["accessProfiles"] = serde_json::json!([{
+        instance["recordTypes"][0]["accessProfiles"] = serde_json::json!([{
             "id": "entity-local-reader",
             "principalClaim": "sub",
             "requiredScopes": ["registry.read"],
@@ -740,7 +816,7 @@ mod tests {
             ("operations", serde_json::json!(["list"])),
             ("operations", serde_json::json!(["read-releases", "list"])),
             ("rowBoundaries", serde_json::json!("unrestricted")),
-            ("entity", serde_json::json!("permit")),
+            ("recordType", serde_json::json!("permit")),
         ] {
             let mut instance = facility.clone();
             instance["accessProfiles"][reader]["permissions"]["datasets"][0][member] =
@@ -752,7 +828,7 @@ mod tests {
         }
 
         let mut entity_permission = facility.clone();
-        entity_permission["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
+        entity_permission["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
             serde_json::json!(["list", "read-live"]);
         assert!(
             !schema.is_valid(&entity_permission),
@@ -783,7 +859,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&document).expect("the schema is JSON");
         assert!(parsed["$defs"].get("AccessPermissionSource").is_none());
         for (group, item) in [
-            ("entities", "EntityPermissionSource"),
+            ("records", "EntityPermissionSource"),
             ("actions", "ActionPermissionSource"),
             ("datasets", "DatasetPermissionSource"),
         ] {
@@ -795,7 +871,7 @@ mod tests {
         }
 
         let permissions = &facility["accessProfiles"][0]["permissions"];
-        let entity = permissions["entities"][0].clone();
+        let entity = permissions["records"][0].clone();
         let dataset = permissions["datasets"][0].clone();
 
         let mut one_list = facility.clone();
@@ -809,7 +885,7 @@ mod tests {
         for (group, misplaced) in [
             ("actions", &entity),
             ("datasets", &entity),
-            ("entities", &dataset),
+            ("records", &dataset),
             ("actions", &dataset),
         ] {
             let mut instance = facility.clone();
@@ -822,7 +898,7 @@ mod tests {
         }
 
         let mut unknown_group = facility.clone();
-        unknown_group["accessProfiles"][0]["permissions"]["records"] = serde_json::json!([]);
+        unknown_group["accessProfiles"][0]["permissions"]["entities"] = serde_json::json!([]);
         assert!(!schema.is_valid(&unknown_group), "an unknown group");
 
         let mut none = facility;
@@ -835,7 +911,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["fields"]
+        instance["recordTypes"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({
@@ -844,12 +920,12 @@ mod tests {
                 "precision":6,
                 "classification":"internal"
             }));
-        instance["entities"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
-        instance["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"]
+        instance["recordTypes"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
+        instance["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(Value::String("location".to_owned()));
-        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"] = serde_json::json!({
+        instance["accessProfiles"][0]["permissions"]["records"][0]["spatialQueries"] = serde_json::json!({
             "bbox":{
                 "maximumLongitudeSpanDegrees":0.25,
                 "maximumLatitudeSpanDegrees":1.5
@@ -857,7 +933,7 @@ mod tests {
         });
         assert!(schema.is_valid(&instance));
 
-        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"]["bbox"]
+        instance["accessProfiles"][0]["permissions"]["records"][0]["spatialQueries"]["bbox"]
             ["geometryField"] = Value::String("location".to_owned());
         assert!(!schema.is_valid(&instance));
     }
@@ -867,7 +943,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["fields"][0]["precision"] = Value::from(2_u64);
+        instance["recordTypes"][0]["fields"][0]["precision"] = Value::from(2_u64);
 
         assert!(!schema.is_valid(&instance));
     }
@@ -877,7 +953,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["fields"][0]
+        instance["recordTypes"][0]["fields"][0]
             .as_object_mut()
             .expect("the field is an object")
             .remove("maximumLength");
@@ -890,7 +966,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["fields"][0]["type"] = Value::String("bytes".to_owned());
+        instance["recordTypes"][0]["fields"][0]["type"] = Value::String("bytes".to_owned());
 
         assert!(!schema.is_valid(&instance));
     }
@@ -899,7 +975,7 @@ mod tests {
     fn schema_accepts_the_minimal_tagged_event_and_webhook_shape() {
         let schema = compile(&schema_document());
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["hooks"] = serde_json::json!([{
+        instance["recordTypes"][0]["hooks"] = serde_json::json!([{
             "phase": "after",
             "id": "asset-created-v1",
             "trigger": "created",
@@ -918,7 +994,7 @@ mod tests {
     fn schema_rejects_per_event_delivery_policy() {
         let schema = compile(&schema_document());
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["hooks"] = serde_json::json!([{
+        instance["recordTypes"][0]["hooks"] = serde_json::json!([{
             "phase": "after",
             "id": "asset-created-v1",
             "trigger": "created",
@@ -982,6 +1058,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "runtime")]
     #[test]
     fn runtime_schema_declares_the_published_dialect_identifier_and_title() {
         let document = runtime_schema_document();
@@ -1064,11 +1141,11 @@ mod tests {
                 Value::from(300_u64),
             ),
             (
-                "/properties/eventDelivery/default/payloadRetentionDays",
+                "/properties/retention/default/hookPayloadRetentionDays",
                 Value::from(7_u64),
             ),
             (
-                "/properties/idempotency/default/receiptRetentionDays",
+                "/properties/retention/default/receiptRetentionDays",
                 Value::from(7_u64),
             ),
             (
@@ -1158,14 +1235,14 @@ mod tests {
             &schema,
             "payload retention above runtime maximum",
             |instance| {
-                instance["eventDelivery"] = serde_json::json!({"payloadRetentionDays": 31});
+                instance["retention"] = serde_json::json!({"hookPayloadRetentionDays": 31});
             },
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "receipt horizon above runtime maximum",
             |instance| {
-                instance["idempotency"] = serde_json::json!({"receiptRetentionDays": 366});
+                instance["retention"] = serde_json::json!({"receiptRetentionDays": 366});
             },
         );
         assert_schema_rejects_parser_refused_runtime(

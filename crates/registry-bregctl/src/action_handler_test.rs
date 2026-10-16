@@ -6,14 +6,14 @@ use registry_breg::action_handler::{
     ActionHandlerOutcome,
 };
 use registry_breg::model::{
-    CompiledActionEffect, CompiledActionHandler, CompiledActionHandlerKind, CompiledActionMutation,
-    CompiledActionTargetBinding, CompiledActionValue,
+    CompiledPlanEffect, CompiledPlanFunction, CompiledPlanFunctionKind, CompiledPlanMutation,
+    CompiledPlanTargetBinding, CompiledPlanValue,
 };
 
 pub(super) fn run(
-    args: &ProjectPlannerTestArgs,
+    args: &ProjectActionTestArgs,
     compiled: &CompiledRegistry,
-) -> Result<PlannerTestSuccessReport, FailureReport> {
+) -> Result<ActionTestSuccessReport, FailureReport> {
     let id = args
         .action
         .as_deref()
@@ -77,15 +77,15 @@ pub(super) fn run(
             )
         })?;
         if let Some((index, field)) = state.mismatch {
-            return Err(planner_test_failure(
-                "planner-test.evidence.mismatch",
+            return Err(action_test_failure(
+                "action-test.evidence.mismatch",
                 &format!("expect/evidenceCalls/{index}/{field}"),
                 "the helper call differs from the ordered synthetic transcript",
             ));
         }
         if evaluation.is_ok() && state.next != state.calls.len() {
-            return Err(planner_test_failure(
-                "planner-test.evidence.missing",
+            return Err(action_test_failure(
+                "action-test.evidence.missing",
                 "expect/evidenceCalls",
                 "the handler omitted an expected helper call",
             ));
@@ -123,11 +123,11 @@ pub(super) fn run(
             error.message.to_owned()
         };
         source_failure(
-            "project planner-test",
+            "project action-test",
             diagnostic(error.kind.code(), &path, &message),
-            DiagnosticArtifact::PlannerTest,
+            DiagnosticArtifact::ActionTest,
             if input_error {
-                SuggestedAction::CorrectPlannerTestInput
+                SuggestedAction::CorrectActionTestInput
             } else {
                 SuggestedAction::CorrectActionHandler
             },
@@ -152,8 +152,8 @@ pub(super) fn run(
     let assertions_passed = if let Some(mut expected) = expected {
         normalize(&mut expected);
         if let Some(path) = mismatch_path(&actual, &expected, "expect") {
-            return Err(planner_test_failure(
-                "planner-test.expect.mismatch",
+            return Err(action_test_failure(
+                "action-test.expect.mismatch",
                 &path,
                 "the computed outcome differs from the expected outcome",
             ));
@@ -169,17 +169,17 @@ pub(super) fn run(
                 .mutations
                 .iter()
                 .map(|mutation| match mutation {
-                    CompiledActionMutation::Set { field, .. }
-                    | CompiledActionMutation::Clear { field } => field.clone(),
+                    CompiledPlanMutation::Set { field, .. }
+                    | CompiledPlanMutation::Clear { field } => field.clone(),
                 })
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            PlannerTestEffectReport {
+            ActionTestEffectReport {
                 id: effect.id.clone(),
                 target_kind: match effect.target.binding {
-                    CompiledActionTargetBinding::Create => "reserved-create",
-                    CompiledActionTargetBinding::Existing { .. } => "existing",
+                    CompiledPlanTargetBinding::Create => "reserved-create",
+                    CompiledPlanTargetBinding::Existing { .. } => "existing",
                 },
                 operation: operation_wire_name(effect.operation),
                 fields,
@@ -187,17 +187,17 @@ pub(super) fn run(
             }
         })
         .collect::<Vec<_>>();
-    Ok(PlannerTestSuccessReport {
+    Ok(ActionTestSuccessReport {
         ok: true,
-        command: "project planner-test",
+        command: "project action-test",
         compiled_revision: compiled.revision().to_owned(),
-        request_entity: String::new(),
+        action_id: String::new(),
         action: Some(action.id.clone()),
         refusal,
         assertions_passed,
         planner: None,
         handler: Some(identity),
-        counts: PlannerTestCountReport {
+        counts: ActionTestCountReport {
             effects: effects.len(),
             field_mutations: effects.iter().map(|e| e.mutations.len()).sum(),
             dependencies: effects.iter().map(|e| e.depends_on.len()).sum(),
@@ -217,23 +217,23 @@ pub(super) fn run(
 /// keeps the refusal a statement about the command rather than an execution
 /// failure that reads like a fault in the authored handler.
 fn handler_identity(
-    handler: &CompiledActionHandler,
-) -> Result<PlannerTestIdentityReport, FailureReport> {
-    if handler.kind != CompiledActionHandlerKind::Rhai {
-        return Err(planner_test_failure(
-            "planner-test.handler.backend",
+    handler: &CompiledPlanFunction,
+) -> Result<ActionTestIdentityReport, FailureReport> {
+    if handler.kind != CompiledPlanFunctionKind::Rhai {
+        return Err(action_test_failure(
+            "action-test.handler.backend",
             "action",
             "the local handler test accepts only Rhai-backed actions; run WASM handler fixtures through the handler SDK's admission proof",
         ));
     }
     let script_sha256 = handler.script_sha256.clone().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.handler.identity",
+        action_test_failure(
+            "action-test.handler.identity",
             "action",
             "the compiled Rhai handler carries no script hash",
         )
     })?;
-    Ok(PlannerTestIdentityReport {
+    Ok(ActionTestIdentityReport {
         kind: "rhai",
         abi: handler.abi.clone(),
         script_sha256,
@@ -305,7 +305,7 @@ fn take_evidence_calls(expected: Option<&mut Value>) -> Result<Vec<SyntheticCall
 fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
     let bytes = read_bounded_regular_file(
         path,
-        "planner-test.file.unavailable",
+        "action-test.file.unavailable",
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
     .map_err(|error| {
@@ -317,7 +317,7 @@ fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
         failure(location, message)
     })?;
     let value = parse_json_strict(&bytes).map_err(|_| failure(location, "provide strict JSON"))?;
-    if !bounded_planner_test_value(&value, 0) {
+    if !bounded_action_test_value(&value, 0) {
         return Err(failure(
             location,
             "the fixture exceeds the closed value bounds",
@@ -327,10 +327,10 @@ fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
 }
 
 fn failure(path: &str, message: &str) -> FailureReport {
-    planner_test_failure("planner-test.action.invalid", path, message)
+    action_test_failure("action-test.action.invalid", path, message)
 }
 
-fn exact_effects(effects: &[CompiledActionEffect]) -> Value {
+fn exact_effects(effects: &[CompiledPlanEffect]) -> Value {
     let effects = effects
         .iter()
         .map(|effect| {
@@ -338,12 +338,12 @@ fn exact_effects(effects: &[CompiledActionEffect]) -> Value {
             let mut clear = Vec::new();
             for mutation in &effect.mutations {
                 match mutation {
-                    CompiledActionMutation::Clear { field } => clear.push(field.clone()),
-                    CompiledActionMutation::Set { field, value } => {
+                    CompiledPlanMutation::Clear { field } => clear.push(field.clone()),
+                    CompiledPlanMutation::Set { field, value } => {
                         let value = match value {
-                            CompiledActionValue::Literal { value } => value.clone(),
-                            CompiledActionValue::FromInput { input } => json!({"fromField": input}),
-                            CompiledActionValue::FromEffect { effect, .. } => {
+                            CompiledPlanValue::Literal { value } => value.clone(),
+                            CompiledPlanValue::FromInput { input } => json!({"fromInput": input}),
+                            CompiledPlanValue::FromEffect { effect, .. } => {
                                 json!({"fromEffect": effect})
                             }
                         };
@@ -450,11 +450,13 @@ mod tests {
     const WASM_HANDLER_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project:
-  id: wasm-planner-test-fixture
+  id: wasm-action-test-fixture
   version: "1"
   defaultLanguage: en
-  canonicalBaseIri: https://wasm-planner-test-fixture.example.test
-entities:
+  canonicalBaseIri: https://wasm-action-test-fixture.example.test
+datasets:
+  - id: test-dataset
+recordTypes:
   - id: person
     primaryDataset: test-dataset
     route: people
@@ -462,18 +464,25 @@ entities:
     fields:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
+functions:
+  - id: register-person-plan
+    runtime: wasm
+    source: wasm/handler.wasm
+    entrypoint: handle
+    abi: registry.action-plan/v1
 actions:
   - id: register-person
     inputs:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
-    handler:
-      type: wasm
-      module: wasm/handler.wasm
-      abi: registry.action-handler/v1
+    execution: {mode: immediate}
+    plan:
+      type: function
+      function: register-person-plan
+      inputs: [person-code, legal-name]
       writes:
         - id: person
-          target: {entity: person}
+          target: {recordType: person}
           operation: create
           fields: [person-code, legal-name]
 accessProfiles:
@@ -486,7 +495,7 @@ accessProfiles:
         - action: register-person
           operations: [invoke]
           targets:
-            - {entity: person, rowBoundaries: unrestricted}
+            - {recordType: person, rowBoundaries: unrestricted}
           results: [person]
 "#;
 
@@ -507,7 +516,7 @@ accessProfiles:
             wat::parse_str(MINIMAL_ABI_WAT).expect("the wat fixture assembles"),
         )
         .unwrap();
-        let compiled = compile(&root, ProfileArg::Authoring, "project planner-test")
+        let compiled = compile(&root, ProfileArg::Authoring, "project action-test")
             .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
         let input = root.join("input.json");
         fs::write(
@@ -515,17 +524,15 @@ accessProfiles:
             br#"{"person-code":"private-code-canary","legal-name":"private-name-canary"}"#,
         )
         .unwrap();
-        let args = ProjectPlannerTestArgs {
+        let args = ProjectActionTestArgs {
             project: root.clone(),
             action: Some("register-person".into()),
             input: Some(input),
             expect: None,
-            entity: None,
-            request: None,
         };
         let failure = run(&args, &compiled).expect_err("a WASM handler is not executed locally");
         let diagnostic = &failure.diagnostics[0];
-        assert_eq!(diagnostic.code, "planner-test.handler.backend");
+        assert_eq!(diagnostic.code, "action-test.handler.backend");
         assert_eq!(diagnostic.path, "action");
         assert!(diagnostic.message.contains("Rhai"), "{diagnostic:?}");
         let rendered = serde_json::to_string(&failure).unwrap();
@@ -540,8 +547,12 @@ accessProfiles:
     /// to produce rather than a panic or a mislabelled digest.
     #[test]
     fn handler_identity_names_the_rhai_backend_and_refuses_every_other_one() {
-        let mut handler = CompiledActionHandler {
-            kind: CompiledActionHandlerKind::Rhai,
+        let mut handler = CompiledPlanFunction {
+            kind: CompiledPlanFunctionKind::Rhai,
+            entrypoint: "calculate".into(),
+            bound_inputs: Default::default(),
+            capabilities: Default::default(),
+            id: "calculate".into(),
             source_module: None,
             script_path: "scripts/register-person.rhai".into(),
             module_path: String::new(),
@@ -563,12 +574,12 @@ accessProfiles:
 
         handler.script_sha256 = None;
         let failure = handler_identity(&handler).expect_err("a Rhai handler carries its hash");
-        assert_eq!(failure.diagnostics[0].code, "planner-test.handler.identity");
+        assert_eq!(failure.diagnostics[0].code, "action-test.handler.identity");
 
-        handler.kind = CompiledActionHandlerKind::Wasm;
+        handler.kind = CompiledPlanFunctionKind::Wasm;
         handler.module_sha256 = Some("sha256:module-digest-canary".into());
         let failure = handler_identity(&handler).expect_err("a WASM handler is not executed here");
-        assert_eq!(failure.diagnostics[0].code, "planner-test.handler.backend");
+        assert_eq!(failure.diagnostics[0].code, "action-test.handler.backend");
         assert!(!serde_json::to_string(&failure)
             .unwrap()
             .contains("sha256:module-digest-canary"));
@@ -618,7 +629,7 @@ accessProfiles:
             .join("../../products/breg/acceptance/farmer-landholding-evidence")
             .canonicalize()
             .unwrap();
-        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
             .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
         for name in [
             "status-only",
@@ -627,7 +638,7 @@ accessProfiles:
             "blank",
             "zero-call",
         ] {
-            let args = ProjectPlannerTestArgs {
+            let args = ProjectActionTestArgs {
                 project: project.clone(),
                 action: Some(
                     if name == "zero-call" {
@@ -639,8 +650,6 @@ accessProfiles:
                 ),
                 input: Some(project.join(format!("examples/{name}.input.json"))),
                 expect: Some(project.join(format!("examples/{name}.expect.json"))),
-                entity: None,
-                request: None,
             };
             let report = run(&args, &compiled).unwrap_or_else(|failure| {
                 panic!("{name}: {}", serde_json::to_string(&failure).unwrap())
@@ -655,7 +664,7 @@ accessProfiles:
             .join("../../products/breg/acceptance/farmer-landholding-evidence")
             .canonicalize()
             .unwrap();
-        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
             .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
         let directory = tempfile::tempdir().unwrap();
         let expect = directory.path().canonicalize().unwrap().join("expect.json");
@@ -664,9 +673,9 @@ accessProfiles:
         )
         .unwrap();
         for (kind, code) in [
-            ("unexpected", "planner-test.evidence.mismatch"),
-            ("selectors", "planner-test.evidence.mismatch"),
-            ("missing", "planner-test.evidence.missing"),
+            ("unexpected", "action-test.evidence.mismatch"),
+            ("selectors", "action-test.evidence.mismatch"),
+            ("missing", "action-test.evidence.missing"),
         ] {
             let mut fixture = base.clone();
             match kind {
@@ -675,13 +684,11 @@ accessProfiles:
                 _ => fixture["evidenceCalls"].as_array_mut().unwrap().push(json!({"capability":"farmer-category","selectors":{"farmer":{"farmer-number":"TH-00042"}},"response":{"category":"private-category-canary"}})),
             }
             fs::write(&expect, serde_json::to_vec(&fixture).unwrap()).unwrap();
-            let args = ProjectPlannerTestArgs {
+            let args = ProjectActionTestArgs {
                 project: project.clone(),
                 action: Some("register-landholding".into()),
                 input: Some(project.join("examples/status-only.input.json")),
                 expect: Some(expect.clone()),
-                entity: None,
-                request: None,
             };
             let failure = run(&args, &compiled).expect_err("transcript mismatch must fail");
             assert_eq!(failure.diagnostics[0].code, code);
@@ -702,7 +709,7 @@ accessProfiles:
             .join("../../products/breg/acceptance/farmer-landholding-evidence")
             .canonicalize()
             .unwrap();
-        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
             .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
         let directory = tempfile::tempdir().unwrap();
         let expect = directory.path().canonicalize().unwrap().join("expect.json");
@@ -718,13 +725,11 @@ accessProfiles:
             let mut fixture = base.clone();
             fixture["evidenceCalls"][0]["response"] = response;
             fs::write(&expect, serde_json::to_vec(&fixture).unwrap()).unwrap();
-            let args = ProjectPlannerTestArgs {
+            let args = ProjectActionTestArgs {
                 project: project.clone(),
                 action: Some("register-landholding".into()),
                 input: Some(project.join("examples/status-only.input.json")),
                 expect: Some(expect.clone()),
-                entity: None,
-                request: None,
             };
             let failure = run(&args, &compiled).expect_err("typed mock contract must fail");
             assert_eq!(
@@ -770,14 +775,14 @@ accessProfiles:
                 "expect.json",
             ],
         ] {
-            let mut arguments = vec!["bregctl", "project", "planner-test", "project"];
+            let mut arguments = vec!["bregctl", "project", "action-test", "project"];
             arguments.extend(flags);
             assert!(Cli::try_parse_from(arguments).is_err());
         }
         assert!(Cli::try_parse_from([
             "bregctl",
             "project",
-            "planner-test",
+            "action-test",
             "project",
             "--action",
             "register-person",
@@ -787,11 +792,10 @@ accessProfiles:
             "expect.json"
         ])
         .is_ok());
-        let help = Cli::try_parse_from(["bregctl", "project", "planner-test", "--help"])
+        let help = Cli::try_parse_from(["bregctl", "project", "action-test", "--help"])
             .unwrap_err()
             .to_string();
         for guidance in [
-            "pair with --request",
             "pair with --input",
             "With --action and --input",
             "without an HTTP envelope",
@@ -803,7 +807,7 @@ accessProfiles:
     #[test]
     fn action_handler_cli_asserts_computation_and_refusal_with_safe_reports() {
         let project = acceptance_project();
-        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
             .unwrap_or_else(|failure| {
                 panic!(
                     "fixture compilation failed: {}",
@@ -816,13 +820,11 @@ accessProfiles:
         let expect = root.join("expect.json");
         fs::write(&input, serde_json::to_vec(&json!({"identifier":"0123456789012","given-name":"  Mina  ","family-name":" Example "})).unwrap()).unwrap();
         fs::write(&expect, serde_json::to_vec(&json!({"effects":[{"id":"person","set":{"identifier":"0123456789012","display-name":"Mina Example"}}]})).unwrap()).unwrap();
-        let args = ProjectPlannerTestArgs {
+        let args = ProjectActionTestArgs {
             project,
             action: Some("register-person".into()),
             input: Some(input.clone()),
             expect: Some(expect.clone()),
-            entity: None,
-            request: None,
         };
         let report = run(&args, &compiled)
             .unwrap_or_else(|failure| panic!("evaluation failed: {}", failure.diagnostics[0].code));
@@ -837,7 +839,7 @@ accessProfiles:
         }
         fs::write(&expect, br#"{"effects":[]}"#).unwrap();
         let failure = run(&args, &compiled).expect_err("omitted expected effect is a mismatch");
-        assert_eq!(failure.diagnostics[0].code, "planner-test.expect.mismatch");
+        assert_eq!(failure.diagnostics[0].code, "action-test.expect.mismatch");
         fs::write(
             &input,
             br#"{"identifier":"0123456789012","given-name":"   ","family-name":" "}"#,
@@ -860,7 +862,7 @@ accessProfiles:
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_planner_test_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+            write_action_test_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
             ExitCode::SUCCESS
         );
         assert!(stderr.is_empty());
@@ -876,7 +878,7 @@ accessProfiles:
         report.refusal.as_mut().unwrap()["label"] = json!("safe\nFORGED\u{1b}[2J");
         let mut stdout = Vec::new();
         assert_eq!(
-            write_planner_test_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+            write_action_test_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
             ExitCode::SUCCESS
         );
         let human = String::from_utf8(stdout).unwrap();
@@ -888,17 +890,15 @@ accessProfiles:
     #[test]
     fn action_handler_input_errors_identify_declared_inputs_and_safe_repair() {
         let project = acceptance_project();
-        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
             .unwrap_or_else(|failure| panic!("fixture failed: {}", failure.diagnostics[0].code));
         let directory = tempfile::tempdir().unwrap();
         let input_path = directory.path().canonicalize().unwrap().join("input.json");
-        let args = ProjectPlannerTestArgs {
+        let args = ProjectActionTestArgs {
             project,
             action: Some("register-person".into()),
             input: Some(input_path.clone()),
             expect: None,
-            entity: None,
-            request: None,
         };
         for (input, expected_path) in [
             (
@@ -926,7 +926,7 @@ accessProfiles:
             assert_eq!(diagnostic.path, expected_path);
             assert_eq!(
                 diagnostic.suggested_action,
-                SuggestedAction::CorrectPlannerTestInput
+                SuggestedAction::CorrectActionTestInput
             );
             let rendered = serde_json::to_string(&failure).unwrap();
             assert!(!rendered.contains("private-key-canary"));

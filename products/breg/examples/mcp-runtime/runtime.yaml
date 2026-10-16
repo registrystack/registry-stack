@@ -20,6 +20,7 @@ resourceServer:
   maximumTokenLifetimeSeconds: 3600
 registry:
   baseUrl: https://registry.example.test/
+  # The source profile requires its trusted TaskGrant issuer and scoped read/Proposal powers.
   accessProfile: citizen-agent
   audience: urn:breg:citizen-address-correction
   scopes: [address-correction:self]
@@ -33,11 +34,10 @@ service:
   description: Correct the postal address the registry holds for you.
   disclosure: The assistant you use will see your current address and the correction you request.
   details:
-    entity: person-address
+    recordType: person-address
   application:
-    entity: address-correction-request
-    targetField: address
-    ownerField: owner
+    action: correct-address
+    targetInput: address
   reviewBaseUrl: https://review.example.test
 audit:
   hashKeyRef: secret:file/audit-key

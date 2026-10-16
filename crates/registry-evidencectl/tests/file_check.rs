@@ -133,12 +133,17 @@ fn a_file_with_a_member_its_format_does_not_define_is_refused() {
 #[test]
 fn a_file_of_no_known_format_is_refused_naming_the_formats() {
     let directory = tempfile::tempdir().expect("directory");
-    for (name, text) in [
+    for (name, text, code) in [
         (
             "unknown-kind.json",
             r#"{"apiVersion": "id.registrystack.org/formats/other/v1", "kind": "Other"}"#,
+            "config.wrong-kind",
         ),
-        ("no-kind.json", r#"{"name": "something"}"#),
+        (
+            "no-kind.json",
+            r#"{"name": "something"}"#,
+            "config.missing-envelope",
+        ),
     ] {
         let file = directory.path().join(name);
         fs::write(&file, text).expect("write");
@@ -146,10 +151,7 @@ fn a_file_of_no_known_format_is_refused_naming_the_formats() {
         let human = check_file(&file, &[]);
         assert_eq!(human.status.code(), Some(1), "{name}");
         let stderr = String::from_utf8_lossy(&human.stderr);
-        assert!(
-            stderr.contains("evidence.check.unknown-format"),
-            "{name}: {stderr}"
-        );
+        assert!(stderr.contains(code), "{name}: {stderr}");
         assert!(
             stderr.contains("EvidenceSourceResolution"),
             "{name}: {stderr}"
@@ -159,10 +161,7 @@ fn a_file_of_no_known_format_is_refused_naming_the_formats() {
         assert_eq!(json.status.code(), Some(1), "{name}");
         let report = json_report(&json);
         assert_eq!(report["status"], "refused", "{name}");
-        assert_eq!(
-            report["diagnostics"][0]["code"], "evidence.check.unknown-format",
-            "{name}"
-        );
+        assert_eq!(report["diagnostics"][0]["code"], code, "{name}");
     }
 }
 
@@ -292,4 +291,103 @@ fn check_help_says_the_project_is_required_unless_a_file_is_given() {
         help.contains("Required unless --file is given"),
         "check --help must say when PROJECT is required: {help}"
     );
+}
+
+#[test]
+fn access_client_checks_share_native_content_rules_without_local_registration_state() {
+    let source = example("evidence/examples/standalone/access/clients/example-caller.yaml");
+    let directory = tempfile::tempdir().expect("directory");
+    // The offline checker validates bytes even under a different filename.
+    let file = directory.path().join("reviewed-client.yaml");
+    let original = fs::read_to_string(&source).expect("access client example");
+    fs::write(&file, &original).unwrap();
+    let output = check_file(&file, &["--format", "json", "--deny-warnings"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(json_report(&output)["diagnostics"], serde_json::json!([]));
+
+    for (text, path) in [
+        (
+            original.replace(
+                "clientId: example-caller",
+                "clientId: INVALID-PRIVATE-CANARY",
+            ),
+            "/clientId",
+        ),
+        (
+            original.replace(
+                "principal: urn:registrystack:evidence:local:client:example-caller",
+                "principal: PRIVATE-CANARY",
+            ),
+            "/principal",
+        ),
+        (
+            original.replace(
+                "evidenceAudience: urn:example:audience:standalone-app",
+                "evidenceAudience: PRIVATE-CANARY",
+            ),
+            "/evidenceAudience",
+        ),
+        (
+            original.replace(
+                "accessProfiles:\n  - standalone-service",
+                "accessProfiles: []",
+            ),
+            "/accessProfiles",
+        ),
+        (
+            original.replace(
+                "keys:\n  - alg: ES256",
+                "keys:\n  - d: PRIVATE-CANARY\n    alg: ES256",
+            ),
+            "/keys/0",
+        ),
+        (
+            format!("{original}exchange:\n  kind: first-party\n  bootstrapScope: test\n"),
+            "/exchange",
+        ),
+    ] {
+        fs::write(&file, text).unwrap();
+        let output = check_file(&file, &["--format", "json"]);
+        assert_eq!(output.status.code(), Some(1), "{path}");
+        let report = json_report(&output);
+        assert_eq!(
+            report["diagnostics"][0]["code"], "evidence.access.invalid-client",
+            "{report}"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], path);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("PRIVATE-CANARY"));
+    }
+}
+
+#[test]
+fn access_client_offline_check_keeps_the_shared_document_byte_bound() {
+    let original = fs::read_to_string(example(
+        "evidence/examples/standalone/access/clients/example-caller.yaml",
+    ))
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("client.yaml");
+    let mut text = original;
+    text.push('#');
+    text.extend(std::iter::repeat_n('x', 1048575 - text.len()));
+    text.push('\n');
+    assert_eq!(text.len(), 1048576);
+    fs::write(&file, &text).unwrap();
+    assert_eq!(
+        check_file(&file, &["--format", "json"]).status.code(),
+        Some(0)
+    );
+    text.push('\n');
+    fs::write(&file, text).unwrap();
+    let output = check_file(&file, &["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    assert_eq!(report["diagnostics"][0]["code"], "yaml.too-large");
+    assert_eq!(report["diagnostics"][0]["path"], "");
+    assert!(report["diagnostics"][0]["source"]["line"].is_null());
 }

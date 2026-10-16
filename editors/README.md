@@ -30,15 +30,16 @@ cannot replace unsaved content.
 
 | Product | Project entry | Semantic navigation |
 |---|---|---|
-| Base Registry Engine | `registry.yaml` declaring `BRegProject` | Entities, fields, access profiles, actions, and authored modules |
-| Registry Casework | `casework.yaml` | Sources, queues, routing, review policies, and directory references |
+| Base Registry Engine | `registry.yaml` declaring `BRegProject` | Record types, datasets, fields, access profiles, Actions, Proposals, named Functions, and authored modules |
+| Registry Coordinator | `workflow.yaml` declaring `CoordinatorProject` | Workflow types, named Functions, Operation aliases, Steps and graph edges, Review outcomes, event triggers, and contained assets |
+| Registry Casework | `casework.yaml` | Review policies, queues, profiles, teams, read-only context providers, routing, clocks, task templates, fixtures, and directory references |
 | Registry Scheduling | `scheduling.yaml` | Services, locations, offerings, opening patterns, holiday sets, and fixture references |
 | Registry Messaging | `messaging.yaml` | Templates and versions, access profiles, providers, and template files |
 | Registry Discovery | `origins.yaml` | Origin and mapping declarations across the project |
 | Registry Manifest | `metadata.yaml`, or an explicitly selected document | Datasets, entities, fields, codelists, services, forms, and their references |
 | Registry Render | `manifest.yaml` declaring `RenderBundle` | Documents and their template, schema, and locale files |
 | Evidence wallet delivery | Explicitly selected configuration | Configuration sections and contained, configuration-relative key-file navigation |
-| Evidence | `evidence-project.yaml`, or the legacy OpenAPI/questions pair | Questions, sources, selectors, policies, facts, and authored file references |
+| Evidence | `evidence.yaml` declaring `EvidenceProject` | Assertion definitions, sources, selector profiles, named Functions, target grants, and authored assets |
 
 Each family uses its own names and scopes. A BReg `registry.yaml` never receives
 diagnostics from another product. Discovery's remote vocabulary identifiers are not unresolved
@@ -58,6 +59,7 @@ From the source checkout, use Python 3.11 or newer to prepare both editors:
 ```console
 python3 editors/configure.py breg /path/to/registry-project
 python3 editors/configure.py scheduling /path/to/scheduling-project
+python3 editors/configure.py coordinator /path/to/workflow-project
 python3 editors/configure.py manifest /path/to/metadata-project --document publication.yaml
 python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/wallet.yaml
 ```
@@ -75,7 +77,7 @@ Setup copies maintained schemas from this checkout and adds a **Registry Stack:
 check** task where the product supplies a validation command. Use **Tasks: Run
 Task** in VS Code or **task: spawn** in Zed. No validator is run automatically
 when a file opens. Casework publishes schemas for its project, runtime, fixture,
-simulation, holiday-set, and development clients files. Messaging publishes
+`holiday-sets/*.yaml` and `holiday-sets/*.yml`, and development clients files. Messaging publishes
 project, template, provider, and runtime schemas; its check task validates the
 whole project. Wallet delivery publishes a runtime schema. Scheduling publishes
 schemas for its project, records, fixture, and runtime files. Render maps its
@@ -83,6 +85,10 @@ bundle `manifest.yaml`, its `labels/*.yaml` tables, and a `runtime.yaml` beside
 them. Manifest maps the selected document to the metadata manifest schema and
 every `profile.yaml` below the project to the profile descriptor schema.
 Platform maps `task-connection.yaml` and checks it with `evidencectl dev check`.
+Coordinator maps `workflow.yaml`, its runtime files, and `scenarios.yaml`, and adds
+`coordinatorctl check --project <project>`. Its semantic index reads the authored
+workflow only; logical connections and producer event identifiers remain with
+the deployment and product validators.
 
 For multiple product directories in one workspace, pass `--workspace` with the
 ancestor directory. Schema mappings name the specific project's paths so one
@@ -93,16 +99,24 @@ the error identifies the file to resolve before retrying. Rerun setup from the
 matching checkout after upgrading. The generated setup contains local paths;
 regenerate it when moving a workspace.
 
-Evidence retains its canonical `tooling editor` schema generator.
-The shared helper invokes the matching Evidence CLI. Schema setup and
-CLI tasks can be used without installing the semantic extension.
+The shared helper copies Evidence's maintained schemas directly and owns its
+workspace settings. Evidence also provides standalone CLI-managed setup through
+`evidencectl tooling editor`. Rerun the setup command that owns your workspace
+configuration after upgrading. Shared setup preserves existing independent
+schema mappings and settings; the standalone CLI refuses customized settings
+rather than replacing them. Schema setup and CLI tasks can be used without
+installing the semantic extension.
+Evidence maps the normalized `evidence.yaml`, `*-target.yaml`, `target.yaml`,
+`targets/*/target.yaml`, `*-authority.yaml`, `authority.yaml`,
+`targets/*/authority.yaml`, `access/clients/*.yaml`, `fixtures/*.yaml`, and
+`mocks/source.yaml`, plus the maintained JSON source-resolution and client-profile formats.
 
 `evidence-deployment` configures an Evidence deployment project: the
 `runtime.yaml` the `evidence` runtime reads, beside its bundle in `bundle/`.
 Setup maps the runtime and bundle contracts to `runtime.yaml` and
 `bundle/evidence.yaml`, the code list schema to `bundle/codelists/*.yaml`, the
-fixture schema to `bundle/fixtures/*.yaml`, and the target governance schema to
-`governance.yaml`. It maps the two verification policy contracts by file name:
+fixture schema to `bundle/fixtures/*.yaml`. It maps the two verification policy
+contracts by file name:
 `verification*.policy.yaml` to the verification policy and
 `holder-bound*.policy.yaml` to the holder-bound verification policy. It adds an
 `evidence check --runtime-config runtime.yaml` task. The runtime, bundle, and
@@ -110,8 +124,9 @@ policy contracts are JSON Schema documents written in YAML.
 
 ## Install
 
-Project setup and editor installation are separate operations. Refresh a
-project's version-matched schema settings with its adopter CLI:
+Project setup and editor installation are separate operations. Use the shared
+helper in [Configure a project](#configure-a-project), or choose standalone CLI
+setup for an Evidence-only workspace. Rerun that chosen setup after upgrading:
 
 ```console
 evidencectl tooling editor /path/to/evidence-project
@@ -146,17 +161,14 @@ The same language server and editor launchers also serve an Evidence authoring p
 no separate Evidence editor integration: one client per workspace folder covers
 the product families it contains.
 
-A folder is an Evidence project root when it contains the `evidence-project.yaml` marker, or, for
-a project created before the marker existed, the legacy pair of a `source.openapi.yaml` file and a
-`questions` directory. Either form gets the same cross-file definitions, references,
-workspace/document symbols, and reference diagnostics over its authoring documents (selectors,
-questions, sources, access policies, and the schemas they cite) that a `registry.yaml` root
-gets for supported products.
+A folder is an Evidence project root when `evidence.yaml` declares the normalized
+`EvidenceProject` v1alpha1 format. It gets cross-file definitions, references,
+workspace/document symbols, and reference diagnostics over assertion definitions,
+sources, selector profiles, named Functions, target grants, and their authored assets.
 
 Project setup and schema refresh use `evidencectl`:
 
 ```console
-evidencectl new /path/to/evidence-project
 evidencectl tooling editor /path/to/evidence-project
 ```
 
@@ -170,9 +182,9 @@ starter outside the checkout, so the diagnostic checks below cannot modify a tra
 
 ```console
 export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
-export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
+export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/standalone"
 evidencectl --version
-evidencectl init "$REGISTRY_STACK_SMOKE_PROJECT" --transport sqlite-extract --profile local
+cp -R products/evidence/examples/standalone "$REGISTRY_STACK_SMOKE_PROJECT"
 evidencectl tooling editor "$REGISTRY_STACK_SMOKE_PROJECT"
 ```
 
@@ -187,18 +199,20 @@ installation and launch instructions:
 Use the following checks in either editor:
 
 1. Confirm the Registry Stack language-server output or log says that the project was indexed.
-2. In `questions/record-status.yaml`, invoke **Go to Definition** on `record-status` in the
-   question's `source: {ref: record-status}` binding. It must open `sources/record-status.yaml`.
-3. Invoke **Find References** on that same name. Results must include the question's binding.
-4. Invoke **Go to Definition** on `record-reference-v1` in `profile: record-reference-v1`. It
-   must open `selectors/record-reference-v1.yaml`.
-5. Search workspace symbols for `record`. Results must include the `record-status` question, the
-   `record-status` source, and the `record-reference-v1` selector profile. The document outline
-   for `questions/record-status.yaml` must list the question and its `condition_satisfied`
-   answer.
-6. Temporarily change the question's source reference to `ref: missing-source`. The editor must
-   report `Unknown source reference 'missing-source'`. Restore `record-status` and confirm that
-   the diagnostic clears.
+2. In `evidence.yaml`, invoke **Go to Definition** on `person-record` in the
+   `adult-status` definition's `acquisition.source`. It must select the named source
+   in the same file.
+3. Invoke **Find References** on that source name. Results must include the
+   `adult-status` acquisition.
+4. Invoke **Go to Definition** on `derive-adult-status` in `derive.function`.
+   It must select the named Function. Invoking definition on that Function's
+   `source` must open `functions/derive-adult-status.rhai`.
+5. Search workspace symbols for `adult-status`. Results must include its
+   assertion definition. The document outline must also list `person-record`,
+   `record-by-id`, and the named Functions.
+6. Temporarily change the acquisition source to `missing-source`. The editor
+   must report an unknown source reference. Restore `person-record` and confirm
+   that the diagnostic clears.
 
 The YAML language server may report additional schema or syntax diagnostics. Semantic
 diagnostics identify their product in the source, such as `evidence` or `breg`. The editor

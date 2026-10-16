@@ -29,8 +29,10 @@ kind: SchedulingRuntimeConfig
 
 The earlier `registry.registrystack.org/scheduling-runtime/v1alpha1` envelope
 is refused with a diagnostic naming this one. So are the renamed keys
-`audit.retainDays`, `retention.attemptReceiptDays`, and
-`retention.hookPayloadDays`, each naming the key that replaced it.
+`audit.retainDays`, `retention.attemptReceiptDays`,
+`retention.attemptReceiptRetentionDays`, `retention.hookPayloadDays`, and
+`caseworkResource` in a `taskGrantStatus` entry, each naming the key that
+replaced it.
 `schedulingctl check PROJECT --runtime-config FILE` reads a runtime file the
 way startup does, against the project's policy, with no package, database,
 network, or secret material, and reports every refusal at its file, line,
@@ -153,11 +155,9 @@ for a loopback host under development loopback. `type: static` with
 `documentRef` reads a pinned key set, which does no rotation of its own:
 rolling a key means replacing the referenced document and restarting
 Scheduling. The removed `jwksUri` key is refused with a diagnostic naming
-`jwksSource` `type: uri` as its replacement. `scopeClaim` defaults to `registry_scopes` for compatibility with
-existing deployments; stock ThunderID emits `scope`, so the maintained example
-and `schedulingctl init` set that explicit override. `readsScope` defaults to
-`scheduling-read` and `explainScope` to `scheduling-explain`; the two must
-differ, because the explain path can name member-level causes the public
+`jwksSource` `type: uri` as its replacement. `scopeClaim` defaults to `scope`,
+the claim stock ThunderID emits. `readsScope` defaults to `scheduling:read`
+and `explainScope` to `scheduling:explain`; the two must differ, because the explain path can name member-level causes the public
 availability read never discloses. `allowedClients` lists the exact client ids
 the runtime admits, and every file writes it, development loopback included:
 a list of at least one distinct client. An omitted member, an empty list, and
@@ -167,9 +167,9 @@ admit every client the issuer verifies, including an application in the same
 realm that has nothing to do with booking, is a startup refusal in every mode
 (`scheduling.runtime.allowed-clients-required`), because a development file
 is copied toward production.
-The native Casework exchange example uses the issuer-compatible
-`scheduling:read` handle and therefore explicitly sets
-`readsScope: scheduling:read`; the compatibility default remains unchanged.
+A read or explain request whose token lacks the required scope is refused
+with `profile.not-authorized`, and the runtime logs, at `info`, the claim it
+read, the scope it expected, and the two keys that select them.
 
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange
@@ -207,13 +207,13 @@ taskGrantStatus:
     clientAssertionAudience: https://identity.example.test/realms/registry
     clientId: scheduling-task-status
     privateKeyRef: secret:file/scheduling-task-status-private-jwk
-    caseworkResource: urn:example:casework
+    statusResource: urn:example:casework
     caBundleRef: secret:file/institution-root-ca
 ```
 
 Offline runtime checks require one to 32 entries with distinct absolute
 `sourceIssuer` identifiers, safe service and token URLs, non-empty client and
-assertion audience, an absolute Casework resource, one status scope token, and
+assertion audience, an absolute status resource, one status scope token, and
 a status path with one `{grantId}` segment. They validate secret
 reference structure without resolving the private key or CA bundle or contacting
 an endpoint. Activation repeats the structural check and verifies key and CA
@@ -223,7 +223,7 @@ contents.
 `baseUrl` selects that authority's HTTPS API. `tokenEndpoint`,
 `clientAssertionAudience`, `clientId`, and `privateKeyRef` configure the
 private-key JWT client credential used to obtain a token for
-`caseworkResource` with the `statusScope` scope. The private key is a JWK
+`statusResource` with the `statusScope` scope. The private key is a JWK
 whose `kid` selects its registered public key. `caBundleRef` is optional and
 applies a private CA bundle to both outbound HTTPS connections.
 
@@ -306,8 +306,9 @@ refuses writes. An expired hold writes its history entry as `system` and no
 audit entry.
 
 `destinations` is optional. `destinations.reminders` is the one place due
-reminder intents are delivered, as CloudEvents 1.0 events over HTTPS POST with
-`bearerTokenRef` as the optional bearer secret. The URL is one reviewed
+reminder intents are delivered, as the shared hook envelope with
+`content-type: application/json` over HTTPS POST (see the README Events
+section), with `bearerTokenRef` as the optional bearer secret. The URL is one reviewed
 absolute endpoint without userinfo, query, or fragment; plain `http` is
 accepted only for an explicit loopback host, so a plaintext destination can
 never silently point at another machine. Delivery is attempted once per claim
@@ -331,8 +332,8 @@ bindings are allowed so retained events captured under an earlier policy can
 finish with their exact original binding. Startup refuses if a retained event's
 binding is no longer available.
 
-`retention.attemptReceiptRetentionDays` covers idempotency attempt receipts
-from 1 through 65535 days; listing cursors keep their fixed fifteen-minute
+`retention.receiptRetentionDays` covers idempotency attempt receipts
+from 1 through 365 days; listing cursors keep their fixed fifteen-minute
 lifetime. `retention.hookPayloadRetentionDays` sets the canonical observer payload's retry and
 dead-letter lifetime from 1 through 30 days. Both configured values default to
 seven days, which is not a jurisdictional recommendation. Appointment, history,

@@ -24,6 +24,7 @@ pub(crate) const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 const HEAD: [&str; 3] = ["ok", "command", "status"];
 
 /// The status a failure envelope carries for each exit class.
+#[cfg(test)]
 pub(crate) fn failure_status(exit: u8) -> &'static str {
     match exit {
         USAGE_EXIT => "usage-error",
@@ -227,5 +228,398 @@ mod tests {
             failure_status(OPERATIONAL_FAILURE_EXIT),
             "operational-failure"
         );
+    }
+}
+
+pub(crate) const REPORT_API_VERSION: &str = "id.registrystack.org/formats/casework/report/v1alpha1";
+pub(crate) const REPORT_KIND: &str = "CaseworkReport";
+
+use registry_casework_core::*;
+use registry_platform_yaml::Diagnostic;
+use serde::{Deserialize, Serialize as DeriveSerialize};
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, DeriveSerialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ReportStatus {
+    Complete,
+    DomainRefusal,
+    UsageError,
+    OperationalFailure,
+}
+
+#[derive(DeriveSerialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReportCommon {
+    pub ok: bool,
+    pub status: ReportStatus,
+    #[cfg_attr(feature="schema",schemars(extend("const"=REPORT_API_VERSION)))]
+    pub api_version: &'static str,
+    #[cfg_attr(feature="schema",schemars(extend("const"=REPORT_KIND)))]
+    pub kind: &'static str,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+macro_rules! payload {
+    ($name:ident {$($(#[$meta:meta])* $field:ident:$ty:ty),* $(,)?})=>{
+        #[derive(Deserialize,DeriveSerialize)]
+        #[cfg_attr(feature="schema",derive(schemars::JsonSchema))]
+        #[serde(rename_all="camelCase",deny_unknown_fields)]
+        pub(crate) struct $name { $($(#[$meta])*pub $field:$ty),* }
+    };
+}
+payload!(InitData {
+    created: PathBuf,
+    template: String,
+    next: String
+});
+payload!(CheckData {project:PathBuf,policy_bindings:Vec<ReviewPolicyIdentity>,files_checked:usize,network_access:bool,database_access:bool,
+    #[serde(default,skip_serializing_if="Option::is_none")]runtime_config:Option<PathBuf>,
+    #[serde(default,skip_serializing_if="Option::is_none")]breg_package:Option<ProducerAgreementData>});
+payload!(ProducerAgreementData {
+    package: PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
+    package_digest: String,
+    agreements: Vec<ProducerAgreement>,
+    network_access: bool,
+    database_access: bool
+});
+payload!(ProducerAgreement {
+    provider_id: String,
+    context_contract: ReviewContextContract,
+    registry_revision: String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
+    schema_digest: String
+});
+payload!(ExplainPolicy {
+    binding: ReviewPolicyIdentity,
+    purpose: ReviewPurpose,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
+    display_schema: Value,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
+    result_schema: Option<Value>,
+    clocks: Vec<String>,
+    context: ReviewContextPolicy,
+    context_custody: String,
+    stages: Vec<ReviewStagePolicy>,
+    outcomes: Vec<ReviewOutcomePolicy>,
+    routing: Vec<RoutingRule>,
+    routing_fields: Vec<String>,
+    dependencies: ReviewPolicyDependencies,
+    retention: ReviewRetentionPolicy,
+    recovery: Vec<String>,
+    refusals: Vec<String>
+});
+payload!(ExplainStaffing {
+    next: String,
+    holdings: String,
+    caseload: String,
+    routing: String,
+    clock_recompute: String
+});
+payload!(ExplainData {project:ProjectIdentity,review_policies:Vec<ExplainPolicy>,context_providers:Vec<ReviewContextProviderPolicy>,staffing:ExplainStaffing,authority:String});
+payload!(TestData {fixtures:Vec<PathBuf>,proof_boundary:String,production_closure:bool,network_access:bool,database_access:bool});
+payload!(TypesData {output:PathBuf,files:Vec<String>});
+payload!(ReaderAuthority {profile:Option<String>,operation:String,source_writes:bool});
+payload!(ProviderPairData {
+    applied: bool,
+    provider_id: String,
+    description: PathBuf,
+    contract: ReviewContextContract,
+    registry_revision: String,
+    reader_authority: ReaderAuthority,
+    next: String
+});
+payload!(LifecycleData {#[cfg_attr(feature="schema",schemars(with="Vec<registry_casework_core::LifecycleDescription>"))]lifecycles:Vec<Value>});
+payload!(PackageData {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
+    package_digest:String,
+    #[serde(default,skip_serializing_if="Option::is_none")]dry_run:Option<bool>,
+    #[serde(default,skip_serializing_if="Option::is_none")]files:Option<Vec<String>>,
+    #[serde(default,skip_serializing_if="Option::is_none")]output:Option<PathBuf>,
+    #[serde(default,skip_serializing_if="Option::is_none")]revision:Option<String>,
+    #[serde(default,skip_serializing_if="Option::is_none")]secrets_included:Option<bool>});
+payload!(DoctorChecks {
+    configuration: String,
+    package: String,
+    database: String,
+    audit: String
+});
+payload!(DoctorData {
+    runtime_config: PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
+    package_digest: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_casework::ActivationPlan")
+    )]
+    activation: Value,
+    checks: DoctorChecks
+});
+payload!(PlanData {
+    runtime_config: PathBuf,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_casework::ActivationPlan")
+    )]
+    plan: Value
+});
+payload!(ApplyData {runtime_config:PathBuf,#[cfg_attr(feature="schema",schemars(with="registry_casework::Activation"))]activation:Value,
+    schema_versions_applied:Vec<i64>,#[cfg_attr(feature="schema",schemars(with="registry_casework::ActivationEffects"))]effects:Value,single_role_statement:Option<String>});
+payload!(StatusData {runtime_config:PathBuf,#[cfg_attr(feature="schema",schemars(with="registry_casework::ActivationStatus"))]activation:Value,single_role_statement:Option<String>});
+#[derive(Deserialize, DeriveSerialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DevState {
+    Starting,
+    Ready,
+    Stopping,
+    Stopped,
+    Failed,
+}
+payload!(DevClient {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    id: String,
+    profile: String,
+    role: CaseworkRole,
+    subject: String,
+    client_id_file: PathBuf,
+    assertion_key_file: PathBuf
+});
+payload!(DevDirectory {
+    revision: i64,
+    teams: usize
+});
+payload!(DevData {state:DevState,project:PathBuf,state_file:PathBuf,operator_config:PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    casework_url:String,token_endpoint:String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    issuer:String,client_assertion_audience:String,resource:String,audience:String,journal:PathBuf,context_providers:Vec<String>,clients:Vec<DevClient>,directory:DevDirectory,
+    #[serde(default,skip_serializing_if="Option::is_none")]issuer_project:Option<PathBuf>});
+payload!(DevEventsData {project:PathBuf,journal:PathBuf,events:Vec<String>,truncated:bool});
+payload!(DevTokenData {
+    header_file: PathBuf
+});
+payload!(DevGrantData {
+    header_file: PathBuf,
+    grant_expires_at: u64
+});
+payload!(DevIdentityData {
+    client_id: String,
+    subject: String
+});
+payload!(UsageData {});
+
+macro_rules! reports {
+    ($($variant:ident => $name:literal : $data:ty),* $(,)?)=>{
+        #[derive(DeriveSerialize)]
+        #[cfg_attr(feature="schema",derive(schemars::JsonSchema))]
+        #[serde(tag="command",deny_unknown_fields)]
+        pub(crate) enum CliReport {$(#[serde(rename=$name)]$variant{#[serde(flatten)]common:ReportCommon,#[serde(skip_serializing_if="Option::is_none")]data:Option<$data>}),*}
+        impl CliReport {
+            fn assemble(command:&str,common:ReportCommon,data:Option<Value>)->anyhow::Result<Self>{
+                Ok(match command {$($name=>Self::$variant{common,data:data.map(serde_json::from_value::<$data>).transpose()?},)* _=>anyhow::bail!("the CLI report command is not declared")})
+            }
+        }
+    }
+}
+reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData);
+
+impl CliReport {
+    pub(crate) fn from_value(command: &str, value: Value) -> anyhow::Result<Self> {
+        let mut fields = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("the CLI command returned no report object"))?;
+        let ok = fields
+            .remove("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        fields.remove("command");
+        let raw_status = fields.remove("status");
+        let diagnostics = fields
+            .remove("diagnostics")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        let mut diagnostics = diagnostics.into_iter().map(diagnostic).collect::<Vec<_>>();
+        if !ok && diagnostics.is_empty() {
+            if let Some(refusals) = fields
+                .get("activation")
+                .and_then(|v| v.get("refusals"))
+                .and_then(Value::as_array)
+            {
+                diagnostics.extend(refusals.iter().cloned().map(diagnostic));
+            }
+            if diagnostics.is_empty() {
+                diagnostics.push(Diagnostic::error(
+                    "casework.operation.refused",
+                    "",
+                    "the requested operation was refused",
+                    "Read the command details, correct the named configuration, and try again.",
+                ));
+            }
+        }
+        let data = match command {
+            "plan" => {
+                let runtime = fields
+                    .remove("runtimeConfig")
+                    .ok_or_else(|| anyhow::anyhow!("plan report has no runtime configuration"))?;
+                serde_json::json!({"runtimeConfig":runtime,"plan":fields})
+            }
+            "status" => {
+                let runtime = fields
+                    .remove("runtimeConfig")
+                    .ok_or_else(|| anyhow::anyhow!("status report has no runtime configuration"))?;
+                let statement = fields.remove("singleRoleStatement").unwrap_or(Value::Null);
+                serde_json::json!({"runtimeConfig":runtime,"singleRoleStatement":statement,"activation":fields})
+            }
+            "apply" => {
+                let runtime = fields
+                    .remove("runtimeConfig")
+                    .ok_or_else(|| anyhow::anyhow!("apply report has no runtime configuration"))?;
+                let versions = fields
+                    .remove("schemaVersionsApplied")
+                    .ok_or_else(|| anyhow::anyhow!("apply report has no schema result"))?;
+                let effects = fields
+                    .remove("effects")
+                    .ok_or_else(|| anyhow::anyhow!("apply report has no effects"))?;
+                let statement = fields.remove("singleRoleStatement").unwrap_or(Value::Null);
+                serde_json::json!({"runtimeConfig":runtime,"schemaVersionsApplied":versions,"effects":effects,"singleRoleStatement":statement,"activation":fields})
+            }
+            "dev" => {
+                fields.insert(
+                    "state".into(),
+                    raw_status.ok_or_else(|| anyhow::anyhow!("dev report has no state"))?,
+                );
+                Value::Object(fields)
+            }
+            _ => Value::Object(fields),
+        };
+        let common = ReportCommon {
+            ok,
+            status: if ok {
+                ReportStatus::Complete
+            } else {
+                ReportStatus::DomainRefusal
+            },
+            api_version: REPORT_API_VERSION,
+            kind: REPORT_KIND,
+            diagnostics,
+        };
+        Self::assemble(command, common, Some(data))
+    }
+
+    pub(crate) fn failure(
+        command: &str,
+        status: ReportStatus,
+        diagnostics: Vec<Diagnostic>,
+    ) -> anyhow::Result<Self> {
+        Self::assemble(
+            command,
+            ReportCommon {
+                ok: false,
+                status,
+                api_version: REPORT_API_VERSION,
+                kind: REPORT_KIND,
+                diagnostics,
+            },
+            None,
+        )
+    }
+}
+
+fn diagnostic(value: Value) -> Diagnostic {
+    if let Ok(diagnostic) = serde_json::from_value::<Diagnostic>(value.clone()) {
+        return diagnostic;
+    }
+    operator_refusal_diagnostic(
+        value["code"]
+            .as_str()
+            .unwrap_or("casework.operation.refused"),
+        value["path"].as_str().unwrap_or(""),
+        value["message"]
+            .as_str()
+            .unwrap_or("the requested operation was refused"),
+    )
+}
+
+pub(crate) fn operator_refusal_diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
+    Diagnostic::error(code,path,message,match code {
+        "casework.activation.schema-newer"=>"Use a Casework release that supports this database schema; preserve the database until then.",
+        "casework.activation.already-active"=>"The package is already active. Check caseworkctl status before choosing a different package.",
+        "casework.activation.retired-schema"=>"Preserve the old database with the release that wrote it and configure a fresh database.",
+        _=>"Follow the named refusal, then run caseworkctl plan --runtime-config FILE before applying.",
+    })
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod typed_report_tests {
+    use super::*;
+    #[test]
+    fn authored_command_reports_match_the_owning_schema() {
+        let directory = crate::canonical_tempdir();
+        let project = directory.path().join("review");
+        let documents = crate::schema::report_documents().unwrap();
+        let schema: Value = serde_json::from_str(&documents["report.schema.json"]).unwrap();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let reports = [
+            (
+                "init",
+                crate::project::init(&project, "standalone-decision").unwrap(),
+            ),
+            (
+                "check",
+                crate::project::check(&project, false, false).unwrap(),
+            ),
+            ("explain", crate::project::explain(&project).unwrap()),
+            ("test", crate::project::test(&project, false).unwrap()),
+            (
+                "types",
+                crate::project_types::generate(&project, &directory.path().join("types")).unwrap(),
+            ),
+            (
+                "package",
+                crate::project::package_dry_run(&project, None).unwrap(),
+            ),
+            (
+                "lifecycle",
+                serde_json::json!({"ok":true,"lifecycles":[review_lifecycle()]}),
+            ),
+        ];
+        for (command, raw) in reports {
+            let report = CliReport::from_value(command, raw)
+                .unwrap_or_else(|error| panic!("{command} report: {error}"));
+            let value = serde_json::to_value(report).unwrap();
+            if let Err(errors) = validator.validate(&value) {
+                panic!(
+                    "{command} schema mismatch at {}",
+                    errors
+                        .map(|error| error.instance_path.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+            }
+            assert_eq!(value["apiVersion"], REPORT_API_VERSION);
+            assert_eq!(value["kind"], REPORT_KIND);
+        }
+    }
+    #[test]
+    fn typed_report_rejects_unmodelled_payload_instead_of_losing_it() {
+        assert!(CliReport::from_value(
+            "types",
+            serde_json::json!({"ok":true,"output":"types","files":[],"unexpected":true})
+        )
+        .is_err());
     }
 }

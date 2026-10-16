@@ -1,297 +1,158 @@
-//! Deployment target authoring for `evidencectl`.
-//!
-//! A target is a native pair of reviewed `governance.yaml` and `runtime.yaml`
-//! plus public signing keys. This module packages those files create-only
-//! from explicit settings or a local development baseline. Local generation
-//! reuses project keys and paths; it never invents production authority, copies
-//! secrets, or relaxes the runtime schema.
+//! Create and inspect the single normalized Evidence target model.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
+    fs::{self, OpenOptions},
+    io::Write as _,
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _},
     path::{Component, Path, PathBuf},
     process::ExitCode,
 };
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use crate::{
-    authored, build,
-    evidence_binary::{self, EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND},
-    source_import::ProjectLock,
+use registry_evidence_authoring::{
+    project::{self, EvidenceProject},
+    target::{self, EvidenceTarget, TargetConnection},
 };
-use registry_evidence_authoring::formats::{
-    decode_authored, envelope_lines, read_authored, TARGET_GOVERNANCE,
-    TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND, TARGET_SETTINGS,
-};
-use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
-use registry_platform_yaml::{ExternalId, Reader};
+use serde_json::{json, Value};
 
-const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
-const MAX_PUBLIC_KEY_BYTES: u64 = 256 * 1024;
-const SECRET_PREFIX: &str = "secret:file/";
+use crate::{authored, OutputFormat};
+
+const MAX_TARGET_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TargetCommand {
-    /// Create target files from explicit settings or a project-local baseline.
+    /// Create a normalized target and its complete authority file.
     New(NewArgs),
-    /// Inspect the public files and logical secret references in a target.
+    /// Inspect one normalized target and its complete grants.
     Explain(ExplainArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct NewArgs {
-    /// New target directory to create; missing parent directories are created.
+    /// New target directory to create.
     pub directory: PathBuf,
-
-    /// Closed settings document with native governance, runtime, and public keys.
-    ///
-    /// This command checks target-file shape, logical secret references, and
-    /// public-key identity. Project-specific bundle and runtime semantics are
-    /// checked by `target explain`, `fixtures run --target`, `build --target`,
-    /// and `doctor`.
+    /// Existing normalized target.yaml to copy with its referenced authority and public key.
     #[arg(long, required_unless_present = "local")]
     pub settings: Option<PathBuf>,
-
     /// Evidence project directory; defaults to the current directory with --local.
     ///
-    /// This command needs an editable project with local signing keys when
-    /// using --local. Its paths fill only omitted local filesystem settings.
+    /// This command needs an editable project holding evidence.yaml.
     #[arg(long, requires = "local")]
     pub project: Option<PathBuf>,
-
-    /// Use project-local development paths; requires local assurance governance.
+    /// Generate a complete disposable local target from the EvidenceProject ceilings.
     #[arg(long)]
     pub local: bool,
-
-    /// Public signing JWK whose RFC 7638 thumbprint names activePublicJwkFile.
-    #[arg(long, requires = "settings")]
-    pub signing_public_key: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct ExplainArgs {
-    /// Complete deployment target containing governance.yaml and runtime.yaml.
+    /// Normalized target.yaml, or a directory containing target.yaml.
     pub target: PathBuf,
-
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project holding evidence.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-
-    /// Emit one machine-readable JSON report on standard output.
+    /// Emit one machine-readable JSON report.
     #[arg(long)]
     pub json: bool,
 }
 
-/// The settings `target new` writes a target from, decoded by the shared
-/// reader. Governance and runtime are carried as written and held to their
-/// closed shapes by `validate_settings_documents`; the format version is the
-/// document's `apiVersion`.
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct TargetSettings {
-    #[cfg_attr(
-        feature = "schema",
-        schemars(extend("x-registry-passthrough" = "The governance members of the Evidence bundle grammar; `evidencectl check` validates them against bundle.schema.yaml after the compile."))
-    )]
-    pub(crate) governance: Value,
-    #[cfg_attr(
-        feature = "schema",
-        schemars(extend("x-registry-passthrough" = "The runtime document of the Evidence runtime grammar; `target new` checks only its top-level members against the closed runtime key set, and `evidence check`, `doctor` and startup check the contents against runtime.schema.yaml."))
-    )]
-    pub(crate) runtime: Value,
-    #[serde(default)]
-    public_keys: BTreeMap<ExternalId, PathBuf>,
-}
-
-/// The derived JSON Schema of one target settings document.
-#[cfg(feature = "schema")]
-pub(crate) fn settings_document_schema() -> serde_json::Value {
-    serde_json::to_value(schemars::schema_for!(TargetSettings)).expect("a derived schema is JSON")
-}
-
-/// The closed Version 1 runtime settings shape, mirroring
-/// `products/evidence/contracts/runtime.schema.yaml`.
-///
-/// evidencectl deliberately does not link the runtime crate, so it cannot
-/// deserialize the document through the runtime's own type. The runtime denies
-/// unknown fields and refuses a misspelled or unpublished key at startup; this
-/// mirror moves that refusal into `target new`, before a target directory the
-/// deployment cannot load exists. Each section stays untyped here because the
-/// runtime, not evidencectl, owns what is inside it. The mirror is held in step
-/// with the published contract by
-/// `the_closed_runtime_mirror_matches_the_published_runtime_contract`.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-// The fields state which keys the document may carry and which it must carry;
-// deserializing is the whole check, so nothing reads them afterwards.
-#[allow(dead_code)]
-pub(crate) struct TargetRuntime {
-    api_version: String,
-    kind: String,
-    package: Value,
-    listener: Value,
-    #[serde(default)]
-    metrics_listener: Option<Value>,
-    secret_providers: Value,
-    signer: Value,
-    audit: Value,
-    outbound_tls: Value,
-    #[serde(default)]
-    source_extracts: Option<Value>,
-    #[serde(default)]
-    acquisition_capabilities: Option<Value>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetReport {
-    format_version: u32,
-    target: String,
-    fixture_paths: Vec<String>,
-    public_key_files: Vec<String>,
-    missing_public_key_files: Vec<String>,
-    secret_references: Vec<String>,
-}
-
-pub(crate) fn run(command: TargetCommand) -> Result<ExitCode> {
+pub(crate) fn run(command: TargetCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
         TargetCommand::New(args) => new(args),
-        TargetCommand::Explain(args) => explain(args),
+        TargetCommand::Explain(args) => explain(args, format),
     }
 }
 
 fn new(args: NewArgs) -> Result<ExitCode> {
-    reject_existing(&args.directory)?;
-    let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-    if args.settings.is_none() {
-        if !args.local {
-            bail!("target new requires --settings or --local");
-        }
-        create_local_target(project, &args.directory, serde_json::json!({}))?;
-        println!(
-            "Created local development target {}",
-            args.directory.display()
-        );
-        return Ok(ExitCode::SUCCESS);
-    }
-    let parent = created_plain_parent(&args.directory, "target parent")?;
-    let settings_arg = args.settings.as_deref().expect("settings checked above");
-    let settings_parent = plain_parent(settings_arg, "settings parent")?;
-    let settings_name = settings_arg
-        .file_name()
-        .ok_or_else(|| anyhow!("settings file must name one file"))?;
-    let settings_path = settings_parent.join(settings_name);
-    let mut settings = decode_authored::<TargetSettings>(
-        &settings_arg.to_string_lossy(),
-        &read_plain_file(&settings_path, MAX_SETTINGS_BYTES, "target settings")?,
-        &TARGET_SETTINGS,
-    )?
-    .value;
     if args.local {
-        fill_local_paths(project, &settings.governance, &mut settings.runtime)?;
-    }
-    validate_settings_documents(&settings.governance, &settings.runtime)?;
-    let derived_signing_public_key = args
-        .signing_public_key
-        .as_deref()
-        .map(|path| signing_public_key_reference(path, "signing public key"))
-        .transpose()?;
-    if let Some((relative, _)) = &derived_signing_public_key {
-        set_or_validate_active_public_key(&mut settings.governance, relative)?;
-    }
-    let expected_public_keys = expected_public_key_files(&settings.governance)?;
-    let mut supplied_public_keys =
-        normalize_supplied_public_keys(settings.public_keys, &settings_parent)?;
-    if let Some((relative, source)) = derived_signing_public_key {
-        if supplied_public_keys.insert(relative, source).is_some() {
-            bail!("target settings must not also list the public key supplied by --signing-public-key");
+        if args.settings.is_some() {
+            bail!("target new accepts either --local or --settings, not both");
         }
+        let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
+        create_local_target(project, &args.directory, json!({}))?;
+    } else {
+        let source = args
+            .settings
+            .as_deref()
+            .context("target new requires --settings or --local")?;
+        copy_explicit_target(source, &args.directory)?;
     }
-    let supplied_names: BTreeSet<_> = supplied_public_keys.keys().cloned().collect();
-    let expected_names: BTreeSet<_> = expected_public_keys.iter().cloned().collect();
-    let missing: Vec<_> = expected_names
-        .difference(&supplied_names)
-        .cloned()
-        .collect();
-    let extra: Vec<_> = supplied_names
-        .difference(&expected_names)
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        bail!("target settings do not supply every public signing key referenced by governance");
-    }
-    if !extra.is_empty() {
-        bail!("target settings name public keys not referenced by governance");
-    }
-
-    let staging = tempfile::Builder::new()
-        .prefix(".evidencectl-target-")
-        .tempdir_in(&parent)
-        .with_context(|| format!("staging the target in {}", parent.display()))?;
-    let staged = staging.path();
-    fs::DirBuilder::new()
-        .mode(0o755)
-        .create(staged.join("public-keys"))
-        .context("creating public-keys directory")?;
-    write_new_file(
-        &staged.join("governance.yaml"),
-        governance_document(&settings.governance)?.as_bytes(),
-        0o644,
-    )?;
-    write_new_file(
-        &staged.join("runtime.yaml"),
-        serde_norway::to_string(&settings.runtime)
-            .context("encoding runtime.yaml")?
-            .as_bytes(),
-        0o644,
-    )?;
-    for (relative, source) in supplied_public_keys {
-        write_new_file(&staged.join(relative), &source.bytes, 0o644)?;
-    }
-    publish(staging, &args.directory)?;
-    println!(
-        "Created deployment target files {}",
-        args.directory.display()
-    );
-    println!(
-        "Next: run `evidencectl check <editable-project> --target {}` and `evidencectl test <editable-project> --target {}` before `evidencectl package`.",
-        args.directory.display(),
-        args.directory.display()
-    );
+    println!("Created Evidence target {}", args.directory.display());
     Ok(ExitCode::SUCCESS)
 }
 
-/// Preflight one connection before an external local-client registration.
-/// The caller keeps the project lock through preflight and insertion.
+pub(crate) fn target_path(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join("target.yaml")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn read_target(path: &Path) -> Result<EvidenceTarget> {
+    let path = target_path(path);
+    let bytes = read_plain_file(&path, MAX_TARGET_BYTES, "Evidence target")?;
+    Ok(target::read_target(&path.to_string_lossy(), &bytes)?.value)
+}
+
+fn read_project(root: &Path) -> Result<EvidenceProject> {
+    let root = fs::canonicalize(root).context("resolving Evidence project")?;
+    let path = root.join(project::PROJECT_FILE);
+    let bytes = read_plain_file(&path, MAX_TARGET_BYTES, "Evidence project")?;
+    Ok(project::read_project(&path.to_string_lossy(), &bytes)?.value)
+}
+
+fn copy_explicit_target(source: &Path, destination: &Path) -> Result<()> {
+    reject_existing(destination)?;
+    let source_path = target_path(source);
+    let source_root = plain_parent(&source_path, "target parent")?;
+    let target = read_target(&source_path)?;
+    let authority = safe_relative(&source_root, &target.authority, "target authority")?;
+    let key = target.signer.public_jwk_file();
+    let public_key = safe_relative(&source_root, key, "target public key")?;
+
+    let parent = created_plain_parent(destination, "target destination parent")?;
+    let staging = tempfile::Builder::new()
+        .prefix(".evidencectl-target-")
+        .tempdir_in(parent)?;
+    copy_new(
+        &source_path,
+        &staging.path().join("target.yaml"),
+        MAX_TARGET_BYTES,
+    )?;
+    copy_new(
+        &authority,
+        &staging.path().join(&target.authority),
+        MAX_TARGET_BYTES,
+    )?;
+    copy_new(&public_key, &staging.path().join(key), MAX_TARGET_BYTES)?;
+    publish(staging, destination)
+}
+
+/// Preflight a local Source connection without changing the target.
 pub(crate) fn check_local_connection(directory: &Path, name: &str, binding: &Value) -> Result<()> {
     if !crate::authoring::valid_local_identifier(name) || !binding.is_object() {
         bail!("local source connection requires a valid name and a mapping");
     }
+    let binding: TargetConnection = serde_json::from_value(binding.clone())
+        .context("local source connection must have valid authored settings")?;
     if !directory.try_exists()? {
         return reject_existing(directory);
     }
-    let (connections, _) = build::local_dev_target_inputs(directory)
-        .context("existing target must contain complete local governance.yaml and runtime.yaml; choose a new target for a settings-only directory")?;
-    if let Some(existing) = connections.get(name) {
-        if existing != binding {
+    let name = name.parse()?;
+    let target = read_target(directory)?;
+    if let Some(existing) = target.connections.get(&name) {
+        if existing != &binding {
             bail!("local source connection already has different authored settings; review it or choose another connection name");
         }
     }
     Ok(())
 }
 
-/// Add one connection without changing the target's other deployment settings.
-/// The caller owns the project lock; only governance.yaml is atomically replaced.
+/// Add one Source connection by atomically replacing target.yaml.
 pub(crate) fn ensure_local_connection(
     project: &Path,
     directory: &Path,
@@ -300,49 +161,44 @@ pub(crate) fn ensure_local_connection(
 ) -> Result<()> {
     check_local_connection(directory, name, &binding)?;
     if !directory.exists() {
-        return create_local_target(project, directory, serde_json::json!({name: binding}));
+        if directory
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("yaml")
+        {
+            bail!("local target file is absent; run `evidencectl init` or pass --target with an existing normalized EvidenceTarget");
+        }
+        return create_local_target(project, directory, json!({name: binding}));
     }
-    let path = directory.join("governance.yaml");
-    let mut governance = read_governance(directory)?;
-    let connections = governance
-        .as_object_mut()
-        .context("local governance must be a mapping")?
-        .entry("sourceConnections")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .context("local sourceConnections must be a mapping")?;
-    if connections.contains_key(name) {
+    let path = target_path(directory);
+    let mut target = read_target(&path)?;
+    let id = name.parse()?;
+    if target.connections.contains_key(&id) {
         return Ok(());
     }
-    connections.insert(name.to_owned(), binding);
-    let bytes = governance_document(&governance)?;
-    let permissions = fs::metadata(&path)?.permissions();
-    let mut staged =
-        tempfile::NamedTempFile::new_in(directory).context("staging local connection settings")?;
-    staged.as_file().set_permissions(permissions)?;
-    staged.write_all(bytes.as_bytes())?;
-    staged.as_file().sync_all()?;
-    staged
-        .persist(&path)
-        .context("publishing local connection settings")?;
-    Ok(())
+    let binding = serde_json::from_value(binding)
+        .context("local source connection must have valid authored settings")?;
+    target.connections.insert(id, binding);
+    let bytes = render_target(&target)?;
+    replace_plain_file(&path, bytes.as_bytes())
 }
 
-/// Create a local source-first target with existing project signing material.
-/// Identical retries are harmless; authored target files are never overwritten.
+/// Create a local target with a complete grant for every AssertionDefinition.
+/// An identical retry is harmless and a different existing target is refused.
 pub(crate) fn create_local_target(
-    project: &Path,
+    project_root: &Path,
     directory: &Path,
     source_connections: Value,
 ) -> Result<()> {
-    if !source_connections.is_object() {
-        bail!("local sourceConnections must be a mapping");
-    }
-    // Settle the project and the target output before any key exists. Key
-    // generation writes into the project, so a run refused for a directory
-    // that is not an Evidence project, or for an output that is already
-    // taken, must be refused before it, and leave nothing behind.
-    let project = local_project_root(project)?;
+    let connections = source_connections
+        .as_object()
+        .context("local source connections must be a mapping")?;
+    let project_root =
+        fs::canonicalize(project_root).context("resolving local Evidence project")?;
+    let project = read_project(&project_root)?;
+    // Identity claim names and task-grant trust are operator-owned, not ceilings.
+    // Refuse before creating directories or disposable signing material.
+    let authority_value = local_authority(&project, "local")?;
     let parent = if directory.exists() {
         let metadata = fs::symlink_metadata(directory)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -351,65 +207,68 @@ pub(crate) fn create_local_target(
         None
     } else {
         reject_existing(directory)?;
-        Some(created_plain_parent(directory, "target parent")?)
+        Some(created_plain_parent(
+            directory,
+            "target destination parent",
+        )?)
     };
-    // Read the project signing key once (creating it when the project has
-    // none) so the kid governance names and the key file written beside it
-    // come from the same material. Reading it twice would let a key replaced
-    // between the reads publish governance and a key file that disagree.
-    let (relative, key_bytes) = crate::authoring::ensure_local_signing_public_jwk(&project)?;
-    let mut governance = crate::authoring::local_target_governance(&relative)?;
-    governance["sourceConnections"] = source_connections;
-    let mut runtime = serde_json::json!({
-        "apiVersion": EVIDENCE_RUNTIME_API_VERSION,
-        "kind": EVIDENCE_RUNTIME_KIND,
-        "listener": {
-            "bind": "127.0.0.1:8080",
-            "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": false,
-            "maximumRequestBytes": 65536, "maximumConcurrentRequests": 64,
-            "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 30000,
+    let (public_key, public_key_bytes) =
+        crate::authoring::ensure_local_signing_public_jwk(&project_root)?;
+    let target_value = json!({
+        "apiVersion": target::TARGET_API_VERSION,
+        "kind": target::TARGET_KIND,
+        "id": "local",
+        "project": project.id,
+        "package": {"root": ".generated/package"},
+        "authority": "authority.yaml",
+        "service": {
+            "providerId": "urn:example:provider:local-evidence",
+            "issuer": "urn:example:issuer:local-evidence",
+            "publicOrigin": "http://127.0.0.1:8080",
+            "trustDomain": "urn:example:trust:local-evidence"
         },
-        "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/signing-p256-private-jwk"},
-        "audit": {"destination": "file"},
-        "outboundTls": {"systemRoots": true, "trustProfiles": {}},
+        "listener": {"bind": "127.0.0.1:8080", "trustProxyIdentityHeaders": false},
+        "authentication": {"oidc": {
+            "issuer": "http://127.0.0.1:8081",
+            "audience": "urn:example:audience:local-evidence",
+            "tokenTypes": ["at+jwt"], "algorithms": ["ES256"],
+            "jwksSource": {"type": "uri", "uri": "http://127.0.0.1:8081/oauth2/jwks"},
+            "principalClaim": "sub", "requesterTagsClaim": "evidence_tags",
+            "evidenceAudienceClaim": "evidence_audience", "requiredScopes": ["evidence:request"],
+            "maximumTokenLifetimeSeconds": 300
+        }},
+        "connections": connections,
+        "secretProviders": {"file": {"root": ".generated/secrets"}},
+        "signer": {"type": "local-jwk", "algorithm": "ES256", "privateKeyRef": "secret:file/signing-p256-private-jwk", "publicJwkFile": public_key},
+        "subjectBinding": {"secretRef": "secret:file/subject-binding-hmac-key", "keyVersion": 1},
+        "audit": {"path": ".generated/audit/evidence.jsonl", "hashKeyRef": "secret:file/audit-hmac-key", "hashKeyVersion": 1},
+        "rateLimits": {"requestsPerPrincipalPerMinute": 60, "burstPerPrincipal": 16, "failedSelectorAttemptsPerPrincipalAuthorityPerMinute": 10},
+        "assuranceProfile": "local",
+        "outboundTls": {"systemRoots": true, "trustProfiles": {}}
     });
-    fill_local_paths(&project, &governance, &mut runtime)?;
-    validate_settings_documents(&governance, &runtime)?;
-    // The kid in governance and the staged key file must agree before
-    // anything is published; the render and the bytes above share one read,
-    // so a disagreement here means the render itself is broken.
-    let governed_key = governance
-        .pointer("/signing/activePublicJwkFile")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("local target governance lost its active public key reference"))?;
-    if governed_key != relative {
-        bail!(
-            "local target governance names public key {governed_key} while the project signing key names {relative}"
-        );
-    }
-    let files = [
-        (
-            "governance.yaml".to_owned(),
-            governance_document(&governance)?.into_bytes(),
-        ),
-        (
-            "runtime.yaml".to_owned(),
-            serde_norway::to_string(&runtime)?.into_bytes(),
-        ),
-        (relative, key_bytes),
+    let target = target::read_target(
+        "target.yaml",
+        authored::to_indented_yaml(&target_value)?.as_bytes(),
+    )?
+    .value;
+    let authority_yaml = authored::to_indented_yaml(&authority_value)?;
+    target::read_authority("authority.yaml", authority_yaml.as_bytes(), &project)?;
+    let target_yaml = render_target(&target)?;
+
+    let expected = [
+        ("target.yaml", target_yaml.as_bytes()),
+        ("authority.yaml", authority_yaml.as_bytes()),
+        (public_key.as_str(), public_key_bytes.as_slice()),
     ];
     let Some(parent) = parent else {
-        // An existing target is a retry: it already holds exactly the files
-        // this render publishes, or it is authored differently and is left
-        // alone.
-        for (name, expected) in &files {
-            let actual = read_plain_file(
+        for (name, bytes) in expected {
+            if read_plain_file(
                 &directory.join(name),
-                MAX_SETTINGS_BYTES,
-                "existing local target file",
-            )?;
-            if actual != *expected {
-                bail!("local target already contains different authored settings; choose a new target directory or review its files explicitly");
+                MAX_TARGET_BYTES,
+                "existing target file",
+            )? != bytes
+            {
+                bail!("local target already contains different authored settings; choose a new target directory or review it explicitly");
             }
         }
         return Ok(());
@@ -417,647 +276,236 @@ pub(crate) fn create_local_target(
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-target-")
         .tempdir_in(parent)?;
-    fs::create_dir(staging.path().join("public-keys"))?;
-    for (name, bytes) in files {
-        write_new_file(&staging.path().join(name), &bytes, 0o644)?;
-    }
+    write_new_file(&staging.path().join("target.yaml"), target_yaml.as_bytes())?;
+    write_new_file(
+        &staging.path().join("authority.yaml"),
+        authority_yaml.as_bytes(),
+    )?;
+    write_new_file(&staging.path().join(&public_key), &public_key_bytes)?;
     publish(staging, directory)
 }
 
-/// A target's `governance.yaml`, read by the shared reader, as the members
-/// it holds without its envelope.
-fn read_governance(target: &Path) -> Result<Value> {
-    let bytes = read_plain_file(
-        &target.join("governance.yaml"),
-        MAX_SETTINGS_BYTES,
-        "deployment governance",
-    )?;
-    let mut governance =
-        read_authored("governance.yaml", &bytes, &TARGET_GOVERNANCE)?.to_json_value();
-    if let Some(members) = governance.as_object_mut() {
-        members.remove("apiVersion");
-        members.remove("kind");
-    }
-    Ok(governance)
-}
-
-/// The `governance.yaml` text for `governance`, its envelope first.
-fn governance_document(governance: &Value) -> Result<String> {
-    Ok(format!(
-        "{}{}",
-        envelope_lines(TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND),
-        serde_norway::to_string(governance).context("encoding governance.yaml")?
-    ))
-}
-
-/// Fill only omitted paths in an explicitly local target. Authored paths are
-/// retained, including when the target is intended for a different local layout.
-fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> Result<()> {
-    if governance.get("assuranceProfile").and_then(Value::as_str) != Some("local") {
-        bail!("--local requires governance assuranceProfile local; production paths are never inferred");
-    }
-    let project = local_project_root(project)?;
-    fill_local_paths_under(&project, runtime)
-}
-
-/// Fill the runtime paths a local target takes from its project, under
-/// `project`, wherever the settings leave them out.
-fn fill_local_paths_under(project: &Path, runtime: &mut Value) -> Result<()> {
-    let secrets = project.join(crate::authoring::SECRETS_DIRECTORY);
-    let local = project.join(".evidence/dev");
-    for (components, path) in [
-        (vec!["package", "root"], local.join("bundle")),
-        (vec!["secretProviders", "file", "root"], secrets),
-        (vec!["audit", "path"], local.join("audit/evidence.jsonl")),
-    ] {
-        let mut node = &mut *runtime;
-        let mut pointer = String::from("/runtime");
-        for component in &components[..components.len() - 1] {
-            node = node
-                .as_object_mut()
-                .ok_or_else(|| local_path_section(&pointer))?
-                .entry((*component).to_owned())
-                .or_insert_with(|| serde_json::json!({}));
-            pointer = format!("{pointer}/{component}");
-        }
-        node.as_object_mut()
-            .ok_or_else(|| local_path_section(&pointer))?
-            .entry(components[components.len() - 1].to_owned())
-            .or_insert_with(|| Value::String(path.to_string_lossy().into_owned()));
-    }
-    Ok(())
-}
-
-fn local_path_section(pointer: &str) -> SettingsDiagnostic {
-    SettingsDiagnostic::at(
-        pointer,
-        "a local target settings runtime section holding a filled path must be a mapping",
-    )
-}
-
-/// Hold a settings document found in a project to what `target new` accepts
-/// from it. A local settings document may leave out the runtime paths
-/// `target new --local` fills, so they are filled under the project before
-/// the check, as that command fills them.
-pub(crate) fn validate_project_settings(
-    project: &Path,
-    governance: &Value,
-    runtime: &Value,
-) -> Result<()> {
-    let mut runtime = runtime.clone();
-    if governance.get("assuranceProfile").and_then(Value::as_str) == Some("local") {
-        fill_local_paths_under(project, &mut runtime)?;
-    }
-    validate_settings_documents(governance, &runtime)
-}
-
-/// Resolve the editable project a local target draws its paths and keys from.
-///
-/// Reading the marker settles that the directory is an Evidence project, so a
-/// caller can refuse a directory that is not one before writing into it.
-fn local_project_root(project: &Path) -> Result<PathBuf> {
-    let project = fs::canonicalize(project).context("resolving local Evidence project")?;
-    read_plain_file(
-        &project.join("evidence-project.yaml"),
-        MAX_SETTINGS_BYTES,
-        "Evidence project marker",
-    )?;
-    Ok(project)
-}
-
-/// A target settings member that does not hold what a deployment target
-/// needs, by its JSON pointer in the settings document. The message names the
-/// member and never repeats its value.
-#[derive(Debug)]
-pub(crate) struct SettingsDiagnostic {
-    pub(crate) pointer: String,
-    pub(crate) message: String,
-}
-
-impl SettingsDiagnostic {
-    fn at(pointer: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            pointer: pointer.into(),
-            message: message.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for SettingsDiagnostic {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for SettingsDiagnostic {}
-
-/// The refusal for a settings member that is not the closed shape. The serde
-/// error follows only when it names a key (an unknown or missing field);
-/// every other serde message quotes the offending value, which a refusal never
-/// repeats.
-fn shape_refusal(error: serde_json::Error, pointer: &str, message: &str) -> anyhow::Error {
-    let text = error.to_string();
-    let diagnostic = SettingsDiagnostic::at(pointer, message);
-    if text.starts_with("unknown field ") || text.starts_with("missing field ") {
-        anyhow::Error::new(error).context(diagnostic)
-    } else {
-        anyhow::Error::new(diagnostic)
-    }
-}
-
-/// Hold settings governance and runtime to the closed shapes a deployment
-/// target needs. A refusal is, or carries as its outermost context, the
-/// [`SettingsDiagnostic`] naming the member at fault.
-pub(crate) fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()> {
-    const GOVERNANCE_SHAPE: &str =
-        "target settings governance is not the closed deployment governance shape";
-    let governance = governance.as_object().ok_or_else(|| {
-        SettingsDiagnostic::at(
-            "/governance",
-            "target settings governance must be a mapping",
-        )
-    })?;
-    let runtime = runtime.as_object().ok_or_else(|| {
-        SettingsDiagnostic::at("/runtime", "target settings runtime must be a mapping")
-    })?;
-    // Validate governance through the same closed type the consumers deserialize
-    // it with (build::TargetGovernance), so `target new` refuses exactly what
-    // `target explain`, `build --target`, and `fixtures run --target` refuse and
-    // never leaves behind a create-only directory those commands cannot open.
-    serde_json::from_value::<build::TargetGovernance>(Value::Object(governance.clone()))
-        .map_err(|error| shape_refusal(error, "/governance", GOVERNANCE_SHAPE))?
-        .into_bundle()
-        .context(SettingsDiagnostic::at("/governance", GOVERNANCE_SHAPE))?;
-    if runtime.get("apiVersion").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_API_VERSION) {
-        return Err(SettingsDiagnostic::at(
-            "/runtime/apiVersion",
-            format!("target settings runtime.apiVersion must be {EVIDENCE_RUNTIME_API_VERSION}"),
-        )
-        .into());
-    }
-    if runtime.get("kind").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_KIND) {
-        return Err(SettingsDiagnostic::at(
-            "/runtime/kind",
-            format!("target settings runtime.kind must be {EVIDENCE_RUNTIME_KIND}"),
-        )
-        .into());
-    }
-    for section in [
-        "service",
-        "issuer",
-        "authentication",
-        "audit",
-        "subjectBinding",
-        "rateLimits",
-        "signing",
-        "authorityProfiles",
-    ] {
-        require_nonempty_mapping(governance, section, "governance")?;
-    }
-    if runtime
-        .get("package")
-        .and_then(|package| package.get("root"))
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        return Err(SettingsDiagnostic::at(
-            "/runtime/package/root",
-            "target settings runtime.package.root must be a string",
-        )
-        .into());
-    }
-    for section in [
-        "listener",
-        "secretProviders",
-        "signer",
-        "audit",
-        "outboundTls",
-    ] {
-        require_nonempty_mapping(runtime, section, "runtime")?;
-    }
-    // Validate the runtime document through the closed mirror of the shape the
-    // runtime loads, so `target new` refuses an unknown or misspelled key here
-    // rather than writing a runtime.yaml the deployment refuses at startup.
-    serde_json::from_value::<TargetRuntime>(Value::Object(runtime.clone())).map_err(|error| {
-        shape_refusal(
-            error,
-            "/runtime",
-            "target settings runtime is not the closed Version 1 runtime shape",
-        )
-    })?;
-    let mut secret_references = BTreeSet::new();
-    collect_secret_references_at(
-        &Value::Object(governance.clone()),
-        "/governance",
-        &mut secret_references,
-    )?;
-    collect_secret_references_at(
-        &Value::Object(runtime.clone()),
-        "/runtime",
-        &mut secret_references,
-    )?;
-    Ok(())
-}
-
-/// Refuse a settings `document` (`governance` or `runtime`) whose `section`
-/// is absent, empty, or not a mapping.
-fn require_nonempty_mapping(
-    object: &serde_json::Map<String, Value>,
-    section: &str,
-    document: &str,
-) -> Result<()> {
-    if object
-        .get(section)
-        .and_then(Value::as_object)
-        .is_some_and(|section| !section.is_empty())
-    {
-        return Ok(());
-    }
-    Err(SettingsDiagnostic::at(
-        format!("/{document}/{section}"),
-        format!("target settings {document}.{section} must be a mapping"),
-    )
-    .into())
-}
-
-fn explain(args: ExplainArgs) -> Result<ExitCode> {
-    let target = fs::canonicalize(&args.target).context("resolving deployment target")?;
-    let _project_lock = ProjectLock::acquire(&args.project)
-        .with_context(|| format!("locking editable project {}", args.project.display()))?;
-    let evidence_bin = evidence_binary::resolve_matching(None)?;
-    let governance = read_governance(&target)?;
-    // The runtime track owns the runtime document's envelope; this reads it
-    // through the shared YAML subset only, for its secret references.
-    let runtime = authored::node_value(Reader::new("runtime.yaml").scan(&read_plain_file(
-        &target.join("runtime.yaml"),
-        MAX_SETTINGS_BYTES,
-        "deployment runtime",
-    )?)?);
-    let public_key_files = expected_public_key_files(&governance)?;
-    let missing_public_key_files = public_key_files
+fn local_authority(project: &EvidenceProject, target_id: &str) -> Result<Value> {
+    let grants = project
+        .assertion_definitions
         .iter()
-        .filter(|path| {
-            read_plain_file(
-                &target.join(path),
-                MAX_PUBLIC_KEY_BYTES,
-                "public signing key",
-            )
-            .is_err()
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut secret_references = BTreeSet::new();
-    collect_secret_references(&governance, &mut secret_references)?;
-    collect_secret_references(&runtime, &mut secret_references)?;
-    // The compile below copies every public key file this governance
-    // references from the deployment target and fails when one is missing, so
-    // the inventory above must run first: a missing key is reported here
-    // instead of surfacing as an unrelated compile failure.
-    let fixture_paths = if missing_public_key_files.is_empty() {
-        let compiled = build::compile_target_fixture_project(&args.project, &target, &evidence_bin)
-            .context("compiling editable project with deployment target")?;
-        compiled.fixture_paths.clone()
-    } else {
-        Vec::new()
-    };
-    let report = TargetReport {
-        format_version: 1,
-        target: target.display().to_string(),
-        fixture_paths,
-        public_key_files,
-        missing_public_key_files,
-        secret_references: secret_references.into_iter().collect(),
-    };
-    if args.json {
-        let members = serde_json::to_value(&report).context("encoding target explanation")?;
-        crate::report::print(&if report.missing_public_key_files.is_empty() {
-            crate::report::success("target explain", "complete", members)
-        } else {
-            let mut members = members;
-            members["diagnostics"] = serde_json::json!([{
-                "severity": "error",
-                "code": "evidencectl.target.public-key-missing",
-                "artifact": report.target,
-                "path": "$.missingPublicKeyFiles",
-                "message": "The deployment target does not hold every public key its governance references.",
-                "suggestedAction": "Copy each file listed under missingPublicKeyFiles into the deployment target, then rerun evidencectl target explain <target> <project>.",
-            }]);
-            crate::report::refused("target explain", "refused", members)
-        })?;
-    } else {
-        println!("Target: {}", report.target);
-        for fixture in &report.fixture_paths {
-            println!("Fixture: {fixture}");
-        }
-        for public_key in &report.public_key_files {
-            println!("Public key: {public_key}");
-        }
-        for missing in &report.missing_public_key_files {
-            println!("Missing public key: {missing}");
-        }
-        for reference in &report.secret_references {
-            println!("Provision {SECRET_PREFIX}{reference}");
-        }
-    }
-    Ok(if report.missing_public_key_files.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(crate::report::DOMAIN_REFUSAL_EXIT)
-    })
-}
-
-fn expected_public_key_files(governance: &Value) -> Result<Vec<String>> {
-    let signing = governance
-        .get("signing")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("target governance must contain native signing configuration"))?;
-    let mut files = BTreeSet::new();
-    let active = signing
-        .get("activePublicJwkFile")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("target governance signing.activePublicJwkFile is required"))?;
-    files.insert(public_key_path(active)?);
-    if let Some(published) = signing.get("publishedPublicJwkFiles") {
-        let published = published.as_array().ok_or_else(|| {
-            anyhow!("target governance signing.publishedPublicJwkFiles must be a list")
-        })?;
-        for value in published {
-            let path = value.as_str().ok_or_else(|| {
-                anyhow!("target governance published public key paths must be strings")
-            })?;
-            files.insert(public_key_path(path)?);
-        }
-    }
-    Ok(files.into_iter().collect())
-}
-
-fn set_or_validate_active_public_key(governance: &mut Value, relative: &str) -> Result<()> {
-    let signing = governance
-        .get_mut("signing")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| anyhow!("target governance must contain native signing configuration"))?;
-    match signing.get("activePublicJwkFile") {
-        Some(Value::String(current)) => {
-            let current = public_key_path(current)?;
-            if current != relative {
-                bail!("target governance signing.activePublicJwkFile does not match the --signing-public-key thumbprint");
+        .map(|(id, definition)| {
+            let authority = definition
+                .grant_ceiling
+                .authorities
+                .first()
+                .context("a local grant needs an authority ceiling")?;
+            let actor = definition
+                .grant_ceiling
+                .actor_kinds
+                .first()
+                .context("a local grant needs an actor-kind ceiling")?;
+            let origin = definition
+                .grant_ceiling
+                .value_origins
+                .first()
+                .context("a local grant needs a value-origin ceiling")?;
+            if *origin != project::ValueOrigin::Request {
+                let bindings = match origin {
+                    project::ValueOrigin::AuthenticatedContext => "valueClaims",
+                    project::ValueOrigin::AuthenticatedGrant => {
+                        "valueClaims, requesterClients and grantSourceIssuer"
+                    }
+                    project::ValueOrigin::Request => unreachable!(),
+                };
+                bail!("AssertionDefinition {id} selects {} values; its ceilings do not supply {bindings}. Author a target.yaml referencing an EvidenceTargetAuthority with those explicit bindings and use `evidencectl target new <directory> --settings <target.yaml>`", origin.as_str());
             }
-        }
-        Some(_) => bail!("target governance signing.activePublicJwkFile must be a string"),
-        None => {
-            signing.insert(
-                "activePublicJwkFile".to_owned(),
-                Value::String(relative.to_owned()),
-            );
-        }
+            let representation = definition
+                .representations
+                .first()
+                .context("a local grant needs a representation")?;
+            let subjects = definition
+                .subjects
+                .iter()
+                .map(|subject| {
+                    Ok(json!({
+                        "role": subject.role,
+                        "selectorProfile": subject.selectors.first().context("a local grant subject needs a selector profile")?,
+                        "valueOrigin": origin
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((authority.to_owned(), actor.to_owned(), json!({
+                "definition": id,
+                "purpose": definition.purpose,
+                "audienceFrom": "authenticated-requester",
+                "representations": [representation],
+                "subjectBinding": definition.subject_binding,
+                "subjects": subjects
+            })))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut profiles = serde_json::Map::new();
+    for (index, (authority, actor_kind, grant)) in grants.into_iter().enumerate() {
+        profiles.insert(
+            format!("local-service-{}", index + 1),
+            json!({"authority": authority, "actorKind": actor_kind, "requesterTags": ["local-service"], "grants": [grant]}),
+        );
     }
-    Ok(())
+    Ok(json!({
+        "apiVersion": target::AUTHORITY_API_VERSION,
+        "kind": target::AUTHORITY_KIND,
+        "target": target_id,
+        "project": project.id,
+        "accessProfiles": profiles
+    }))
 }
 
-struct PublicKeySource {
-    bytes: Vec<u8>,
+fn explain(args: ExplainArgs, format: OutputFormat) -> Result<ExitCode> {
+    let project = read_project(&args.project)?;
+    let path = target_path(&args.target);
+    let target = read_target(&path)?;
+    if target.project != project.id {
+        bail!("target must name this EvidenceProject");
+    }
+    let root = plain_parent(&path, "target parent")?;
+    let authority_path = safe_relative(&root, &target.authority, "target authority")?;
+    let authority_bytes = read_plain_file(&authority_path, MAX_TARGET_BYTES, "target authority")?;
+    let authority = target::read_authority(
+        &authority_path.to_string_lossy(),
+        &authority_bytes,
+        &project,
+    )?
+    .value;
+    if authority.target != target.id {
+        bail!("target authority must name this EvidenceTarget");
+    }
+    let compiled = target::compile_authority(&authority, &project).map_err(|findings| {
+        authored::file_findings_report(&authority_path.to_string_lossy(), "authority", findings)
+    })?;
+    let report = json!({
+        "target": target.id,
+        "project": target.project,
+        "authority": target.authority,
+        "accessProfiles": compiled["accessProfiles"],
+        "connections": target.connections.keys().collect::<Vec<_>>(),
+        "offline": true,
+        "secretResolution": false
+    });
+    if args.json || format == OutputFormat::Json {
+        crate::report::print(&crate::report::success(
+            "target explain",
+            "complete",
+            report,
+        ))?;
+    } else {
+        println!("Target: {}", target.id);
+        println!("Project: {}", target.project);
+        println!("Authority: {}", target.authority);
+        println!("Access profiles: {}", authority.access_profiles.len());
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
-fn signing_public_key_reference(
-    path: &Path,
-    description: &str,
-) -> Result<(String, PublicKeySource)> {
-    let source = resolve_plain_file(path, description)?;
-    let bytes = read_plain_file(&source, MAX_PUBLIC_KEY_BYTES, description)?;
-    let text =
-        std::str::from_utf8(&bytes).with_context(|| format!("{description} must be UTF-8"))?;
-    let public = PublicJwk::parse(text)
-        .with_context(|| format!("{description} must be a valid public JWK"))?;
-    if public.algorithm().ok() != Some(SigningAlgorithm::Es256) {
-        bail!("{description} must use ES256 P-256");
-    }
-    let kid = public
-        .jkt()
-        .with_context(|| format!("computing the {description} thumbprint"))?;
-    if public.kid.as_deref() != Some(kid.as_str()) {
-        bail!("{description} kid must equal its RFC 7638 thumbprint");
-    }
-    Ok((
-        format!("public-keys/{kid}.jwk.json"),
-        PublicKeySource { bytes },
-    ))
+fn render_target(target: &EvidenceTarget) -> Result<String> {
+    let mut value = serde_json::to_value(target)?;
+    let object = value.as_object_mut().expect("EvidenceTarget is an object");
+    object.insert("apiVersion".to_owned(), json!(target::TARGET_API_VERSION));
+    object.insert("kind".to_owned(), json!(target::TARGET_KIND));
+    authored::to_indented_yaml(&value)
 }
 
-fn normalize_supplied_public_keys(
-    public_keys: BTreeMap<ExternalId, PathBuf>,
-    settings_parent: &Path,
-) -> Result<BTreeMap<String, PublicKeySource>> {
-    let mut normalized = BTreeMap::new();
-    for (name, source) in public_keys {
-        let name = name.as_str();
-        let relative = if name.starts_with("public-keys/") {
-            public_key_path(name)?
-        } else {
-            public_key_path(&format!("public-keys/{name}"))?
-        };
-        let source = if source.is_absolute() {
-            source
-        } else {
-            settings_parent.join(source)
-        };
-        let (actual_relative, source) =
-            signing_public_key_reference(&source, "target settings public key")?;
-        if actual_relative != relative {
-            bail!("target settings public key name must match the JWK RFC 7638 thumbprint");
-        }
-        if normalized.insert(relative, source).is_some() {
-            bail!("target settings name the same public key more than once");
-        }
-    }
-    Ok(normalized)
-}
-
-fn public_key_path(value: &str) -> Result<String> {
-    let name = value
-        .strip_prefix("public-keys/")
-        .ok_or_else(|| anyhow!("public signing key paths must live under public-keys/"))?;
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains('\\')
-        || name.len() > 160
-        || Path::new(name)
+fn safe_relative(root: &Path, relative: &str, label: &str) -> Result<PathBuf> {
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || path
             .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
-        bail!("public signing key names must be plain file names under public-keys/");
+        bail!("{label} must be a plain target-relative path without traversal");
     }
-    Ok(format!("public-keys/{name}"))
-}
-
-fn collect_secret_references(value: &Value, references: &mut BTreeSet<String>) -> Result<()> {
-    collect_secret_references_at(value, "", references)
-}
-
-/// Collect the logical secret names `value` references, refusing the first
-/// malformed reference by its JSON pointer below `pointer`.
-fn collect_secret_references_at(
-    value: &Value,
-    pointer: &str,
-    references: &mut BTreeSet<String>,
-) -> Result<()> {
-    match value {
-        Value::String(value) => {
-            if let Some(reference) = value.strip_prefix(SECRET_PREFIX) {
-                if !valid_secret_name(reference) {
-                    return Err(SettingsDiagnostic::at(
-                        pointer,
-                        "target secret reference has invalid syntax",
-                    )
-                    .into());
-                }
-                references.insert(reference.to_owned());
-            }
+    let mut candidate = root.to_path_buf();
+    for part in path.components() {
+        candidate.push(part);
+        let metadata = fs::symlink_metadata(&candidate)
+            .with_context(|| format!("inspecting {label} {}", candidate.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!("{label} cannot traverse symbolic links");
         }
-        Value::Array(values) => {
-            for (index, value) in values.iter().enumerate() {
-                collect_secret_references_at(value, &format!("{pointer}/{index}"), references)?;
-            }
-        }
-        Value::Object(values) => {
-            for (key, value) in values {
-                let escaped = key.replace('~', "~0").replace('/', "~1");
-                collect_secret_references_at(value, &format!("{pointer}/{escaped}"), references)?;
-            }
-        }
-        _ => {}
     }
-    Ok(())
+    Ok(candidate)
 }
 
-fn valid_secret_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'a'..=b'z'))
-        && bytes.len() <= 128
-        && bytes[1..].iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
+fn plain_parent(path: &Path, label: &str) -> Result<PathBuf> {
+    let parent = path.parent().context("path requires a parent directory")?;
+    let parent = fs::canonicalize(parent).with_context(|| format!("resolving {label}"))?;
+    if !fs::symlink_metadata(&parent)?.is_dir() {
+        bail!("{label} must be a plain directory");
+    }
+    Ok(parent)
+}
+
+fn created_plain_parent(path: &Path, label: &str) -> Result<PathBuf> {
+    let parent = path.parent().context("path requires a parent directory")?;
+    let mut cursor = PathBuf::new();
+    for component in parent.components() {
+        cursor.push(component);
+        match fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                bail!("{label} cannot traverse symbolic links or non-directories");
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::DirBuilder::new().mode(0o755).create(&cursor)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    fs::canonicalize(parent).with_context(|| format!("resolving {label}"))
 }
 
 fn reject_existing(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(_) => bail!("target output already exists; choose a new directory"),
+        Ok(_) => bail!("target destination already exists"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).context("inspecting target output"),
+        Err(error) => Err(error.into()),
     }
 }
 
-fn resolve_plain_file(path: &Path, description: &str) -> Result<PathBuf> {
-    let parent = plain_parent(path, description)?;
-    let name = path
-        .file_name()
-        .ok_or_else(|| anyhow!("{description} must name one file"))?;
-    Ok(parent.join(name))
+fn read_plain_file(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).with_context(|| format!("inspecting {label}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
+        bail!("{label} must be a bounded plain file");
+    }
+    fs::read(path).with_context(|| format!("reading {label}"))
 }
 
-fn plain_parent(path: &Path, description: &str) -> Result<PathBuf> {
-    if !matches!(path.components().next_back(), Some(Component::Normal(_))) {
-        bail!("{description} must name one file or directory");
-    }
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let metadata =
-        fs::symlink_metadata(parent).with_context(|| format!("inspecting {description}"))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        bail!("{description} must be an existing plain directory");
-    }
-    fs::canonicalize(parent).with_context(|| format!("resolving {description}"))
+fn copy_new(source: &Path, destination: &Path, maximum: u64) -> Result<()> {
+    let bytes = read_plain_file(source, maximum, "target input")?;
+    write_new_file(destination, &bytes)
 }
 
-/// Resolve the parent for a newly authored output, creating it when missing.
-///
-/// `target new` demands no pre-created `targets/` directory, exactly as `init`
-/// and `source add` create the parents they write under. A parent that already
-/// exists as a symlink stays refused: the published target must live in a
-/// plain directory the operator can review.
-fn created_plain_parent(path: &Path, description: &str) -> Result<PathBuf> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    // Walk the chain one component at a time. A recursive create follows a
-    // symlinked ancestor, which would publish the target outside the project,
-    // so each existing component is inspected with lstat and each missing one
-    // is created on its own under a component already known to be a plain
-    // directory.
-    let mut walked = PathBuf::new();
-    let mut plain_ancestor = true;
-    let mut creating = false;
-    for component in parent.components() {
-        walked.push(component);
-        if !creating {
-            match fs::symlink_metadata(&walked) {
-                Ok(metadata) => {
-                    plain_ancestor = metadata.is_dir() && !metadata.file_type().is_symlink();
-                    continue;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    if !plain_ancestor {
-                        bail!("{description} must be an existing plain directory");
-                    }
-                    creating = true;
-                }
-                Err(error) => {
-                    return Err(error).with_context(|| format!("inspecting {description}"));
-                }
-            }
-        }
-        fs::DirBuilder::new()
-            .mode(0o755)
-            .create(&walked)
-            .with_context(|| format!("creating {description} {}", walked.display()))?;
-    }
-    plain_parent(path, description)
-}
-
-fn read_plain_file(path: &Path, maximum: u64, description: &str) -> Result<Vec<u8>> {
-    let descriptor = rustix::fs::open(
-        path,
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::CLOEXEC
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::NONBLOCK,
-        rustix::fs::Mode::empty(),
-    )
-    .map_err(std::io::Error::from)
-    .with_context(|| format!("opening {description}"))?;
-    let mut file = File::from(descriptor);
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > maximum {
-        bail!("{description} must be a bounded regular file");
-    }
-    let mut bytes = Vec::new();
-    std::io::Read::by_ref(&mut file)
-        .take(maximum + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > maximum {
-        bail!("{description} exceeds its byte limit");
-    }
-    Ok(bytes)
-}
-
-fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
+fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::DirBuilder::new()
-            .mode(0o755)
-            .recursive(true)
-            .create(parent)
-            .with_context(|| format!("creating directory {}", parent.display()))?;
+        fs::create_dir_all(parent)?;
     }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(mode)
+        .mode(0o644)
         .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
-    file.write_all(contents)?;
+        .with_context(|| format!("creating {} without replacement", path.display()))?;
+    file.write_all(bytes)?;
     file.sync_all()?;
+    Ok(())
+}
+
+fn replace_plain_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("target.yaml must remain a plain file");
+    }
+    let parent = path.parent().context("target.yaml requires a parent")?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.as_file().set_permissions(metadata.permissions())?;
+    staged.write_all(bytes)?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).context("publishing target.yaml")?;
     Ok(())
 }
 
@@ -1092,876 +540,200 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::disallowed_methods,
-        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
-    )]
     use super::*;
-    use std::os::unix::fs::symlink;
-
-    const ES256_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
-    const ES256_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
-
-    fn target_settings(signing: &str, public_keys: &str) -> String {
-        format!(
-            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
-kind: EvidenceTargetSettings
-governance:
-  assuranceProfile: local
-  service:
-    publicOrigin: http://127.0.0.1:8080
-  issuer:
-    uri: urn:example:issuer
-  authentication:
-    oidc:
-      issuer: https://issuer.example
-  audit:
-    hashKeyVersion: 1
-  subjectBinding:
-    secretRef: secret:file/subject-binding-hmac-key
-  rateLimits:
-    requestsPerPrincipalPerMinute: 60
-  signing:
-{signing}
-  authorityProfiles:
-    local:
-      kind: explicit-request
-runtime:
-  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-  kind: EvidenceRuntimeConfig
-  package:
-    root: /tmp/evidence/bundle
-  listener:
-    bind: 127.0.0.1:8080
-  secretProviders:
-    file:
-      root: /tmp/evidence/secrets
-  signer:
-    type: transit
-  audit:
-    path: /tmp/evidence/audit.jsonl
-  outboundTls:
-    systemRoots: true
-{public_keys}"#
-        )
-    }
-
-    /// CFG-SEC-3: a refusal names the location and the expected type, never the
-    /// value. `lib.rs` prints the whole error chain, so no layer may carry it.
-    #[test]
-    fn a_wrong_typed_settings_value_is_never_echoed_in_the_refusal() {
-        const MARKER: u64 = 7_654_321_987;
-        let marker = MARKER.to_string();
-        let governance = serde_json::json!({"assuranceProfile": MARKER});
-        let error = validate_settings_documents(&governance, &serde_json::json!({}))
-            .expect_err("a numeric assuranceProfile is refused");
-        let rendered = format!("{error:#}");
-        let diagnostic = error
-            .downcast_ref::<SettingsDiagnostic>()
-            .expect("the refusal is a settings diagnostic");
-        assert_eq!(diagnostic.pointer, "/governance");
-        assert!(
-            !rendered.contains(&marker),
-            "the refusal echoed the value: {rendered}"
-        );
-    }
 
     #[test]
-    fn local_target_derives_paths_without_overwriting_authored_paths_or_production() {
-        let temporary = tempfile::tempdir().unwrap();
-        fs::write(temporary.path().join("evidence-project.yaml"), "version: 1").unwrap();
-        let project = fs::canonicalize(temporary.path()).unwrap();
-        let local = serde_json::json!({"assuranceProfile": "local"});
-        let mut runtime = serde_json::json!({});
-        fill_local_paths(&project, &local, &mut runtime).unwrap();
-        assert_eq!(
-            runtime["package"]["root"],
-            project
-                .join(".evidence/dev/bundle")
-                .to_string_lossy()
-                .as_ref()
-        );
-        assert_eq!(
-            runtime["secretProviders"]["file"]["root"],
-            project.join("secrets").to_string_lossy().as_ref()
-        );
-        assert_eq!(
-            runtime["audit"]["path"],
-            project
-                .join(".evidence/dev/audit/evidence.jsonl")
-                .to_string_lossy()
-                .as_ref()
-        );
-        runtime["package"]["root"] = Value::String("/srv/reviewed/bundle".to_owned());
-        runtime["secretProviders"]["file"]["root"] =
-            Value::String("/srv/reviewed/secrets".to_owned());
-        runtime["audit"]["path"] = Value::String("/srv/reviewed/audit.jsonl".to_owned());
-        let authored = runtime.clone();
-        fill_local_paths(&project, &local, &mut runtime).unwrap();
-        assert_eq!(runtime, authored);
-        assert!(fill_local_paths(
-            &project,
-            &serde_json::json!({"assuranceProfile": "production"}),
-            &mut runtime
-        )
-        .is_err());
-        assert_eq!(runtime, authored);
-    }
-
-    #[test]
-    fn local_target_creation_reuses_public_key_and_refuses_changed_retry() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let project = canonical.as_path();
-        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
-        fs::create_dir(project.join("secrets")).unwrap();
-        fs::write(
-            project.join("secrets/signing-p256-public.jwk.json"),
-            ES256_PUBLIC_JWK,
-        )
-        .unwrap();
-        let target = project.join("target");
-        let connections = serde_json::json!({});
-        create_local_target(project, &target, connections.clone()).unwrap();
-        create_local_target(project, &target, connections.clone()).unwrap();
-        let governance: Value =
-            serde_norway::from_slice(&fs::read(target.join("governance.yaml")).unwrap()).unwrap();
-        assert_eq!(governance["assuranceProfile"], "local");
-        assert!(governance["authorityProfiles"]
-            .as_object()
-            .unwrap()
-            .values()
-            .all(|profile| profile["grants"].as_array().unwrap().is_empty()));
-        assert!(governance.get("requirements").is_none());
-        fs::write(target.join("runtime.yaml"), "operator authored settings").unwrap();
-        assert!(create_local_target(project, &target, connections).is_err());
-        assert_eq!(
-            fs::read_to_string(target.join("runtime.yaml")).unwrap(),
-            "operator authored settings"
-        );
-    }
-
-    #[test]
-    fn local_target_creation_creates_missing_parents_and_refuses_a_symlinked_parent() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let project = canonical.as_path();
-        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
-        fs::create_dir(project.join("secrets")).unwrap();
-        fs::write(
-            project.join("secrets/signing-p256-public.jwk.json"),
-            ES256_PUBLIC_JWK,
-        )
-        .unwrap();
-        let target = project.join("targets/nested/local");
-        assert!(!target.parent().unwrap().exists());
-        create_local_target(project, &target, serde_json::json!({}))
-            .expect("missing target parents are created");
-        assert!(target.join("governance.yaml").is_file());
-
-        let real = project.join("real-parent");
-        fs::create_dir(&real).unwrap();
-        symlink(&real, project.join("link-parent")).expect("symlink");
-        let error = create_local_target(
-            project,
-            &project.join("link-parent/local"),
-            serde_json::json!({}),
-        )
-        .expect_err("a symlinked target parent is refused");
-        assert!(
-            format!("{error:#}").contains("must be an existing plain directory"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn local_target_creation_refuses_a_symlinked_ancestor_of_a_missing_parent() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let project = canonical.join("project");
-        fs::create_dir(&project).unwrap();
-        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
-        fs::create_dir(project.join("secrets")).unwrap();
-        fs::write(
-            project.join("secrets/signing-p256-public.jwk.json"),
-            ES256_PUBLIC_JWK,
-        )
-        .unwrap();
-        let elsewhere = canonical.join("elsewhere");
-        fs::create_dir(&elsewhere).unwrap();
-        symlink(&elsewhere, project.join("targets")).expect("symlink");
-        let error = create_local_target(
-            &project,
-            &project.join("targets/nested/local"),
-            serde_json::json!({}),
-        )
-        .expect_err("a symlinked ancestor of the target parent is refused");
-        assert!(
-            format!("{error:#}").contains("must be an existing plain directory"),
-            "{error:#}"
-        );
-        assert!(
-            !elsewhere.join("nested").exists(),
-            "a refused target creates nothing outside the project"
-        );
-    }
-
-    #[test]
-    fn local_target_creation_generates_a_missing_project_signing_key_once() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let project = canonical.as_path();
-        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
-        let mut secrets = fs::DirBuilder::new();
-        secrets.mode(0o700);
-        secrets.create(project.join("secrets")).unwrap();
-        let target = project.join("target");
-        create_local_target(project, &target, serde_json::json!({}))
-            .expect("a project without a signing key gets one");
-        let governance: Value =
-            serde_norway::from_slice(&fs::read(target.join("governance.yaml")).unwrap()).unwrap();
-        let active = governance
-            .pointer("/signing/activePublicJwkFile")
-            .and_then(Value::as_str)
-            .expect("governance names its active key")
-            .to_owned();
-        let written: Value = serde_norway::from_slice(
-            &fs::read(target.join(&active)).expect("the named key file is written"),
-        )
-        .unwrap();
-        let generated: Value = serde_norway::from_slice(
-            &fs::read(project.join("secrets/signing-p256-public.jwk.json"))
-                .expect("the project key was generated"),
-        )
-        .unwrap();
-        assert_eq!(
-            active,
-            format!("public-keys/{}.jwk.json", written["kid"].as_str().unwrap())
-        );
-        assert_eq!(written, generated, "governance and disk name one key");
-        assert!(project.join("secrets/signing-p256-private-jwk").is_file());
-        // The generation is create-only: an identical retry reuses the key and
-        // the authored target unchanged.
-        create_local_target(project, &target, serde_json::json!({}))
-            .expect("an identical retry is harmless");
-        let retried: Value =
-            serde_norway::from_slice(&fs::read(target.join(&active)).unwrap()).unwrap();
-        assert_eq!(retried, generated);
-    }
-
-    #[test]
-    fn local_target_creation_refuses_a_directory_that_is_not_a_project_before_writing_keys() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let outside = canonical.as_path();
-        let error = create_local_target(
-            outside,
-            &outside.join("targets/local"),
-            serde_json::json!({}),
-        )
-        .expect_err("a directory without an Evidence project marker is refused");
-        assert!(
-            format!("{error:#}").contains("Evidence project marker"),
-            "{error:#}"
-        );
-        assert!(
-            !outside.join(crate::authoring::SECRETS_DIRECTORY).exists(),
-            "a refused local target writes no key material"
-        );
-        assert!(!outside.join("targets/local").exists());
-    }
-
-    #[test]
-    fn local_target_creation_refuses_an_occupied_output_before_writing_keys() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let project = canonical.as_path();
-        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
-        let target = project.join("target");
-        fs::write(&target, "operator authored settings").unwrap();
-        let error = create_local_target(project, &target, serde_json::json!({}))
-            .expect_err("an occupied target output is refused");
-        assert!(
-            format!("{error:#}").contains("must be a plain directory"),
-            "{error:#}"
-        );
-        assert!(
-            !project.join(crate::authoring::SECRETS_DIRECTORY).exists(),
-            "a refused local target writes no key material"
-        );
-        assert_eq!(
-            fs::read_to_string(&target).unwrap(),
-            "operator authored settings"
-        );
-    }
-
-    #[test]
-    fn local_connection_insertion_preserves_custom_settings_and_refuses_conflicts() {
-        let temporary = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temporary.path()).unwrap();
-        let project = canonical.as_path();
-        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
-        fs::create_dir(project.join("secrets")).unwrap();
-        fs::write(
-            project.join("secrets/signing-p256-public.jwk.json"),
-            ES256_PUBLIC_JWK,
-        )
-        .unwrap();
-        let target = project.join("target");
-        let first = serde_json::json!({"baseUrl": "http://127.0.0.1:18000"});
-        ensure_local_connection(project, &target, "first", first.clone()).unwrap();
-        let path = target.join("governance.yaml");
-        let mut governance: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        governance["service"]["publicOrigin"] = serde_json::json!("http://127.0.0.1:19000");
-        fs::write(&path, serde_norway::to_string(&governance).unwrap()).unwrap();
-        let runtime = fs::read(target.join("runtime.yaml")).unwrap();
-        let before = fs::read(&path).unwrap();
-        ensure_local_connection(project, &target, "first", first).unwrap();
-        assert_eq!(fs::read(&path).unwrap(), before);
-        let second = serde_json::json!({"baseUrl": "http://127.0.0.1:18001"});
-        ensure_local_connection(project, &target, "second", second.clone()).unwrap();
-        governance["sourceConnections"]["second"] = second;
-        let actual: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(actual, governance);
-        assert_eq!(fs::read(target.join("runtime.yaml")).unwrap(), runtime);
-        let before = fs::read(&path).unwrap();
-        assert!(check_local_connection(
-            &target,
-            "first",
-            &serde_json::json!({"baseUrl": "http://127.0.0.1:19001"})
-        )
-        .is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-        governance["assuranceProfile"] = serde_json::json!("production");
-        fs::write(&path, serde_norway::to_string(&governance).unwrap()).unwrap();
-        assert!(check_local_connection(&target, "third", &serde_json::json!({})).is_err());
-    }
-
-    #[test]
-    fn signing_public_key_reference_names_active_key_by_thumbprint() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("signing-public.jwk.json");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-
-        let (relative, source) = signing_public_key_reference(&key_path, "signing public key")
-            .expect("public key reference");
-        assert_eq!(
-            relative,
-            "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json"
-        );
-        assert_eq!(source.bytes, ES256_PUBLIC_JWK.as_bytes());
-
-        let mut governance = serde_json::json!({
-            "signing": {
-                "publishedPublicJwkFiles": []
-            }
-        });
-        set_or_validate_active_public_key(&mut governance, &relative).expect("active key set");
-        assert_eq!(governance["signing"]["activePublicJwkFile"], relative);
-        set_or_validate_active_public_key(&mut governance, &relative).expect("matching active key");
-
-        governance["signing"]["activePublicJwkFile"] =
-            serde_json::json!("public-keys/other.jwk.json");
-        assert!(set_or_validate_active_public_key(&mut governance, &relative).is_err());
-    }
-
-    #[test]
-    fn target_new_fills_active_public_key_from_signing_key_argument() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("signing-public.jwk.json");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-        fs::write(
-            &settings_path,
-            target_settings("    publishedPublicJwkFiles: []", ""),
-        )
-        .expect("settings");
-
-        new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: Some(key_path),
-        })
-        .expect("target created");
-
-        let governance: Value = serde_norway::from_slice(
-            &fs::read(target.join("governance.yaml")).expect("governance"),
-        )
-        .expect("governance parses");
-        assert_eq!(
-            governance["signing"]["activePublicJwkFile"],
-            "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json"
-        );
-        assert!(target
-            .join("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json")
-            .is_file());
-    }
-
-    #[test]
-    fn public_key_inputs_must_match_governance_references() {
-        let governance = serde_json::json!({
-            "signing": {
-                "activePublicJwkFile": "public-keys/active.jwk.json",
-                "publishedPublicJwkFiles": ["public-keys/old.jwk.json"]
-            }
-        });
-        assert_eq!(
-            expected_public_key_files(&governance).expect("expected keys"),
-            ["public-keys/active.jwk.json", "public-keys/old.jwk.json"]
-        );
-
-        let mut supplied = BTreeMap::new();
-        let settings = tempfile::tempdir().expect("settings directory");
-        let active = settings.path().join("active.jwk.json");
-        fs::write(&active, ES256_PUBLIC_JWK).expect("active key");
-        supplied.insert(
-            ExternalId::new("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json")
-                .expect("an external id"),
-            PathBuf::from("active.jwk.json"),
-        );
-        assert_eq!(
-            normalize_supplied_public_keys(supplied, settings.path())
-                .expect("normalized")
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>(),
-            ["public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json"]
-        );
-    }
-
-    #[test]
-    fn target_new_rejects_private_jwk_in_public_keys_without_publishing() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("private.jwk");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PRIVATE_JWK).expect("private key");
-        fs::write(
-            &settings_path,
-            target_settings(
-                "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
-                "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: private.jwk\n",
+    fn local_targets_require_explicit_authenticated_value_bindings_before_writing() {
+        for (origin, bindings) in [
+            ("authenticated-context", "valueClaims"),
+            (
+                "authenticated-grant",
+                "requesterClients and grantSourceIssuer",
             ),
-        )
-        .expect("settings");
-
-        assert!(new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .is_err());
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-
-    #[test]
-    fn target_new_rejects_public_key_filename_that_does_not_match_thumbprint() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("active.jwk.json");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-        fs::write(
-            &settings_path,
-            target_settings(
-                "    activePublicJwkFile: public-keys/mismatched.jwk.json\n    publishedPublicJwkFiles: []",
-                "publicKeys:\n  mismatched.jwk.json: active.jwk.json\n",
-            ),
-        )
-        .expect("settings");
-
-        assert!(new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .is_err());
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-
-    #[test]
-    fn target_new_rejects_placeholder_runtime_shape() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("active.jwk.json");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-        fs::write(
-            &settings_path,
-            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
-kind: EvidenceTargetSettings
-governance:
-  assuranceProfile: local
-  service:
-    publicOrigin: http://127.0.0.1:8080
-  issuer:
-    uri: urn:example:issuer
-  authentication:
-    oidc:
-      issuer: https://issuer.example
-  audit:
-    hashKeyVersion: 1
-  subjectBinding:
-    secretRef: secret:file/subject-binding-hmac-key
-  rateLimits:
-    requestsPerPrincipalPerMinute: 60
-  signing:
-    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
-    publishedPublicJwkFiles: []
-  authorityProfiles:
-    local:
-      kind: explicit-request
-runtime:
-  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-  kind: EvidenceRuntimeConfig
-publicKeys:
-  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json
-"#,
-        )
-        .expect("settings");
-
-        assert!(new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .is_err());
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-
-    #[test]
-    fn target_new_rejects_unknown_governance_field() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(
-            &settings_path,
-            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
-kind: EvidenceTargetSettings
-governance:
-  assuranceProfile: local
-  service:
-    publicOrigin: http://127.0.0.1:8080
-  issuer:
-    uri: urn:example:issuer
-  authentication:
-    oidc:
-      issuer: https://issuer.example
-  audit:
-    hashKeyVersion: 1
-  subjectBinding:
-    secretRef: secret:file/subject-binding-hmac-key
-  rateLimits:
-    requestsPerPrincipalPerMinute: 60
-  signing:
-    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
-    publishedPublicJwkFiles: []
-  authorityProfiles:
-    local:
-      kind: explicit-request
-  unexpectedField: true
-runtime:
-  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-  kind: EvidenceRuntimeConfig
-"#,
-        )
-        .expect("settings");
-
-        // The consumers (target explain, build --target, fixtures run --target)
-        // deserialize governance.yaml through the same closed TargetGovernance
-        // type, which denies unknown fields. `target new` must refuse this file
-        // too instead of creating a target those commands then refuse to open.
-        assert!(new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .is_err());
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-    #[test]
-    fn target_new_rejects_unknown_runtime_field() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("active.jwk.json");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-        let settings = target_settings(
-            "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
-            "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json\n",
-        )
-        .replace(
-            "  outboundTls:\n",
-            "  unexpectedField: true\n  outboundTls:\n",
-        );
-        fs::write(&settings_path, settings).expect("settings");
-
-        // The runtime denies unknown fields and names this key when it refuses
-        // the document at startup. `target new` must refuse it here instead of
-        // writing a runtime.yaml the deployment cannot load.
-        let Err(error) = new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        }) else {
-            panic!("an unknown runtime field is refused");
-        };
-        let reported = format!("{error:#}");
-        assert!(reported.contains("unexpectedField"), "{reported}");
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-    /// The Evidence runtime owns the settings shape and this crate does not link
-    /// it, so `TargetRuntime` is a restatement nothing but a test can hold in
-    /// step: a key the runtime adds would be refused here, and a key it drops
-    /// would still be accepted. The published runtime contract is the document
-    /// the runtime loader answers to, so it is what the mirror is held against.
-    #[test]
-    fn the_closed_runtime_mirror_matches_the_published_runtime_contract() {
-        let contract = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../products/evidence/contracts/runtime.schema.yaml"
-        );
-        let schema: Value = serde_norway::from_slice(
-            &fs::read(contract).expect("the published runtime contract is readable"),
-        )
-        .expect("the published runtime contract parses");
-        assert_eq!(
-            schema["additionalProperties"],
-            Value::Bool(false),
-            "the published runtime contract must stay closed"
-        );
-        let published = schema["properties"]
-            .as_object()
-            .expect("the runtime contract publishes properties");
-        let required: BTreeSet<&str> = schema["required"]
-            .as_array()
-            .expect("the runtime contract names its required properties")
-            .iter()
-            .map(|name| name.as_str().expect("each required property is a name"))
-            .collect();
-
-        let complete: serde_json::Map<String, Value> = published
-            .keys()
-            .map(|name| (name.clone(), sample_runtime_value(name)))
-            .collect();
-        serde_json::from_value::<TargetRuntime>(Value::Object(complete.clone()))
-            .expect("the mirror accepts every key the contract publishes");
-
-        for name in published.keys() {
-            let mut document = complete.clone();
-            document.remove(name);
-            let accepted = serde_json::from_value::<TargetRuntime>(Value::Object(document)).is_ok();
-            assert_eq!(
-                accepted,
-                !required.contains(name.as_str()),
-                "`{name}` is required by the mirror exactly when the contract requires it"
-            );
-        }
-
-        let mut unpublished = complete;
-        unpublished.insert("unpublishedField".to_owned(), Value::Bool(true));
-        assert!(
-            serde_json::from_value::<TargetRuntime>(Value::Object(unpublished)).is_err(),
-            "the mirror must refuse a key the contract does not publish"
-        );
-    }
-
-    /// A value the mirror can deserialize for the contract property `name`. The
-    /// mirror leaves the interior of each section to the runtime, so only
-    /// `apiVersion` and `kind` need a shape of their own.
-    fn sample_runtime_value(name: &str) -> Value {
-        match name {
-            "apiVersion" => serde_json::json!(EVIDENCE_RUNTIME_API_VERSION),
-            "kind" => serde_json::json!(EVIDENCE_RUNTIME_KIND),
-            _ => serde_json::json!({}),
-        }
-    }
-
-    #[test]
-    fn target_new_rejects_assurance_profile_outside_enum() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(
-            &settings_path,
-            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
-kind: EvidenceTargetSettings
-governance:
-  assuranceProfile: enterprise
-  service:
-    publicOrigin: http://127.0.0.1:8080
-  issuer:
-    uri: urn:example:issuer
-  authentication:
-    oidc:
-      issuer: https://issuer.example
-  audit:
-    hashKeyVersion: 1
-  subjectBinding:
-    secretRef: secret:file/subject-binding-hmac-key
-  rateLimits:
-    requestsPerPrincipalPerMinute: 60
-  signing:
-    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
-    publishedPublicJwkFiles: []
-  authorityProfiles:
-    local:
-      kind: explicit-request
-runtime:
-  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-  kind: EvidenceRuntimeConfig
-"#,
-        )
-        .expect("settings");
-
-        // "enterprise" is a nonempty string, which the previous hand-rolled
-        // check accepted; only the closed TargetGovernance type restricts
-        // assuranceProfile to local, production, or evidence-grade.
-        assert!(new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .is_err());
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-
-    #[test]
-    fn target_new_accepts_a_valid_settings_file() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("active.jwk.json");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-        fs::write(
-            &settings_path,
-            target_settings(
-                "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
-                "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json\n",
-            ),
-        )
-        .expect("settings");
-
-        new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .expect("a settings file matching the closed governance shape is accepted");
-
-        assert!(target.join("governance.yaml").is_file());
-        assert!(target.join("runtime.yaml").is_file());
-        let governance: Value = serde_norway::from_slice(
-            &fs::read(target.join("governance.yaml")).expect("governance"),
-        )
-        .expect("governance parses");
-        assert_eq!(governance["assuranceProfile"], "local");
-    }
-
-    #[test]
-    fn target_new_refuses_the_retired_runtime_api_version_with_the_replacement_named() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let key_path = temporary.path().join("active.jwk.json");
-        let settings_path = temporary.path().join("settings.yaml");
-        let target = temporary.path().join("target");
-        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
-        let settings = target_settings(
-            "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
-            "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json\n",
-        );
-        let retired = settings.replace(
-            EVIDENCE_RUNTIME_API_VERSION,
-            "registry.registrystack.org/evidence-runtime/v1alpha1",
-        );
-        assert_ne!(retired, settings, "the retired value is written");
-        fs::write(&settings_path, retired).expect("settings");
-
-        let error = new(NewArgs {
-            directory: target.clone(),
-            settings: Some(settings_path),
-            project: None,
-            local: false,
-            signing_public_key: None,
-        })
-        .expect_err("the retired runtime apiVersion is refused");
-
-        let diagnostic = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<SettingsDiagnostic>())
-            .expect("the refusal names the member at fault");
-        assert_eq!(diagnostic.pointer, "/runtime/apiVersion");
-        assert!(
-            diagnostic.message.contains(EVIDENCE_RUNTIME_API_VERSION),
-            "the refusal names the apiVersion to write"
-        );
-        assert!(
-            !target.exists(),
-            "failed target creation must be create-only"
-        );
-    }
-
-    #[test]
-    fn public_key_paths_stay_inside_public_keys_directory() {
-        for value in [
-            "active.jwk.json",
-            "public-keys/../active.jwk.json",
-            "public-keys/nested/active.jwk.json",
-            "secrets/active.jwk.json",
         ] {
-            assert!(public_key_path(value).is_err(), "{value} must be refused");
+            let root = tempfile::tempdir().unwrap();
+            let source =
+                include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
+            let decoded = project::read_project("evidence.yaml", source.as_bytes()).unwrap();
+            let mut value = serde_json::to_value(decoded.value).unwrap();
+            value["apiVersion"] = json!(project::PROJECT_API_VERSION);
+            value["kind"] = json!(project::PROJECT_KIND);
+            for definition in value["assertionDefinitions"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                // A later request origin must never silently downgrade the chosen origin.
+                definition["grantCeiling"]["valueOrigins"] = json!([origin, "request"]);
+            }
+            fs::write(
+                root.path().join("evidence.yaml"),
+                authored::to_indented_yaml(&value).unwrap(),
+            )
+            .unwrap();
+            let error =
+                create_local_target(root.path(), &root.path().join("targets/local"), json!({}))
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains(origin), "{error}");
+            assert!(error.contains(bindings), "{error}");
+            assert!(error.contains("--settings <target.yaml>"), "{error}");
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
         }
-        assert!(public_key_path("public-keys/active.jwk.json").is_ok());
     }
 
     #[test]
-    fn target_explanation_reports_only_logical_secret_references() {
-        let mut references = BTreeSet::new();
-        collect_secret_references(
-            &serde_json::json!({
-                "audit": "secret:file/audit-key",
-                "nested": ["secret:file/source-token", "not-secret"]
-            }),
-            &mut references,
+    fn explicit_targets_preserve_complete_authenticated_origin_authority() {
+        let mut project = project::read_project(
+            "evidence.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
         )
-        .expect("references");
-        assert_eq!(
-            references.into_iter().collect::<Vec<_>>(),
-            ["audit-key", "source-token"]
-        );
+        .unwrap()
+        .value;
+        let request_authority = local_authority(&project, "local").unwrap();
+        for origin in [
+            project::ValueOrigin::AuthenticatedContext,
+            project::ValueOrigin::AuthenticatedGrant,
+        ] {
+            for definition in project.assertion_definitions.values_mut() {
+                definition.grant_ceiling.value_origins =
+                    serde_json::from_value(json!([origin])).unwrap();
+            }
+            let mut authority = request_authority.clone();
+            for profile in authority["accessProfiles"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                if origin == project::ValueOrigin::AuthenticatedGrant {
+                    profile["requesterClients"] = json!(["local-consumer"]);
+                    profile["grantSourceIssuer"] = json!("http://127.0.0.1:8081");
+                }
+                for grant in profile["grants"].as_array_mut().unwrap() {
+                    for subject in grant["subjects"].as_array_mut().unwrap() {
+                        subject["valueOrigin"] = json!(origin);
+                        let selector_id = subject["selectorProfile"]
+                            .as_str()
+                            .unwrap()
+                            .parse::<registry_platform_yaml::LocalId>()
+                            .unwrap();
+                        let selector = project.selector_profiles.get(&selector_id).unwrap();
+                        subject["valueClaims"] = json!(selector
+                            .fields
+                            .keys()
+                            .map(|field| (
+                                field.to_string(),
+                                json!(format!(
+                                    "subjects.{}.{}",
+                                    subject["role"].as_str().unwrap(),
+                                    field
+                                ))
+                            ))
+                            .collect::<serde_json::Map<String, Value>>());
+                    }
+                }
+            }
+            let root = tempfile::tempdir().unwrap();
+            let root_path = root.path().canonicalize().unwrap();
+            let input = root_path.join("input");
+            fs::create_dir(&input).unwrap();
+            let target_source =
+                include_bytes!("../../../products/evidence/examples/standalone/local-target.yaml");
+            fs::write(input.join("target.yaml"), target_source).unwrap();
+            let target = target::read_target("target.yaml", target_source)
+                .unwrap()
+                .value;
+            let authority_yaml = authored::to_indented_yaml(&authority).unwrap();
+            fs::write(input.join(&target.authority), &authority_yaml).unwrap();
+            let key = input.join(target.signer.public_jwk_file());
+            fs::create_dir_all(key.parent().unwrap()).unwrap();
+            let (_, public_key) =
+                crate::authoring::ensure_local_signing_public_jwk(&input).unwrap();
+            fs::write(key, &public_key).unwrap();
+            let output = root_path.join("copied");
+            copy_explicit_target(&input, &output).unwrap();
+            assert_eq!(
+                fs::read(output.join(target.signer.public_jwk_file())).unwrap(),
+                public_key
+            );
+            assert!(!output
+                .join(".generated/secrets/signing-p256-private-jwk")
+                .exists());
+            let copied = fs::read(output.join(&target.authority)).unwrap();
+            assert_eq!(copied, authority_yaml.as_bytes());
+            let decoded = target::read_authority("authority.yaml", &copied, &project).unwrap();
+            target::compile_authority(&decoded.value, &project).unwrap();
+        }
+    }
+
+    #[test]
+    fn local_request_grants_pass_the_owning_authority_reader() {
+        let project = project::read_project(
+            "evidence.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
+        )
+        .unwrap()
+        .value;
+        let authority = local_authority(&project, "local").unwrap();
+        let yaml = authored::to_indented_yaml(&authority).unwrap();
+        let decoded = target::read_authority("authority.yaml", yaml.as_bytes(), &project).unwrap();
+        target::compile_authority(&decoded.value, &project).unwrap();
+    }
+
+    #[test]
+    fn maintained_deployment_targets_use_the_normalized_reader() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/reference/deployment-targets/environments");
+        for environment in ["local", "staging", "production"] {
+            let path = root.join(environment).join("evidence/target.yaml");
+            let target = read_target(&path).unwrap();
+            assert_eq!(target.id.as_str(), environment);
+            assert_eq!(target.authority, "authority.yaml");
+            assert_eq!(target.project.as_str(), "example-evidence");
+        }
+    }
+
+    #[test]
+    fn target_relative_paths_reject_traversal() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(safe_relative(root.path(), "../authority.yaml", "authority").is_err());
+        assert!(safe_relative(root.path(), "/authority.yaml", "authority").is_err());
+    }
+
+    #[test]
+    fn existing_destinations_are_never_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("target");
+        fs::create_dir(&destination).unwrap();
+        assert!(reject_existing(&destination).is_err());
+    }
+
+    #[test]
+    fn connection_names_and_shapes_are_bounded_before_io() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(check_local_connection(
+            root.path().join("missing").as_path(),
+            "../bad",
+            &json!({})
+        )
+        .is_err());
+        assert!(check_local_connection(
+            root.path().join("missing").as_path(),
+            "source",
+            &json!(true)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rendered_targets_use_the_normalized_envelope() {
+        let decoded = target::read_target(
+            "target.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/local-target.yaml"),
+        )
+        .unwrap();
+        let rendered = render_target(&decoded.value).unwrap();
+        assert!(rendered.contains("kind: EvidenceTarget"));
+        assert!(!rendered.contains("EvidenceTargetSettings"));
     }
 }

@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+# Local callers for `bregctl dev`. The owned ThunderID issuer that
+# `dev` starts beside the registry, registers each client below and issues it
+# short-lived tokens carrying these claims. One client binds each access profile
+# that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
+# first start runs the journeys and serves the package without another file.
+# A maintained refusal step can name the exact client for its profile with
+# `testBindings`; the 'Explicit teaching clients' section of
+# products/breg/DEV.md documents the closed binding format.
+# `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
+# nothing here is a credential, and none of it belongs in a deployment.
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: reader
+    accessProfiles: [record-reader]
+    scopes: [registry:generic:read]
+    claims:
+      registry_principal: generic-registry-reader
+      registry_purpose: registry-reporting
+      registry_record_status: active
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: generic-registry-source
+      registry_purpose: evidence-source-read

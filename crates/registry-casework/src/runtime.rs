@@ -5,15 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Arg, Command};
-use registry_casework_breg::BregBinding;
-use registry_casework_core::SourceAdapter;
+use registry_casework_core::ReviewContextProvider;
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::{Interval, MissedTickBehavior};
+use tokio::time::MissedTickBehavior;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::{
@@ -390,47 +389,41 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
     }
 }
 
-/// Build the source adapters the package declares from their runtime
-/// bindings, refusing a binding the package does not declare.
-pub fn build_source_adapters(
+/// Build the read-only providers the package declares from exact captured exports.
+pub fn build_context_providers(
     config: &RuntimeConfig,
     package: &crate::LoadedCaseworkPackage,
     secrets: &SecretResolver,
-) -> Result<Vec<Arc<dyn SourceAdapter>>, RuntimeError> {
+) -> Result<Vec<Arc<dyn ReviewContextProvider>>, RuntimeError> {
     let project = package.project();
-    let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
-    for source in &project.sources {
-        let binding = config
-            .sources
-            .get(&source.id)
-            .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?;
-        let adapter = binding
-            .build_adapter_from_description(
-                source,
-                package
-                    .source_description(&source.description)
-                    .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?,
-                secrets,
-            )
-            .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
-        adapters.push(Arc::new(adapter));
+    let mut providers: Vec<Arc<dyn ReviewContextProvider>> = Vec::new();
+    for provider in &project.context_providers {
+        let Some(binding) = config.context_providers.get(&provider.deployment_ref) else {
+            continue;
+        };
+        let description = provider
+            .description
+            .as_deref()
+            .and_then(|path| package.context_export(path))
+            .ok_or_else(|| RuntimeError::ContextProviderConfiguration(provider.id.clone()))?;
+        let built = registry_casework_breg::build_provider(binding, provider, description, secrets)
+            .map_err(|_| RuntimeError::ContextProviderConfiguration(provider.id.clone()))?;
+        providers.push(Arc::new(built));
     }
-    if config.sources.len() != adapters.len() {
-        let unmatched = config
-            .sources
-            .keys()
-            .find(|id| !project.sources.iter().any(|source| &&source.id == id))
-            .cloned()
-            .unwrap_or_default();
-        return Err(RuntimeError::SourceConfiguration(unmatched));
+    if config.context_providers.keys().any(|deployment| {
+        !project
+            .context_providers
+            .iter()
+            .any(|provider| &provider.deployment_ref == deployment)
+    }) {
+        return Err(RuntimeError::ContextProviderConfiguration(String::new()));
     }
-    Ok(adapters)
+    Ok(providers)
 }
 
 /// Refuse to serve a database whose activation ledger does not name this
 /// configuration: no package applied, another database's identity, another
-/// package, a source binding generation the last apply did not record, or a
-/// split-role activation whose runtime credential can now write the ledger,
+/// package, or a split-role activation whose runtime credential can now write the ledger,
 /// or a runtime credential that cannot write the ledger and does not hold
 /// the grants a split-role apply issues it.
 /// It only reads, and returns the role mode the runtime credential has.
@@ -438,7 +431,6 @@ pub async fn check_activation(
     store: &PostgresStore,
     database_id: &str,
     package_digest: &str,
-    adapters: &[&dyn SourceAdapter],
 ) -> Result<crate::RoleMode, RuntimeError> {
     let active = store
         .active_activation()
@@ -452,16 +444,6 @@ pub async fn check_activation(
             active: active.package_digest,
             configured: package_digest.to_owned(),
         });
-    }
-    for adapter in adapters {
-        if !store
-            .source_generation_registered(adapter.source_id(), adapter.binding_generation())
-            .await?
-        {
-            return Err(RuntimeError::SourceGenerationNotActive(
-                adapter.source_id().to_owned(),
-            ));
-        }
     }
     let (role_mode, grants_current) = store
         .effective_role()
@@ -482,55 +464,23 @@ pub async fn check_activation(
 }
 
 /// Refuse to serve a package that strands in-flight work pinned under an
-/// earlier package, unless the operator acknowledged that exact package.
+/// earlier package.
 /// `apply` makes the same comparison, but a process still serving the
 /// earlier package may admit work between that apply and this start, so the
 /// runtime repeats it read-only before it serves.
 pub async fn check_pinned_work(
     store: &PostgresStore,
     project: &registry_casework_core::CaseworkProject,
-    adapters: &[&dyn SourceAdapter],
+    providers: &[&dyn ReviewContextProvider],
     package_digest: &str,
-    acknowledged: Option<&str>,
 ) -> Result<(), RuntimeError> {
-    let conflicts = crate::stranded_pinned_work(store, project, adapters).await?;
-    match crate::pinned_work_verdict(&conflicts, package_digest, acknowledged) {
+    let conflicts = crate::stranded_pinned_work(store, project, providers).await?;
+    match crate::pinned_work_verdict(&conflicts, package_digest) {
         crate::PinnedWorkVerdict::Clear => Ok(()),
-        crate::PinnedWorkVerdict::Acknowledged => {
-            tracing::warn!(
-                stranded = %crate::describe_stranded_work(&conflicts),
-                "serving an acknowledged Casework policy package that strands pinned work"
-            );
-            Ok(())
-        }
         crate::PinnedWorkVerdict::Refused => Err(RuntimeError::StrandedPinnedWork(
             crate::stranded_work_refusal(&conflicts, package_digest),
         )),
     }
-}
-
-/// Refuse a source whose imported description pins a revision the source no
-/// longer serves. A source that cannot be read now is not refused here: its
-/// reads refuse the same drift once it answers.
-pub async fn check_source_revisions(adapters: &[&dyn SourceAdapter]) -> Result<(), RuntimeError> {
-    for adapter in adapters {
-        match adapter.source_revision_pin().await {
-            Ok(Some(pin)) if pin.pinned != pin.served => {
-                return Err(RuntimeError::SourceRevisionStale {
-                    source_id: adapter.source_id().to_owned(),
-                    pinned: pin.pinned,
-                    served: pin.served,
-                });
-            }
-            Ok(_) => {}
-            Err(error) => tracing::warn!(
-                source_id = adapter.source_id(),
-                error = %error,
-                "the pinned source revision could not be compared with the source at startup"
-            ),
-        }
-    }
-    Ok(())
 }
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
@@ -554,22 +504,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     validate_retained_completion_destinations(&store, &config.review_completion_destinations)
         .await?;
 
-    let adapters = build_source_adapters(&config, &package, &secrets)?;
-    let adapter_refs = adapters
+    let providers = build_context_providers(&config, &package, &secrets)?;
+    let provider_refs = providers
         .iter()
-        .map(|adapter| adapter.as_ref())
+        .map(|provider| provider.as_ref())
         .collect::<Vec<_>>();
-    let role_mode =
-        check_activation(&store, config.database_id(), &package_digest, &adapter_refs).await?;
-    check_pinned_work(
-        &store,
-        project,
-        &adapter_refs,
-        &package_digest,
-        config.package.acknowledge_stranded_work.as_deref(),
-    )
-    .await?;
-    check_source_revisions(&adapter_refs).await?;
+    let role_mode = check_activation(&store, config.database_id(), &package_digest).await?;
+    check_pinned_work(&store, project, &provider_refs, &package_digest).await?;
     if role_mode == crate::RoleMode::Single {
         tracing::warn!(
             role_mode = role_mode.as_str(),
@@ -594,14 +535,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             crate::task_grants::TaskAuthority::load(authority, &secrets, audit.identifiers())
         })
         .transpose()?;
-    let service = CaseworkService::new(store.clone(), project.clone(), adapters)?
-        .with_task_authority(task_authority)
-        .with_reconciliation_intervals(
-            config
-                .sources
-                .iter()
-                .map(|(source_id, binding)| (source_id.clone(), reconciliation_interval(binding))),
-        );
+    let service = CaseworkService::new(store.clone(), project.clone(), providers)?
+        .with_task_authority(task_authority);
     let completion_dispatcher = Arc::new(ReviewCompletionDispatcher::new(
         store.clone(),
         &config.review_completion_destinations,
@@ -616,12 +551,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         let mut retention_ticks = 0_u8;
         loop {
             interval.tick().await;
-            if let Err(error) = worker_service.synchronize_pending(100).await {
-                tracing::warn!(error = %error, "Casework synchronization pass did not complete");
-            }
-            if let Err(error) = worker_service.process_due_clocks(100).await {
-                tracing::warn!(error = %error, "Casework clock pass did not complete");
-            }
             if let Err(error) = worker_service.process_due_review_clocks(100).await {
                 tracing::warn!(error = %error, "Casework review clock pass did not complete");
             }
@@ -630,11 +559,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 if let Err(error) = worker_service.erase_expired_reviews().await {
                     tracing::warn!(error = %error, "Casework review retention pass did not complete");
                 }
-                if let Err(error) = worker_service.erase_expired_cursors().await {
-                    tracing::warn!(error = %error, "Casework inbox cursor retention pass did not complete");
-                }
-                if let Err(error) = worker_service.erase_expired_assignment_cursors().await {
-                    tracing::warn!(error = %error, "Casework assignment cursor retention pass did not complete");
+                if let Err(error) = worker_service.erase_expired_review_staffing().await {
+                    tracing::warn!(error = %error, "Casework review staffing retention pass did not complete");
                 }
                 if let Err(error) = worker_service
                     .erase_expired_directory_target_cursors()
@@ -645,17 +571,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 if let Err(error) = worker_service.erase_expired_absence_cursors().await {
                     tracing::warn!(error = %error, "Casework absence cursor retention pass did not complete");
                 }
-                if let Err(error) = worker_service.erase_expired_source_history_cursors().await {
-                    tracing::warn!(error = %error, "Casework source history cursor retention pass did not complete");
-                }
-                if let Err(error) = worker_service.reconcile_ineligible_assignments(100).await {
-                    tracing::warn!(error = %error, "Casework assignment eligibility pass did not complete");
-                }
                 if let Err(error) = worker_service.reconcile_review_absences(100).await {
                     tracing::warn!(error = %error, "Casework review absence-cover pass did not complete");
-                }
-                if let Err(error) = worker_service.erase_expired_clock_previews().await {
-                    tracing::warn!(error = %error, "Casework clock preview retention pass did not complete");
                 }
             }
         }
@@ -675,28 +592,14 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             }
         },
     ));
-    for (source_id, binding) in &config.sources {
-        let reconciliation = service.clone();
-        let source_id = source_id.clone();
-        let interval_duration = reconciliation_interval(binding);
-        workers.push(supervise(
-            "source reconciliation",
-            worker_stopped.clone(),
-            async move {
-                let mut interval = reconciliation_timer(interval_duration);
-                loop {
-                    interval.tick().await;
-                    if let Err(error) = reconciliation.reconcile_source(&source_id).await {
-                        tracing::warn!(source_id, error = %error, "Casework reconciliation pass did not complete");
-                    }
-                }
-            },
-        ));
-    }
     drop(worker_stopped);
     let metrics_state = crate::metrics::MetricsState::new(
-        Arc::new(store),
-        config.sources.keys().cloned().collect(),
+        store,
+        project
+            .context_providers
+            .iter()
+            .map(|provider| provider.id.clone())
+            .collect(),
         package_digest.clone(),
     );
     let app = router(HttpState {
@@ -723,18 +626,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         worker.abort();
     }
     served
-}
-
-/// The interval between reconciliation passes for one bound source, taken
-/// directly from its operator-configured binding.
-fn reconciliation_interval(binding: &BregBinding) -> Duration {
-    Duration::from_millis(binding.reconciliation_interval_milliseconds)
-}
-
-fn reconciliation_timer(period: Duration) -> Interval {
-    let mut interval = tokio::time::interval(period);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    interval
 }
 
 /// Serve until a supervised background loop stops. The listener never stops on
@@ -884,111 +775,6 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use registry_casework_core::SourceAdapterError;
-
-    struct Pinned(Result<Option<registry_casework_core::SourceRevisionPin>, SourceAdapterError>);
-
-    #[async_trait::async_trait]
-    impl SourceAdapter for Pinned {
-        fn source_id(&self) -> &str {
-            "registry"
-        }
-
-        fn binding_generation(&self) -> &str {
-            "generation"
-        }
-
-        async fn source_revision_pin(
-            &self,
-        ) -> Result<Option<registry_casework_core::SourceRevisionPin>, SourceAdapterError> {
-            self.0.clone()
-        }
-
-        async fn verify_transition(
-            &self,
-            _request: registry_casework_core::EventRequest,
-        ) -> Result<registry_casework_core::TransitionHint, SourceAdapterError> {
-            Err(SourceAdapterError::Invalid)
-        }
-
-        async fn read_authoritative(
-            &self,
-            _subject: &registry_casework_core::SubjectRef,
-        ) -> Result<registry_casework_core::AuthoritativeObservation, SourceAdapterError> {
-            Err(SourceAdapterError::Invalid)
-        }
-
-        async fn discover_active(
-            &self,
-            _cursor: Option<&registry_casework_core::DiscoveryCursor>,
-            _limit: usize,
-        ) -> Result<registry_casework_core::ActiveSubjectsPage, SourceAdapterError> {
-            Err(SourceAdapterError::Invalid)
-        }
-
-        async fn read_for_caller(
-            &self,
-            _subject: &registry_casework_core::SubjectRef,
-            _source_profile_id: &str,
-            _credential: registry_casework_core::EphemeralCredential<'_>,
-        ) -> Result<registry_casework_core::CallerSubjectView, SourceAdapterError> {
-            Err(SourceAdapterError::Invalid)
-        }
-
-        async fn prepare_action(
-            &self,
-            _request: registry_casework_core::PrepareActionRequest<'_>,
-        ) -> Result<registry_casework_core::PreparedSourceAttempt, SourceAdapterError> {
-            Err(SourceAdapterError::Invalid)
-        }
-
-        async fn execute_prepared(
-            &self,
-            _request: registry_casework_core::ExecutePreparedRequest<'_>,
-        ) -> Result<registry_casework_core::SourceReceipt, SourceAdapterError> {
-            Err(SourceAdapterError::Invalid)
-        }
-    }
-
-    fn pin(pinned: &str, served: &str) -> Pinned {
-        Pinned(Ok(Some(registry_casework_core::SourceRevisionPin {
-            pinned: pinned.to_owned(),
-            served: served.to_owned(),
-        })))
-    }
-
-    #[tokio::test]
-    async fn startup_refuses_a_pinned_source_revision_the_source_no_longer_serves() {
-        let stale = pin("sha256:pinned", "sha256:served");
-        let error = check_source_revisions(&[&stale])
-            .await
-            .expect_err("a stale pin is refused");
-        assert!(matches!(
-            &error,
-            RuntimeError::SourceRevisionStale { source_id, pinned, served }
-                if source_id == "registry" && pinned == "sha256:pinned" && served == "sha256:served"
-        ));
-        let message = error.to_string();
-        assert!(
-            message.contains(
-                "`caseworkctl check PROJECT --against-breg-package DIR --source-id registry`"
-            ) && message.contains(
-                "`caseworkctl source add BREG_PROJECT --project PROJECT --source-id registry --apply`"
-            ),
-            "{message}"
-        );
-    }
-
-    #[tokio::test]
-    async fn startup_accepts_a_current_pin_an_unpinned_source_and_an_unreachable_source() {
-        let current = pin("sha256:same", "sha256:same");
-        let unpinned = Pinned(Ok(None));
-        let unreachable = Pinned(Err(SourceAdapterError::Unavailable));
-        check_source_revisions(&[&current, &unpinned, &unreachable])
-            .await
-            .expect("only a pin the source contradicts is refused");
-    }
-
     #[tokio::test]
     async fn review_completion_delivery_is_minimal_authenticated_and_stable_after_lost_ack() {
         let server = MockServer::start().await;
@@ -1335,44 +1121,6 @@ mod tests {
         );
     }
 
-    fn breg_binding(reconciliation_interval_milliseconds: u64) -> BregBinding {
-        BregBinding {
-            base_url: "https://registry.example.test".into(),
-            reader_profile: "casework-reader".into(),
-            token_endpoint: "https://identity.example.test/token".into(),
-            client_assertion_audience: Some("https://identity.example.test".into()),
-            resource: Some("urn:example:registry".into()),
-            scopes: Some(vec!["casework:source-reader".into()]),
-            client_id_ref: "secret:file/client-id".into(),
-            client_assertion_key_ref: "secret:file/client-key".into(),
-            webhook_secret_ref: "secret:file/webhook".into(),
-            event_source: "urn:registrystack:registry:professional:instance:pilot".into(),
-            trusted_root_certificates_ref: None,
-            attempt_timeout_milliseconds: 30_000,
-            connect_timeout_milliseconds: 10_000,
-            reconciliation_interval_milliseconds,
-        }
-    }
-
-    #[test]
-    fn reconciliation_interval_uses_the_bindings_configured_milliseconds() {
-        assert_eq!(
-            reconciliation_interval(&breg_binding(60_000)),
-            Duration::from_secs(60)
-        );
-        assert_eq!(
-            reconciliation_interval(&breg_binding(120_000)),
-            Duration::from_millis(120_000)
-        );
-    }
-
-    #[tokio::test]
-    async fn reconciliation_skips_ticks_missed_during_a_slow_pass() {
-        let interval = reconciliation_timer(Duration::from_secs(1));
-        assert_eq!(interval.period(), Duration::from_secs(1));
-        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Skip);
-    }
-
     #[test]
     fn serve_is_the_only_subcommand() {
         let command = command();
@@ -1425,8 +1173,8 @@ pub enum RuntimeError {
          secretProviders.file.root must be an absolute path"
     )]
     SecretConfiguration,
-    #[error("the Casework source binding for source {0} is invalid")]
-    SourceConfiguration(String),
+    #[error("the Casework review-context provider {0} is not configured for its declared capability and export")]
+    ContextProviderConfiguration(String),
     #[error(
         "no Casework package has been applied to this database; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]
@@ -1437,10 +1185,6 @@ pub enum RuntimeError {
         "the active Casework package in this database is {active}, not the configured package {configured}; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]
     PackageNotActive { active: String, configured: String },
-    #[error(
-        "the binding of source {0} differs from the one the active package was applied with; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
-    )]
-    SourceGenerationNotActive(String),
     #[error("{0}")]
     StrandedPinnedWork(String),
     /// `fix` names what to do: reassign the objects, revoke the privileges,
@@ -1457,14 +1201,6 @@ pub enum RuntimeError {
         "the Casework runtime role cannot write the activation ledger but does not hold the grants a split-role apply issues it; run `caseworkctl apply --runtime-config FILE` to issue them"
     )]
     RuntimeGrantsMissing,
-    #[error(
-        "source {source_id} pins sourceRevision {pinned}, but the source serves registry revision {served}; run `caseworkctl check PROJECT --against-breg-package DIR --source-id {source_id}` with the BReg package the source serves, repin with `caseworkctl source add BREG_PROJECT --project PROJECT --source-id {source_id} --apply`, then `caseworkctl package PROJECT --output DIRECTORY`, `caseworkctl plan --runtime-config FILE`, and `caseworkctl apply --runtime-config FILE`"
-    )]
-    SourceRevisionStale {
-        source_id: String,
-        pinned: String,
-        served: String,
-    },
     #[error("the Casework audit destination could not be initialized")]
     Audit,
     #[error("the Casework audit destination could not be initialized: {0}")]

@@ -29,8 +29,8 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{
     initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, verify_runtime_role, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
+    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    RegistryStateTestIdentity, RoleMode,
 };
 use registry_breg::startup::{
     check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
@@ -70,7 +70,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_count() {
+async fn runtime_startup_preserves_retryable_submissions_when_review_authority_is_missing() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -114,49 +114,49 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
         .admin
         .batch_execute(&format!(
             "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";
-             GRANT SELECT ON registry_internal.registry_request_state TO \"{}\";",
+             GRANT SELECT ON registry_internal.registry_proposal_state TO \"{}\";",
             database.runtime_role.as_str(),
             database.runtime_role.as_str()
         ))
         .await
         .expect("runtime review schema access");
-    for request_id in [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()] {
+    for proposal_id in [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()] {
         database
             .admin
             .execute(
-                "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id,request_id,owner_reference,state,proposal_version,
+                "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id,proposal_id,owner_reference,state,submission_version,
                   workflow_revision)
-                 VALUES ('requests',$1,'owner-retained','submitted',1,1)",
-                &[&request_id],
+                 VALUES ('retained-action',$1,'owner-retained','submitted',1,1)",
+                &[&proposal_id],
             )
             .await
-            .expect("retained request state inserts");
+            .expect("retained native Proposal state inserts");
         database
             .admin
             .execute(
-                "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id,request_id,proposal_version,request_record_revision,
+                "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id,proposal_id,submission_version,input_revision,
                   contract_fingerprint,effect_digest,snapshot)
-                 VALUES ('requests',$1,1,1,$2,$2,'{}'::jsonb)",
-                &[&request_id, &format!("sha256:{}", "a".repeat(64))],
+                 VALUES ('retained-action',$1,1,1,$2,$2,'{}'::jsonb)",
+                &[&proposal_id, &format!("sha256:{}", "a".repeat(64))],
             )
             .await
             .expect("retained proposal inserts");
         database
             .admin
             .execute(
-                "INSERT INTO registry_internal.registry_request_review_submissions
-                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
-                  producer_id,policy_id,idempotency_key,create_request,
+                "INSERT INTO registry_internal.registry_proposal_review_submissions
+                 (action_id,proposal_id,submission_version,proposal_digest,job_id,authority,
+                  producer_id,policy_id,expected_policy,idempotency_key,create_request,
                   expected_submission_digest,on_approved_mode,executor,state,accepted_binding)
-                 VALUES ('requests',$1,1,$2,$3,'casework-retained','producer-retained',
-                         'policy-retained',$4,'{}'::jsonb,$2,'manual',NULL,'accepted','{}'::jsonb)",
+                 VALUES ('retained-action',$1,1,$2,$3,'casework-retained','producer-retained',
+                         'policy-retained','{}'::jsonb,$4,'{}'::jsonb,$2,'manual',NULL,'accepted','{}'::jsonb)",
                 &[
-                    &request_id,
+                    &proposal_id,
                     &format!("sha256:{}", "a".repeat(64)),
                     &uuid::Uuid::new_v4(),
-                    &format!("submit-{request_id}"),
+                    &format!("submit-{proposal_id}"),
                 ],
             )
             .await
@@ -173,17 +173,33 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    assert_eq!(
+    let prepared =
         prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
             .await
-            .err(),
-        Some(StartupError::ReviewAuthorityMissing {
-            authority: "casework-retained".to_owned(),
-            retained_submissions: 2,
-        })
-    );
-
+            .expect("missing optional review authority leaves unrelated Registry work usable");
+    let retained = database
+        .admin
+        .query(
+            "SELECT s.state, w.state, w.blocked_reason, s.withdrawn, s.attempt_count
+               FROM registry_internal.registry_proposal_review_submissions s
+               JOIN registry_internal.registry_proposal_state w
+                 USING (action_id, proposal_id)
+              WHERE s.authority = 'casework-retained'",
+            &[],
+        )
+        .await
+        .expect("retained submissions remain available for dependency recovery");
+    assert_eq!(retained.len(), 2);
+    for row in retained {
+        assert_eq!(row.get::<_, String>(0), "accepted");
+        assert_eq!(row.get::<_, String>(1), "submitted");
+        assert_eq!(row.get::<_, Option<String>>(2), None);
+        assert!(!row.get::<_, bool>(3));
+        assert_eq!(row.get::<_, i32>(4), 0);
+    }
+    drop(prepared);
     database.cleanup().await;
+    idp.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -428,10 +444,6 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
-    verify_runtime_role(&migration, &database.migration_role)
-        .await
-        .expect_err("migration connection is not accepted as runtime");
-
     let fixture = StartupFixture::new();
     let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
     let provisional_context = provisional.context();
@@ -691,10 +703,6 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    verify_runtime_role(&migration, &database.migration_role)
-        .await
-        .expect_err("migration connection is not accepted as runtime");
-
     let fixture = StartupFixture::new();
     let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
     let provisional_context = provisional.context();
@@ -3059,7 +3067,7 @@ impl PackageFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     let project = format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     );
     parse_project_yaml(project.as_bytes()).expect("project fixture parses");
     project.into_bytes()
@@ -3072,7 +3080,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
         ""
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
     )
     .into_bytes()
 }
@@ -3080,7 +3088,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
 /// One module whose `holder` entity carries an encrypted restricted field, so
 /// a production package built from it requires field-encryption key state.
 fn module_bytes_with_encrypted_field() -> Vec<u8> {
-    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_owned()
         .into_bytes()
 }

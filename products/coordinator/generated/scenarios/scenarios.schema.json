@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "AuthoredExpectation": {
+      "additionalProperties": false,
+      "description": "Where the run must stop. Omitted members are not checked.",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/ExpectedOutcome",
+          "description": "The outcome the run finishes with, or `{type: none}` for a run that\nfinishes without one. Omit it to leave the outcome unchecked."
+        },
+        "output": {
+          "default": null,
+          "description": "The output the run finishes with. Omit it to leave the output\nunchecked.",
+          "x-registry-foreign": "json"
+        },
+        "path": {
+          "description": "The steps the run reaches, in order.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "state": {
+          "$ref": "#/$defs/ExpectedState",
+          "description": "The state the run stops in."
+        },
+        "workflowElapsedSeconds": {
+          "description": "The virtual seconds from admission to where the run stops. Omit it to\nleave the time unchecked.",
+          "format": "uint32",
+          "maximum": 31536000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "state"
+      ],
+      "type": "object"
+    },
+    "AuthoredReply": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The call completed and returned `value`.",
+          "properties": {
+            "type": {
+              "const": "success",
+              "type": "string"
+            },
+            "value": {
+              "description": "The output the call returns, which must satisfy the operation's\noutput contract.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The call failed and may be retried; the run stops as retryable, or as\nuncertain after an earlier uncertain reply, unless a recovery consumes\nanother reply.",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The code the reply carries, such as credential-unavailable."
+            },
+            "type": {
+              "const": "retryable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The product refused the call; the run stops as refused, or as\nuncertain after an earlier uncertain reply.",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The code the reply carries, such as product-not-found."
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The product returned a package-declared, no-effect business refusal.\nA supported call takes its `onDeclaredRefusal` edge when it has one;\notherwise the run stops as refused.",
+          "properties": {
+            "refusalCode": {
+              "$ref": "#/$defs/DeclaredRefusalCode",
+              "description": "The validated refusal code the package declares."
+            },
+            "type": {
+              "const": "declared-refusal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "refusalCode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The call's effect is unknown; the run stops as uncertain unless a\nrecovery consumes another reply.",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The code the reply carries, such as transport-uncertain."
+            },
+            "type": {
+              "const": "uncertain",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The product's receipt for the call expired, so the original command\ncannot be confirmed; the run stops as uncertain and no later reply is\nconsumed.",
+          "properties": {
+            "type": {
+              "const": "receipt-expired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuthoredScenario": {
+      "additionalProperties": false,
+      "description": "One run of the workflow, from admission to where it stops.",
+      "properties": {
+        "admittedAt": {
+          "description": "The RFC 3339 instant the run is admitted; the virtual clock starts\nhere and moves only to the instants waits select.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "expect": {
+          "$ref": "#/$defs/AuthoredExpectation",
+          "description": "Where the run must stop."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The case name test reports."
+        },
+        "input": {
+          "description": "The start input, which must satisfy the workflow input schema.",
+          "x-registry-foreign": "json"
+        },
+        "recovery": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Recovery"
+          },
+          "description": "The operator recovery each call step receives after a retryable or\nuncertain reply, by step, so the step consumes its next reply.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "replies": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/AuthoredReply"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
+          "description": "The synthetic replies each call step receives, by step, in the order\nits attempts consume them: 1 to 8 per step. A reply after the first\nneeds a recovery for that step.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "waits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AuthoredWait"
+          },
+          "description": "What each wait-for step the run reaches receives, by step: the event\nit waits for, or its timeout.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "admittedAt",
+        "input",
+        "replies",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "AuthoredWait": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The event arrives when the wait starts; the run continues at the\nstep's `next` with `value` as the step's output.",
+          "properties": {
+            "type": {
+              "const": "event",
+              "type": "string"
+            },
+            "value": {
+              "description": "The event, which must satisfy the step's event contract. A review\nresult must also be one the review protocol accepts, for the\nrequest identifier, subject, policy and submission digest the\nrequest step accepted.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The host repeats the accepted external read and interprets these\nsynthetic typed responses under the completion's named Function.",
+          "properties": {
+            "responses": {
+              "description": "One to 128 bounded response objects in observation order.",
+              "items": {
+                "x-registry-foreign": "json"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "observations",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "responses"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "No event arrives: the clock moves by the step's `timeoutSeconds`, and\nthe run continues at its `onTimeout`, or stops as `timed-out` when the\nstep has none. A deadline that passes first stops the run as\n`deadline-exceeded`.",
+          "properties": {
+            "type": {
+              "const": "timeout",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An authorized caller cancels the run while this wait is durably\nparked. The run continues at `onCancel`, or stops as `cancelled` when\nthe step has none.",
+          "properties": {
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DeclaredRefusalCode": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "ExpectedOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The run finishes with the outcome `value` names.",
+          "properties": {
+            "type": {
+              "const": "named",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The outcome, declared under the workflow's `outcomes`."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The run stops without an outcome.",
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExpectedState": {
+      "description": "A state a scenario run stops in: `completed` (a finish step ran),\n`refused`, `retryable`, `uncertain`, `cancelled` (a waiting run was\ncancelled), `timed-out` (a wait's timeout passed\nand the wait has no `onTimeout`), or `deadline-exceeded` (the workflow\ndeadline passed first).",
+      "enum": [
+        "completed",
+        "refused",
+        "retryable",
+        "uncertain",
+        "cancelled",
+        "timed-out",
+        "deadline-exceeded"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Recovery": {
+      "description": "An operator recovery: `retry-same` sends the same frozen command again\nafter a retryable reply, or after an uncertain one where the operation\nallows it; `reconcile` reads the product's receipt for an uncertain\ncommand, for operations that keep one.",
+      "enum": [
+        "retry-same",
+        "reconcile"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Offline cases for one workflow: each runs the workflow from a start input\nagainst synthetic product replies on a virtual clock, and states where the\nrun must end. `coordinatorctl test` runs them; no product is contacted.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/coordinator/scenarios/v1alpha1",
+      "description": "The format and version this document is written in.",
+      "type": "string"
+    },
+    "cases": {
+      "description": "The cases, 1 to 64, each with a unique `id`.",
+      "items": {
+        "$ref": "#/$defs/AuthoredScenario"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "kind": {
+      "const": "CoordinatorScenarios",
+      "description": "The kind of document this is.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cases",
+    "apiVersion",
+    "kind"
+  ],
+  "title": "CoordinatorScenarios",
+  "type": "object"
+}

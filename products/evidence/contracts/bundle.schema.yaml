@@ -30,6 +30,13 @@ properties:
       Names the document type; together with `apiVersion` it tells a governed package
       configuration apart from every other Registry Stack file.
     const: EvidenceBundle
+  project:
+    description: >-
+      Stable normalized EvidenceProject identifier. A package carrying this identifier
+      contains no authority profiles; startup captures a separately activated target
+      authority for this project and exact package digest. Each definition declares all
+      grant-ceiling dimensions and its representation ceiling.
+    $ref: '#/$defs/LocalId'
   assuranceProfile:
     description: >-
       Declares the governed assurance boundary of the whole package, and the value is visible
@@ -274,11 +281,12 @@ properties:
       $ref: '#/$defs/source'
   authorityProfiles:
     description: >-
-      Named authority profiles deciding which requester class may obtain which assertion.
-      Exactly one authority path may match a request, and two paths covering the same requirement,
-      purpose, and subject tuple deny that request rather than failing startup.
+      Complete authority profiles for a legacy compiled bundle. A normalized project package
+      carries an empty map, and the runtime installs only the separately activated target
+      snapshot after package validation. Exactly one complete authority path may match;
+      overlapping paths deny rather than combining their permissions.
     type: object
-    minProperties: 1
+    minProperties: 0
     maxProperties: 128
     propertyNames:
       $ref: '#/$defs/LocalId'
@@ -326,6 +334,17 @@ properties:
         party pin this requirement without depending on the rest of the deployment.
       $ref: '#/$defs/requirement'
 allOf:
+  - if:
+      required: [project]
+    then:
+      properties:
+        authorityProfiles: {maxProperties: 0}
+        requirements:
+          items:
+            required: [grantCeiling, representations]
+    else:
+      properties:
+        authorityProfiles: {minProperties: 1}
   - if:
       properties:
         assuranceProfile:
@@ -2597,7 +2616,9 @@ $defs:
       actorKind:
         description: >-
           Restrict this authority profile to the verified actor kind. An agent without
-          a task grant must use a profile explicitly bound to agent.
+          a task grant must use a profile explicitly bound to agent. Normalized target
+          authority must explicitly name a kind inside the definition's actor ceiling;
+          omission cannot turn that ceiling into wildcard authority.
         enum: [human, agent, service]
       requesterTags:
         description: >-
@@ -2661,14 +2682,21 @@ $defs:
             audienceFrom:
               description: >-
                 Binds the assertion audience to the requester's verified evidence audience
-                claim, so the public request cannot name another audience.
+                claim, so the public request cannot name another audience. For a normalized
+                definition the resolved audience must also fit its authored audience ceiling
+                before selector values, credentials or sources are accessed.
               const: authenticated-requester
             responseFormats:
               description: >-
                 Serializations this path permits, defaulting to signed JWS alone when omitted.
                 Unsigned and SD-JWT VC output each require both the bundle-level `responseFormats`
-                and the one matched grant to permit them.
-              $ref: '#/$defs/response-formats'
+                and the one matched grant to permit them. Holder-bound grants may name only
+                SD-JWT forms; the mandatory signed-JWS package format does not widen this grant.
+              type: array
+              minItems: 1
+              maxItems: 4
+              uniqueItems: true
+              items: {enum: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]}
             subjectBindingModes:
               description: >-
                 Subject-binding modes this path permits, defaulting to audience-scoped alone when
@@ -2879,11 +2907,59 @@ $defs:
       - disclosureGuard
       - existenceDisclosure
     properties:
+      question:
+        description: Human-facing presentation; excluded from the definition behavior revision.
+        type: string
+        minLength: 1
+        maxLength: 2048
+      grantCeiling:
+        description: >-
+          Package-owned authority, actor, value-origin and audience ceilings. The definition's
+          purposes, subject-role selector profiles, representations and subjectBinding supply
+          the remaining dimensions. A target grant can narrow the complete tuple only.
+        type: object
+        additionalProperties: false
+        required: [authorities, actorKinds, valueOrigins, audiences]
+        properties:
+          authorities:
+            type: array
+            minItems: 1
+            maxItems: 5
+            uniqueItems: true
+            items: {enum: [statutory, organizational, consent, delegated, explicit-request]}
+          actorKinds:
+            type: array
+            minItems: 1
+            maxItems: 3
+            uniqueItems: true
+            items: {enum: [human, agent, service]}
+          valueOrigins:
+            type: array
+            minItems: 1
+            maxItems: 3
+            uniqueItems: true
+            items: {enum: [request, authenticated-context, authenticated-grant]}
+          audiences:
+            type: array
+            minItems: 1
+            maxItems: 32
+            uniqueItems: true
+            items: {$ref: '#/$defs/uri'}
+      representations:
+        description: >-
+          Definition-specific serialization ceiling inside the package responseFormats.
+          The one complete target grant and binding mode must also permit the selected format.
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items: {enum: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]}
+        x-runtime-validation: Each format must be permitted by the definition binding mode.
       handle:
         description: >-
-          Stable application-facing identifier for selecting this requirement's
-          complete published definition. It is governed explicitly and is never
-          inferred from the requirement URI.
+          Stable local authoring, inspection and generated-code identifier for this definition.
+          Public requests select its exact Requirement URI; this handle is not a substitute
+          wire identity and is never inferred from that URI.
         $ref: '#/$defs/local-id'
       uri:
         description: >-
@@ -2916,9 +2992,9 @@ $defs:
         $ref: '#/$defs/acquisition'
       purposes:
         description: >-
-          Closed set of purpose codes this requirement can be requested under; an authority-profile
-          grant must bind one of them together with a role and selector profile, or that combination
-          has no authority path and the bundle fails to load.
+          Closed set of purpose codes this definition can be requested under. One complete
+          target grant must bind an allowed purpose with every declared subject role, selector
+          profile and value origin. Package validity does not itself create target authority.
         type: array
         minItems: 1
         maxItems: 32

@@ -5,7 +5,7 @@ apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
 kind: BRegModule
 id: consent-__SUBJECT__
 version: 0.1.0
-entities:
+recordTypes:
 - id: __SUBJECT__-privacy-notice
   primaryDataset: consent
   route: __SUBJECT__-privacy-notices
@@ -95,27 +95,31 @@ actions:
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
   - {id: expires-at, type: timestamp, classification: internal}
-  requires:
-  - {input: link, field: subject, equalsInput: subject}
-  - {input: link, field: active, equals: true}
-  - {input: clause, field: recipient, equalsInput: recipient}
-  - {input: clause, field: purpose, equalsInput: purpose}
-  - {input: clause, field: scope, equalsInput: scope}
-  effects:
-  - id: decision
-    target: {entity: __SUBJECT__-consent-decision}
-    operation: create
-    set:
-      link: {fromField: link}
-      subject: {fromField: subject}
-      clause: {fromField: clause}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      channel: {fromField: channel}
-      effective-at: {fromField: effective-at}
-      expires-at: {fromField: expires-at}
+  commitGuards:
+    targets:
+    - {input: link, field: subject, equalsFromInput: subject}
+    - {input: link, field: active, equals: true}
+    - {input: clause, field: recipient, equalsFromInput: recipient}
+    - {input: clause, field: purpose, equalsFromInput: purpose}
+    - {input: clause, field: scope, equalsFromInput: scope}
+  execution: {mode: immediate}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: __SUBJECT__-consent-decision}
+      operation: create
+      set:
+        link: {fromInput: link}
+        subject: {fromInput: subject}
+        clause: {fromInput: clause}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        channel: {fromInput: channel}
+        effective-at: {fromInput: effective-at}
+        expires-at: {fromInput: expires-at}
 - id: refuse-__SUBJECT__-consent
   consentIssuer: self
   inputs:
@@ -128,26 +132,30 @@ actions:
   - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [refused], required: true, classification: internal}
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
-  requires:
-  - {input: link, field: subject, equalsInput: subject}
-  - {input: link, field: active, equals: true}
-  - {input: clause, field: recipient, equalsInput: recipient}
-  - {input: clause, field: purpose, equalsInput: purpose}
-  - {input: clause, field: scope, equalsInput: scope}
-  effects:
-  - id: decision
-    target: {entity: __SUBJECT__-consent-decision}
-    operation: create
-    set:
-      link: {fromField: link}
-      subject: {fromField: subject}
-      clause: {fromField: clause}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      channel: {fromField: channel}
-      effective-at: {fromField: effective-at}
+  commitGuards:
+    targets:
+    - {input: link, field: subject, equalsFromInput: subject}
+    - {input: link, field: active, equals: true}
+    - {input: clause, field: recipient, equalsFromInput: recipient}
+    - {input: clause, field: purpose, equalsFromInput: purpose}
+    - {input: clause, field: scope, equalsFromInput: scope}
+  execution: {mode: immediate}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: __SUBJECT__-consent-decision}
+      operation: create
+      set:
+        link: {fromInput: link}
+        subject: {fromInput: subject}
+        clause: {fromInput: clause}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        channel: {fromInput: channel}
+        effective-at: {fromInput: effective-at}
 - id: withdraw-__SUBJECT__-consent
   consentIssuer: self
   inputs:
@@ -160,26 +168,30 @@ actions:
   - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [withdrawn], required: true, classification: internal}
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
-  requires:
-  - {input: link, field: subject, equalsInput: subject}
-  - {input: link, field: active, equals: true}
-  - {input: clause, field: recipient, equalsInput: recipient}
-  - {input: clause, field: purpose, equalsInput: purpose}
-  - {input: clause, field: scope, equalsInput: scope}
-  effects:
-  - id: decision
-    target: {entity: __SUBJECT__-consent-decision}
-    operation: create
-    set:
-      link: {fromField: link}
-      subject: {fromField: subject}
-      clause: {fromField: clause}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      channel: {fromField: channel}
-      effective-at: {fromField: effective-at}
+  commitGuards:
+    targets:
+    - {input: link, field: subject, equalsFromInput: subject}
+    - {input: link, field: active, equals: true}
+    - {input: clause, field: recipient, equalsFromInput: recipient}
+    - {input: clause, field: purpose, equalsFromInput: purpose}
+    - {input: clause, field: scope, equalsFromInput: scope}
+  execution: {mode: immediate}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: __SUBJECT__-consent-decision}
+      operation: create
+      set:
+        link: {fromInput: link}
+        subject: {fromInput: subject}
+        clause: {fromInput: clause}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        channel: {fromInput: channel}
+        effective-at: {fromInput: effective-at}
 - id: record-__SUBJECT__-consent-assisted
   consentIssuer: steward
   inputs:
@@ -194,26 +206,30 @@ actions:
   - {id: expires-at, type: timestamp, classification: internal}
   - {id: evidence, type: string, maximumLength: 2048, required: true, classification: restricted}
   - {id: witness, type: string, maximumLength: 255, classification: restricted}
-  requires:
-  - {input: clause, field: recipient, equalsInput: recipient}
-  - {input: clause, field: purpose, equalsInput: purpose}
-  - {input: clause, field: scope, equalsInput: scope}
-  effects:
-  - id: decision
-    target: {entity: __SUBJECT__-consent-decision}
-    operation: create
-    set:
-      subject: {fromField: subject}
-      clause: {fromField: clause}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      channel: {fromField: channel}
-      effective-at: {fromField: effective-at}
-      expires-at: {fromField: expires-at}
-      evidence: {fromField: evidence}
-      witness: {fromField: witness}
+  commitGuards:
+    targets:
+    - {input: clause, field: recipient, equalsFromInput: recipient}
+    - {input: clause, field: purpose, equalsFromInput: purpose}
+    - {input: clause, field: scope, equalsFromInput: scope}
+  execution: {mode: immediate}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: __SUBJECT__-consent-decision}
+      operation: create
+      set:
+        subject: {fromInput: subject}
+        clause: {fromInput: clause}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        channel: {fromInput: channel}
+        effective-at: {fromInput: effective-at}
+        expires-at: {fromInput: expires-at}
+        evidence: {fromInput: evidence}
+        witness: {fromInput: witness}
 - id: invalidate-__SUBJECT__-consent
   consentIssuer: steward
   inputs:
@@ -225,19 +241,22 @@ actions:
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [steward-review], required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
   - {id: invalidation-reason, type: vocabulary-code, vocabulary: consent-invalidation-reason, required: true, classification: internal}
-  effects:
-  - id: decision
-    target: {entity: __SUBJECT__-consent-decision}
-    operation: create
-    set:
-      subject: {fromField: subject}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      channel: {fromField: channel}
-      effective-at: {fromField: effective-at}
-      invalidation-reason: {fromField: invalidation-reason}
+  execution: {mode: immediate}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: __SUBJECT__-consent-decision}
+      operation: create
+      set:
+        subject: {fromInput: subject}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        channel: {fromInput: channel}
+        effective-at: {fromInput: effective-at}
+        invalidation-reason: {fromInput: invalidation-reason}
 - id: import-__SUBJECT__-consent
   consentIssuer: steward
   inputs:
@@ -251,18 +270,21 @@ actions:
   - {id: expires-at, type: timestamp, classification: internal}
   - {id: source-reference, type: string, maximumLength: 255, required: true, classification: internal}
   - {id: evidence, type: string, maximumLength: 2048, classification: restricted}
-  effects:
-  - id: decision
-    target: {entity: __SUBJECT__-consent-decision}
-    operation: create
-    set:
-      subject: {fromField: subject}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      channel: {fromField: channel}
-      effective-at: {fromField: effective-at}
-      expires-at: {fromField: expires-at}
-      source-reference: {fromField: source-reference}
-      evidence: {fromField: evidence}
+  execution: {mode: immediate}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: __SUBJECT__-consent-decision}
+      operation: create
+      set:
+        subject: {fromInput: subject}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        channel: {fromInput: channel}
+        effective-at: {fromInput: effective-at}
+        expires-at: {fromInput: expires-at}
+        source-reference: {fromInput: source-reference}
+        evidence: {fromInput: evidence}

@@ -510,7 +510,7 @@ async fn activated_task_status(
             "clientAssertionAudience": base,
             "clientId": "scheduling-status",
             "privateKeyRef": format!("secret:env/{secret_name}"),
-            "caseworkResource": "urn:casework:test"
+            "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
     let registry = TaskGrantStatusRegistry::activate(
@@ -4625,7 +4625,7 @@ fn sealed_deployment(
         "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
-        "retention": {"attemptReceiptRetentionDays": 7},
+        "retention": {"receiptRetentionDays": 7},
     });
     let operator = root.join("runtime.yaml");
     std::fs::write(
@@ -5877,7 +5877,7 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
     for (appointment, status) in [(&taken, 202), (&unanswered, 503), (&refused, 403)] {
         Mock::given(method("POST"))
             .and(path("/events"))
-            .and(header("content-type", "application/cloudevents+json"))
+            .and(header("content-type", "application/json"))
             .and(body_string_contains(appointment.as_str()))
             .respond_with(ResponseTemplate::new(status))
             .mount(&destination)
@@ -5920,8 +5920,9 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
         "a destination that refused outright is held for an operator"
     );
 
-    // What went on the wire is one CloudEvents 1.0 event per intent, naming
-    // this deployment and carrying the committed payload, and nothing else.
+    // What went on the wire is one shared hook envelope per intent, naming
+    // this deployment and the appointment, carrying the committed payload,
+    // and nothing else.
     let sent = destination.received_requests().await.expect("the requests");
     assert_eq!(sent.len(), 3, "one request per due intent, and no more");
     let event: Value = serde_json::from_slice(
@@ -5932,9 +5933,20 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
             .body,
     )
     .expect("a JSON event body");
-    assert_eq!(event["specversion"], "1.0");
-    assert_eq!(event["source"], SCHEDULING_ID);
+    assert!(event.get("specversion").is_none());
+    assert_eq!(
+        event["source"],
+        format!("urn:registrystack:scheduling:{SCHEDULING_ID}")
+    );
     assert_eq!(event["type"], "org.registrystack.scheduling.confirmation");
+    assert_eq!(
+        event["subject"]["recordReference"],
+        format!("/v1/appointments/{taken}")
+    );
+    assert_eq!(
+        event["dataschema"],
+        "urn:registrystack:scheduling:reminder-data:confirmation"
+    );
     assert_eq!(event["data"]["appointmentId"], taken);
 
     // A second pass repeats nothing: the delivered intent is done and the

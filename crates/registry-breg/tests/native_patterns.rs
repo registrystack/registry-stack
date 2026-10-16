@@ -6,7 +6,7 @@ use registry_breg::generated_ddl::field_pattern_constraint_name;
 use serde_json::json;
 
 fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
-    let mut value = json!({
+    let mut value = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"native-patterns","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patterns.example.test"},
         "manifestProjection":{
@@ -16,12 +16,12 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
             "datasets":[{"id":"records","title":"Records"}],
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://patterns.example.test/v1","servesDatasets":["records"]}]
         },
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"identifier","type":"string","maximumLength":100,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}]
+        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}]
     });
     if let Some(pattern) = pattern {
-        value["entities"][0]["fields"][0]["pattern"] = json!(pattern);
+        value["recordTypes"][0]["fields"][0]["pattern"] = json!(pattern);
     }
     parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()
 }
@@ -61,7 +61,8 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
     // Compilation is deliberately structural: only PostgreSQL validates ARE syntax.
     assert!(compile_project(&project(Some("[")), &[], CompileProfile::Authoring).is_ok());
     assert!(compile_project(&project(Some("")), &[], CompileProfile::Authoring).is_ok());
-    for invalid in ["x".repeat(4097), "a\0b".to_owned()] {
+    {
+        let invalid = "x".repeat(4097);
         let error =
             compile_project(&project(Some(&invalid)), &[], CompileProfile::Authoring).unwrap_err();
         assert!(error
@@ -70,6 +71,15 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
             .any(|d| d.code == "breg.field.pattern-bounds-invalid"));
         assert!(!format!("{error:?}").contains(&invalid));
     }
+    let mut source = serde_json::to_value(project(None)).unwrap();
+    source["recordTypes"][0]["fields"][0]["pattern"] = json!("a\0b");
+    let failure = parse_project_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("control characters are refused by the authored source reader");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "yaml.control-character"));
+    assert!(!format!("{failure:?}").contains("a\0b"));
 }
 
 #[test]

@@ -392,7 +392,6 @@ async fn items(
         geojson_next_link_prefix: Some(next_link_prefix),
         kind: RecordReadKind::List { plan: read },
         maximum_records,
-        request_history_after_proposal_version: None,
         correlation,
     };
     match service.records.list(request).await {
@@ -680,7 +679,6 @@ fn query_options(
     let parsed = strict_query::parse_read_query(pairs).map_err(|_| QueryParseError::Invalid)?;
     Ok(QueryOptions {
         parsed,
-        request_history_after_proposal_version: None,
         historical: None,
     })
 }
@@ -694,7 +692,6 @@ fn profile_query_options(profile_id: &str) -> QueryOptions {
                 strict_query::ReadQueryOptions::default(),
             ),
         },
-        request_history_after_proposal_version: None,
         historical: None,
     }
 }
@@ -847,9 +844,11 @@ mod tests {
         };
         let value = collection.value("https://registry.example.test");
         let links = value["links"].as_array().expect("collection links");
-        assert!(links.iter().all(|link| link["href"]
-            .as_str()
-            .is_some_and(|href| href.starts_with("https://registry.example.test/v1/gis"))));
+        assert!(links.iter().all(|link| {
+            link["href"]
+                .as_str()
+                .is_some_and(|href| href.starts_with("https://registry.example.test/v1/gis"))
+        }));
 
         let prefixed = collection.value("https://registry.example.test/registry-a");
         let links = prefixed["links"].as_array().expect("prefixed links");
@@ -970,7 +969,9 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(
             requests[0].geojson_next_link_prefix.as_deref(),
-            Some("https://registry.example.test/v1/gis/collections/service-site.map-reader/items?cursor=")
+            Some(
+                "https://registry.example.test/v1/gis/collections/service-site.map-reader/items?cursor="
+            )
         );
     }
 
@@ -1180,7 +1181,8 @@ mod tests {
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: gis-test, version: "1", defaultLanguage: en, canonicalBaseIri: https://gis-test.example.test}
-entities:
+datasets: [{"id":"test-dataset"}]
+recordTypes:
   - id: service-site
     primaryDataset: test-dataset
     route: service-sites
@@ -1196,8 +1198,8 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: [registry:sites:read]
     permissions:
-      entities:
-        - entity: service-site
+      records:
+        - recordType: service-site
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [code, label, location]
@@ -1209,8 +1211,8 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: service-site
+      records:
+        - recordType: service-site
           rowBoundaries: unrestricted
           operations: [get]
           readableFields: [code, label, location]
@@ -1218,8 +1220,8 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: service-site
+      records:
+        - recordType: service-site
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [code, label, location]

@@ -5,15 +5,15 @@ model {
     technology 'OAuth / OIDC / JWT / JWKS'
     description 'Issues standing access tokens and, when configured, exchanges trusted Casework task assertions for resource-bound tokens. Each runtime independently verifies tokens and applies its own client admission and authorization rules. BReg and Evidence require explicit actor kind; human Casework roles require the configured human-identity claim. Maintained local development uses pinned stock ThunderID with 300-second access tokens and existing-token re-exchange. Production issuer registration and token lifetimes remain operator responsibilities.'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/auth.rs 'BReg token verification'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-casework/src/auth.rs 'Casework human and machine identity'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/auth.rs 'Casework human and machine identity'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/auth.rs 'Evidence caller verification'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-thunderid-tooling/README.md 'Stock issuer integration and deployment boundary'
   }
   taskAgent = external 'Institutional task agent' {
     #optional #taskAuthority
     technology 'Registered OAuth client / private-key JWT'
-    description 'Performs a human-approved task under its own principal and client identity. The maintained issuer registration restricts its bootstrap token to casework:grants:assert; Casework checks that scope is present and refuses this agent on human routes. The template fixes client, resource, scopes, purpose, bounds and lifetime; proposal identity and subjects come from the source. Initial exchange uses a Casework task assertion. The maintained ThunderID setup can re-exchange an existing access token without Casework, preserving the original grant deadline. The agent receives no human bearer or human profile.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/casework/TASK_GRANTS.md 'Task approval and assertion contract'
+    description 'Performs a human-approved task under its own principal and client identity. The maintained issuer registration restricts its bootstrap token to casework:grants:assert; Casework checks that scope is present and refuses this agent on human routes. The template fixes client, resource, scopes, purpose, bounds and lifetime; exact subjects come from the pinned review context. Initial exchange uses a Casework task assertion. The maintained ThunderID setup can re-exchange an existing access token without Casework, preserving the original grant deadline. The agent receives no human bearer or human profile.'
+    link https://github.com/registrystack/registry-stack/blob/main/products/casework/TASK_GRANTS.md 'Task approval and assertion contract'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-platform-httputil/src/client/private_key_jwt.rs 'Fresh task-token exchange'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-thunderid-tooling/src/grant.rs 'Fresh approval lookup in the maintained CLI'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-thunderid-tooling/examples/contextual-exchange.rs 'Existing-token re-exchange with the original deadline'
@@ -24,14 +24,14 @@ model {
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-thunderid-tooling/src/render.rs 'Bootstrap registration and token lifetime'
   }
   approvedTask = credential 'Approved task grant' {
-    technology 'Immutable Casework record / at most 900 s'
-    description 'Human approval fixes the template, source-derived proposal and subjects, agent, client, resource, scopes, purpose, bounds and original registry_grant_exp. Evidence templates also fix requester tags and relying-party audience. The retained record is authorization state, not a bearer token. Casework caps template lifetime at 900 seconds; assertions and exchanges cannot extend it. BReg approval and application must finish before this deadline.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-casework-core/src/task_grant.rs 'Immutable template, grant and lifetime cap'
+    technology 'Immutable Casework record / explicit deadline'
+    description 'Human ReviewTask approval fixes the template, exact subject binding, agent, client, resource, scopes, purpose, bounds and original registry_grant_exp. Evidence templates also fix requester tags and relying-party audience. The retained record is authorization state, not a bearer token. Immediate grants last at most 900 seconds; explicit deferred BReg or Scheduling grants last at most seven days. Deferred execution requires fresh resource status, except Scheduling may explicitly permit unchecked execution only in the final fifteen minutes. Evidence grants remain immediate. Assertions and exchanges cannot extend the original deadline. BReg approval and application must finish before this deadline.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/task_grant.rs 'Immutable template, grant and lifetime cap'
   }
   taskAssertion = credential 'Casework task assertion' {
     technology 'Casework-signed JWT / at most 60 s'
     description 'Issued only after current grant eligibility and source checks. Expiry is the earlier of 60 seconds from issuance or the grant deadline. Carries the approved task context and registry_approver pseudonym; it carries neither registry_grant_authority nor registry_grant_source_issuer. The exchange issuer derives source provenance from verified iss.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-casework/src/task_grants.rs 'Assertion payload, signing and expiry'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/task_grants.rs 'Assertion payload, signing and expiry'
   }
   taskAccessToken = credential 'Exchanged task access token' {
     technology 'Issuer JWT / 300 s in maintained setup'
@@ -42,8 +42,8 @@ model {
 
   application .call casework.api 'Uses a configured Casework caller profile' {
     technology 'HTTPS / maintained Casework client / bearer'
-    description 'An application calls the independently authorized Casework API. Human and Requester roles retain separate profile and identity requirements.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-casework-client/src/client.rs 'Application-facing Casework client'
+    description 'An application calls the independently authorized Casework API. Trusted producers and human reviewers retain separate profile and identity requirements.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client/src/client.rs 'Application-facing Casework client'
   }
   taskAgent .call issuer 'Obtains bootstrap and exchanged task tokens' {
     #optional #taskAuthority
@@ -85,7 +85,7 @@ model {
   breg.task_grants .call casework.api 'Checks current task status before new writes' {
     #optional #taskAuthority
     technology 'HTTPS / authenticated status GET / no positive cache'
-    description 'BReg selects a status client by source issuer. New task-bound submissions check the presented grant; later approval and application check the retained original grant; database retries recheck. Active Casework status rereads BReg through its separate service reader and rechecks eligibility after source I/O. Source failure fails the status check. Approval and application must finish before the original grant deadline, at most 900 seconds after approval, or require an explicit new authorized submission. Human rejection and owner cancellation do not require the old submitter grant to remain active. Status and mutation commits are separate transactions. Reads make no status call.'
+    description 'BReg selects a status client by source issuer. New task-bound submissions check the presented grant; later approval and application check the retained original grant; database retries recheck. Active Casework status rechecks ReviewTask eligibility and exact context. Current-source grants use the separate purpose-bound service reader and recheck eligibility after source I/O; submitted context uses its admitted snapshot. Source failure fails the status check. Approval and application must finish before the original grant deadline, under the approved immediate or deferred mode, or require an explicit new authorized submission. Human rejection and owner cancellation do not require the old submitter grant to remain active. Status and mutation commits are separate transactions. Reads make no status call.'
     navigateTo breg_task_write
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/task_grant.rs 'Fresh status and exact binding comparison'
   }

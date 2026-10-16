@@ -30,19 +30,8 @@ pub(super) const MAX_STATE_BYTES: u64 = (MAX_PROJECT_BYTES * 4) as u64;
 pub(super) const MAX_JOURNAL_BYTES: u64 = MAX_STATE_BYTES * 2;
 pub(super) const STATE_PATH: &str = ".evidence/source-imports/state.json";
 pub(super) const JOURNAL_PATH: &str = ".evidence/source-imports/transaction.json";
-const AUTHORED_DIRECTORIES: &[&str] = &[
-    "questions",
-    "sources",
-    "selectors",
-    "schemas",
-    "adapters",
-    "derivations",
-    "fixtures",
-    "codelists",
-    "queries",
-    "public-keys",
-];
-const AUTHORED_FILES: &[&str] = &["evidence-project.yaml", "source.openapi.yaml"];
+const AUTHORED_DIRECTORIES: &[&str] = &["functions", "fixtures", "codelists", "queries"];
+const AUTHORED_FILES: &[&str] = &["evidence.yaml", "source.openapi.yaml"];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -237,8 +226,10 @@ pub(super) fn artifact_path(value: &str) -> Result<()> {
     let suffix = match directory {
         "sources" | "selectors" | "schemas" => ".yaml",
         "adapters" => ".rhai",
+        "functions" => ".rhai",
+        "source-fragments" | "selector-fragments" => ".json",
         _ => bail!(
-            "exports may contain only ordinary source, selector, schema and adapter artifacts"
+            "source imports may contain only bounded source fragments, Functions, or verified public export artifacts"
         ),
     };
     let stem = name
@@ -397,7 +388,7 @@ mod tests {
     use super::*;
 
     fn project(root: &Path) {
-        fs::create_dir_all(root.join("questions")).expect("question directory");
+        fs::create_dir_all(root.join("functions")).expect("Function directory");
     }
 
     fn oversized(bytes: u64) -> String {
@@ -406,8 +397,8 @@ mod tests {
 
     #[test]
     fn authored_bound_sizes_each_path_by_its_own_kind() {
-        assert_eq!(authored_bound("questions/one.yaml"), MAX_FILE_BYTES);
-        assert_eq!(authored_bound("evidence-project.yaml"), MAX_FILE_BYTES);
+        assert_eq!(authored_bound("functions/one.rhai"), MAX_FILE_BYTES);
+        assert_eq!(authored_bound("evidence.yaml"), MAX_FILE_BYTES);
         assert_eq!(authored_bound(OPENAPI_FILE), MAX_OPENAPI_BYTES);
         assert_eq!(authored_bound(STATE_PATH), MAX_STATE_BYTES);
         assert_eq!(authored_bound(JOURNAL_PATH), MAX_JOURNAL_BYTES);
@@ -418,10 +409,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary project");
         let root = directory.path();
         project(root);
-        fs::write(root.join("questions/one.yaml"), oversized(MAX_FILE_BYTES))
-            .expect("oversized question");
+        fs::write(root.join("functions/one.rhai"), oversized(MAX_FILE_BYTES))
+            .expect("oversized Function");
         let Err(error) = snapshot(root) else {
-            panic!("an oversized question is refused");
+            panic!("an oversized Function is refused");
         };
         assert!(
             error.to_string().contains("bounded plain file"),
@@ -448,13 +439,13 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary project");
         let root = directory.path();
         project(root);
-        fs::write(root.join("questions/one.yaml"), oversized(MAX_FILE_BYTES))
-            .expect("oversized question");
+        fs::write(root.join("functions/one.rhai"), oversized(MAX_FILE_BYTES))
+            .expect("oversized Function");
         let replacement = Contents {
             text: "id: one\n".to_owned(),
             mode: 0o600,
         };
-        let Err(error) = write(root, "questions/one.yaml", Some(&replacement)) else {
+        let Err(error) = write(root, "functions/one.rhai", Some(&replacement)) else {
             panic!("an oversized destination is refused");
         };
         assert!(

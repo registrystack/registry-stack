@@ -3,20 +3,17 @@
 //! synthetic cases a requirement is proven against offline.
 //!
 //! The bundle loader reads each referenced fixture through the shared
-//! configuration reader and checks that it is synthetic and covers every
-//! required case category. The offline runner interprets the cases. Every
+//! configuration reader and checks that it is synthetic. Production and
+//! evidence-grade bundles also require every case category. The offline runner interprets the cases. Every
 //! refusal names the file, the member, its line and column, and the fix, and
 //! none repeats a value from the file (CFG-SEC-3).
 
-use std::collections::BTreeSet;
-
 use registry_platform_yaml::{
-    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, RemovedKey, Report,
-    Severity,
+    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
 };
 use serde_json::Value;
 
-use crate::config::BundleExpressions;
+use crate::config::{AssuranceProfile, BundleExpressions};
 
 /// The kind of an Evidence fixture document.
 pub const EVIDENCE_FIXTURE_KIND: &str = "EvidenceFixture";
@@ -32,29 +29,67 @@ pub const EVIDENCE_FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(EVIDENCE_FIXTURE_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[RemovedKey {
-        pointer: "/fixture",
-        replacement: "The fixture identifier is replaced by the envelope: remove `fixture` and declare `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and `kind: EvidenceFixture`.",
-    }],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/fixture",
+            replacement: "The fixture identifier is replaced by the envelope: remove `fixture` and declare `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and `kind: EvidenceFixture`.",
+        },
+        RemovedKey { pointer: "/synthetic_only", replacement: "Write `syntheticOnly` instead." },
+        RemovedKey { pointer: "/coequal_acceptance_definition", replacement: "Write `coequalAcceptanceDefinition` instead." },
+        RemovedKey { pointer: "/provider_contract", replacement: "Write `providerContract` instead." },
+        RemovedKey { pointer: "/privacy_expectation", replacement: "Write `privacyExpectation` instead." },
+        RemovedKey { pointer: "/common/observed_at", replacement: "Write `observedAt` instead." },
+        RemovedKey { pointer: "/common/legal_local_date", replacement: "Write `legalLocalDate` instead." },
+        RemovedKey { pointer: "/common/verified_token_claims", replacement: "Write `verifiedTokenClaims` instead." },
+        RemovedKey { pointer: "/cases/*/observed_at", replacement: "Write `observedAt` instead." },
+        RemovedKey { pointer: "/cases/*/legal_local_date", replacement: "Write `legalLocalDate` instead." },
+        RemovedKey { pointer: "/cases/*/verified_token_claims", replacement: "Write `verifiedTokenClaims` instead." },
+        RemovedKey { pointer: "/cases/*/expected_lookup", replacement: "Write `expectedLookup` instead." },
+        RemovedKey { pointer: "/cases/*/expected_public_problem", replacement: "Write `expectedPublicProblem` instead." },
+        RemovedKey { pointer: "/cases/*/expected_subject_roles", replacement: "Write `expectedSubjectRoles` instead." },
+        RemovedKey { pointer: "/cases/*/derivation_runs", replacement: "Write `derivationRuns` instead." },
+        RemovedKey { pointer: "/cases/*/signed_success", replacement: "Write `signedSuccess` instead." },
+        RemovedKey { pointer: "/cases/*/source_failure", replacement: "Write `sourceFailure` instead." },
+        RemovedKey { pointer: "/cases/*/companion_bundle", replacement: "Write `companionBundle` instead." },
+        RemovedKey { pointer: "/cases/*/injected_derivation", replacement: "Write `injectedDerivation` instead." },
+        RemovedKey { pointer: "/cases/*/expected_value", replacement: "Write `expectedValue` instead." },
+        RemovedKey { pointer: "/cases/*/expected_values", replacement: "Write `expectedValues` instead." },
+        RemovedKey { pointer: "/privacyExpectation/evidence_contains", replacement: "Write `evidenceContains` instead." },
+        RemovedKey { pointer: "/privacyExpectation/evidence_excludes", replacement: "Write `evidenceExcludes` instead." },
+        RemovedKey { pointer: "/privacyExpectation/diagnostics_exclude", replacement: "Write `diagnosticsExclude` instead." },
+        RemovedKey { pointer: "/privacyExpectation/member_inputs", replacement: "Write `memberInputs` instead." },
+        RemovedKey { pointer: "/privacyExpectation/minimization_claim", replacement: "Write `minimizationClaim` instead." },
+        RemovedKey { pointer: "/privacyExpectation/subject_bindings", replacement: "Write `subjectBindings` instead." },
+    ],
 };
 
 /// The most cases one fixture holds.
 pub const MAXIMUM_CASES: usize = 256;
 
-/// Read one fixture file and check that it is synthetic and covers every
-/// case category. `file` is the name the diagnostics carry.
+/// Read one synthetic fixture file. Local bundles may use focused suites;
+/// production and evidence-grade bundles require every case category. `file` is the name the diagnostics carry.
 /// `declared_unresolved` says whether the requirement's initial source
 /// declares an unresolved outcome a case may replay.
 ///
 /// The value returned is the document without its envelope, for the offline
 /// runner.
-pub fn read_fixture(file: &str, bytes: &[u8], declared_unresolved: bool) -> Result<Value, Report> {
+pub fn read_fixture(
+    file: &str,
+    bytes: &[u8],
+    declared_unresolved: bool,
+    assurance_profile: AssuranceProfile,
+) -> Result<Value, Report> {
     let mut hook = BundleExpressions;
     let document = Reader::new(file)
         .with_hook(&mut hook)
         .read(bytes, &Expect::one(&EVIDENCE_FIXTURE_FORMAT))?;
     let mut value = document.to_json_value();
-    check_coverage(&document, &value, declared_unresolved)
+    if value.get("coequalAcceptanceDefinition") == Some(&Value::Bool(true)) {
+        document.decode::<shape::CoequalFixture>()?;
+    } else {
+        document.decode::<shape::ReferenceFixture>()?;
+    }
+    check_coverage(&document, &value, declared_unresolved, assurance_profile)
         .map_err(|diagnostic| Report::new(vec![*diagnostic]))?;
     if let Some(body) = value.as_object_mut() {
         body.remove("apiVersion");
@@ -63,12 +98,192 @@ pub fn read_fixture(file: &str, bytes: &[u8], declared_unresolved: bool) -> Resu
     Ok(value)
 }
 
+/// Typed control-key shells for the two existing evaluator forms. Synthetic
+/// source/response, selector, fact and expected-value trees use ForeignValue:
+/// their keys and nulls belong to the reviewed source or output contract.
+/// The runtime evaluates the original document after this single shape check.
+pub(crate) mod shape {
+    #![allow(
+        dead_code,
+        reason = "fixture shells validate the existing authored keys; the evaluator retains original nodes"
+    )]
+    use registry_platform_yaml::{ForeignValue, Identified, LocalId, UniqueIdList};
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ReferenceFixture {
+        #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
+        pub synthetic_only: bool,
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+        pub cases: UniqueIdList<ReferenceCase>,
+        pub common: Option<ReferenceCommon>,
+        pub privacy_expectation: Option<ReferencePrivacy>,
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct CoequalFixture {
+        #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
+        pub synthetic_only: bool,
+        #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
+        pub coequal_acceptance_definition: bool,
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+        pub cases: UniqueIdList<CoequalCase>,
+        pub common: Option<CoequalCommon>,
+        pub privacy_expectation: Option<CoequalPrivacy>,
+        pub provider_contract: Option<ForeignValue>,
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ReferenceCommon {
+        pub observed_at: Option<String>,
+        pub purpose: Option<String>,
+        pub audience: Option<String>,
+        pub extract: Option<String>,
+        pub selectors: Option<ForeignValue>,
+        pub verified_token_claims: Option<ForeignValue>,
+        pub derivation_selector_inputs: Option<ForeignValue>,
+        pub expected_request_parts: Option<ForeignValue>,
+        pub expected_transport: Option<ForeignValue>,
+        pub expected_fetch_request_parts: Option<ForeignValue>,
+        pub expected_fetch_transport: Option<ForeignValue>,
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct CoequalCommon {
+        pub observed_at: Option<String>,
+        pub legal_local_date: Option<String>,
+        pub purpose: Option<String>,
+        pub audience: Option<String>,
+        pub selector: Option<ForeignValue>,
+        pub selectors: Option<ForeignValue>,
+        pub subjects: Option<ForeignValue>,
+        pub verified_token_claims: Option<ForeignValue>,
+        pub derivation_selector_inputs: Option<ForeignValue>,
+        pub expected_request_parts: Option<ForeignValue>,
+        pub expected_transport: Option<ForeignValue>,
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ReferenceCase {
+        pub id: LocalId,
+        pub purpose: Option<String>,
+        pub audience: Option<String>,
+        pub observed_at: Option<String>,
+        pub source_failure: Option<String>,
+        pub bundle_mutation: Option<String>,
+        pub statement_mutation: Option<String>,
+        pub request_mutation: Option<String>,
+        pub derivation_mutation: Option<String>,
+        pub derivation_parameter_mutation: Option<ForeignValue>,
+        #[cfg_attr(feature="schema", schemars(extend("const" = true)))]
+        pub declared_unresolved: Option<bool>,
+        pub response: Option<ForeignValue>,
+        pub responses: Option<ForeignValue>,
+        pub selectors: Option<ForeignValue>,
+        pub selector_overrides: Option<ForeignValue>,
+        pub expected: Option<ReferenceExpected>,
+    }
+    impl Identified for ReferenceCase {
+        fn id(&self) -> &str {
+            self.id.as_str()
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct CoequalCase {
+        pub id: LocalId,
+        pub purpose: Option<String>,
+        pub audience: Option<String>,
+        pub observed_at: Option<String>,
+        pub legal_local_date: Option<String>,
+        pub expected: Option<String>,
+        pub expected_lookup: Option<String>,
+        pub expected_public_problem: Option<String>,
+        pub source_failure: Option<String>,
+        pub companion_bundle: Option<String>,
+        pub derivation_runs: Option<bool>,
+        pub signed_success: Option<bool>,
+        pub expected_subject_roles: Option<Vec<String>>,
+        pub source: Option<ForeignValue>,
+        pub sources: Option<ForeignValue>,
+        pub selectors: Option<ForeignValue>,
+        pub selector_overrides: Option<ForeignValue>,
+        pub subjects: Option<ForeignValue>,
+        pub verified_token_claims: Option<ForeignValue>,
+        pub derivation_selector_inputs: Option<ForeignValue>,
+        pub injected_derivation: Option<ForeignValue>,
+        pub expected_value: Option<ForeignValue>,
+        pub expected_values: Option<ForeignValue>,
+    }
+    impl Identified for CoequalCase {
+        fn id(&self) -> &str {
+            self.id.as_str()
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ReferenceExpected {
+        pub lookup: Option<String>,
+        pub public_problem: Option<String>,
+        pub error: Option<String>,
+        pub bundle: Option<String>,
+        pub output_gate: Option<String>,
+        pub rejected_before: Option<String>,
+        pub raw_references_disclosed: Option<bool>,
+        pub signed: Option<bool>,
+        pub derivation_runs: Option<bool>,
+        // The evaluator counts references in one list concept, whose limit is 64 items.
+        pub entity_reference_count: Option<registry_platform_yaml::BoundedU64<0, 64>>,
+        pub source_request_count: Option<registry_platform_yaml::BoundedU64<0, 2>>,
+        pub facts: Option<ForeignValue>,
+        pub value: Option<ForeignValue>,
+        pub values: Option<ForeignValue>,
+        pub expected_transport: Option<ForeignValue>,
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ReferencePrivacy {
+        pub evidence_contains: Option<Vec<String>>,
+        pub evidence_excludes: Option<Vec<String>>,
+        pub diagnostics_exclude: Option<Vec<String>>,
+    }
+
+    #[derive(Deserialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct CoequalPrivacy {
+        pub evidence_contains: Option<Vec<String>>,
+        pub evidence_excludes: Option<Vec<String>>,
+        pub diagnostics_exclude: Option<Vec<String>>,
+        pub member_inputs: Option<String>,
+        pub minimization_claim: Option<String>,
+        pub subject_bindings: Option<String>,
+    }
+}
+
 type Refusal = Box<registry_platform_yaml::Diagnostic>;
 
 fn check_coverage(
     document: &Document,
     root: &Value,
     declared_unresolved: bool,
+    assurance_profile: AssuranceProfile,
 ) -> Result<(), Refusal> {
     // A member the rule concerns that is not written is placed at the
     // nearest member that is.
@@ -82,22 +297,17 @@ fn check_coverage(
         diagnostic.path = pointer.to_owned();
         Box::new(diagnostic)
     };
-    if root.get("synthetic_only") != Some(&Value::Bool(true)) {
+    if root.get("syntheticOnly") != Some(&Value::Bool(true)) {
         return Err(refuse(
             "evidence.fixture.not-synthetic",
-            "/synthetic_only",
-            "a fixture declares synthetic_only: true",
-            "Declare `synthetic_only: true` and use invented values only.",
+            "/syntheticOnly",
+            "a fixture declares syntheticOnly: true",
+            "Declare `syntheticOnly: true` and use invented values only.",
         ));
     }
-    let Some(cases) = root.get("cases").and_then(Value::as_array) else {
-        return Err(refuse(
-            "evidence.fixture.missing-cases",
-            "/cases",
-            "a fixture declares its cases as a list",
-            "Declare `cases` as a list of cases, each with an `id`.",
-        ));
-    };
+    let cases = root["cases"]
+        .as_array()
+        .expect("the typed shell has a case list");
     if cases.is_empty() || cases.len() > MAXIMUM_CASES {
         return Err(refuse(
             "evidence.fixture.invalid-case-count",
@@ -106,25 +316,11 @@ fn check_coverage(
             "Declare at least one case, and split a longer fixture between requirements.",
         ));
     }
-    let mut ids = BTreeSet::new();
     let mut categories = Categories::default();
     for (index, case) in cases.iter().enumerate() {
-        let Some(id) = case.get("id").and_then(Value::as_str) else {
-            return Err(refuse(
-                "evidence.fixture.invalid-case",
-                &format!("/cases/{index}/id"),
-                "a fixture case is a mapping with a text id",
-                "Write the case as a mapping and give it an `id`.",
-            ));
-        };
-        if LocalId::new(id).is_err() || !ids.insert(id) {
-            return Err(refuse(
-                "evidence.fixture.invalid-case-id",
-                &format!("/cases/{index}/id"),
-                "a case id is a local identifier and unique within its fixture",
-                "Give every case a lowercase id of up to 64 letters, digits, `_`, or `-` that no other case of this fixture uses.",
-            ));
-        }
+        let id = case["id"]
+            .as_str()
+            .expect("the typed shell has a local case id");
         let pointer = format!("/cases/{index}/declaredUnresolved");
         let case_declares_unresolved = match case.get("declaredUnresolved") {
             Some(Value::Bool(true)) if declared_unresolved => true,
@@ -148,7 +344,7 @@ fn check_coverage(
         };
         categories.observe(id, case_declares_unresolved);
     }
-    if !categories.complete() {
+    if assurance_profile != AssuranceProfile::Local && !categories.complete() {
         return Err(refuse(
             "evidence.fixture.incomplete-coverage",
             "/cases",
@@ -227,8 +423,13 @@ mod tests {
     }
 
     fn refusal(text: &str, declared_unresolved: bool) -> registry_platform_yaml::Diagnostic {
-        let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), declared_unresolved)
-            .expect_err("the fixture is refused");
+        let report = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            declared_unresolved,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect_err("the fixture is refused");
         assert!(
             !report.render_human().contains(CANARY),
             "the refusal repeats no value"
@@ -239,22 +440,101 @@ mod tests {
 
     #[test]
     fn reads_a_complete_fixture_without_its_envelope() {
-        let text = format!("{HEADER}synthetic_only: true\ncases:\n{}", complete_cases());
-        let value = read_fixture("fixtures/cases.yaml", text.as_bytes(), false)
-            .expect("a complete fixture");
+        let text = format!("{HEADER}syntheticOnly: true\ncases:\n{}", complete_cases());
+        let value = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect("a complete fixture");
         assert_eq!(value.get("apiVersion"), None);
         assert_eq!(value.get("kind"), None);
         assert_eq!(value["cases"].as_array().map(Vec::len), Some(8));
     }
 
     #[test]
+    fn focused_coverage_is_local_only() {
+        let text = format!("{HEADER}syntheticOnly: true\ncases:\n  - {{id: positive}}\n");
+        let value = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .expect("local focused fixture");
+        assert_eq!(value["cases"].as_array().map(Vec::len), Some(1));
+        for profile in [
+            AssuranceProfile::Production,
+            AssuranceProfile::EvidenceGrade,
+        ] {
+            let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), false, profile)
+                .expect_err("strict profiles require complete coverage");
+            assert_eq!(
+                report.diagnostics()[0].code,
+                "evidence.fixture.incomplete-coverage"
+            );
+        }
+        let complete = format!("{HEADER}syntheticOnly: true\ncases:\n{}", complete_cases());
+        read_fixture(
+            "fixtures/cases.yaml",
+            complete.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .expect("complete local fixtures remain valid");
+    }
+
+    #[test]
+    fn focused_local_coverage_preserves_structural_and_private_refusals() {
+        for (body, code) in [
+            (
+                "syntheticOnly: false\ncases: [{id: positive}]\n".to_owned(),
+                "evidence.fixture.not-synthetic",
+            ),
+            (
+                "syntheticOnly: true\ncases: []\n".to_owned(),
+                "evidence.fixture.invalid-case-count",
+            ),
+            (
+                "syntheticOnly: true\ncases: [{id: positive}, {id: positive}]\n".to_owned(),
+                "config.duplicate-id",
+            ),
+            (
+                format!("syntheticOnly: true\ncases: [{{id: {CANARY}}}]\n"),
+                "config.invalid-value",
+            ),
+            (
+                "syntheticOnly: true\ncases: [{id: unresolved, declaredUnresolved: true}]\n"
+                    .to_owned(),
+                "evidence.fixture.unresolved-not-declared",
+            ),
+        ] {
+            let report = read_fixture(
+                "fixtures/cases.yaml",
+                format!("{HEADER}{body}").as_bytes(),
+                false,
+                AssuranceProfile::Local,
+            )
+            .expect_err("local coverage changes no structural boundary");
+            assert_eq!(report.diagnostics()[0].code, code);
+            assert!(!report.render_human().contains(CANARY));
+        }
+    }
+
+    #[test]
     fn a_retired_header_without_the_envelope_is_refused_and_named() {
         let text = format!(
-            "fixture: registry.evidence.reference.{CANARY}/v1\nsynthetic_only: true\ncases:\n{}",
+            "fixture: registry.evidence.reference.{CANARY}/v1\nsyntheticOnly: true\ncases:\n{}",
             complete_cases()
         );
-        let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), false)
-            .expect_err("the fixture is refused");
+        let report = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect_err("the fixture is refused");
         assert!(
             !report.render_human().contains(CANARY),
             "the refusal repeats no value"
@@ -280,7 +560,7 @@ mod tests {
         let table: Vec<(&str, String, bool, &str, &str, usize)> = vec![
             (
                 "retired identifier beside the envelope",
-                format!("{HEADER}fixture: registry.evidence.reference.{CANARY}/v1\nsynthetic_only: true\ncases:\n{cases}"),
+                format!("{HEADER}fixture: registry.evidence.reference.{CANARY}/v1\nsyntheticOnly: true\ncases:\n{cases}"),
                 false,
                 "config.removed-key",
                 "/fixture",
@@ -288,31 +568,31 @@ mod tests {
             ),
             (
                 "not synthetic",
-                format!("{HEADER}synthetic_only: false\ncases:\n{cases}"),
+                format!("{HEADER}syntheticOnly: false\ncases:\n{cases}"),
                 false,
                 "evidence.fixture.not-synthetic",
-                "/synthetic_only",
+                "/syntheticOnly",
                 3,
             ),
             (
                 "cases not a list",
-                format!("{HEADER}synthetic_only: true\ncases: {CANARY}\n"),
+                format!("{HEADER}syntheticOnly: true\ncases: {CANARY}\n"),
                 false,
-                "evidence.fixture.missing-cases",
+                "config.invalid-type",
                 "/cases",
                 4,
             ),
             (
                 "repeated case id",
-                format!("{HEADER}synthetic_only: true\ncases:\n{cases}  - {{id: positive}}\n"),
+                format!("{HEADER}syntheticOnly: true\ncases:\n{cases}  - {{id: positive}}\n"),
                 false,
-                "evidence.fixture.invalid-case-id",
+                "config.duplicate-id",
                 "/cases/8/id",
                 13,
             ),
             (
                 "unresolved without a source declaration",
-                format!("{HEADER}synthetic_only: true\ncases:\n{without_ambiguous}  - {{id: unresolved, declaredUnresolved: true}}\n"),
+                format!("{HEADER}syntheticOnly: true\ncases:\n{without_ambiguous}  - {{id: unresolved, declaredUnresolved: true}}\n"),
                 false,
                 "evidence.fixture.unresolved-not-declared",
                 "/cases/7/declaredUnresolved",
@@ -320,7 +600,7 @@ mod tests {
             ),
             (
                 "unresolved marker not true",
-                format!("{HEADER}synthetic_only: true\ncases:\n{without_ambiguous}  - {{id: unresolved, declaredUnresolved: false}}\n"),
+                format!("{HEADER}syntheticOnly: true\ncases:\n{without_ambiguous}  - {{id: unresolved, declaredUnresolved: false}}\n"),
                 true,
                 "evidence.fixture.invalid-unresolved-marker",
                 "/cases/7/declaredUnresolved",
@@ -328,7 +608,7 @@ mod tests {
             ),
             (
                 "incomplete coverage",
-                format!("{HEADER}synthetic_only: true\ncases:\n{without_ambiguous}"),
+                format!("{HEADER}syntheticOnly: true\ncases:\n{without_ambiguous}"),
                 false,
                 "evidence.fixture.incomplete-coverage",
                 "/cases",
@@ -351,11 +631,16 @@ mod tests {
             .replace("  - {id: ambiguous}\n", "");
         let fixture = |marker: &str| {
             format!(
-                "{HEADER}synthetic_only: true\ncases:\n{cases}  - {{id: unresolved, declaredUnresolved: {marker}}}\n"
+                "{HEADER}syntheticOnly: true\ncases:\n{cases}  - {{id: unresolved, declaredUnresolved: {marker}}}\n"
             )
         };
-        read_fixture("fixtures/cases.yaml", fixture("true").as_bytes(), true)
-            .expect("the declared unresolved case covers no-match and ambiguity");
+        read_fixture(
+            "fixtures/cases.yaml",
+            fixture("true").as_bytes(),
+            true,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect("the declared unresolved case covers no-match and ambiguity");
 
         // The marker counts only when the requirement declares the collapse,
         // and only as `true`; either other way the hidden categories stay
@@ -364,8 +649,13 @@ mod tests {
             ("true", false, "evidence.fixture.unresolved-not-declared"),
             ("false", true, "evidence.fixture.invalid-unresolved-marker"),
         ] {
-            let report = read_fixture("fixtures/cases.yaml", fixture(marker).as_bytes(), declared)
-                .expect_err("the hidden lookup categories stay uncovered");
+            let report = read_fixture(
+                "fixtures/cases.yaml",
+                fixture(marker).as_bytes(),
+                declared,
+                AssuranceProfile::EvidenceGrade,
+            )
+            .expect_err("the hidden lookup categories stay uncovered");
             assert!(
                 report
                     .diagnostics()
@@ -373,6 +663,116 @@ mod tests {
                     .any(|diagnostic| diagnostic.code == code),
                 "{code}"
             );
+        }
+    }
+    #[test]
+    fn both_fixture_forms_close_controls_and_preserve_foreign_payloads() {
+        for (marker, payload) in [
+            ("", "response"),
+            ("coequalAcceptanceDefinition: true\n", "source"),
+        ] {
+            let text = format!("{HEADER}syntheticOnly: true\n{marker}cases:\n  - id: positive\n    {payload}: {{external_key: null, nested: {{unfamiliar: [1, true]}}}}\n");
+            let value = read_fixture(
+                "fixtures/cases.yaml",
+                text.as_bytes(),
+                false,
+                AssuranceProfile::Local,
+            )
+            .unwrap();
+            assert_eq!(value["cases"][0][payload]["external_key"], Value::Null);
+            for (text, path) in [
+                (
+                    format!("{text}unknownControl: {CANARY}\n"),
+                    "/unknownControl",
+                ),
+                (
+                    format!("{text}common: {{unknownControl: {CANARY}}}\n"),
+                    "/common/unknownControl",
+                ),
+                (
+                    text.replace(
+                        "id: positive",
+                        &format!("id: positive\n    unknownControl: {CANARY}"),
+                    ),
+                    "/cases/0/unknownControl",
+                ),
+            ] {
+                let report = read_fixture(
+                    "fixtures/cases.yaml",
+                    text.as_bytes(),
+                    false,
+                    AssuranceProfile::Local,
+                )
+                .unwrap_err();
+                assert!(report
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "config.unknown-key"
+                        && diagnostic.path == path));
+                assert!(!report.render_human().contains(CANARY));
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_fixture_ids_keep_both_shared_source_locations() {
+        let text =
+            format!("{HEADER}syntheticOnly: true\ncases:\n  - id: positive\n  - id: positive\n");
+        let report = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .unwrap_err();
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.duplicate-id");
+        assert_eq!(diagnostic.path, "/cases/1/id");
+        assert_eq!(diagnostic.source.as_ref().unwrap().line, Some(6));
+        assert_eq!(diagnostic.related[0].path, "/cases/0/id");
+        assert_eq!(diagnostic.related[0].line, Some(5));
+    }
+    #[test]
+    fn retired_fixture_controls_name_the_replacement_without_touching_payload_keys() {
+        let base = format!("{HEADER}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - id: positive\n    source: {{synthetic_only: null, expected_lookup: kept}}\n");
+        read_fixture(
+            "fixtures/cases.yaml",
+            base.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .unwrap();
+        for (text, path, replacement) in [
+            (
+                format!("{base}synthetic_only: true\n"),
+                "/synthetic_only",
+                "syntheticOnly",
+            ),
+            (
+                format!("{base}common: {{observed_at: '2026-08-02T00:00:00Z'}}\n"),
+                "/common/observed_at",
+                "observedAt",
+            ),
+            (
+                base.replace("id: positive", "id: positive\n    expected_lookup: match"),
+                "/cases/0/expected_lookup",
+                "expectedLookup",
+            ),
+        ] {
+            let report = read_fixture(
+                "fixtures/cases.yaml",
+                text.as_bytes(),
+                false,
+                AssuranceProfile::Local,
+            )
+            .unwrap_err();
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path == path)
+                .unwrap();
+            assert_eq!(diagnostic.code, "config.removed-key");
+            assert!(diagnostic.suggested_action.contains(replacement));
         }
     }
 }

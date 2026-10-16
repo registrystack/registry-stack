@@ -76,12 +76,14 @@ class Exemption:
 
 @dataclass(frozen=True)
 class RustBlock:
-    """A runtime struct field that must hold a shared block type."""
+    """A runtime struct field that must hold a shared block type, or a `Vec` of
+    it when `repeated` is set."""
 
     path: str
     struct: str
     field: str
     block: str
+    repeated: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,38 @@ class Row:
 
 
 ROWS: tuple[Row, ...] = (
+    Row(
+        product="coordinator",
+        loader_sources=("crates/registry-coordinator/src",),
+        runtime_schema="products/coordinator/generated/runtime/runtime.schema.json",
+        shared_blocks=(
+            "DatabaseConfig",
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PackageConfig",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
+        reference_refusal=TestRef("crates/registry-coordinator/tests/runtime_config.rs", "runtime_secret_references_refuse_environment_substitution"),
+        authored_refusal=TestRef("crates/registry-coordinator/tests/authoring.rs", "authored_workflow_refuses_environment_substitution"),
+        digest_mismatch=TestRef("crates/registry-coordinator/tests/deployment_surface.rs", "immutable_package_closure_tamper_and_abi_are_checked"),
+        rust_blocks=(
+            RustBlock("crates/registry-coordinator/src/runtime.rs", "RuntimeConfig", "secret_providers", "SecretProvidersConfig"),
+            RustBlock("crates/registry-coordinator/src/runtime.rs", "RuntimeConfig", "database", "DatabaseConfig"),
+            RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "packages", "PackageConfig", repeated=True),
+            RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "listener", "PrivateListenerConfig"),
+            RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "issuer", "OidcIssuerConfig"),
+            # Coordinator derives the shared OidcClientsConfig from its policy keys,
+            # instead of carrying a second client-admission list. The owning
+            # policy_keys_are_the_only_closed_client_admission_configuration test
+            # verifies this authoring contract; AccessConfig still runs the shared check.
+        ),
+    ),
     Row(
         product="render",
         loader_sources=("crates/registry-render/src",),
@@ -560,7 +594,7 @@ ROWS: tuple[Row, ...] = (
 
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
-     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci"}
+     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci", "coordinator"}
 )
 
 
@@ -797,12 +831,16 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
             problems.append(f"{row.product}: {entry.path} has no struct {entry.struct}")
             continue
         written = fields.get(entry.field)
+        expected = f"Vec<{entry.block}>" if entry.repeated else entry.block
+        if entry.repeated:
+            item = re.fullmatch(r"Vec<(.+)>", written or "")
+            written = item.group(1) if item else None
         if written == f"{PLATFORM_CRATE}::{entry.block}":
             continue
         if written != entry.block:
             problems.append(
                 f"{row.product}: {entry.path} {entry.struct}.{entry.field} is not "
-                f"typed {entry.block}"
+                f"typed {expected}"
             )
             continue
         if re.search(rf"\b(?:struct|enum|type|union)\s+{entry.block}\b", code):

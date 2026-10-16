@@ -15,7 +15,7 @@ export declare class BaseRegistryClient {
   statisticsPublish(dataset: string, period: string, status: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: number, reason: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | undefined | null): Promise<BRegMetadata>
-  entitySchema(entityIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  entitySchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one bounded first page of record revisions as inert JSON. */
   recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one exact retained revision as validated inert record JSON. */
@@ -35,31 +35,48 @@ export declare class BaseRegistryClient {
   listRelationshipRecords(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueRelationshipList(value: any): Promise<PageOutcome>
   lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
+  startProposal(binding: BRegActionBinding, inputsJson: string, key: string): Promise<BRegProposal>
+  readProposal(proposal: BRegProposal): Promise<BRegProposal>
+  readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome>
+  getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
+  downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
+  readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome>
+  downloadProposalReviewDocument(binding: BRegProposalReviewBinding, context: any, field: string): Promise<RawOutcome>
+  readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome>
+  readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome>
+  uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
+  deleteProposalAttachment(proposal: BRegProposal, slot: string, key: string): Promise<BRegProposal>
+  listProposals(collection: BRegProposalCollection, queryJson: string): Promise<ProposalPage>
+  prepareProposal(proposal: BRegProposal, operation: string, bodyJson: string, key: string): BRegPreparedProposal
+  recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
+  executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   /** Fetch opaque target conditions for one metadata-selected action. */
-  actionTargetConditions(binding: BRegImmediateActionBinding, inputs: any): Promise<BRegActionTargetConditions>
+  actionTargetConditions(binding: BRegActionBinding, inputs: any): Promise<BRegActionTargetConditions>
   /**
    * Invoke one metadata-selected immediate action. An invocation whose
    * outcome is unknown is resent identically under the same key, at most
    * `maxMutationRetries` times.
    */
-  invokeAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
+  invokeAction(binding: BRegActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
   /**
    * Prepare inert invocation evidence before any token acquisition or I/O.
    * Persist `toBytes` before invoking so a lost response can be recovered.
    */
-  prepareAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
+  prepareAction(binding: BRegActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
   /**
    * Revalidate saved invocation evidence against freshly selected authority
    * and the caller's original inputs and key. The saved target conditions
    * are reused exactly; this never fetches conditions or sends a request.
    */
-  recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: any, idempotencyKey: string): BRegRecoveredAction
+  recoverAction(binding: BRegActionBinding, prepared: BRegPreparedAction, inputs: any, idempotencyKey: string): BRegRecoveredAction
   /**
    * Explicitly send a recovered invocation under its original key. An
    * invocation whose outcome is unknown is resent identically under that
    * key, at most `maxMutationRetries` times.
    */
-  executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
+  executeRecoveredAction(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
+  /** Execute a recovered proposal start with its exact original request and key. */
+  executeRecoveredProposalStart(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<BRegProposal>
   createRecord(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /** Prepare inert Create evidence before any token acquisition or I/O. */
   prepareCreate(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
@@ -100,28 +117,6 @@ export declare class BaseRegistryClient {
   ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: number, profileId: string): Promise<CompleteOutcome>
   /** Tombstone one record against its current strong ETag. */
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
-  /**
-   * Replace one governed attachment slot with exact bytes. The prepared
-   * upload already satisfies the slot's served size and content-type policy.
-   */
-  uploadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
-  /** Read the exact bytes one governed slot holds for one proposal version. */
-  downloadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, proposalVersion: number): Promise<RawOutcome>
-  /** Empty one governed attachment slot. */
-  deleteAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
-  lifecycleActions(authority: BRegLifecycleAuthority, record: any, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
-  /**
-   * Decode one already loaded record's retained request-history page.
-   * This performs no I/O and does not advance the returned continuation.
-   */
-  requestHistory(record: any, formatValue?: string | undefined | null): RetainedRequestHistoryPage | null
-  executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome>
-  /** Prepare inert lifecycle evidence before any token acquisition or I/O. */
-  prepareLifecycleAction(authority: BRegLifecycleAuthority, record: any, action: BRegLifecycleAction, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedLifecycle
-  /** Revalidate saved lifecycle evidence against freshly selected authority. */
-  recoverLifecycleAction(authority: BRegLifecycleAuthority, prepared: BRegPreparedLifecycle): BRegRecoveredLifecycle
-  /** Explicitly send a recovered lifecycle action. */
-  executeRecoveredLifecycleAction(recovered: BRegRecoveredLifecycle): Promise<CompleteOutcome>
   getRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
   listRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueListJson(value: any): Promise<JsonOutcome>
@@ -138,15 +133,15 @@ export declare class BaseRegistryClient {
   continueRelationshipListJson(value: any): Promise<JsonOutcome>
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
   /** Fetch opaque target conditions from exact action-input JSON. */
-  actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   /** Invoke an action from exact JSON and preserve exact receipt values. */
-  invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
+  invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
   /** Prepare inert invocation evidence from exact action-input JSON. */
-  prepareActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
+  prepareActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
   /** Revalidate saved invocation evidence against exact original input JSON. */
-  recoverActionJson(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
+  recoverActionJson(binding: BRegActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
   /** Explicitly send a recovered invocation and preserve exact receipt values. */
-  executeRecoveredActionJson(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
+  executeRecoveredActionJson(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   /** Prepare inert Create evidence from exact JSON text. */
   prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
@@ -157,15 +152,10 @@ export declare class BaseRegistryClient {
   batchRecordsJson(binding: BRegBatchBinding, requestJson: string, idempotencyKey: string): Promise<JsonOutcome>
   /** Tombstone one record and preserve exact response values. */
   tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
-  uploadAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
-  deleteAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
-  lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
-  /** Prepare inert lifecycle evidence from an exact Registry Record response. */
-  prepareLifecycleActionJson(authority: BRegLifecycleAuthority, recordJson: string, action: BRegLifecycleAction, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedLifecycle
-  executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
-  /** Explicitly send a recovered lifecycle action and preserve exact values. */
-  executeRecoveredLifecycleActionJson(recovered: BRegRecoveredLifecycle): Promise<JsonOutcome>
 }
+
+export declare class BRegActionBinding {}
+export type ActionBinding = BRegActionBinding
 
 /** Opaque server-validated target conditions for one immediate action. */
 export declare class BRegActionTargetConditions {
@@ -175,43 +165,11 @@ export declare class BRegActionTargetConditions {
 }
 export type ActionTargetConditions = BRegActionTargetConditions
 
-/** Opaque governed attachment slot selected from metadata fetched by this client source. */
-export declare class BRegAttachmentSlot {
-  get slotIdentifier(): string
-  get entityIdentifier(): string
-  get accessProfile(): string
-  get requiredForSubmit(): boolean
-  /** Largest body the served slot policy accepts, in bytes. */
-  get maximumBytes(): number
-  get contentTypes(): Array<string>
-  /** Authored sensitivity of this slot's content. */
-  get classification(): string
-  get canDownload(): boolean
-  get canUpload(): boolean
-  get canRemove(): boolean
-  acceptsContentType(contentType: string): boolean
-  /** Bind exact bytes to this slot. Refusals happen here, before any request. */
-  prepareUpload(contentType: string, body: Buffer): BRegAttachmentUpload
-  /** Read this slot's engine-owned state out of one Registry Record envelope. */
-  valueIn(record: any, formatValue?: string | undefined | null): any
-}
-export type AttachmentSlot = BRegAttachmentSlot
-
-/** Opaque bytes already accepted by one slot's served upload policy. */
-export declare class BRegAttachmentUpload {
-  get contentType(): string
-  get byteSize(): number
-}
-export type AttachmentUpload = BRegAttachmentUpload
-
 export declare class BRegBatchBinding {}
 export type BatchBinding = BRegBatchBinding
 
 export declare class BRegCreateBinding {}
 export type CreateBinding = BRegCreateBinding
-
-export declare class BRegImmediateActionBinding {}
-export type ImmediateActionBinding = BRegImmediateActionBinding
 
 /**
  * One bounded, digest-bound chunk of an ingestion run. The chunk digest is
@@ -243,29 +201,21 @@ export declare class BRegIngestionPrefixDigest {
 }
 export type IngestionPrefixDigest = BRegIngestionPrefixDigest
 
-export declare class BRegLifecycleAction {
-  withReason(reason: string): BRegLifecycleAction
-  get bodyJson(): string
-  get operation(): string
-  get href(): string
-  get body(): any
-}
-export type LifecycleAction = BRegLifecycleAction
-
-export declare class BRegLifecycleAuthority {}
-export type LifecycleAuthority = BRegLifecycleAuthority
-
 export declare class BRegMetadata {
+  /** Read-only capability inventory for each exact Action/profile pair. */
+  get proposalActions(): any
   /** Caller-filtered inert descriptors. Selectors below remain the only authority constructors. */
   get operations(): any
-  /** Complete typed caller-filtered immediate-action descriptors. */
-  get immediateActions(): any
+  selectProposals(profile: string): BRegProposalCollection
+  selectProposalGet(profile: string): BRegProposalGetBinding
+  selectProposalReviewContext(profile: string, action: string): BRegProposalReviewBinding
+  selectProposalReviewStatus(profile: string, action: string): BRegProposalReviewBinding
+  /** Complete typed caller-filtered Action descriptors. */
+  get actions(): any
   /** Original caller-filtered action metadata as exact JSON text. */
   get actionsJson(): string | null
   /** Validated caller-filtered statistical dataset descriptions, without entity authority. */
   get statisticalDatasets(): any | null
-  /** Descriptive change-request capability for one entity, when advertised. */
-  changeRequestCapability(entityIdentifier: string): any | null
   get registryIdentifier(): string
   get registryVersion(): string
   get registryRevision(): string
@@ -273,11 +223,9 @@ export declare class BRegMetadata {
   get etag(): string | null
   selectCreate(operationIdentifier: string, expectedProfile: string): BRegCreateBinding
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
-  selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
-  selectAttachments(entityIdentifier: string, expectedProfile: string): Array<BRegAttachmentSlot>
-  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegImmediateActionBinding
-  selectTombstone(entityIdentifier: string, expectedProfile: string): BRegTombstoneBinding
-  selectBatch(entityIdentifier: string, expectedProfile: string): BRegBatchBinding
+  selectAction(actionIdentifier: string, expectedProfile: string): BRegActionBinding
+  selectTombstone(recordTypeIdentifier: string, expectedProfile: string): BRegTombstoneBinding
+  selectBatch(recordTypeIdentifier: string, expectedProfile: string): BRegBatchBinding
 }
 export type Metadata = BRegMetadata
 
@@ -309,17 +257,28 @@ export declare class BRegPreparedCreate {
 }
 export type PreparedCreate = BRegPreparedCreate
 
-/**
- * Inert original lifecycle request evidence. The bytes carry record values
- * and an idempotency key, but no token or executable metadata authority.
- */
-export declare class BRegPreparedLifecycle {
-  /** Restore bounded inert evidence previously returned by `toBytes`. */
-  static fromBytes(bytes: Buffer): BRegPreparedLifecycle
-  /** Copy the exact evidence bytes for owner-protected persistence. */
+export declare class BRegPreparedProposal {
+  static fromBytes(bytes: Buffer): BRegPreparedProposal
   toBytes(): Buffer
 }
-export type PreparedLifecycle = BRegPreparedLifecycle
+export type PreparedProposal = BRegPreparedProposal
+
+export declare class BRegProposal {
+  get inputJson(): string | null
+  get identifier(): string
+  get actionIdentifier(): string
+  get documentJson(): string
+}
+export type Proposal = BRegProposal
+
+export declare class BRegProposalCollection {}
+export type ProposalCollection = BRegProposalCollection
+
+export declare class BRegProposalGetBinding {}
+export type ProposalGetBinding = BRegProposalGetBinding
+
+export declare class BRegProposalReviewBinding {}
+export type ProposalReviewBinding = BRegProposalReviewBinding
 
 /**
  * A recovered immediate-action invocation and key. This remains inert until
@@ -336,13 +295,6 @@ export type RecoveredAction = BRegRecoveredAction
 export declare class BRegRecoveredCreate {}
 export type RecoveredCreate = BRegRecoveredCreate
 
-/**
- * A recovered lifecycle action and key. This remains inert until
- * `executeRecoveredLifecycleAction` is explicitly called.
- */
-export declare class BRegRecoveredLifecycle {}
-export type RecoveredLifecycle = BRegRecoveredLifecycle
-
 export declare class BRegTombstoneBinding {}
 export type TombstoneBinding = BRegTombstoneBinding
 
@@ -353,37 +305,6 @@ export declare class PrivateKeyJwt {
   bearerToken(): Promise<string>
 }
 export type PrivateKeyJwtBinding = PrivateKeyJwt
-
-/** One inert caller-visible target written by an applied request. */
-export declare class RequestResultReference {
-  get targetEntityIdentifier(): string
-  get targetRecordIdentifier(): string
-  get targetRevision(): number
-  toString(): string
-}
-
-/** One explicitly loaded retained request-history page. */
-export declare class RetainedRequestHistoryPage {
-  get proposals(): Array<RetainedRequestProposal>
-  get nextAfterProposalVersion(): number | null
-  findProposal(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: number): RetainedRequestProposal | null
-  findApplication(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: number, applicationIdentifier: string): RetainedRequestProposal | null
-  toString(): string
-}
-
-/** One exact retained proposal in an explicitly loaded history page. */
-export declare class RetainedRequestProposal {
-  get requestEntityIdentifier(): string
-  get requestIdentifier(): string
-  get proposalVersion(): number
-  get bregState(): string
-  get current(): boolean
-  get detailErased(): boolean
-  get applicationIdentifier(): string | null
-  get resultLinkCount(): number
-  get resultReferences(): Array<RequestResultReference>
-  toString(): string
-}
 
 export interface CompleteOutcome {
   kind: string
@@ -422,6 +343,11 @@ export interface PageOutcome {
   etag?: string
   snapshot?: string
   validAt?: string
+}
+
+export interface ProposalPage {
+  items: Array<BRegProposal>
+  nextCursor?: string
 }
 
 export interface RawOutcome {

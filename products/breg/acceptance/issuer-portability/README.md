@@ -15,21 +15,18 @@ binaries. The runner owns a unique disposable container,
 dynamic loopback ports, and an owner-only temporary directory. It cleans up
 services and credentials when finished. It does not contact an existing realm.
 
-To also continue a persisted approval across the issuer change, set
-`BREG_TEST_DATABASE_URL` to an explicitly disposable PostgreSQL database, as
-for the product's PostgreSQL tests, and opt in:
+With an explicitly disposable PostgreSQL service, the opt-in native case also
+proves that issuer replacement cannot transfer old Proposal ownership or receipt
+authority to the same textual principal. A reconstructed runtime with the same
+issuer can still recover its exact committed receipt:
 
 ```sh
 uv run products/breg/scripts/test-issuer-portability.py --with-postgres
 ```
 
-This additional case records the first approval using a real stock-issuer token,
-reconstructs BReg with Keycloak trust against the same database, refuses the
-old stock-issuer token and the same service principal's attempt to approve another
-stage, then accepts the independent human's Keycloak token. The runner never
-creates or resets the supplied database. Builds finish before token issuance.
-It also continues the original principal's pagination cursor and replays a
-committed approval receipt after cutover. Another principal cannot reuse the cursor.
+Set `BREG_TEST_DATABASE_URL` as for the other PostgreSQL tests. This case uses
+the same native database with distinct issuer-bound mutation coordinators.
+It does not migrate retired Request approvals across issuers.
 
 The default registry project requires the `registry_principal` direct claim,
 `registry:read` permission, `registry-administration` purpose, and `districts`
@@ -53,11 +50,10 @@ client registration. Keycloak uses an optional
 the same BReg permission and resource contract through different provisioning
 mechanisms. No production authentication dependency on either issuer is added.
 
-The default router test uses a recording backend. The optional PostgreSQL
-case adds persisted approval continuity. Broader database enforcement, hosted
-login UX, revocation operations, and production TLS are separate verification
-surfaces. The approval fixture also consumes the same `tenant_claim` assignment
-from both issuers.
+The default router test uses a recording backend; the opt-in PostgreSQL case
+proves native Proposal issuer isolation and same-issuer receipt recovery.
+Broader database enforcement, hosted login UX, revocation operations, and
+production TLS are separate verification surfaces.
 Issuer JWKS are fetched from each live provider and then passed to BReg's
 existing static-key-source interface. This journey does not prove remote-JWKS
 refresh or key rotation. Local HTTP is restricted to this disposable exercise.

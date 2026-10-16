@@ -1,8 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
 common:
-  observed_at: "2026-08-02T00:00:00Z"
+  observedAt: "2026-08-02T00:00:00Z"
   selectors:
     subject:
       profile: tracked-entity-reference-v1
@@ -205,7 +205,7 @@ cases:
         urn:gov:example:concept:professional-licence-active: true
         urn:gov:example:concept:professional-licence-expiry-category: within-30-days
   - id: boundary-first-expired-day
-    observed_at: "2026-08-03T00:00:00Z"
+    observedAt: "2026-08-03T00:00:00Z"
     response:
       pager:
         page: 1

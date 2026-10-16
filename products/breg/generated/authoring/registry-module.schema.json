@@ -17,8 +17,8 @@
           "minLength": 1,
           "type": "string"
         },
-        "sourceEntity": {
-          "description": "Entity whose access profile authorizes the read. Omitted for direct reads of the logged entity.",
+        "sourceRecordType": {
+          "description": "Record type whose access profile authorizes the read. Omitted for direct reads of the logged record type.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-z][a-z0-9_-]*$",
@@ -89,12 +89,6 @@
           "default": false,
           "type": "boolean"
         },
-        "applyTargets": {
-          "items": {
-            "$ref": "#/$defs/ApplyTargetPermissionSource"
-          },
-          "type": "array"
-        },
         "default": {
           "default": false,
           "type": "boolean"
@@ -154,23 +148,6 @@
           "type": "array",
           "uniqueItems": true
         },
-        "readableRequestFields": {
-          "description": "Readable change-request decision detail.",
-          "items": {
-            "$ref": "#/$defs/RequestMetadataFieldSource"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requestPresence": {
-          "items": {
-            "$ref": "#/$defs/RequestPresencePermissionSource"
-          },
-          "type": "array"
-        },
-        "requestVisibility": {
-          "$ref": "#/$defs/RequestVisibilitySource"
-        },
         "requesterClients": {
           "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
           "items": {
@@ -217,13 +194,6 @@
         },
         "spatialQueries": {
           "$ref": "#/$defs/SpatialQueryPermissionSource"
-        },
-        "submitterTargets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
         },
         "taskGrant": {
           "$ref": "#/$defs/CompiledTaskGrantSource"
@@ -360,6 +330,40 @@
       ],
       "type": "object"
     },
+    "ActionExecutionSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "immediate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "proposal",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ProposalPolicySource"
+            }
+          },
+          "required": [
+            "mode",
+            "proposal"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ActionHandlerKindSource": {
       "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `breg.action.handler-wasm-build-unsupported`\ndiagnostic.",
       "enum": [
@@ -381,48 +385,6 @@
       "required": [
         "code",
         "label"
-      ],
-      "type": "object"
-    },
-    "ActionHandlerSource": {
-      "additionalProperties": false,
-      "description": "The authored action handler: the shared hook handler declaration, with the\nauthorization members a governed action adds.\n\n`handler` is [`HookHandlerSource`], the same declaration an entity hook\ncarries, so this product spells a handler one way. It is flattened, so the\nauthored member set stays `type`, the source reference the type names,\n`abi`, `writes`, and `refusals`. `writes` and `refusals` are this\nproduct's own: they bound what the handler may write and the refusals it\nmay return, and no hook declares them.\n\nTwo rules narrow the shared declaration to what this path runs. `abi` is\noptional there and required here, refused at deserialization, because\nevery backend an action may declare speaks one. The `url` kind is refused\nby the compiler at `actions[].handler.type`, because an action handler\nruns inside the triggering transaction and cannot be remote.",
-      "properties": {
-        "abi": {
-          "enum": [
-            "registry.action-handler/v1"
-          ],
-          "type": "string"
-        },
-        "module": {
-          "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
-          "type": "string"
-        },
-        "refusals": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ActionHandlerRefusalSource"
-          },
-          "type": "array"
-        },
-        "script": {
-          "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
-          "type": "string"
-        },
-        "type": {
-          "$ref": "#/$defs/ActionHandlerKindSource"
-        },
-        "writes": {
-          "items": {
-            "$ref": "#/$defs/ActionHandlerWriteSource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "type",
-        "abi",
-        "writes"
       ],
       "type": "object"
     },
@@ -454,265 +416,389 @@
       "type": "object"
     },
     "ActionInputSource": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "boolean",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximumLength": {
+                  "format": "uint32",
+                  "maximum": 1000000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "minimumLength": {
+                  "default": 0,
+                  "format": "uint32",
+                  "maximum": 1000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "string",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "maximumLength"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximumLength": {
+                  "format": "uint32",
+                  "maximum": 10000000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "maximumLength"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "int64",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximum": {
+                  "type": "string"
+                },
+                "minimum": {
+                  "type": "string"
+                },
+                "precision": {
+                  "format": "uint32",
+                  "maximum": 38,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "scale": {
+                  "format": "uint32",
+                  "maximum": 38,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "decimal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "precision",
+                "scale"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "vocabulary-code",
+                  "type": "string"
+                },
+                "values": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "vocabulary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "vocabulary"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "onDelete": {
+                  "$ref": "#/$defs/ReferenceDelete",
+                  "default": "restrict"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "reference",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "target"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "bbox": {
+                  "$ref": "#/$defs/Crs84BboxSource"
+                },
+                "precision": {
+                  "format": "uint32",
+                  "maximum": 9,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "crs84-point",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "precision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximumBytes": {
+                  "format": "uint32",
+                  "maximum": 1048576,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "schema": {
+                  "x-registry-foreign": "json-schema-2020-12"
+                },
+                "type": {
+                  "const": "structured",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "maximumBytes",
+                "schema"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "apiName": {
+              "type": "string"
+            },
+            "classification": {
+              "$ref": "#/$defs/Classification"
+            },
+            "display": {
+              "$ref": "#/$defs/DisplaySource",
+              "default": {}
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "required": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "classification"
+          ],
+          "type": "object",
+          "unevaluatedProperties": false
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "apiName": {
+              "type": "string"
+            },
+            "classification": {
+              "$ref": "#/$defs/Classification"
+            },
+            "display": {
+              "$ref": "#/$defs/DisplaySource"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "required": {
+              "default": false,
+              "type": "boolean"
+            },
+            "typeRef": {
+              "$ref": "#/$defs/LocalId"
+            }
+          },
+          "required": [
+            "id",
+            "typeRef",
+            "classification"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ActionPlanSource": {
       "oneOf": [
         {
+          "additionalProperties": false,
           "properties": {
-            "type": {
-              "const": "boolean",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximumLength": {
-              "format": "uint32",
-              "maximum": 1000000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "minimumLength": {
-              "default": 0,
-              "format": "uint32",
-              "maximum": 1000000,
-              "minimum": 0,
-              "type": "integer"
+            "effects": {
+              "items": {
+                "$ref": "#/$defs/ActionEffectSource"
+              },
+              "type": "array"
             },
             "type": {
-              "const": "string",
+              "const": "fixed",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "maximumLength"
+            "effects"
           ],
           "type": "object"
         },
         {
+          "additionalProperties": false,
           "properties": {
-            "maximumLength": {
-              "format": "uint32",
-              "maximum": 10000000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "type": {
-              "const": "text",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumLength"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "int64",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximum": {
-              "type": "string"
-            },
-            "minimum": {
-              "type": "string"
-            },
-            "precision": {
-              "format": "uint32",
-              "maximum": 38,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "scale": {
-              "format": "uint32",
-              "maximum": 38,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "decimal",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "precision",
-            "scale"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "date",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "timestamp",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "uuid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "vocabulary-code",
-              "type": "string"
-            },
-            "values": {
+            "capabilities": {
               "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "function": {
+              "type": "string"
+            },
+            "inputs": {
               "items": {
                 "type": "string"
               },
               "type": "array"
             },
-            "vocabulary": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "vocabulary"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "onDelete": {
-              "$ref": "#/$defs/ReferenceDelete",
-              "default": "restrict"
-            },
-            "target": {
-              "type": "string"
+            "refusals": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ActionHandlerRefusalSource"
+              },
+              "type": "array"
             },
             "type": {
-              "const": "reference",
+              "const": "function",
               "type": "string"
+            },
+            "writes": {
+              "items": {
+                "$ref": "#/$defs/ActionHandlerWriteSource"
+              },
+              "type": "array"
             }
           },
           "required": [
             "type",
-            "target"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "bbox": {
-              "$ref": "#/$defs/Crs84BboxSource"
-            },
-            "precision": {
-              "format": "uint32",
-              "maximum": 9,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "crs84-point",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "precision"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximumBytes": {
-              "format": "uint32",
-              "maximum": 1048576,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "schema": {
-              "x-registry-foreign": "json-schema-2020-12"
-            },
-            "type": {
-              "const": "structured",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumBytes",
-            "schema"
+            "function",
+            "inputs",
+            "writes"
           ],
           "type": "object"
         }
-      ],
-      "properties": {
-        "apiName": {
-          "type": "string"
-        },
-        "classification": {
-          "$ref": "#/$defs/Classification"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "required": {
-          "default": false,
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "id",
-        "classification"
-      ],
-      "type": "object",
-      "unevaluatedProperties": false
+      ]
     },
     "ActionRequirementSource": {
       "additionalProperties": false,
       "properties": {
+        "atLeast": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "atMost": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "currentDate": {
+          "$ref": "#/$defs/CurrentDatePredicateSource"
+        },
         "equals": {
           "$ref": "#/$defs/ScalarLiteral"
         },
-        "equalsInput": {
+        "equalsFromInput": {
           "type": "string"
         },
         "field": {
+          "default": "",
           "type": "string"
         },
         "input": {
@@ -722,27 +808,35 @@
           "const": true,
           "description": "Requires the stored value to be unset. Only `true` is read.",
           "type": "boolean"
+        },
+        "revision": {
+          "$ref": "#/$defs/GuardRevisionSource"
         }
       },
       "required": [
-        "input",
-        "field"
+        "input"
       ],
       "type": "object"
     },
     "ActionSource": {
       "additionalProperties": false,
       "properties": {
-        "consentIssuer": {
-          "$ref": "#/$defs/ConsentIssuerSource",
-          "description": "Required when the action creates consent-record rows."
+        "apiName": {
+          "type": "string"
         },
-        "effects": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ActionEffectSource"
-          },
-          "type": "array"
+        "commitGuards": {
+          "$ref": "#/$defs/CommitGuardsSource",
+          "default": {
+            "evidence": [],
+            "targets": []
+          }
+        },
+        "consentIssuer": {
+          "$ref": "#/$defs/ConsentIssuerSource"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource",
+          "default": {}
         },
         "evidence": {
           "items": {
@@ -750,8 +844,8 @@
           },
           "type": "array"
         },
-        "handler": {
-          "$ref": "#/$defs/ActionHandlerSource"
+        "execution": {
+          "$ref": "#/$defs/ActionExecutionSource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -763,26 +857,24 @@
           },
           "type": "array"
         },
-        "requires": {
-          "description": "Acceptance-time checks over exact existing reference inputs, combined with AND.",
-          "items": {
-            "$ref": "#/$defs/ActionRequirementSource"
-          },
-          "type": "array"
+        "plan": {
+          "$ref": "#/$defs/ActionPlanSource"
         }
       },
       "required": [
-        "id"
+        "id",
+        "execution",
+        "plan"
       ],
       "type": "object"
     },
     "ActionTargetSource": {
       "additionalProperties": false,
       "properties": {
-        "entity": {
+        "fromInput": {
           "type": "string"
         },
-        "fromField": {
+        "recordType": {
           "type": "string"
         }
       },
@@ -794,9 +886,10 @@
         "fromEffect": {
           "type": "string"
         },
-        "fromField": {
+        "fromInput": {
           "type": "string"
-        }
+        },
+        "value": true
       },
       "type": "object"
     },
@@ -807,23 +900,6 @@
         "service"
       ],
       "type": "string"
-    },
-    "ApplyTargetPermissionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "entity": {
-          "type": "string"
-        },
-        "rowBoundaries": {
-          "$ref": "#/$defs/RowBoundaries",
-          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
-        }
-      },
-      "required": [
-        "entity",
-        "rowBoundaries"
-      ],
-      "type": "object"
     },
     "AttachmentSlotSource": {
       "additionalProperties": false,
@@ -890,6 +966,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -921,74 +1000,15 @@
       ],
       "type": "string"
     },
-    "ChangeControlSource": {
-      "additionalProperties": false,
-      "properties": {
-        "requiredFor": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/Operation"
-          },
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestApplicationSource": {
-      "additionalProperties": false,
-      "properties": {
-        "preconditions": {
-          "$ref": "#/$defs/ChangeRequestPreconditionsSource"
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestCurrentDatePredicateSource": {
+    "Classification": {
       "enum": [
-        "on-or-after",
-        "on-or-before"
+        "public",
+        "internal",
+        "restricted"
       ],
       "type": "string"
     },
-    "ChangeRequestEffectSource": {
-      "additionalProperties": false,
-      "properties": {
-        "clear": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "operation": {
-          "$ref": "#/$defs/Operation"
-        },
-        "set": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ChangeRequestValueSource"
-          },
-          "default": {},
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "target": {
-          "$ref": "#/$defs/ChangeRequestTargetSource"
-        }
-      },
-      "required": [
-        "target",
-        "operation"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestEvidenceRequirementSource": {
+    "CommitEvidenceRequirementSource": {
       "additionalProperties": false,
       "properties": {
         "atLeast": {
@@ -1004,7 +1024,7 @@
           "type": "integer"
         },
         "equals": true,
-        "equalsFromRequestField": {
+        "equalsFromInput": {
           "type": "string"
         },
         "output": {
@@ -1016,7 +1036,49 @@
       ],
       "type": "object"
     },
-    "ChangeRequestEvidenceSource": {
+    "CommitEvidenceSelectorSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "type": {
+              "const": "target-field",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "field"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CommitEvidenceSource": {
       "additionalProperties": false,
       "properties": {
         "id": {
@@ -1037,13 +1099,13 @@
         "requires": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ChangeRequestEvidenceRequirementSource"
+            "$ref": "#/$defs/CommitEvidenceRequirementSource"
           },
           "type": "array"
         },
         "subjects": {
           "additionalProperties": {
-            "$ref": "#/$defs/ChangeRequestEvidenceSubjectSource"
+            "$ref": "#/$defs/CommitEvidenceSubjectSource"
           },
           "propertyNames": {
             "$ref": "#/$defs/ExternalId"
@@ -1060,7 +1122,7 @@
       ],
       "type": "object"
     },
-    "ChangeRequestEvidenceSubjectSource": {
+    "CommitEvidenceSubjectSource": {
       "additionalProperties": false,
       "properties": {
         "profile": {
@@ -1068,7 +1130,7 @@
         },
         "selectors": {
           "additionalProperties": {
-            "$ref": "#/$defs/ChangeRequestSelectorSource"
+            "$ref": "#/$defs/CommitEvidenceSelectorSource"
           },
           "description": "Exact governed selector-profile field map. Every profile field must be\npresent exactly once and no undeclared field is admitted.",
           "propertyNames": {
@@ -1083,362 +1145,25 @@
       ],
       "type": "object"
     },
-    "ChangeRequestGuardTargetSource": {
-      "additionalProperties": false,
-      "properties": {
-        "entity": {
-          "type": "string"
-        },
-        "fromField": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "requires": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ChangeRequestPredicateSource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "entity",
-        "fromField"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestOnApprovedModeSource": {
-      "enum": [
-        "manual",
-        "automatic"
-      ],
-      "type": "string"
-    },
-    "ChangeRequestOnApprovedSource": {
-      "additionalProperties": false,
-      "properties": {
-        "executor": {
-          "type": "string"
-        },
-        "mode": {
-          "$ref": "#/$defs/ChangeRequestOnApprovedModeSource",
-          "default": "manual"
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestPlannerKindSource": {
-      "description": "The authored change-request planner backend. The wasm backend is\nexpressible so a declared WASM planner is refused by the compiler with a\npinned diagnostic; WASM planners stay unsupported. Retained Rust name for\nthe reviewed change-request authoring contract.",
-      "enum": [
-        "rhai",
-        "wasm"
-      ],
-      "type": "string"
-    },
-    "ChangeRequestPlannerSource": {
-      "additionalProperties": false,
-      "properties": {
-        "abi": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ChangeRequestPlannerKindSource"
-        },
-        "requestFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "script": {
-          "type": "string"
-        },
-        "writes": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ChangeRequestPlannerWriteSource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "kind",
-        "script",
-        "abi"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestPlannerTargetSource": {
-      "additionalProperties": false,
-      "properties": {
-        "entity": {
-          "type": "string"
-        },
-        "fromField": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestPlannerWriteSource": {
-      "additionalProperties": false,
-      "properties": {
-        "fields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "operation": {
-          "$ref": "#/$defs/Operation"
-        },
-        "target": {
-          "$ref": "#/$defs/ChangeRequestPlannerTargetSource"
-        }
-      },
-      "required": [
-        "target",
-        "operation"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestPreconditionsSource": {
+    "CommitGuardsSource": {
       "additionalProperties": false,
       "properties": {
         "evidence": {
-          "description": "Governed Evidence acquisitions required immediately before application.",
+          "default": [],
           "items": {
-            "$ref": "#/$defs/ChangeRequestEvidenceSource"
-          },
-          "type": "array"
-        },
-        "request": {
-          "description": "Predicates over the frozen request intake itself.",
-          "items": {
-            "$ref": "#/$defs/ChangeRequestPredicateSource"
+            "$ref": "#/$defs/CommitEvidenceSource"
           },
           "type": "array"
         },
         "targets": {
-          "description": "Existing records read and revision-bound at proposal preparation.",
-          "items": {
-            "$ref": "#/$defs/ChangeRequestGuardTargetSource"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestPredicateSource": {
-      "additionalProperties": false,
-      "properties": {
-        "atLeast": {
-          "format": "int64",
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
-          "type": "integer"
-        },
-        "atMost": {
-          "format": "int64",
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
-          "type": "integer"
-        },
-        "currentDate": {
-          "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
-        },
-        "equals": {
-          "$ref": "#/$defs/ScalarLiteral"
-        },
-        "equalsFromRequestField": {
-          "type": "string"
-        },
-        "field": {
-          "type": "string"
-        },
-        "isNull": {
-          "const": true,
-          "description": "Requires the stored value to be unset. Only `true` is read.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "field"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestRetentionModeSource": {
-      "enum": [
-        "retain",
-        "operator-erase"
-      ],
-      "type": "string"
-    },
-    "ChangeRequestRetentionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "$ref": "#/$defs/ChangeRequestRetentionModeSource",
-          "default": "retain"
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestReviewSource": {
-      "description": "Either a required review, `type: required` naming `authority` and\n`policyId`, or `type: none`.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "authority": {
-              "type": "string"
-            },
-            "policyId": {
-              "type": "string"
-            },
-            "type": {
-              "const": "required",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "authority",
-            "policyId"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "none",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "ChangeRequestSelectorSource": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "field": {
-              "type": "string"
-            },
-            "type": {
-              "const": "request-field",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "field"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "field": {
-              "type": "string"
-            },
-            "target": {
-              "type": "string"
-            },
-            "type": {
-              "const": "target-field",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "target",
-            "field"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "ChangeRequestSource": {
-      "additionalProperties": false,
-      "properties": {
-        "application": {
-          "$ref": "#/$defs/ChangeRequestApplicationSource",
-          "default": {}
-        },
-        "effects": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ChangeRequestEffectSource"
+            "$ref": "#/$defs/ActionRequirementSource"
           },
           "type": "array"
-        },
-        "onApproved": {
-          "$ref": "#/$defs/ChangeRequestOnApprovedSource",
-          "default": {
-            "mode": "manual"
-          }
-        },
-        "planner": {
-          "$ref": "#/$defs/ChangeRequestPlannerSource"
-        },
-        "retention": {
-          "$ref": "#/$defs/ChangeRequestRetentionSource",
-          "default": {
-            "mode": "retain"
-          }
-        },
-        "review": {
-          "$ref": "#/$defs/ChangeRequestReviewSource"
-        }
-      },
-      "required": [
-        "review"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestTargetSource": {
-      "additionalProperties": false,
-      "properties": {
-        "entity": {
-          "type": "string"
-        },
-        "fromField": {
-          "type": "string"
         }
       },
       "type": "object"
-    },
-    "ChangeRequestValueSource": {
-      "additionalProperties": false,
-      "properties": {
-        "fromEffect": {
-          "type": "string"
-        },
-        "fromField": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "Classification": {
-      "enum": [
-        "public",
-        "internal",
-        "restricted"
-      ],
-      "type": "string"
     },
     "ComparisonOperator": {
       "enum": [
@@ -1806,6 +1531,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -1837,6 +1565,13 @@
       ],
       "type": "object"
     },
+    "CurrentDatePredicateSource": {
+      "enum": [
+        "on-or-after",
+        "on-or-before"
+      ],
+      "type": "string"
+    },
     "DateFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1845,6 +1580,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "encrypted": {
           "default": false,
@@ -1885,6 +1623,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "encrypted": {
           "default": false,
@@ -2220,6 +1961,26 @@
       ],
       "type": "object"
     },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "DisplaySource": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "titleField": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "EntityExtensionSource": {
       "additionalProperties": false,
       "properties": {
@@ -2235,12 +1996,6 @@
           "$ref": "#/$defs/AccessRequirementsSource",
           "description": "Add mandatory requirements only when the entity has none; replacing them is refused."
         },
-        "changeControl": {
-          "$ref": "#/$defs/ChangeControlSource"
-        },
-        "changeRequest": {
-          "$ref": "#/$defs/ChangeRequestSource"
-        },
         "constraints": {
           "default": [],
           "items": {
@@ -2253,9 +2008,6 @@
             "$ref": "#/$defs/DerivedSource"
           },
           "type": "array"
-        },
-        "entity": {
-          "type": "string"
         },
         "fields": {
           "default": [],
@@ -2281,11 +2033,17 @@
           },
           "type": "array"
         },
+        "mutationPolicy": {
+          "$ref": "#/$defs/MutationPolicySource"
+        },
         "readPaths": {
           "items": {
             "$ref": "#/$defs/ReadPathSource"
           },
           "type": "array"
+        },
+        "recordType": {
+          "type": "string"
         },
         "selectorProfiles": {
           "items": {
@@ -2295,7 +2053,7 @@
         }
       },
       "required": [
-        "entity"
+        "recordType"
       ],
       "type": "object"
     },
@@ -2318,21 +2076,11 @@
           "$ref": "#/$defs/AccessRequirementsSource",
           "description": "Mandatory request-access requirements checked against every profile, including module contributions."
         },
-        "attachments": {
-          "description": "Governed binary slots on change-request entities, projected under their exact IDs.",
-          "items": {
-            "$ref": "#/$defs/AttachmentSlotSource"
-          },
-          "type": "array"
+        "apiName": {
+          "type": "string"
         },
         "batch": {
           "$ref": "#/$defs/BatchSource"
-        },
-        "changeControl": {
-          "$ref": "#/$defs/ChangeControlSource"
-        },
-        "changeRequest": {
-          "$ref": "#/$defs/ChangeRequestSource"
         },
         "classification": {
           "$ref": "#/$defs/Classification",
@@ -2354,6 +2102,10 @@
             "$ref": "#/$defs/DerivedSource"
           },
           "type": "array"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource",
+          "default": {}
         },
         "fields": {
           "default": [],
@@ -2384,6 +2136,9 @@
         },
         "mutationMode": {
           "$ref": "#/$defs/MutationMode"
+        },
+        "mutationPolicy": {
+          "$ref": "#/$defs/MutationPolicySource"
         },
         "primaryDataset": {
           "type": "string"
@@ -2420,107 +2175,73 @@
       "type": "object"
     },
     "EventConditionSource": {
+      "additionalProperties": false,
       "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language. The shared\nreader's union helper decodes it, so an error inside a variant keeps its\nposition (CFG-SCHEMA-8). An unset value is named in `beforeIsNull` or\n`afterIsNull`; `null` is never a comparison literal (CFG-EMPTY-1).",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "afterEquals": {
-              "additionalProperties": {
-                "$ref": "#/$defs/ScalarLiteral"
-              },
-              "default": {},
-              "description": "Required values after the change. Valid with created and patched triggers.",
-              "propertyNames": {
-                "$ref": "#/$defs/LocalId"
-              },
-              "type": "object"
-            },
-            "afterIsNull": {
-              "default": [],
-              "description": "Fields that must be unset after the change. Valid with created and patched triggers.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
-            "beforeEquals": {
-              "additionalProperties": {
-                "$ref": "#/$defs/ScalarLiteral"
-              },
-              "default": {},
-              "description": "Required values before the change. Valid with patched and tombstoned triggers.",
-              "propertyNames": {
-                "$ref": "#/$defs/LocalId"
-              },
-              "type": "object"
-            },
-            "beforeIsNull": {
-              "default": [],
-              "description": "Fields that must be unset before the change. Valid with patched and tombstoned triggers.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
-            "changed": {
-              "default": [],
-              "description": "Fields whose values must change. Only valid with the patched trigger.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
-            "type": {
-              "const": "fields",
-              "type": "string"
-            }
+      "properties": {
+        "afterEquals": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ScalarLiteral"
           },
-          "required": [
-            "type"
-          ],
+          "default": {},
+          "description": "Required values after the change. Valid with created and patched triggers.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "toStates": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
-            "transitions": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
-            "type": {
-              "const": "request-lifecycle",
-              "type": "string"
-            }
+        "afterIsNull": {
+          "default": [],
+          "description": "Fields that must be unset after the change. Valid with created and patched triggers.",
+          "items": {
+            "type": "string"
           },
-          "required": [
-            "type"
-          ],
+          "type": "array",
+          "uniqueItems": true
+        },
+        "beforeEquals": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ScalarLiteral"
+          },
+          "default": {},
+          "description": "Required values before the change. Valid with patched and tombstoned triggers.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
+        },
+        "beforeIsNull": {
+          "default": [],
+          "description": "Fields that must be unset before the change. Valid with patched and tombstoned triggers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "changed": {
+          "default": [],
+          "description": "Fields whose values must change. Only valid with the patched trigger.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "type": {
+          "const": "fields",
+          "type": "string"
         }
-      ]
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
     },
     "EventTrigger": {
       "enum": [
         "created",
         "patched",
-        "tombstoned",
-        "request-lifecycle"
+        "tombstoned"
       ],
       "type": "string"
     },
@@ -2599,8 +2320,366 @@
         },
         {
           "$ref": "#/$defs/StructuredFieldSourceSchema"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "apiName": {
+              "type": "string"
+            },
+            "classification": {
+              "$ref": "#/$defs/Classification"
+            },
+            "display": {
+              "$ref": "#/$defs/DisplaySource"
+            },
+            "encrypted": {
+              "default": false,
+              "type": "boolean"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "lookup": {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "relationship": {
+              "additionalProperties": false,
+              "properties": {
+                "inverseName": {
+                  "pattern": "^[a-z][A-Za-z0-9]*$",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "required": {
+              "default": false,
+              "type": "boolean"
+            },
+            "typeRef": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "validTimeRole": {
+              "$ref": "#/$defs/ValidTimeRole"
+            }
+          },
+          "required": [
+            "id",
+            "typeRef",
+            "classification"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "FieldTypeSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumLength": {
+              "format": "uint32",
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minimumLength": {
+              "default": 0,
+              "format": "uint32",
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "string",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maximumLength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumLength": {
+              "format": "uint32",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maximumLength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "int64",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximum": {
+              "type": "string"
+            },
+            "minimum": {
+              "type": "string"
+            },
+            "precision": {
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "scale": {
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "decimal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "vocabulary-code",
+              "type": "string"
+            },
+            "values": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vocabulary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "vocabulary"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "onDelete": {
+              "$ref": "#/$defs/ReferenceDelete",
+              "default": "restrict"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bbox": {
+              "$ref": "#/$defs/Crs84BboxSource"
+            },
+            "precision": {
+              "format": "uint32",
+              "maximum": 9,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "crs84-point",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumBytes": {
+              "format": "uint32",
+              "maximum": 1048576,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "schema": {
+              "x-registry-foreign": "json-schema-2020-12"
+            },
+            "type": {
+              "const": "structured",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maximumBytes",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FunctionLimitsSource": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumOperations": {
+          "default": 10000,
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumOutputBytes": {
+          "default": 8192,
+          "format": "uint32",
+          "maximum": 2097152,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FunctionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "abi": {
+          "const": "registry.action-plan/v1",
+          "type": "string"
+        },
+        "capabilities": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "entrypoint": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "limits": {
+          "$ref": "#/$defs/FunctionLimitsSource",
+          "default": {
+            "maximumOperations": 10000,
+            "maximumOutputBytes": 8192
+          }
+        },
+        "runtime": {
+          "$ref": "#/$defs/ActionHandlerKindSource"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "runtime",
+        "source",
+        "entrypoint",
+        "abi"
+      ],
+      "type": "object"
     },
     "GeoJsonSource": {
       "additionalProperties": false,
@@ -2613,6 +2692,12 @@
         "geometryField"
       ],
       "type": "object"
+    },
+    "GuardRevisionSource": {
+      "enum": [
+        "unchanged"
+      ],
+      "type": "string"
     },
     "HookHandlerSource": {
       "description": "Where a hook's handler runs.\n\nThe pairing rule: `rhai` requires `script`, `wasm` requires `module`,\n`url` requires `destinationId`, and each\nkind requires exactly its own fields and nothing else. `abi` is required on\n`rhai` and `wasm` and forbidden on `url`; its value is closed and checked at\ncompile time in [`crate::validate_hooks`].",
@@ -2773,6 +2858,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -2845,10 +2933,10 @@
         "field": {
           "type": "string"
         },
-        "membershipEntity": {
+        "membershipKeyField": {
           "type": "string"
         },
-        "membershipKeyField": {
+        "membershipRecordType": {
           "type": "string"
         },
         "principalField": {
@@ -2857,7 +2945,7 @@
       },
       "required": [
         "field",
-        "membershipEntity",
+        "membershipRecordType",
         "membershipKeyField",
         "principalField",
         "activeField"
@@ -2870,6 +2958,28 @@
         "create-only"
       ],
       "type": "string"
+    },
+    "MutationPolicyMode": {
+      "enum": [
+        "direct",
+        "proposal-required"
+      ],
+      "type": "string"
+    },
+    "MutationPolicySource": {
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "$ref": "#/$defs/MutationPolicyMode"
+        },
+        "patch": {
+          "$ref": "#/$defs/MutationPolicyMode"
+        },
+        "tombstone": {
+          "$ref": "#/$defs/MutationPolicyMode"
+        }
+      },
+      "type": "object"
     },
     "NormalizationStep": {
       "description": "A normalization step applied to the canonical string form of an encrypted\nvalue before its blind index is derived. The vocabulary is closed.",
@@ -2903,11 +3013,8 @@
             "batch",
             "revisions",
             "snapshot",
-            "submit-request",
-            "revise-request",
-            "cancel-request",
-            "apply-request",
-            "invoke"
+            "invoke",
+            "start"
           ],
           "type": "string"
         },
@@ -2915,6 +3022,336 @@
           "const": "import",
           "description": "Create records through a durable ingestion run, and nothing else. The\ngrant is enabled only while an operator-opened import authority is open\nfor the entity and profile. It declares no item route and no raw batch\nroute, and change control does not count it as a direct write.",
           "type": "string"
+        }
+      ]
+    },
+    "PolicySelectionSource": {
+      "additionalProperties": false,
+      "dependentRequired": {
+        "digest": [
+          "version"
+        ],
+        "version": [
+          "digest"
+        ]
+      },
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$comment": "The review protocol also bounds UTF-8 bytes, which the reader checks without restricting externally issued identifiers to ASCII.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/ExternalId"
+            }
+          ],
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ProposalApplicationSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "manual",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumAttempts": {
+              "default": 3,
+              "format": "uint32",
+              "maximum": 32,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "mode": {
+              "const": "automatic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProposalContextValueSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "slot": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "document",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "input": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "record",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "recordType": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "changes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordType",
+            "fields"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProposalEventTransition": {
+      "enum": [
+        "started",
+        "edited",
+        "submitted",
+        "revised",
+        "rebased",
+        "retried",
+        "cancelled",
+        "applied",
+        "rejected",
+        "review-returned"
+      ],
+      "type": "string"
+    },
+    "ProposalHookSource": {
+      "additionalProperties": false,
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/HookHandlerSource"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "transitions": {
+          "description": "Omit to observe every committed lifecycle transition.",
+          "items": {
+            "$ref": "#/$defs/ProposalEventTransition"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "handler"
+      ],
+      "type": "object"
+    },
+    "ProposalPolicySource": {
+      "additionalProperties": false,
+      "properties": {
+        "application": {
+          "$ref": "#/$defs/ProposalApplicationSource",
+          "default": {
+            "maximumAttempts": 3,
+            "mode": "automatic"
+          }
+        },
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AttachmentSlotSource"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "description": "Post-commit observers of the fixed, value-free Proposal lifecycle event.",
+          "items": {
+            "$ref": "#/$defs/ProposalHookSource"
+          },
+          "type": "array"
+        },
+        "retention": {
+          "$ref": "#/$defs/ProposalRetentionSource"
+        },
+        "review": {
+          "$ref": "#/$defs/ProposalReviewSource"
+        },
+        "reviewContext": {
+          "$ref": "#/$defs/ProposalReviewContextSource"
+        }
+      },
+      "required": [
+        "review",
+        "retention"
+      ],
+      "type": "object"
+    },
+    "ProposalRetentionMode": {
+      "enum": [
+        "retain",
+        "operator-erase"
+      ],
+      "type": "string"
+    },
+    "ProposalRetentionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ProposalRetentionMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "ProposalReviewContextSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProposalContextValueSource"
+          },
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "enum": [
+                "id",
+                "recordId",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "deletedAt"
+              ],
+              "x-registry-member-names": true
+            },
+            "pattern": "^[a-z][A-Za-z0-9]{0,63}$",
+            "type": "string"
+          },
+          "type": "object",
+          "x-registry-member-names": true
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "ProposalReviewSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority": {
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/PolicySelectionSource"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "const": "required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "authority",
+            "source",
+            "policy"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -3008,12 +3445,25 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
         "onDelete": {
           "$ref": "#/$defs/ReferenceDelete",
           "default": "restrict"
+        },
+        "relationship": {
+          "additionalProperties": false,
+          "properties": {
+            "inverseName": {
+              "pattern": "^[a-z][A-Za-z0-9]*$",
+              "type": "string"
+            }
+          },
+          "type": "object"
         },
         "required": {
           "default": false,
@@ -3039,37 +3489,6 @@
         "target"
       ],
       "type": "object"
-    },
-    "RequestMetadataFieldSource": {
-      "description": "Fields of request decision metadata governed separately from stored record fields.",
-      "enum": [
-        "actor-reference",
-        "reason",
-        "review-state"
-      ],
-      "type": "string"
-    },
-    "RequestPresencePermissionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "requestType": {
-          "type": "string"
-        },
-        "rowBoundaries": {
-          "$ref": "#/$defs/RowBoundaries",
-          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
-        }
-      },
-      "required": [
-        "requestType",
-        "rowBoundaries"
-      ],
-      "type": "object"
-    },
-    "RequestVisibilitySource": {
-      "const": "owner",
-      "description": "Expose only requests created by the current authenticated principal.",
-      "type": "string"
     },
     "RequiredScopes": {
       "anyOf": [
@@ -3189,6 +3608,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "encrypted": {
           "default": false,
           "type": "boolean"
@@ -3246,6 +3668,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "encrypted": {
           "default": false,
           "type": "boolean"
@@ -3294,13 +3719,6 @@
         "endField": {
           "type": "string"
         },
-        "scopeFields": {
-          "description": "Deprecated bounded predecessor bridge. New authoring should declare\nexclusivity only through `constraints[].scopeFields`.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "startField": {
           "type": "string"
         }
@@ -3319,6 +3737,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "encrypted": {
           "default": false,
@@ -3369,6 +3790,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -3480,6 +3904,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -3519,6 +3946,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -3561,7 +3991,7 @@
   "additionalProperties": false,
   "properties": {
     "actions": {
-      "description": "Named immediate actions introduced by this module.",
+      "description": "Named Actions introduced by this module.",
       "items": {
         "$ref": "#/$defs/ActionSource"
       },
@@ -3579,19 +4009,18 @@
       },
       "type": "array"
     },
-    "entities": {
-      "default": [],
-      "description": "Entities introduced by this module.",
-      "items": {
-        "$ref": "#/$defs/EntitySource"
-      },
-      "type": "array"
-    },
-    "extendEntities": {
+    "extendRecordTypes": {
       "default": [],
       "description": "Additive contributions to entities already declared by the project or another module.",
       "items": {
         "$ref": "#/$defs/EntityExtensionSource"
+      },
+      "type": "array"
+    },
+    "functions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FunctionSource"
       },
       "type": "array"
     },
@@ -3602,6 +4031,24 @@
     "kind": {
       "const": "BRegModule",
       "type": "string"
+    },
+    "recordTypes": {
+      "default": [],
+      "description": "Record types introduced by this module.",
+      "items": {
+        "$ref": "#/$defs/EntitySource"
+      },
+      "type": "array"
+    },
+    "valueTypes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/FieldTypeSource"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "version": {
       "description": "Module version recorded alongside its content digest in the project.",

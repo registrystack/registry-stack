@@ -4,12 +4,12 @@
 # The members are documented at the top of the runner.
 formats:
   breg/module:
-    project: products/breg/examples/minimal
-    init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
+    project: products/platform/conformance/projects/breg
+    prepare: ["bregctl project lock {project}"]
     removedKeys:
-      - /entities/0/hooks/0/handler/kind
-      - /extendEntities/0/hooks/0/handler/kind
-      - /actions/0/handler/kind
+      - /extendRecordTypes/0/fields/0/minLength
+      - /extendRecordTypes/0/fields/0/maxLength
+      - /extendRecordTypes/0/fields/0/maxBytes
   # Journeys are checked against the project whose routes they call, and a
   # reviewed migration file at its place in the project tree.
   breg/journeys:
@@ -40,19 +40,10 @@ formats:
   # The retired apiVersion and renamed keys each Casework reader refuses by
   # name.
   casework/fixture:
-    project: products/casework/examples/payment-review
+    project: products/casework/examples/standalone-decision
     retiredApiVersions:
       - registry.registrystack.org/casework-fixture/v1alpha1
-    removedKeys:
-      - /name
-      - /source
-      - /expect/targetElapsed
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
-  casework/simulation:
-    project: products/casework/examples/multi-stage-routing-clocks
-    removedKeys:
-      - /subject/id
-      - /expect/ruleId
   casework/holiday-set:
     project: products/casework/examples/multi-stage-routing-clocks
   casework/dev-clients:
@@ -67,8 +58,6 @@ formats:
       - /authentication/oidc/jwksSource/kind
       - /authentication/oidc/principalClaim
       - /audit/retainDays
-      - /reviewCompletionDestinations/payment-results/timeoutMilliseconds
-      - /reviewCompletionDestinations/payment-results/retrySeconds
       - /package/expectedPolicyDigest
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
 
@@ -98,6 +87,7 @@ formats:
     removedKeys:
       - /audit/retainDays
       - /retention/attemptReceiptDays
+      - /retention/attemptReceiptRetentionDays
       - /retention/hookPayloadDays
       - /authentication/oidc/jwksUri
       - /authentication/oidc/jwksSource/kind
@@ -138,6 +128,7 @@ formats:
       - /retention/payloadDays
       - /retention/recordDays
       - /retention/submissionReceiptDays
+      - /retention/submissionReceiptRetentionDays
       - /audit/retainDays
     retiredApiVersions:
       - registry.registrystack.org/messaging-runtime/v1alpha1
@@ -203,36 +194,23 @@ formats:
       - /version
       - /clients/task-agent/assertionKeyFile
 
-  # The authoring template ships without the disposable signing key
-  # `evidencectl new` writes, so the copy gets a freshly generated key for the
-  # check to sign fixture answers with.
+  # The normalized example ships without private key material. Generate a
+  # disposable signer for the complete local target before fixture evaluation.
   evidence/fixture:
-    project: crates/registry-evidencectl/templates/sqlite-extract
+    project: products/evidence/examples/standalone
     prepare:
-      - evidencectl keygen signing --output-dir {project}/secrets
+      - evidencectl keygen signing --output-dir {project}/.generated/secrets
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
-  evidence/question:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: questions/record-status.yaml}
-  evidence/source:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: sources/record-status.yaml}
-  evidence/selector:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: selectors/record-reference-v1.yaml}
-  evidence/target-governance:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    copies:
-      target:
-        from: products/evidence/reference/deployment-targets/environments/local/evidence
-  evidence/target-settings:
-    project: products/evidence/reference/authoring-projects/example
-  evidence/access-policy:
-    project: products/evidence/reference/authoring-projects/example
+  evidence/project:
+    project: products/evidence/examples/standalone
+  evidence/target:
+    project: products/evidence/examples/standalone
+  evidence/target-authority:
+    project: products/evidence/examples/standalone
   evidence/access-client:
-    project: products/evidence/reference/authoring-projects/example
+    project: products/evidence/examples/standalone
   evidence/mock-plan:
-    project: products/evidence/reference/authoring-projects/example
+    project: products/evidence/examples/formats/source-mock
 
   # The bundle is checked through its deployment project's runtime
   # configuration, pointed at the staged copy, and its SHA256SUMS is refreshed
@@ -316,14 +294,14 @@ formats:
   # of the format it writes there (CFG-SCHEMA-7: its first line is the schema
   # modeline). Formats with an entry above carry their `init` there.
   breg/project:
-    init: {command: "bregctl init {directory}", file: registry.yaml}
+    init: {command: "bregctl init {directory}", file: registry.yaml, association: native-kind}
     removedKeys:
       - /registry
-      - /entities/0/fields/0/minLength
-      - /entities/0/fields/0/maxLength
-      - /entities/0/fields/0/maxBytes
-      - /entities/0/hooks/0/handler/kind
-      - /actions/0/handler/kind
+      - /recordTypes/0/fields/0/minLength
+      - /recordTypes/0/fields/0/maxLength
+      - /recordTypes/0/fields/0/maxBytes
+      - /recordTypes/0/hooks/0/handler/kind
+      - /actions/0/plan/kind
     retiredApiVersions:
       - registry.registrystack.org/v1alpha1
   breg/runtime:
@@ -355,5 +333,19 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
-  evidence/authoring-project:
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}
+  # Coordinator checks the staged three-file portable project. Its init output
+  # carries the same project and runtime envelopes the readers accept.
+  coordinator/project:
+    # Isolate the path role: other functions keep their shared source file
+    # when the corpus moves or symlinks this one outside the project.
+    set:
+      /functions/notice-route/source: notice-route.rhai
+    write:
+      notice-route.rhai: |
+        fn notice_route(args) {
+            let record = args["record"];
+            if record.data.domainData.noticeAllowed { "send" } else { "skip" }
+        }
+    init: {command: "coordinatorctl init --directory {directory}", file: workflow.yaml}
+  coordinator/runtime:
+    init: {command: "coordinatorctl init --directory {directory}", file: runtime.yaml}

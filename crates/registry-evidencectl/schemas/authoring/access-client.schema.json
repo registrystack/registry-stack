@@ -2,7 +2,7 @@
   "$defs": {
     "ActiveClientExchange": {
       "additionalProperties": false,
-      "description": "Local issuer wiring for a client whose Evidence authority comes from a task\nassertion. This does not grant access or change the governed task policy.",
+      "description": "Local issuer wiring for a client whose Evidence authority comes from a task\nassertion. This does not grant access or change the governed task profile.",
       "properties": {
         "bootstrapResource": {
           "description": "None means the issuer owner's default resource, not the Evidence resource.",
@@ -41,6 +41,14 @@
       ],
       "type": "string"
     },
+    "ActorKind": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
     "ClientStatus": {
       "enum": [
         "active",
@@ -60,6 +68,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "accessProfiles": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "actorKind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActorKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "apiVersion": {
       "const": "id.registrystack.org/formats/evidence/access-client/v1alpha1",
       "type": "string"
@@ -88,12 +112,6 @@
       "const": "EvidenceAccessClient",
       "type": "string"
     },
-    "policies": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
     "principal": {
       "type": "string"
     },
@@ -106,7 +124,7 @@
     "kind",
     "clientId",
     "status",
-    "policies",
+    "accessProfiles",
     "principal",
     "evidenceAudience",
     "keys"

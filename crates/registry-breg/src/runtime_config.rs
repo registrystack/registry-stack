@@ -164,6 +164,22 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename audit.retainDays to audit.retentionDays; the value stays as it is",
     },
     RemovedKey {
+        path: "eventDelivery",
+        replacement: "move eventDelivery.payloadRetentionDays to retention.hookPayloadRetentionDays and delete the eventDelivery block; the value stays as it is",
+    },
+    RemovedKey {
+        path: "eventDelivery.payloadRetentionDays",
+        replacement: "rename eventDelivery.payloadRetentionDays to retention.hookPayloadRetentionDays; the value stays as it is",
+    },
+    RemovedKey {
+        path: "idempotency",
+        replacement: "move idempotency.receiptRetentionDays to retention.receiptRetentionDays and delete the idempotency block; the value stays as it is",
+    },
+    RemovedKey {
+        path: "idempotency.receiptRetentionDays",
+        replacement: "rename idempotency.receiptRetentionDays to retention.receiptRetentionDays; the value stays as it is",
+    },
+    RemovedKey {
         path: "cursor.maxAgeSeconds",
         replacement: "rename cursor.maxAgeSeconds to cursor.maximumAgeSeconds; the value stays as it is",
     },
@@ -200,6 +216,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename attachmentVerification.kind to attachmentVerification.type; the value stays as it is",
     },
     REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RemovedKey {
+        path: "taskGrantStatus.*.caseworkResource",
+        replacement: "rename caseworkResource to statusResource in each taskGrantStatus entry; the value stays as it is",
+    },
 ];
 
 /// The shared reader's refusal of a runtime configuration file: every
@@ -265,7 +285,9 @@ pub enum RuntimeConfigError {
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
-    #[error("runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, absolute resource identifiers, one status scope token, and a status path with one {{grantId}} segment")]
+    #[error(
+        "runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, absolute resource identifiers, one status scope token, and a status path with one {{grantId}} segment"
+    )]
     InvalidTaskGrantStatus,
     #[error(
         "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
@@ -392,9 +414,11 @@ impl RuntimeConfigError {
     fn suggested_action(&self) -> &'static str {
         match self {
             Self::Reader(_) => "",
-            Self::InvalidTaskGrantStatus => "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment.",
+            Self::InvalidTaskGrantStatus => {
+                "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment."
+            }
             Self::InvalidBinding => {
-                "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, review authority, and review executor the package relies on."
+                "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, and review authority the package relies on."
             }
             Self::InvalidInstanceId => {
                 "Set identity.instanceId to a lowercase letter followed by at most 63 lowercase letters, digits, `-`, or `_`."
@@ -701,9 +725,9 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         | "sourceIssuer"
         | "tokenEndpoint"
         | "clientAssertionAudience"
-        | "caseworkResource"]
-        | ["reviewAuthorities" | "reviewExecutors", _, "endpoint"]
-        | ["reviewAuthorities" | "reviewExecutors", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
+        | "statusResource"]
+        | ["reviewAuthorities", _, "endpoint"]
+        | ["reviewAuthorities", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
             "https://deferred.invalid/"
         }
         _ => registry_platform_config::DEFAULT_STAND_IN,
@@ -743,9 +767,7 @@ pub struct RuntimeConfig {
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
-    review_executors: BTreeMap<String, ReviewExecutorConfig>,
-    event_delivery: EventDeliveryConfig,
-    idempotency: IdempotencyConfig,
+    retention: RetentionConfig,
     operational_timeouts: OperationalTimeouts,
     wasm_execution: WasmExecutionConfig,
     metrics_listener: Option<MetricsListenerConfig>,
@@ -779,20 +801,12 @@ impl RuntimeConfig {
         let cursor = CursorConfig::from_raw(raw.cursor)?;
         let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
-        let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
-        let idempotency = IdempotencyConfig::from_raw(raw.idempotency)?;
+        let retention = RetentionConfig::from_raw(raw.retention);
         let review_authorities = raw
             .review_authorities
             .into_iter()
             .map(|(id, authority)| {
                 ReviewAuthorityConfig::from_raw(&id, authority).map(|authority| (id, authority))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        let review_executors = raw
-            .review_executors
-            .into_iter()
-            .map(|(id, executor)| {
-                ReviewExecutorConfig::from_raw(&id, executor).map(|executor| (id, executor))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
@@ -820,9 +834,7 @@ impl RuntimeConfig {
             event_destinations,
             evidence_providers: raw.evidence_providers,
             review_authorities,
-            review_executors,
-            event_delivery,
-            idempotency,
+            retention,
             operational_timeouts,
             wasm_execution,
             metrics_listener,
@@ -839,15 +851,9 @@ impl RuntimeConfig {
             &self.secret_resolver()?,
         )
         .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        for profile in compiled
-            .entities()
-            .values()
-            .flat_map(|entity| entity.access_profiles.values())
-        {
-            if let Some(grant) = &profile.task_grant {
-                if !status.contains(&grant.source_issuer) {
-                    return Err(RuntimeConfigError::InvalidBinding);
-                }
+        for issuer in crate::task_grant::required_source_issuers(compiled) {
+            if !status.contains(issuer) {
+                return Err(RuntimeConfigError::InvalidBinding);
             }
         }
         Ok(Arc::new(status))
@@ -913,25 +919,11 @@ impl RuntimeConfig {
         &self,
         compiled: &CompiledRegistry,
     ) -> Result<Option<Arc<crate::review_store::ReviewAuthorityRegistry>>> {
-        let required = compiled
-            .entities()
-            .values()
-            .filter_map(|entity| entity.change_request.as_ref())
-            .filter_map(|request| match &request.review {
-                crate::model::CompiledChangeRequestReview::Required(requirement) => {
-                    Some(requirement.authority.as_str())
-                }
-                crate::model::CompiledChangeRequestReview::None => None,
-            })
-            .collect::<BTreeSet<_>>();
-        if required.is_empty() && self.review_authorities.is_empty() {
+        // Review is an optional runtime dependency. An absent binding disables
+        // only operations that need that authority; no replacement is inferred.
+        let _ = compiled;
+        if self.review_authorities.is_empty() {
             return Ok(None);
-        }
-        if required
-            .iter()
-            .any(|authority| !self.review_authorities.contains_key(*authority))
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
         }
         let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
@@ -975,129 +967,6 @@ impl RuntimeConfig {
             activated.insert(authority.clone(), Arc::new(authority_client));
         }
         crate::review_store::ReviewAuthorityRegistry::new(activated)
-            .map(Arc::new)
-            .map(Some)
-            .map_err(|_| RuntimeConfigError::InvalidBinding)
-    }
-
-    pub fn activate_review_executors(
-        &self,
-        compiled: &CompiledRegistry,
-    ) -> Result<Option<Arc<crate::review_store::ReviewExecutorRegistry>>> {
-        let required = compiled
-            .entities()
-            .values()
-            .filter_map(|entity| entity.change_request.as_ref())
-            .filter(|request| {
-                matches!(
-                    request.review,
-                    crate::model::CompiledChangeRequestReview::Required(_)
-                ) && request.on_approved.mode
-                    == crate::model::CompiledChangeRequestOnApprovedMode::Automatic
-            })
-            .filter_map(|request| request.on_approved.executor.as_deref())
-            .collect::<BTreeSet<_>>();
-        if required.is_empty() && self.review_executors.is_empty() {
-            return Ok(None);
-        }
-        if required
-            .iter()
-            .any(|executor| !self.review_executors.contains_key(*executor))
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
-        }
-        for entity in compiled.entities().values() {
-            let Some(request) = entity.change_request.as_ref() else {
-                continue;
-            };
-            if !matches!(
-                request.review,
-                crate::model::CompiledChangeRequestReview::Required(_)
-            ) || request.on_approved.mode
-                != crate::model::CompiledChangeRequestOnApprovedMode::Automatic
-            {
-                continue;
-            }
-            let executor = request
-                .on_approved
-                .executor
-                .as_deref()
-                .ok_or(RuntimeConfigError::InvalidBinding)?;
-            let config = self
-                .review_executors
-                .get(executor)
-                .ok_or(RuntimeConfigError::InvalidBinding)?;
-            if entity
-                .access_profiles
-                .get(&config.access_profile)
-                .is_none_or(|profile| {
-                    !profile
-                        .operations
-                        .contains(&crate::contract::Operation::ApplyRequest)
-                })
-            {
-                return Err(RuntimeConfigError::InvalidBinding);
-            }
-        }
-        let mut activated = BTreeMap::new();
-        // An executor can remain necessary for an application job accepted
-        // under the previous package even when the new package no longer
-        // selects it. Activate every retained binding and derive the routes it
-        // is still authorized to call from the new package.
-        for (executor, config) in &self.review_executors {
-            if config.registry_id != compiled.registry_id() {
-                return Err(RuntimeConfigError::InvalidBinding);
-            }
-            let request_entities = compiled
-                .entities()
-                .values()
-                .filter(|entity| {
-                    entity.change_request.is_some()
-                        && entity
-                            .access_profiles
-                            .get(&config.access_profile)
-                            .is_some_and(|profile| {
-                                profile
-                                    .operations
-                                    .contains(&crate::contract::Operation::ApplyRequest)
-                            })
-                })
-                .collect::<Vec<_>>();
-            if request_entities.is_empty()
-                || request_entities.iter().any(|entity| {
-                    entity
-                        .access_profiles
-                        .get(&config.access_profile)
-                        .is_none_or(|profile| {
-                            !profile
-                                .operations
-                                .contains(&crate::contract::Operation::ApplyRequest)
-                        })
-                })
-            {
-                return Err(RuntimeConfigError::InvalidBinding);
-            }
-            let request_routes = request_entities
-                .into_iter()
-                .map(|entity| (entity.id.clone(), entity.route.clone()))
-                .collect::<BTreeMap<_, _>>();
-            let token_provider = self.review_token_provider(
-                config.token_ref.as_ref(),
-                config.private_key_jwt.as_ref(),
-            )?;
-            let executor_client = crate::review_store::ReviewExecutorClient::new(
-                executor.to_owned(),
-                config.endpoint.clone(),
-                token_provider,
-                config.registry_id.clone(),
-                config.access_profile.clone(),
-                request_routes,
-                self.operational_timeouts.http_request,
-            )
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-            activated.insert(executor.clone(), Arc::new(executor_client));
-        }
-        crate::review_store::ReviewExecutorRegistry::new(activated)
             .map(Arc::new)
             .map(Some)
             .map_err(|_| RuntimeConfigError::InvalidBinding)
@@ -1204,12 +1073,8 @@ impl RuntimeConfig {
         &self.cursor
     }
 
-    pub fn event_delivery(&self) -> &EventDeliveryConfig {
-        &self.event_delivery
-    }
-
-    pub fn idempotency(&self) -> &IdempotencyConfig {
-        &self.idempotency
+    pub fn retention(&self) -> &RetentionConfig {
+        &self.retention
     }
 
     /// The idempotency policy every write path of this runtime spends keys
@@ -1218,7 +1083,7 @@ impl RuntimeConfig {
     pub fn idempotency_policy(&self) -> Result<crate::idempotency::IdempotencyPolicy> {
         crate::idempotency::IdempotencyPolicy::new(
             self.authentication.oidc.issuer(),
-            self.idempotency.receipt_retention_days(),
+            self.retention.receipt_retention_days(),
         )
         .map_err(|_| RuntimeConfigError::InvalidBounds)
     }
@@ -1248,7 +1113,7 @@ impl RuntimeConfig {
             .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
         ActivatedEventDestinationRegistry::activate(compiled, &self.event_destinations, &resolver)
             .map(|destinations| {
-                destinations.with_payload_retention(self.event_delivery.payload_retention)
+                destinations.with_payload_retention(self.retention.payload_retention)
             })
     }
 
@@ -1379,8 +1244,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("audit", &self.audit)
             .field("cursor", &self.cursor)
             .field("event_destinations", &self.event_destinations)
-            .field("event_delivery", &self.event_delivery)
-            .field("idempotency", &self.idempotency)
+            .field("retention", &self.retention)
             .field("operational_timeouts", &self.operational_timeouts)
             .field("wasm_execution", &self.wasm_execution)
             .field("metrics_listener", &self.metrics_listener)
@@ -2464,41 +2328,30 @@ pub struct CursorConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EventDeliveryConfig {
+pub struct RetentionConfig {
+    receipt_retention_days: u16,
     payload_retention: Duration,
 }
 
-impl EventDeliveryConfig {
-    fn from_raw(raw: RawEventDeliveryConfig) -> Result<Self> {
-        Ok(Self {
-            payload_retention: Duration::from_secs(
-                u64::from(raw.payload_retention_days) * 24 * 60 * 60,
-            ),
-        })
-    }
-
-    #[must_use]
-    pub fn payload_retention(&self) -> Duration {
-        self.payload_retention
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IdempotencyConfig {
-    receipt_retention_days: u16,
-}
-
-impl IdempotencyConfig {
-    fn from_raw(raw: RawIdempotencyConfig) -> Result<Self> {
-        Ok(Self {
+impl RetentionConfig {
+    fn from_raw(raw: RawRetentionConfig) -> Self {
+        Self {
             receipt_retention_days: raw.receipt_retention_days,
-        })
+            payload_retention: Duration::from_secs(
+                u64::from(raw.hook_payload_retention_days) * 24 * 60 * 60,
+            ),
+        }
     }
 
     /// How many days a held response is kept after its commit.
     #[must_use]
     pub fn receipt_retention_days(&self) -> u16 {
         self.receipt_retention_days
+    }
+
+    #[must_use]
+    pub fn payload_retention(&self) -> Duration {
+        self.payload_retention
     }
 }
 
@@ -2795,68 +2648,6 @@ struct RawReviewPrivateKeyJwtConfig {
     ca_bundle_ref: Option<SecretReference>,
 }
 
-#[derive(Clone)]
-struct ReviewExecutorConfig {
-    endpoint: reqwest::Url,
-    token_ref: Option<SecretReference>,
-    private_key_jwt: Option<ReviewPrivateKeyJwtConfig>,
-    registry_id: String,
-    access_profile: String,
-}
-
-impl ReviewExecutorConfig {
-    fn from_raw(id: &str, raw: RawReviewExecutorConfig) -> Result<Self> {
-        if id.trim().is_empty()
-            || id.len() > 128
-            || id.chars().any(char::is_control)
-            || raw.registry_id.trim().is_empty()
-            || raw.registry_id.len() > 128
-            || raw.registry_id.chars().any(char::is_control)
-            || raw.access_profile.trim().is_empty()
-            || raw.access_profile.len() > 128
-            || raw.access_profile.chars().any(char::is_control)
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
-        }
-        let endpoint =
-            reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        registry_platform_httputil::client::ServiceBaseUrl::new(endpoint.clone())
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        let token_ref = raw.token_ref;
-        let private_key_jwt = raw
-            .private_key_jwt
-            .map(ReviewPrivateKeyJwtConfig::from_raw)
-            .transpose()?;
-        if token_ref.is_some() == private_key_jwt.is_some() {
-            return Err(RuntimeConfigError::InvalidBinding);
-        }
-        Ok(Self {
-            endpoint,
-            token_ref,
-            private_key_jwt,
-            registry_id: raw.registry_id,
-            access_profile: raw.access_profile,
-        })
-    }
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawReviewExecutorConfig {
-    endpoint: String,
-    /// A static bearer token for the executing registry. Exactly one of
-    /// `tokenRef` and `privateKeyJwt` is written.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    token_ref: Option<SecretReference>,
-    /// A refreshing client-assertion credential for the executing registry.
-    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
-    registry_id: String,
-    access_profile: String,
-}
-
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2910,18 +2701,11 @@ struct RawRuntimeConfig {
         schemars(schema_with = "local_id_map_schema::<RawReviewAuthorityConfig>")
     )]
     review_authorities: BTreeMap<String, RawReviewAuthorityConfig>,
-    #[serde(default, deserialize_with = "local_id_map")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "local_id_map_schema::<RawReviewExecutorConfig>")
-    )]
-    review_executors: BTreeMap<String, RawReviewExecutorConfig>,
-    /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
+    /// Optional retention windows for idempotency receipts and retained
+    /// event payloads. Defaults to a seven-day receipt horizon and the
+    /// server's bounded payload retention policy.
     #[serde(default)]
-    event_delivery: RawEventDeliveryConfig,
-    /// Optional idempotency tuning. Defaults to a seven-day receipt horizon.
-    #[serde(default)]
-    idempotency: RawIdempotencyConfig,
+    retention: RawRetentionConfig,
     /// Optional operational request, shutdown, locking, and migration timeout tuning.
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
@@ -3340,35 +3124,7 @@ struct RawCursorConfig {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawEventDeliveryConfig {
-    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
-    #[serde(default = "default_webhook_payload_retention_days")]
-    #[serde(
-        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
-    )]
-    payload_retention_days: u8,
-}
-
-impl Default for RawEventDeliveryConfig {
-    fn default() -> Self {
-        Self {
-            payload_retention_days: default_webhook_payload_retention_days(),
-        }
-    }
-}
-
-const fn default_webhook_payload_retention_days() -> u8 {
-    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawIdempotencyConfig {
+struct RawRetentionConfig {
     /// Days a held response is kept after its commit. A retry after it is
     /// refused as expired and never executed; the key stays spent.
     #[serde(default = "default_receipt_retention_days")]
@@ -3382,14 +3138,29 @@ struct RawIdempotencyConfig {
         )
     )]
     receipt_retention_days: u16,
+    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
+    #[serde(default = "default_webhook_payload_retention_days")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
+    )]
+    hook_payload_retention_days: u8,
 }
 
-impl Default for RawIdempotencyConfig {
+impl Default for RawRetentionConfig {
     fn default() -> Self {
         Self {
             receipt_retention_days: default_receipt_retention_days(),
+            hook_payload_retention_days: default_webhook_payload_retention_days(),
         }
     }
+}
+
+const fn default_webhook_payload_retention_days() -> u8 {
+    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
 }
 
 const fn default_receipt_retention_days() -> u16 {

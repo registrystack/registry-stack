@@ -78,6 +78,19 @@ async fn setup_with_contracts(
     Arc<registry_breg::CompiledRegistry>,
     ExpectedRegistryIdentity,
 ) {
+    setup_customized(source, maximum_age, contracts, |_| {}).await
+}
+
+async fn setup_customized(
+    source: Option<&str>,
+    maximum_age: u64,
+    contracts: Option<&[u8]>,
+    customize: impl FnOnce(&mut registry_breg::contract::RegistryProject),
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
     let database = TestDatabase::create(1).await;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/farmer-landholding-evidence");
@@ -88,6 +101,7 @@ async fn setup_with_contracts(
             capability.maximum_observation_age_seconds = maximum_age;
         }
     }
+    customize(&mut project);
     let assets = [
         "scripts/register-landholding.rhai",
         "scripts/check-procedure.rhai",
@@ -155,7 +169,7 @@ fn app_with_client(
     database: &TestDatabase,
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: ExpectedRegistryIdentity,
-    client: Arc<registry_breg::action_evidence_client::EvidenceActionClient>,
+    client: impl Into<Option<Arc<registry_breg::action_evidence_client::EvidenceActionClient>>>,
     fault: Option<MutationFaultPoint>,
 ) -> (axum::Router, RuntimePool) {
     let pool = database.runtime_config.build_pool().unwrap();
@@ -186,8 +200,13 @@ fn app_with_client(
         lock,
         Duration::from_secs(5),
         audit,
-    )
-    .with_evidence_evaluator(Arc::new(ActionEvidenceEvaluator::new(client)));
+    );
+    let mutations = match client.into() {
+        Some(client) => {
+            mutations.with_evidence_evaluator(Arc::new(ActionEvidenceEvaluator::new(client)))
+        }
+        None => mutations,
+    };
     let mutations = match fault {
         Some(fault) => mutations.with_fault_for_test(fault),
         None => mutations,
@@ -261,6 +280,167 @@ async fn counts(database: &TestDatabase, registry: &registry_breg::CompiledRegis
         .await
         .unwrap();
     (0..6).map(|index| row.get(index)).collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_evidence_refuses_guarded_action_while_unrelated_action_commits() {
+    let (database, registry, identity) = setup_customized(None, 60, None, |project| {
+        let check = project
+            .actions
+            .iter_mut()
+            .find(|action| action.id == "check-procedure")
+            .unwrap();
+        check.evidence.clear();
+        if let registry_breg::contract::ActionPlanSource::Function { capabilities, .. } =
+            &mut check.plan
+        {
+            capabilities.clear();
+        }
+    })
+    .await;
+    let secrets = registry_platform_config::SecretResolver::new(
+        [registry_platform_config::SecretProvider::File],
+        "/private/tmp",
+    )
+    .unwrap();
+    let absent =
+        registry_breg::action_evidence_config::activate(&registry, &BTreeMap::new(), &secrets)
+            .unwrap();
+    assert!(
+        absent.is_none(),
+        "the actual startup activation accepts an absent optional mapping"
+    );
+    let (app, _) = app_with_client(&database, registry.clone(), identity, None, None);
+    let guarded = send(
+        app.clone(),
+        ACTION,
+        "missing-evidence",
+        input("missing", false),
+        true,
+    )
+    .await;
+    assert_eq!(guarded.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(counts(&database, &registry).await, vec![0, 0, 0, 0, 0, 0]);
+    let ordinary = send(
+        app,
+        "/v1/actions/check-procedure",
+        "unrelated",
+        input("unrelated", false),
+        true,
+    )
+    .await;
+    assert_eq!(ordinary.0, StatusCode::OK, "{}", ordinary.1);
+    assert_eq!(counts(&database, &registry).await, vec![0, 1, 1, 1, 1, 0]);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_evidence_is_guard_only_and_replay_never_reacquires() {
+    let pure = r#"fn plan(ctx) { #{effects:[#{id:"landholding",set:#{
+        "farmer-number":ctx.inputs["farmer-number"],"parcel-code":ctx.inputs["parcel-code"]}}]} }"#;
+    let (database, registry, identity) = setup_customized(Some(pure), 60, None, |project| {
+        let action = project.actions.iter_mut().find(|action| action.id == "register-landholding").unwrap();
+        action.evidence.clear();
+        if let registry_breg::contract::ActionPlanSource::Function { capabilities, .. } = &mut action.plan {
+            capabilities.clear();
+        }
+        action.commit_guards.evidence.push(serde_json::from_value(json!({
+            "id":"farmer-status","provider":"farmer-registry","requirement":"urn:example:farmer:status-v1",
+            "subjects":{"farmer":{"profile":"farmer-number-v1","selectors":{"farmer-number":{"type":"input","input":"farmer-number"}}}},
+            "requires":[{"output":"active","equals":true}],"maximumObservationAgeSeconds":60
+        })).unwrap());
+    }).await;
+    let provider = EvidenceProvider::start().await;
+    let (app, _) = app(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        &provider,
+        None,
+    );
+    let first = send(
+        app.clone(),
+        ACTION,
+        "commit-guard",
+        input("guarded", false),
+        true,
+    )
+    .await;
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert_eq!(provider.calls(), 1);
+    assert_eq!(counts(&database, &registry).await, vec![1, 0, 1, 1, 1, 1]);
+    provider.mode("unavailable");
+    let replay = send(
+        app.clone(),
+        ACTION,
+        "commit-guard",
+        input("guarded", false),
+        true,
+    )
+    .await;
+    assert_eq!(replay, first);
+    assert_eq!(provider.calls(), 1);
+    let secrets = registry_platform_config::SecretResolver::new(
+        [registry_platform_config::SecretProvider::File],
+        "/private/tmp",
+    )
+    .unwrap();
+    assert!(
+        registry_breg::action_evidence_config::activate(&registry, &BTreeMap::new(), &secrets)
+            .unwrap()
+            .is_none()
+    );
+    let (without_mapping, _) = app_with_client(&database, registry.clone(), identity, None, None);
+    assert_eq!(
+        send(
+            without_mapping.clone(),
+            ACTION,
+            "commit-guard",
+            input("guarded", false),
+            true
+        )
+        .await,
+        first
+    );
+    assert_eq!(
+        provider.calls(),
+        1,
+        "local exact recovery performs no acquisition"
+    );
+    assert_eq!(
+        send(
+            without_mapping,
+            ACTION,
+            "unmapped-uncommitted",
+            input("new", false),
+            true
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(counts(&database, &registry).await, vec![1, 0, 1, 1, 1, 1]);
+    provider.mode("inactive");
+    let refused = send(
+        app.clone(),
+        ACTION,
+        "commit-refused",
+        input("refused", false),
+        true,
+    )
+    .await;
+    assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+    assert_eq!(counts(&database, &registry).await, vec![1, 0, 1, 1, 1, 1]);
+    provider.mode("expired");
+    assert!(
+        !send(app, ACTION, "commit-expired", input("expired", false), true)
+            .await
+            .0
+            .is_success()
+    );
+    assert_eq!(counts(&database, &registry).await, vec![1, 0, 1, 1, 1, 1]);
+    database.assert_every_audit_request_answered_once();
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -572,7 +752,7 @@ async fn signed_evidence_actions_release_postgres_and_commit_atomic_transcripts(
 
 #[tokio::test(flavor = "current_thread")]
 async fn caught_failed_helper_cannot_commit_or_make_another_disclosure() {
-    let source = r#"fn handle(ctx) {
+    let source = r#"fn plan(ctx) {
         let subjects = #{farmer: #{"farmer-number": "FR-12345"}};
         try { evidence::resolve("farmer-status", subjects); } catch (error) {}
         try { evidence::resolve("farmer-category", subjects); } catch (error) {}

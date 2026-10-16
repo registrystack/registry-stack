@@ -7,15 +7,15 @@ use serde::Serialize;
 
 use crate::compiler::operation_id;
 use crate::contract::{
-    AccessProfileSource, AccessRequirementsSource, ActorKindSource, Classification,
-    ConsentIssuerSource, EntitySource, FieldTypeSource, MembershipBoundarySource, Operation,
-    ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
+    AccessProfileSource, AccessRequirementsSource, ActorKindSource, BoundaryOperator,
+    Classification, ConsentIssuerSource, EntitySource, FieldTypeSource, MembershipBoundarySource,
+    Operation, ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
 
 fn profile_path(entity: &str, profile: &str) -> String {
-    format!("entities[id={entity}].accessProfiles[id={profile}]")
+    format!("recordTypes[id={entity}].accessProfiles[id={profile}]")
 }
 
 pub(crate) fn validate_access_requirements(
@@ -24,7 +24,7 @@ pub(crate) fn validate_access_requirements(
 ) {
     for entity in entities.values() {
         if let Some(requirements) = &entity.access_requirements {
-            let path = format!("entities[id={}].accessRequirements", entity.id);
+            let path = format!("recordTypes[id={}].accessRequirements", entity.id);
             if requirements.required_scopes.is_empty()
                 && requirements.allowed_purposes.is_empty()
                 && requirements.row_boundaries.is_empty()
@@ -88,7 +88,7 @@ pub(crate) fn validate_access_requirements(
                         continue;
                     };
                     let location = format!(
-                        "{}.readPaths[path={}].requirements[entity={visited}]",
+                        "{}.readPaths[path={}].requirements[recordType={visited}]",
                         profile_path(&entity.id, &profile.id),
                         path.id
                     );
@@ -97,7 +97,7 @@ pub(crate) fn validate_access_requirements(
                     check_profile(&request_requirements, profile, &location, errors);
                     if !requirements.row_boundaries.is_empty() {
                         errors.push(Diagnostic::error("breg.access.requirements-read-path-row-boundary-unsupported", location,
-                            "this relationship route enforces root rows only; use a direct grant on the protected entity instead of this read-path grant"));
+                            "this relationship route enforces root rows only; use a direct grant on the protected record type instead of this read-path grant"));
                     }
                 }
             }
@@ -116,7 +116,7 @@ pub(crate) fn check_profile(
         .difference(&profile.required_scopes)
     {
         errors.push(Diagnostic::error("breg.access.requirements-scope-missing", format!("{path}.requiredScopes[value={scope}]"),
-            "add the entity's mandatory scope to this profile; granting other scopes does not satisfy it"));
+            "add the record type's mandatory scope to this profile; granting other scopes does not satisfy it"));
     }
     if !requirements.allowed_purposes.is_empty()
         && (profile.required_purposes.is_empty()
@@ -125,12 +125,12 @@ pub(crate) fn check_profile(
                 .is_subset(&requirements.allowed_purposes))
     {
         errors.push(Diagnostic::error("breg.access.requirements-purpose-widened", format!("{path}.requiredPurposes"),
-            "require a nonempty subset of the entity's allowedPurposes; an empty list allows every purpose"));
+            "require a nonempty subset of the record type's allowedPurposes; an empty list allows every purpose"));
     }
     for boundary in &requirements.row_boundaries {
         if !profile.row_boundaries.contains(boundary) {
             errors.push(Diagnostic::error("breg.access.requirements-row-boundary-missing", format!("{path}.rowBoundaries[field={}]", boundary.field),
-                "include the entity's exact field, claim, and operator binding; request filters and other claim names do not satisfy this requirement"));
+                "include the record type's exact field, claim, and operator binding; request filters and other claim names do not satisfy this requirement"));
         }
     }
 }
@@ -144,25 +144,17 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
-                && profile.request_visibility.is_none()
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-collection", format!("{path}.rowBoundaries"),
-                    "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access"));
+                    "this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies"));
             }
-            let unrestricted_non_read = profile.request_visibility.is_some()
-                && profile
-                    .operations
-                    .iter()
-                    .any(|operation| !matches!(operation, Operation::Get | Operation::List));
             if entity.classification != Classification::Public
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
-                && ((!profile.operations.contains(&Operation::List)
-                    && profile.request_visibility.is_none())
-                    || unrestricted_non_read)
+                && !profile.operations.contains(&Operation::List)
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-rows", format!("{path}.rowBoundaries"),
-                    "this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access"));
+                    "this profile has no claim-bound row restriction for its granted operations; Review this registry-wide access"));
             }
             let write_operations = [Operation::Create, Operation::Patch, Operation::Import]
                 .into_iter()
@@ -186,26 +178,20 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 .map(|b| b.field.as_str())
                 .filter(|field| *field != "id")
                 .collect::<BTreeSet<_>>();
-            if creates
-                && boundary_fields
-                    .iter()
-                    .any(|field| profile.writable_fields.contains(*field))
+            // Equality binds both the old and new row to one claim value. Only
+            // an `in` boundary allows a patch to move between authorized values.
+            if patches
+                && profile.row_boundaries.iter().any(|b| {
+                    b.operator == BoundaryOperator::In && profile.writable_fields.contains(&b.field)
+                })
             {
-                let patch_review = if patches {
-                    ". Review separately that patch can move a record within the caller's allowed values"
+                let advice = if creates {
+                    "keep it writable for create, and use a separate patch permission without it if moving records is not intended"
                 } else {
-                    ""
+                    "remove it from writableFields unless moving records is intended"
                 };
                 findings.push(Diagnostic::finding("breg.access.profile-writable-row-boundary", format!("{path}.writableFields"),
-                    &format!("create needs this authorization-bound field in writableFields, because the row policy pins it to the caller's claim on insert; keep it writable, and expect a create naming any other value to be refused{patch_review}")));
-            } else if patches
-                && profile
-                    .row_boundaries
-                    .iter()
-                    .any(|b| profile.writable_fields.contains(&b.field))
-            {
-                findings.push(Diagnostic::finding("breg.access.profile-writable-row-boundary", format!("{path}.writableFields"),
-                    "patch can change an authorization-bound field within the caller's allowed values; remove it from writableFields unless moving records is intended"));
+                    &format!("patch can change an authorization-bound field within the caller's allowed values; {advice}")));
             }
             if creates {
                 for field in boundary_fields
@@ -240,12 +226,12 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                         .any(|f| &f.id == field && f.classification > entity.classification)
                 {
                     findings.push(Diagnostic::finding("breg.access.profile-higher-classification", format!("{path}.readableFields[field={field}]"),
-                        "this field is more sensitive than its entity's classification; verify the profile's scope and purpose before disclosing it"));
+                        "this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it"));
                 }
             }
             for permission in &profile.read_paths {
                 findings.push(Diagnostic::finding("breg.access.profile-related-disclosure", format!("{path}.readPaths[path={}]", permission.path),
-                    "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through entity accessRequirements"));
+                    "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through record type accessRequirements"));
             }
         }
     }
@@ -263,7 +249,7 @@ pub(crate) fn compiled_access_findings(
         for entity in crate::consent::self_bound_targets(action, entities) {
             for grant in &action.permissions {
                 link_bound.insert(format!(
-                    "actions[id={}].permissions[profile={}].targets[entity={entity}].rowBoundaries",
+                    "actions[id={}].permissions[profile={}].targets[recordType={entity}].rowBoundaries",
                     action.id, grant.profile_id
                 ));
             }
@@ -271,12 +257,13 @@ pub(crate) fn compiled_access_findings(
     }
     for reach in row_reach(entities, actions) {
         // Ordinary permissions retain their existing finding codes above.
-        if reach.surface == "entity" {
+        if reach.surface == "record" {
             continue;
         }
         // A `self` consent issuer's subject and record targets are bound
         // through the caller's principal link, not by a row boundary.
         if reach.rows == "all"
+            && !reach.owner_only
             && !link_bound.contains(&reach.source_path)
             && entities
                 .get(&reach.entity)
@@ -326,7 +313,7 @@ pub(crate) fn project_access_findings(
     }
     for entity in entities.values() {
         if let Some(requirements) = &entity.access_requirements {
-            let path = format!("entities[id={}].accessRequirements", entity.id);
+            let path = format!("recordTypes[id={}].accessRequirements", entity.id);
             for (member, items) in [
                 ("requiredScopes", &requirements.required_scopes),
                 ("allowedPurposes", &requirements.allowed_purposes),
@@ -534,8 +521,9 @@ pub struct AccessExplanation {
     pub missing_claims: &'static str,
     pub evaluation: &'static str,
     pub routes: crate::model::CompiledAccessInventory,
+    #[serde(rename = "recordTypes")]
     pub entities: Vec<EntityAccessExplanation>,
-    pub actions: CompiledActionInventory,
+    pub actions: serde_json::Value,
     pub row_reach: Vec<RowReachExplanation>,
     pub claim_contract: Option<crate::authority::AuthorityInventory>,
     pub claim_contract_error: Option<crate::authority::AuthorityInventoryError>,
@@ -552,6 +540,8 @@ pub struct AccessExplanation {
 #[serde(rename_all = "camelCase")]
 pub struct StatisticalDatasetAccessExplanation {
     pub dataset: String,
+    /// Authentication requirements for every dataset profile, including dataset-only readers.
+    pub access_profiles: Vec<AccessProfileSource>,
     /// Profiles that read live counts.
     pub read_live: Vec<String>,
     /// The profile that publishes releases; empty when the dataset has none.
@@ -609,6 +599,7 @@ pub struct ConsentClientExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentRecordExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub maximum_duration_days: u32,
     pub gives: Vec<String>,
@@ -621,6 +612,7 @@ pub struct ConsentRecordExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatedPermissionExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub profile: String,
     pub source_path: String,
@@ -654,16 +646,31 @@ pub struct ConsentIssuerExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityAccessExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub classification: Classification,
+    /// Direct grants remain constrained by the Record type mutation policy.
+    pub mutation_policy: serde_json::Value,
     pub requirements: Option<AccessRequirementsSource>,
-    pub profiles: Vec<AccessProfileSource>,
+    pub profiles: Vec<serde_json::Value>,
+}
+
+/// Make effective defaults explicit only in author inspection. The compiled
+/// profile's serialization remains the package and runtime authority contract.
+fn inspect_record_profile(profile: &AccessProfileSource) -> serde_json::Value {
+    let mut value = serde_json::to_value(profile).expect("compiled access profile serializes");
+    if profile.row_boundaries.is_empty() {
+        value["rowBoundaries"] = serde_json::json!("unrestricted");
+    }
+    value["allowCount"] = serde_json::json!(profile.allow_count);
+    value
 }
 
 /// Configuration locations identify compiled permissions, not original file line numbers.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowReachExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub profile: String,
     pub source_path: String,
@@ -672,7 +679,7 @@ pub struct RowReachExplanation {
     pub row_boundaries: Vec<RowBoundarySource>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub membership_boundaries: Vec<MembershipBoundarySource>,
-    pub owner_only_request_reads: bool,
+    pub owner_only: bool,
 }
 
 fn row_reach(
@@ -700,7 +707,7 @@ fn row_reach(
             },
             row_boundaries: boundaries.to_vec(),
             membership_boundaries: memberships.to_vec(),
-            owner_only_request_reads: owner,
+            owner_only: owner,
         });
     };
     for entity in entities.values() {
@@ -710,55 +717,11 @@ fn row_reach(
                 &entity.id,
                 &profile.id,
                 format!("{path}.rowBoundaries"),
-                "entity",
+                "record",
                 &profile.row_boundaries,
                 &profile.membership_boundaries,
-                profile.request_visibility.is_some(),
+                false,
             );
-            for id in &profile.submitter_targets {
-                if let Some(target) = entities
-                    .get(id)
-                    .and_then(|entity| entity.access_profiles.get(&profile.id))
-                {
-                    add(
-                        id,
-                        &profile.id,
-                        format!("{path}.submitterTargets[entity={id}]"),
-                        "submitter_target",
-                        &target.row_boundaries,
-                        &[],
-                        false,
-                    );
-                }
-            }
-            for target in &profile.apply_targets {
-                add(
-                    &target.entity,
-                    &profile.id,
-                    format!(
-                        "{path}.applyTargets[entity={}].rowBoundaries",
-                        target.entity
-                    ),
-                    "apply_target",
-                    &target.row_boundaries,
-                    &[],
-                    false,
-                );
-            }
-            for target in &profile.request_presence {
-                add(
-                    &target.request_type,
-                    &profile.id,
-                    format!(
-                        "{path}.requestPresence[requestType={}].rowBoundaries",
-                        target.request_type
-                    ),
-                    "request_presence",
-                    &target.row_boundaries,
-                    &[],
-                    false,
-                );
-            }
         }
     }
     for action in &actions.actions {
@@ -768,7 +731,7 @@ fn row_reach(
                     &target.entity_id,
                     &grant.profile_id,
                     format!(
-                        "actions[id={}].permissions[profile={}].targets[entity={}].rowBoundaries",
+                        "actions[id={}].permissions[profile={}].targets[recordType={}].rowBoundaries",
                         action.id, grant.profile_id, target.entity_id
                     ),
                     "action_target",
@@ -776,6 +739,24 @@ fn row_reach(
                     &[],
                     false,
                 );
+            }
+        }
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            for grant in &proposal.permissions {
+                for target in &grant.targets {
+                    add(
+                        &target.entity_id,
+                        &grant.profile_id,
+                        format!(
+                            "actions[id={}].execution.proposal.permissions[profile={}].targets[recordType={}].rowBoundaries",
+                            action.id, grant.profile_id, target.entity_id
+                        ),
+                        "proposal_target",
+                        &target.row_boundaries,
+                        &[],
+                        grant.ownership == Some(crate::contract::ProposalOwnership::Caller),
+                    );
+                }
             }
         }
     }
@@ -792,7 +773,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
     AccessExplanation {
         scope_matching: "all required scopes must be present",
         purpose_matching: "one allowed purpose must match; a profile that names none accepts every purpose",
-        row_matching: "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
+        row_matching: "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; Proposal caller ownership additionally limits Proposal operations",
         profile_selection: "one profile per request; selecting its name never grants authority and profiles are not merged",
         relationship_matching: "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
         missing_claims: "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
@@ -804,11 +785,16 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
             .map(|entity| EntityAccessExplanation {
                 entity: entity.id.clone(),
                 classification: entity.classification,
+                mutation_policy: crate::artifacts::render_mutation_policy(entity),
                 requirements: entity.access_requirements.clone(),
-                profiles: entity.access_profiles.values().cloned().collect(),
+                profiles: entity.access_profiles.values().map(inspect_record_profile).collect(),
             })
             .collect(),
-        actions: registry.actions().clone(),
+        actions: serde_json::json!({
+            "actions": registry.actions().actions.iter().map(crate::artifacts::inspect_action).collect::<Vec<_>>(),
+            "routes": registry.actions().routes,
+            "access": registry.actions().access,
+        }),
         row_reach: row_reach(registry.entities(), registry.actions()),
         claim_contract,
         claim_contract_error,
@@ -820,6 +806,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
                 let releases = dataset.releases.as_ref();
                 StatisticalDatasetAccessExplanation {
                     dataset: dataset.id.clone(),
+                    access_profiles: dataset.access_profiles.values().cloned().collect(),
                     read_live: dataset.live_profiles.iter().cloned().collect(),
                     publish: releases
                         .map(|releases| releases.publisher.clone())

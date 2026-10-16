@@ -61,7 +61,7 @@ async fn sdk_declared_handler_refusal_and_committed_replay_match_real_server() {
         .unwrap();
     let action = metadata
         .value
-        .select_immediate_action("register-person", "person-registrar")
+        .select_action("register-person", "person-registrar")
         .unwrap();
     let mut blank = input("0123456789012")["input"].as_object().unwrap().clone();
     blank.insert("givenName".into(), json!("   "));
@@ -145,20 +145,22 @@ async fn setup_with_handler_source(
         .insert(registry_breg::contract::Operation::Batch);
     // The regression variant adds a field ceiling wider than the selected
     // mutation and a row boundary on the declared, optionally omitted target.
-    project
+    let multi_action = project
         .actions
         .iter_mut()
         .find(|action| action.id == "register-person-with-registration")
-        .unwrap()
-        .handler
-        .as_mut()
-        .unwrap()
-        .writes
-        .iter_mut()
-        .find(|slot| slot.id == "register")
-        .unwrap()
-        .fields
-        .push("active".to_owned());
+        .unwrap();
+    if let registry_breg::contract::ActionPlanSource::Function { inputs, writes, .. } =
+        &mut multi_action.plan
+    {
+        writes
+            .iter_mut()
+            .find(|slot| slot.id == "register")
+            .unwrap()
+            .fields
+            .push("active".to_owned());
+        inputs.push("clear-register-contact".to_owned());
+    }
     project
         .actions
         .iter_mut()
@@ -385,7 +387,7 @@ async fn assert_direct_patch_pattern_diagnostic(mut app: axum::Router, record_id
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let body: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap();
-    assert_eq!(body["entityId"], "person");
+    assert_eq!(body["recordType"], "person");
     assert_eq!(body["fieldId"], "identifier");
     assert!(!body.to_string().contains("112345678901x"));
 }
@@ -560,7 +562,7 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     );
     let invalid = call(simple, "invalid-pattern", input("112345678901x")).await;
     assert_eq!(invalid.0, StatusCode::CONFLICT, "{}", invalid.1);
-    assert_eq!(invalid.1["entityId"], "person");
+    assert_eq!(invalid.1["recordType"], "person");
     assert_eq!(invalid.1["fieldId"], "identifier");
     assert!(!invalid.1.to_string().contains("112345678901x"));
     assert!(problem_validator.is_valid(&invalid.1), "{}", invalid.1);
@@ -580,14 +582,14 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
         "{}",
         direct_invalid.1
     );
-    assert_eq!(direct_invalid.1["entityId"], "person");
+    assert_eq!(direct_invalid.1["recordType"], "person");
     assert_eq!(direct_invalid.1["fieldId"], "identifier");
     let batch_invalid = send(app.clone(), "POST", "/v1/records/people:batch?accessProfile=person-administrator", "batch-invalid", json!({"items":[
         {"operation":"create","data":{"identifier":"8123456789012","displayName":"Staged first"}},
         {"operation":"create","data":{"identifier":"912345678901x","displayName":"Invalid later"}}
     ]}), "person-administrator").await;
     assert_eq!(batch_invalid.0, StatusCode::CONFLICT, "{}", batch_invalid.1);
-    assert_eq!(batch_invalid.1["entityId"], "person");
+    assert_eq!(batch_invalid.1["recordType"], "person");
     assert_eq!(batch_invalid.1["fieldId"], "identifier");
     assert_eq!(
         after,
@@ -947,7 +949,13 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     );
     assert_eq!(test_action_handler_invocation_count("register-person"), 1);
     assert_eq!(before_evaluator_timeout, counts(&database, &registry).await);
-    assert_eq!(call(simple, "evaluator-deadline", input("7123456789012")).await.0, StatusCode::OK, "active evaluator deadline rolls back the receipt lock and permits a healthy subsequent invocation");
+    assert_eq!(
+        call(simple, "evaluator-deadline", input("7123456789012"))
+            .await
+            .0,
+        StatusCode::OK,
+        "active evaluator deadline rolls back the receipt lock and permits a healthy subsequent invocation"
+    );
     let clear_conditions = call(
         &format!("{coordinated}/target-conditions"),
         "clear-conditions",
@@ -1024,7 +1032,7 @@ async fn action_handler_faults_log_only_compiled_locations_and_static_causes() {
     let _test_guard = HANDLER_TEST_LOCK.lock().await;
     let logs = captured_handler_logs();
     let (database, registry, identity) = setup_with_handler_source(Some(
-        r#"fn handle(ctx) {
+        r#"fn plan(ctx) {
             if ctx.inputs.identifier == "0123456789012" {
                 return #{effects: [#{id: "person", set: #{
                     identifier: ctx.inputs.identifier, "display-name": false

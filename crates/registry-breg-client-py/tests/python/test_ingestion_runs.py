@@ -47,7 +47,7 @@ def run_wire(**overrides) -> dict:
         "runId": RUN_ID,
         "status": "open",
         "blockedReason": None,
-        "entityId": "people",
+        "recordType": "people",
         "operation": "create",
         "profileId": "importer.v1",
         "packageRevision": "revision-1",
@@ -126,7 +126,7 @@ class IngestionRunTests(unittest.TestCase):
                     self.end_headers()
                     self.wfile.write(body)
                 elif "/ingestion-runs" in path:
-                    self.answer(200, {"runs": [run_wire()], "hasMore": False, "nextAfter": None})
+                    self.answer(200, {"runs": [run_wire()], "hasMore": False, "nextCursor": None})
                 else:
                     self.answer(404, {})
 
@@ -271,7 +271,7 @@ class IngestionRunTests(unittest.TestCase):
         outcome = self.client.list_ingestion_runs(
             "people",
             limit=25,
-            after=RUN_ID,
+            cursor=RUN_ID,
             status="open",
             input_digest=INPUT_DIGEST,
             access_profile="importer.v1",
@@ -279,11 +279,11 @@ class IngestionRunTests(unittest.TestCase):
         self.assertEqual(len(outcome["value"]["runs"]), 1)
         self.assertEqual(outcome["value"]["runs"][0]["runId"], RUN_ID)
         self.assertIs(outcome["value"]["hasMore"], False)
-        self.assertIsNone(outcome["value"]["nextAfter"])
+        self.assertIsNone(outcome["value"]["nextCursor"])
         query = parse_qsl(urlsplit(self.requests[-1][1]).query)
         self.assertEqual(
             [key for key, _ in query],
-            ["accessProfile", "limit", "after", "status", "inputDigest"],
+            ["accessProfile", "limit", "cursor", "status", "inputDigest"],
         )
         self.assertEqual(dict(query)["accessProfile"], "importer.v1")
         self.assertEqual(dict(query)["status"], "open")
@@ -298,10 +298,10 @@ class IngestionRunTests(unittest.TestCase):
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", input_digest="xyz")
         self.assertEqual(raised.exception.kind, "invalid-request")
-        # The engine parses the after pair as a canonical run id, so a cursor
+        # The engine parses the cursor pair as a canonical run id, so a cursor
         # it could never issue is refused before it is sent.
         with self.assertRaises(BaseRegistryClientError) as raised:
-            self.client.list_ingestion_runs("people", after="cursor+/=")
+            self.client.list_ingestion_runs("people", cursor="cursor+/=")
         self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", access_profile="x\n")

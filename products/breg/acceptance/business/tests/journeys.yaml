@@ -4,7 +4,7 @@ journeys:
   - id: registrar-and-public-register
     steps:
       - id: create-legal-entity
-        entity: legal-entity
+        recordType: legal-entity
         accessProfile: business-registrar
         claims:
           principal: synthetic-business-registrar
@@ -31,7 +31,7 @@ journeys:
             protected-ownership-reference: OWNERSHIP-SYNTH-001
         capture: first-business
       - id: public-register-gets-business
-        entity: legal-entity
+        recordType: legal-entity
         accessProfile: public-register
         claims:
           principal: synthetic-public-reader
@@ -50,7 +50,7 @@ journeys:
             entity-status: active
             public-service-address: Synthetic service address
       - id: public-register-lists-businesses
-        entity: legal-entity
+        recordType: legal-entity
         accessProfile: public-register
         claims:
           principal: synthetic-public-reader
@@ -63,7 +63,7 @@ journeys:
           status: 200
           count: 1
       - id: registrar-suspends-business
-        entity: legal-entity
+        recordType: legal-entity
         accessProfile: business-registrar
         claims:
           principal: synthetic-business-registrar
@@ -84,7 +84,7 @@ journeys:
             protected-ownership-reference: OWNERSHIP-SYNTH-001
         capture: suspended-business
       - id: public-register-sees-new-status
-        entity: legal-entity
+        recordType: legal-entity
         accessProfile: public-register
         claims:
           principal: synthetic-public-reader
@@ -101,7 +101,7 @@ journeys:
             legal-name: Synthetic Example Cooperative
             entity-status: suspended
       - id: registrar-without-purpose-is-concealed
-        entity: legal-entity
+        recordType: legal-entity
         accessProfile: business-registrar
         claims:
           principal: synthetic-business-registrar

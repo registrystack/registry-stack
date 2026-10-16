@@ -2,50 +2,118 @@
 
 ## Unreleased
 
-- BREAKING: a filtered, sorted list page is served from an index. The
-  compiler appends the record id as the last column of every authored index
-  under `entities[].indexes`, because every list orders by the record id
-  last; entity source views are no longer `security_barrier` views, so the
-  planner reaches those indexes; and a continuation over a required stored
-  field is one row comparison the index can seek. Reference, unique
-  constraint, and spatial indexes are unchanged, and so are row-level
-  security policies, cursors, and page order. An index declared as the
-  fields a list compares with `eq` followed by the field it sorts by now
-  returns each page of that list, first or deep, without ordering the
-  filtered set. A range or `in` filter on a leading field is still ordered
-  for each page.
-  The generated DDL, and with it every package revision and managed schema
-  fingerprint, changes, so this release's `breg` refuses a v0.41.0 package
-  with `the package compiler derivation failed` until a successor is active.
-  Migration: build a successor over the active v0.41.0 package with this
-  release's `bregctl` and apply it before starting this release's `breg`.
-  v0.41.0 state upgrades in place. The first successor this release builds
-  over a v0.41.0 package, from an unchanged project too, also brings the
-  compiler-generated DDL up to date once: it replaces every entity source
-  view, and drops and rebuilds every declared index. Dropping an index takes
-  an `ACCESS EXCLUSIVE` lock on its entity table, rebuilding it takes a
-  `SHARE` lock and reads the table once, and replacing a view rewrites no
-  row. A successor without a reviewed migration runs its statements in one
-  transaction, so the locks are held until it commits and a failure rolls
-  all of them back. Each lock wait is bounded by
-  `operationalTimeouts.migrationLockMilliseconds` and each statement by
-  `operationalTimeouts.migrationStatementMilliseconds`: size the second for
-  the largest indexed entity table. A successor built over a package this
-  release built carries none of these statements.
-- BREAKING: an authored index declares at most 31 fields. The compiler
-  refuses a longer one with `breg.index.fields-too-many`, because the
-  record id it appends takes the last of the 32 key columns PostgreSQL
-  allows in an index. An index of exactly 32 fields, which compiled and
-  applied before, must drop a field.
-- `package.json` gains the optional
-  `migrationPlan.priorBaseline.generatedDdlSha256`: the digest of the
-  `database/ddl.sql` the baseline package carries, as its manifest file list
-  states it. A successor whose baseline states the digest this compiler
-  generates for the baseline model plans only the change; one whose baseline
-  states another digest, or none, also carries the statements that bring
-  compiler-generated views and declared indexes up to date. A package
-  v0.41.0 built has no such key in its own plan and still reads as a
-  baseline.
+- Apply this release to a fresh database; it carries no state migration
+  from 0.41.
+- BREAKING: a Review result from Registry Casework names the policy outcome
+  it settled on, and BReg reads it. Upgrade Casework and every review
+  producer, including BReg, in the same release. A 0.41 BReg refuses an
+  approved result that names an outcome, and this BReg refuses a 0.41
+  approved result that names none; either way an approved Proposal stays
+  `submitted` until both sides are upgraded.
+- BREAKING: an event with no compiled delivery is bounded at 1 MiB, the
+  Version 1 signable bound, instead of 2 MiB, and a larger one is refused
+  when it is recorded. The runtime logs the envelope size and bound with the
+  fix: project fewer or smaller fields into the event.
+- The Rust client's `verify_webhook` delegates to the shared hooks receiver
+  and keeps its API and refusal codes. A signed header that is not visible
+  ASCII is refused as `malformed-signature`.
+
+- BREAKING: retention windows other than the audit journal's live in a
+  top-level `retention` block, the shape Scheduling and Messaging use.
+  `idempotency.receiptRetentionDays` becomes `retention.receiptRetentionDays`
+  and `eventDelivery.payloadRetentionDays` becomes
+  `retention.hookPayloadRetentionDays`, the name Scheduling uses for the same
+  hook payload window; defaults and bounds are unchanged, and
+  `audit.retentionDays` stays where it is. Each old key, and each old
+  `idempotency` or `eventDelivery` block, is refused with `config.removed-key`
+  naming the new path. Before:
+
+  ```yaml
+  idempotency:
+    receiptRetentionDays: 7
+  eventDelivery:
+    payloadRetentionDays: 7
+  ```
+
+  After:
+
+  ```yaml
+  retention:
+    receiptRetentionDays: 7
+    hookPayloadRetentionDays: 7
+  ```
+
+  Migration: move both keys into one `retention` block and delete the old
+  blocks; the values stay as they are.
+
+- BREAKING: a `taskGrantStatus` entry names its status resource
+  `statusResource` (was `caseworkResource`), since any task authority, not
+  only Casework, can answer grant status. The old key is refused with
+  `config.removed-key` naming `statusResource`. Migration: rename the key;
+  the value stays as it is.
+
+- `GET /v1/proposals/{id}/submissions/{version}` reads one submitted
+  version of a Proposal under Proposal Get authority: its frozen effect
+  digest, its review result, and its application status as separate members,
+  with `current` marking the latest version. The application member never
+  names the applier. Once neither the review result nor the application
+  receipt is retained, the read answers 410 `proposal.submission_expired`.
+  A non-canonical or unknown version is concealed like an unknown Proposal.
+- BREAKING: the Proposal list takes `limit` (1 to 100, default 50) for its
+  page size and refuses `top` with `query.invalid` naming `limit`. An
+  ingestion run listing takes `cursor` and answers `nextCursor`, and refuses
+  `after` with `query.invalid` naming `cursor`. Both refusals come after the
+  caller's authority is checked, so an unauthorized caller still sees
+  concealment. Record, metadata, statistics and GIS lists keep `$top` and
+  `$skiptoken`. The Rust `BRegProposalQuery.top` field is `limit`;
+  `BRegIngestionRunListQuery::after` is `cursor` and
+  `BRegIngestionRunPage::next_after` is `next_cursor`; the Node.js and Python
+  clients take `cursor` and return `nextCursor`.
+- `bregctl dev` pulls the same pinned PostgreSQL image from Docker Hub after
+  ECR Public throttled hosted development journeys. Existing owned containers
+  at the prior exact ECR reference remain valid.
+- BREAKING: projects declare `recordTypes` and Actions. Immediate Actions
+  commit their plan in one transaction; durable Proposals freeze the same plan
+  for inspection, optional Review, and independently authorized application.
+  The old entity-backed change-request model and its routes are removed.
+  Build packages from the current project format and apply them to a fresh
+  database. This baseline provides no compatibility layer or state migration
+  for the removed contracts.
+- BREAKING: Rust, Node.js and Python clients use standalone Proposal methods.
+  In Node, `immediateActions` and `selectImmediateAction` become `actions` (with
+  a declared mode) and `selectAction`; Action `contractFingerprint` becomes
+  `revision`, and BReg-owned `Entity` identifiers become `RecordType` identifiers.
+  Replace lifecycle methods with `startProposal`, `prepareProposal`,
+  `executeProposal` and `recoverProposal`; replace request attachments with
+  `uploadProposalAttachment`, `downloadProposalAttachment` and
+  `deleteProposalAttachment`. Request history is replaced by explicit
+  `getProposal` and `listProposals` observations. Rust and Python expose the
+  corresponding snake-case methods. Recovery requires a fresh authorized
+  Proposal read. See the [Node client](../../crates/registry-breg-client-node/README.md#standalone-proposals)
+  and [Python client](../../crates/registry-breg-client-py/README.md#standalone-proposals)
+  for the replacement flows.
+- BReg metadata uses version 2 and describes each profile's Proposal operations,
+  readable inputs and governed document-slot requirements. The client refuses
+  older metadata versions; regenerate packages and update clients together.
+- Review context can project a declared supporting document without granting
+  ordinary Proposal Get. Downloads use the frozen submission's bytes and
+  recheck current context disclosure, verification and retention. Review status
+  exposes the accepted provider `requestId` for independently authorized
+  history and notes reads; human context does not expose that ID.
+- `bregctl dev` seeds and retained example results use `recordType`. Removed
+  authoring keys name their replacements, and model inspection includes each
+  field's compiled `fieldType`, including fields absent from query projections.
+- Review policies select the provider's current policy by ID by default. An
+  optional complete version and digest pin requires an exact policy. Once
+  accepted, a Review keeps its exact policy and frozen submission identity
+  across retries and recovery.
+- Filtered, sorted lists use declared indexes under `recordTypes[].indexes`.
+  The compiler appends the record ID to each index, so an index accepts at
+  most 31 authored fields. Source views allow the PostgreSQL planner to reach
+  those indexes while row-level security continues to enforce disclosure.
+  Index fields matching equality filters followed by the sort field support
+  indexed continuation; a range or `in` filter on a leading field can still
+  require a sort for each page.
 - `bregctl dev` requests local client tokens for the resource that
   `issuer.clientResources` assigns to that client. Previously, startup requested
   every token for the owner BReg audience, so an owner that registered a client
@@ -54,6 +122,95 @@
   when the published key declares `use: sig`, lists `verify` alone if it lists
   `key_ops`, and carries no private member. The pinned ThunderID 1.0.1 issuer
   publishes such keys, so an existing local session starts as before.
+- BREAKING: a Proposal lifecycle event's `subject.recordReference` is the
+  Proposal's resource path, `/v1/proposals/{id}`, instead of a hashed
+  reference. Record events keep their hashed reference. A receiver that
+  matched Proposal events by the hashed value matches the path instead.
+- BREAKING: `applicationStatus.recovery` is `retry` or `correct-input`.
+  The never-emitted `refresh` and `receipt-only` values are removed from the
+  schema and from the Rust `BRegApplicationRecoveryHint` and Node.js types;
+  a document carrying either is refused as malformed. Apply, Retry and Revise
+  link availability keeps both values.
+- BREAKING: under required Review, `applicationStatus.state` reads
+  `awaiting-review` until an approved result exists, in both application
+  modes. `application-refused` now means only that an executor refused the
+  frozen effects. A changes-requested or provider-ended Review is reported by
+  the `apply` link's availability as `review-changes-requested` or
+  `review-ended`, each with the new recovery `revise`. `applicationStatus.recovery` no longer lists the never-emitted
+  `terminal`. The Rust, Node.js and Python clients and the generated project
+  SDKs accept the new values; update clients with the server.
+- BREAKING: a Review that rejects a Proposal's current submission ends the
+  Proposal. It moves to the terminal state `rejected` in the transaction that
+  records the result, with a `rejected` lifecycle event whose `authorityKind`
+  is `review`. Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer
+  409 `proposal.rejected`, including after a package activation changes the
+  Action revision, and each command link reads `review-rejected` with
+  recovery `receipt-only`. An attachment upload or removal is an Edit and
+  answers the same with either attachment storage. The OpenAPI documents
+  declare 409 on every Proposal command and attachment write.
+  `applicationStatus.state` reads `rejected`. A changes-requested result keeps
+  the Proposal `submitted` and revisable and records a `review-returned`
+  event. Proposal `state`, event `transition` and `authorityKind`, and the
+  Rust, Node.js and Python client types accept the new values. Migration: a
+  client that waited for Revise after a rejection starts a new Proposal
+  instead; a receiver that switches on `transition` or `authorityKind` adds
+  the new values.
+- BREAKING: every Proposal document and lifecycle event carries `turn`:
+  `party`, `official` or `nobody`, whose move the Proposal waits on, derived
+  when it is read and never stored. `turn` is required in the Proposal
+  document and Proposal event schemas. `GET /v1/proposals?turn=party` (or `official`, `nobody`) lists only
+  Proposals with that turn, and `state=rejected` lists rejected ones; any
+  other value is concealed like every malformed list query. A page may hold
+  fewer than `limit` items, so keep paging while `nextCursor` is present.
+  The Rust `BRegProposalQuery` gains `turn`. Migration: a receiver that
+  validates Proposal events against a pinned copy of the schema refreshes it.
+- Proposal Get, each Proposal in a list, and the per-version submission read
+  carry `decision` once the reviewer decided the submission: `status`,
+  `decidedAt` and, when the reviewer wrote one for the subject,
+  `publicReason`. It is read through the review protocol's result type, and
+  the public reason is the only reviewer text BReg serves. A read that serves
+  a public reason records a fixed `proposal-review-public-reason` marker in
+  its audit entry, never the text. Lifecycle command responses omit
+  `decision`.
+- The `apply` link's availability tells the truth about Reviews that cannot
+  approve the current submission: an approval past its `availableUntil`, an
+  `answered` result, and a review submission that failed for good read
+  `review-ended` with recovery `revise` instead of `pending-review` with
+  `refresh`. While delivery or result lookup is failing it reads
+  `dependency-outage` with recovery `retry`. When Revise is the recovery, the
+  Retry link reports the same reason instead of `invalid-input`.
+- BREAKING: Apply, Retry and Revise link availability no longer lists the
+  never-emitted recovery `terminal`. It is removed from the schema, the Rust
+  `BRegRecoveryHint`, and the Node.js and Python types; a document carrying it
+  is refused as malformed. Migration: drop any `terminal` branch; a rejected
+  Proposal reads `receipt-only`.
+- The Rust, Node.js and Python clients read one submitted version with
+  `read_proposal_submission` (`readProposalSubmission` in Node.js), which
+  follows the Proposal's self link and decodes `decision`, and a lapsed
+  version's 410 `proposal.submission_expired` as a Problem. The client
+  capability inventory names it and the `limit` and `turn` list options.
+- The per-version submission read's 410 audits a result count of zero, not a
+  one-record read.
+- BREAKING: `bregctl explain lifecycle` answers
+  `breg/lifecycle-explanation/v1alpha6`, which adds the `rejected` state, the
+  `reject` transition from `submitted`, and its `review-authority-result`
+  enforcement. `bregctl explain events` answers
+  `breg/events-explanation/v1alpha6`, whose Proposal transition selection adds
+  `rejected` and `review-returned`; a Proposal hook may select either.
+  Migration: select the `v1alpha6` schema for both formats.
+- `bregctl dev` verifies the webhook deliveries it receives with the shared
+  hooks receiver, the verifier the clients use, and keeps only its local
+  checks of content type, event id, time, generation and attempt.
+- Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
+  queued, applying or blocked automatic application job in the same
+  transaction, so the job reads `cancelled` instead of remaining inert queued
+  work the worker can never claim. Installation widens the job state check on
+  an existing database.
+- The Python client exposes `verify_webhook_delivery`, the shared Rust webhook
+  verifier the Node client already offers, with keyword-only `method`, `path`,
+  `headers`, `body` and `key`. Refusal raises `BaseRegistryClientError` with
+  kind `webhook-verification`. The durable receiver example verifies with it
+  instead of its own HMAC code.
 
 ## 0.41.0 - 2026-10-13
 

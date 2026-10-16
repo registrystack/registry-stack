@@ -1,7 +1,7 @@
 # Base Registry Engine Rust client
 
-`registry-breg-client` is the canonical bounded Rust client for Base Registry
-Engine. Its public API uses the BReg technical family and the
+`registry-breg-client` is the canonical bounded Rust client for
+Base Registry Engine (BReg). Its public API uses the BReg technical family and the
 `BaseRegistryClient` entry point.
 
 One method performs one explicitly initiated HTTP exchange, except that a
@@ -35,7 +35,7 @@ loopback HTTP. Credentials, queries, fragments, and ambiguous empty path
 segments are refused at construction.
 
 Health and readiness never acquire a token. Caller-filtered OpenAPI, metadata,
-schemas, record operations, and lifecycle actions may use one configured token.
+schemas, record operations, Actions, and Proposals may use one configured token.
 
 When a service forwards a human access token, derive a caller-scoped client
 instead of constructing another transport:
@@ -113,21 +113,19 @@ writes. Relationship methods take the entity route, source-record UUID, and path
 route independently. Temporal and relationship requests reject bbox combinations.
 
 Parsed metadata retains selectors, read paths, vocabulary labels, reference
-operations, actions, change-request capabilities, and optional caller-filtered
+operations, Actions, Proposal capabilities, and optional caller-filtered
 statistical dataset descriptions. `BRegMetadata::statistical_datasets()` returns
 validated inert JSON; release-only readers can receive these descriptions with
 no entities or entity operations. Descriptions grant no entity authority.
-`select_immediate_action`, `select_batch`, and `select_tombstone`
+`select_action`, `select_batch`, and `select_tombstone`
 require complete executable contracts bound to the source, profile, and package.
-Every operation lists its `readableRequestFields`, empty when the selected
-profile holds no request metadata grant; metadata without it is refused. A
-descriptor the engine does not serve is absent, and an absent executable contract
-produces an unsupported selection error. Metadata decoding ignores unknown object
-members while retaining duplicate-member and resource-bound refusals. An unknown
+A descriptor the engine does not serve is absent, and an absent executable
+contract produces an unsupported selection error. Metadata decoding ignores
+unknown object members while retaining duplicate-member and resource-bound refusals. An unknown
 `requiredCapabilities` value disables only the operation that names it.
 Well-formed unsupported statistical vocabulary omits only the affected dataset;
-unsupported descriptive change-request, selector, or spatial vocabulary omits
-only that capability. An unsupported temporal mode keeps its `temporal`
+unsupported descriptive selector or spatial vocabulary omits only that
+capability. An unsupported temporal mode keeps its `temporal`
 descriptor as served and uninterpreted, because null already means the
 collection is not temporal. Unsupported executable vocabulary remains inert until
 exact selection. Known field shapes, references, identities, and disclosure grants
@@ -149,13 +147,13 @@ checks it against compiled OpenAPI and Rust, Node, and Python entry points.
 BReg uses the neutral `registry-record` DTOs for ordinary JSON and JSON-LD
 Registry Record responses. The shared decoder rejects duplicate JSON members,
 unknown envelope members, invalid identifiers, and inconsistent collection
-metadata. BReg-specific response metadata, ETags, operations, and lifecycle
-extensions remain in this crate.
+metadata. BReg-specific response metadata, ETags, and operations remain in this
+crate. Standalone Proposals have their own response contract.
 
-## Writes and lifecycle actions
+## Writes and Actions
 
 Fetch caller-filtered Registry Metadata before selecting an exact direct-write
-or lifecycle binding. A write binding is executable only when its method,
+or Action binding. A write binding is executable only when its method,
 route, request contract, operation kind, capabilities, registry, primary
 dataset, entity, profile, revision, and client origin form a complete known
 contract.
@@ -180,7 +178,7 @@ fails the same way, so the client never resends them. `action.evidence_failed`
 and `service.unavailable` (503) stay unknown and are resent.
 
 The client resends a keyed mutation (Create, PATCH, attachment upload and
-delete, lifecycle actions, immediate actions, batches, tombstones, and
+delete, Proposal transitions, immediate Actions, batches, tombstones, and
 statistical publication and withdrawal) whose outcome is unknown, with the
 same key, headers, and body bytes, at most twice by default, waiting 250 ms
 and then 500 ms, or the service's `Retry-After` when that is longer and at
@@ -200,56 +198,77 @@ attempt left no effect, so the client then returns the earlier unknown-outcome
 error instead of the refusal.
 
 BReg keeps a key spent for good but holds its response only for the receipt
-horizon (`idempotency.receiptRetentionDays`, 7 days by default). The same
+horizon (`retention.receiptRetentionDays`, 7 days by default). The same
 request under the same key after that horizon gets `idempotency.expired`
 (410) and does not run again: an earlier attempt committed and its response is
 gone. `is_outcome_unknown()` is false for it and the client never resends it;
 read the resource to learn its current state.
 
-The lifecycle is source-owned and exposes only Submit, Revise, Cancel, and
-Apply. `action.with_reason("Applied after external approval.")?` returns a copy
-of an Apply action carrying optional recorded text. Text is preserved exactly,
-including empty strings and whitespace; the limit is 4096 Unicode characters
-and NUL is refused. Submit, Revise, and Cancel refuse reasons. Persist the
-prepared action after adding its reason, and reuse the same action and
-idempotency key for an explicit retry.
+`select_action` selects an Action's declared immediate or Proposal mode.
+Immediate Actions use `invoke_action`; Proposal-mode Actions use
+`start_proposal`. Proposal transitions are promoted from an authorized
+`BRegProposal`, separately from ordinary Registry Record writes. Their
+conditions are not record ETags. Read the current Proposal before choosing a
+new transition; recover an uncertain command from its original prepared bytes.
 
-`retained_history()` returns one strict typed `BRegRetainedRequestHistoryPage`.
-Each proposal carries its exact request identity, proposal version, optional
-application identity, caller-visible result count, and inert result references.
-`find_application` selects only an exact identity already present on that page.
-It performs no I/O. An absent page is distinct from a loaded proposal whose
-visible result list is empty. Follow `next_after_proposal_version` explicitly
-with `request_history_after_proposal_version`.
+Application result references grant no target authority. Read a target through
+an ordinary authorized `get_record`; a retained result revision records
+application provenance, not the target's current revision or write condition.
 
-Result references grant no target authority. Read a target through an ordinary
-authorized `get_record`; the retained target revision is application provenance,
-not the target's current revision, ETag, or a write precondition. Debug output
-redacts request and target identifiers.
+## Standalone Proposal observation
 
-`BRegRequestMetadata::proposal()` exposes the strict frozen review requirement.
-When external review is required, `BRegRequestMetadata::review()` exposes the
-bounded submission, result, delivery, application, and recovery status needed
-for correlation and operations. It carries no reviewer, decision reason, or
-review payload, and cannot grant Apply authority.
+A Proposal-mode Action uses `start_proposal` with a
+`BRegActionInvocationRequest` to create a draft. `prepare_proposal` and
+`execute_proposal` send its promoted `edit`, `submit`, `revise`, `rebase`,
+`retry`, `cancel`, or `apply` transition only when available to the caller.
+Submit freezes the exact submission. Apply carries `submissionVersion` and
+`effectDigest`, with optional `reason` text of at most 4096 Unicode characters
+and no NUL. Persist `BRegPreparedProposal` before dispatch; after restart,
+`recover_proposal` restores the original condition, body and key under current
+ordinary authority. A later status read does not recover an uncertain command.
 
-Lifecycle action ETags are not interchangeable with record ETags. After a
-success or refusal, refetch the record before deciding which transition is
-currently available.
+Recovery requires a freshly authorized Proposal observation, obtained with Get
+or as an item from List, and a matching transition or receipt-only recovery link.
+The Get flow needs a current `get` grant; an authorized List item can also supply
+the observation. Losing all such read access, including access to a current
+target row, prevents recovery by that caller. Preserve the evidence for an
+authorized operator; do not infer failure or submit the mutation under a new key.
 
-`BRegLifecycleActionReceipt::to_value()` returns the exact validated receipt
-projection for durable attempt and accountability storage. It includes the
-source record identifier, revision, snapshot reference, and request outcome,
-and contains no access token or record fields.
+Use `select_proposal_get` on the current `registry_contract`, then use
+`get_proposal` for an authorized representation. Its optional `applicationStatus`
+reports the retained frozen submission's awaiting-review, pending, applying,
+blocked, applied or cancelled state, with closed recovery reasons and bounded
+automatic retry progress. A review outcome is never an application reason: the
+`apply` link's availability reports `review-rejected`,
+`review-changes-requested` or `review-ended`, each with recovery `revise`. Applied state includes the separate exact application evidence. Match
+Proposal ID, Action revision, submission version and effect digest before using
+that evidence to continue a dependent workflow. A blocked state does not claim
+that application can never occur.
+
+Automatic recovery Apply and Retry require an explicit current grant and a
+verified human caller. An observing service gains no recovery authority.
+The built-in executor uses its own governed system grant.
+
+`select_proposals` and `list_proposals` read one bounded page; advance its
+cursor explicitly. `read_proposal_review_status` and
+`read_proposal_review_context` use the Proposal's separately promoted review
+links. `upload_proposal_attachment`, `download_proposal_attachment`, and
+`delete_proposal_attachment` use its governed slot links, not record fields.
+Mutation receipts retain the selected slot. Disclosed upload metadata must match
+those exact bytes, media type and length; deletion must not retain a disclosed
+value. Get and readable-attachment grants are separate from write authority, so a
+successful write may omit value metadata. An omitted value does not independently
+prove its stored content. An invalid receipt leaves the mutation outcome unknown;
+retain the original condition, bytes and key for same-command recovery.
 
 ## Response security
 
 Before returning a body, the client enforces bounded headers and body, exactly
 one canonical lower-case W3C Trace Context v0 `traceparent`, BReg's exact
 response media type, and a strict BReg Problem envelope. Registry Metadata
-and lifecycle JSON are decoded with strict duplicate-member rejection. Storage-pattern
+and Proposal JSON are decoded with strict duplicate-member rejection. Storage-pattern
 conflicts preserve the `MutationConflict` classification; their optional paired
-`entityId` and `fieldId` members are bounded, validated and discarded. An
+`recordType` and `fieldId` members are bounded, validated and discarded. An
 optional `fieldPath` is retained only after it matches BReg's closed grammar and
 the known problem code that permits that location. Unknown object members are
 ignored after duplicate rejection; recognized extensions on known codes retain
@@ -271,34 +290,27 @@ transport error chains.
 
 ### Explicit recovery across process restarts
 
-`prepare_create` and `prepare_lifecycle_action` return inert bounded evidence
-with `as_bytes()` and `from_slice()`. Persist it in an owner-only file before
-sending the mutation. Create evidence contains the request values. Lifecycle
-evidence contains only the authority, record and action binding needed to
-reconstruct the exact request; it omits record fields, proposal, external-review
-status, and history. Both forms contain the caller's idempotency
-key, have redacted Debug representations, and contain no tokens.
+`prepare_create` returns inert bounded `BRegPreparedCreate` evidence with
+`as_bytes()` and `from_slice()`. Persist it in an owner-only file before sending
+the mutation. It contains the request values and caller's idempotency key, has
+a redacted Debug representation, and contains no token.
 
 After restart, fetch caller-filtered `registry_contract` again under the same
-principal and selected profile. Select the current Create binding or lifecycle
-authority, then call `recover_create` or `recover_lifecycle_action`. Recovery
-requires the same source and registry revision and revalidates the original
-request against that authority before returning the request/action and original
-key for an explicitly initiated send. Never replace an uncertain action with a
-newly advertised action. Lifecycle recovery retains the original record and
-action binding, so an applied request whose current record no longer advertises
-Apply can still replay the original precondition and body. Use a current
-authorized read for external-review status. The runtime remains responsible for current authorization,
-preconditions, and exact idempotency replay.
+principal and selected profile. Select the current Create binding, then call
+`recover_create`. Recovery requires the same source and registry revision and
+revalidates the original request against that authority before returning the
+request and original key
+for an explicitly initiated send. The runtime remains responsible for current
+authorization, preconditions, and exact idempotency replay.
 
-For immediate actions, Rust callers use `prepare_action` before the first
-`invoke_action`, then retain `BRegPreparedAction` bytes in the same protected
+For Actions, Rust callers use `prepare_action` before the first `invoke_action`
+or `start_proposal`, then retain `BRegPreparedAction` bytes in the same protected
 attempt. After reacquiring metadata under the same principal and profile,
 `recover_action` requires the original inputs and idempotency key and restores
 the exact opaque target-condition tokens and invocation bytes. It performs no
-network exchange and never acquires replacement conditions. `invoke_action`
-remains the explicit send, including after recovery. The saved bytes contain
-input values and must be treated as private application state.
+network exchange and never acquires replacement conditions. `invoke_action` or
+`start_proposal` remains the explicit send, including after recovery. The saved
+bytes contain input values and must be treated as private application state.
 
 These APIs do not authenticate saved evidence or bind a token provider to a
 principal. The application must protect its state and bind attempts to its exact
@@ -309,14 +321,12 @@ Opaque authority handles are never deserialized from saved state.
 `record_revisions(route, id, profile)` retrieves at most the newest 100 retained
 revisions as inert JSON bytes over the native `/revisions` route. There is no
 revision-list continuation. `get_record_revision` retrieves one retained revision
-as inert JSON bytes. Proposal history has a separate pagination contract: read
-`request.history.nextAfterProposalVersion`, then pass it to record-get options
-as `request_history_after_proposal_version` until the returned cursor is null.
+as inert JSON bytes. Standalone Proposal listing uses the separate
+`select_proposals` and `list_proposals` contract.
 
-`BRegMetadataOperation::query()` retains typed caller-filtered query capabilities,
-including the request workflow filter fields advertised by the runtime. Field
-labels, entity labels, and title fields are descriptive hints and do not create
-operation authority. `decode_exact_json` decodes bounded JSON with duplicate
+`BRegMetadataOperation::query()` retains typed caller-filtered query
+capabilities. Field labels, entity labels, and title fields are descriptive
+hints and do not create operation authority. `decode_exact_json` decodes bounded JSON with duplicate
 refusal and rejects literals that would silently round. Mutation builders retain
 the server's additional integer restrictions. The Node facade offers explicit
 JSON text input and result methods for values outside JavaScript's safe range.

@@ -687,10 +687,10 @@ thread_local! {
 /// first use and routes each record to the buffer of the thread that emitted
 /// it; records from threads without a buffer are dropped. The attempt and the
 /// stub run on this test's current-thread runtime, so its records land here.
-struct Captured(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
 
 impl Captured {
-    fn install() -> Self {
+    pub(crate) fn install() -> Self {
         static INSTALLED: std::sync::Once = std::sync::Once::new();
         INSTALLED.call_once(|| {
             tracing::subscriber::set_global_default(
@@ -707,7 +707,7 @@ impl Captured {
         Self(buffer)
     }
 
-    fn finish(self) -> String {
+    pub(crate) fn finish(self) -> String {
         CAPTURE.with(|slot| *slot.borrow_mut() = None);
         String::from_utf8(self.0.lock().expect("captured lock").clone()).expect("utf-8 logs")
     }

@@ -2,6 +2,169 @@
 
 ## Unreleased
 
+- BREAKING: every `ReviewDecisionReceipt` names the policy `outcome` its
+  decision selected; the field is required in the OpenAPI document and the
+  Rust, Node.js and Python clients, and a client refuses a receipt without
+  one. `outcomeLabel` stays optional.
+- BREAKING: the Casework project format aligns with the cross-product
+  configuration conventions. `caseworkctl check` and the runtime refuse every
+  old spelling at its path, name the replacement, and point at its row in the
+  format table below; there is no migration command. The served review
+  policy takes the same names: `ReviewPolicy`, `ReviewPolicyClosure`, the
+  served clocks and routing, and the trusted producer in its dependencies.
+  The identifier-keyed maps of row F4 are a configuration shape only: served
+  policies keep arrays, listed in identifier order, and reordering a map
+  changes neither the served policy nor its digest. Outcomes, clock
+  reminders, review policies, context providers and task templates are
+  therefore listed in identifier order rather than authored order. Stages,
+  routing rules and clock steps stay lists.
+
+  | Row | Before | After |
+  | --- | --- | --- |
+  | F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
+  | F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
+  | F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
+  | F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, `reviewPolicies`, `contextProviders`, `taskTemplates`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
+  | F5 | `type: activity` | `type: stage` |
+  | F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
+  | F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |
+  | F8 | `atRisk: {workingDaysBefore: N}`, reminder `workingDaysBefore: N` | `atRisk: {before: {workingDays: N}}`, `reminders: {REMINDER_ID: {before: {workingDays: N}}}` |
+  | F9 | routing `when: {activity: review}` | removed; a rule applies whenever a task is created, and one naming a `stage` matches only that stage's tasks |
+
+  Rows F1, F2, F3, F5, F6, F7, F8 and F9 also change the served policy in
+  the OpenAPI document and the Node.js and Python client types: served
+  clocks carry `anchor: {type}`, `after: {hours}` or `{workingDays}`,
+  `atRisk.before.workingDays` and `reminders[].before.workingDays`, no
+  `completeOn`; routing conditions carry no `activity`; policy retention
+  carries `terminalRetentionDays` and `accountabilityRetentionDays`; a served
+  producer carries `retention.receiptRetentionDays` instead of
+  `recoveryDays`. Use a fresh Casework database: pinned policy closures
+  stored in the old shape are not converted.
+- Correction to the v0.34.0 entry on review retention: a subject clock
+  never paused across a changes-requested round. It covers one request, and
+  a resubmission starts a new budget. The unused pause fields
+  (`pausedMilliseconds`, `pauseStartedAt`), the `paused` clock state and its
+  evaluation branch are removed, and `ElapsedBudget.dueAt` is always present.
+  Use a fresh Casework database: the clock occurrence table drops `paused_at`
+  and `paused_seconds`.
+- BREAKING: the trusted producer's review policy list findings read
+  `casework.review-producer.no-policies`, `too-many-policies`,
+  `invalid-policy` and `duplicate-policy` instead of `no-kinds`,
+  `too-many-kinds`, `invalid-kind` and `duplicate-kind`, and the refusal of
+  a missing initiator reads "the review policy excludes its initiator". Its
+  receipt retention findings read
+  `casework.review-producer.receipt-retention-out-of-range` and
+  `receipt-retention-exceeds-result-retention` instead of
+  `recovery-days-out-of-range` and `recovery-exceeds-retention`.
+- A repeated stage id or routing rule id within one review policy is
+  refused by the reader as `config.duplicate-id` at the `id` of the second
+  item (CFG-ID-5), before the semantic checks run. The product codes
+  `casework.review-policy.duplicate-stage-id` and
+  `casework.routing.duplicate-rule-id` no longer appear for a project read
+  from a file. Stages and routing rules stay ordered lists. Migration: no
+  file changes; a script that matches either product code must match
+  `config.duplicate-id`.
+- The runtime's readiness check refuses a database holding a retired
+  Casework schema with the same fresh-database instruction that `migrate`
+  gives, instead of reporting its migration ledger as newer than the binary.
+- A stage clock whose due time falls inside a daylight-saving gap on a
+  given date is due at the first instant after the gap, and one inside a
+  fold at the earlier instant, so a due time that passes `check` evaluates on
+  every date instead of failing at runtime.
+- BREAKING: `registry_casework_core::ClockPolicyError` gains
+  `Calendar { at, reason }`, which keeps the calendar's refusal and the clock
+  field it concerns (such as `/reminders/due-soon/before/workingDays`) instead of
+  reporting `Value`, and is no longer `Copy`. The runtime logs that reason
+  before refusing a stored clock it cannot evaluate. `ClockPolicyError::Value`
+  now covers only the wrong clock kind.
+- `caseworkctl dev` pulls the same pinned PostgreSQL image from Docker Hub
+  after ECR Public throttled hosted development journeys. Existing owned
+  containers at the prior exact ECR reference remain valid.
+- Review fixture display preserves JSON null where a policy permits it, such
+  as optional document context fields. Configuration validation stays strict.
+- BREAKING: replace source-owned WorkItems, prepared attempts and source actions
+  with one ReviewPolicy/ReviewRequest/ReviewTask/Decision/ReviewResult model.
+  Requests select a policy by ID, with an optional exact version and digest;
+  accepted requests retain the provider's concrete binding. Context uses `mode`
+  `submitted` or `current-source`. There is no source mutation authority or
+  retired HTTP/CLI compatibility surface. Use a fresh Casework database;
+  retained legacy schemas are refused before mutation, not converted or erased.
+- Keep multi-stage review, independent reviewer thresholds, staffing, bounded
+  task grants, pinned clocks, audited recovery and retention on ReviewTask.
+  Current-source providers expose only purpose-specific read capabilities.
+- Pair native BReg Proposal context through `caseworkctl provider pair`. BReg
+  consumes the correlated result and applies under its own current authority.
+- Refresh canonical, standalone and advanced examples, typed CLI reports,
+  generated contracts and adopter/operator documentation.
+- Export the shared review submission digest helper through Node and Python
+  clients so producers can use exact admission and recovery without implementing
+  the protocol canonicalizer.
+- BREAKING: task list, next-task and holdings reads complete their bounded scan
+  before sorting and paging, including unfiltered queues. They refuse an
+  exhausted candidate or source-read budget with `review.query-too-broad`
+  instead of returning a partial page. Defaults are 100 candidates, 25 source
+  reads and 2000 ms. Page size and reference filtering do not reduce the scan;
+  size the policy for the expected query or narrow its queue or exact subject.
+  Supervision and own decisions retain their partial-page contract.
+- Caseload preview and apply intentionally move the complete claimed set for
+  one officer, optionally in one queue, with a cap of 100 tasks. They accept no
+  subset or continuation. Individual task assignments remain separate operations.
+  Supervisory discovery intentionally omits holder identities and due dates;
+  it does not replace a team holdings board.
+- A caseload or clock recompute preview must be applied within 15 minutes.
+  An applied preview answers the same result to a retry with the same preview
+  for 24 hours, even after a Directory change, so a lost apply response is
+  recoverable.
+- Authorized ReviewTask reads and supervisory rows expose optional
+  `staffingDiagnostic: no-cover-available` after an assignment or absence
+  recompute finds no eligible cover. Responsibility changes and task closure
+  clear the notice. Remove the unused `AssignmentContext` client export.
+- BREAKING: every decided ReviewResult names the policy outcome it settled
+  on. `outcome` is required on approved, rejected, changes-requested and
+  answered results and absent on cancelled and superseded ones, and approval
+  decision receipts carry the selected outcome. Upgrade Casework and every
+  review producer, including BReg, in the same release: a 0.41 producer
+  refuses approved results that name an outcome, and a current producer
+  refuses a 0.41 approved result that names none.
+- BREAKING: clients sending an approve without an outcome
+  (`{"type":"approve"}`) are refused with 400 `request.invalid`, validation
+  path `$.outcome`, reason `outcome-not-declared`, and the
+  `Registry-Casework-Validation-Allowed` header listing the policy's approval
+  outcomes. Send one of those identifiers, for example
+  `{"type":"approve","outcome":"approved"}`. Policies with
+  `purpose: approval` must declare their approval outcomes (`settlement:
+  approved`); `caseworkctl check` refuses one that declares none.
+- BREAKING: every review policy outcome declares `publicReason: required`,
+  `optional` or `none`, with no default. A decision may carry a bounded
+  `publicReason` (at most 2000 UTF-8 bytes), which the producer receives on
+  the ReviewResult for release to the subject's owner. The private `reason`
+  stays in the accountability record, and the audit journal records only
+  `publicReasonGiven`. A missing required reason is refused with
+  `public-reason-required`, one an outcome does not accept with
+  `public-reason-not-declared`, one over the bound with
+  `maximum-bytes-exceeded` and a blank or control-character one with
+  `text-invalid` at `$.publicReason`; the OpenAPI schema publishes the
+  2000-byte bound.
+- BREAKING: every approval in one stage names the same outcome. An approval
+  naming another outcome than an earlier approval in its stage is refused
+  with 400 `request.invalid`, validation path `$.outcome`, reason
+  `approval-outcome-differs`, and the `Registry-Casework-Validation-Allowed`
+  header naming the outcome already chosen: approve with that outcome, or
+  request changes or reject. The final stage settles the request with that
+  outcome and the public reason of the approval that meets its threshold;
+  earlier stages' outcomes and reasons, and other approvers' public reasons,
+  are kept for accountability and not released.
+- BREAKING: a private `reason` over its 2000-byte bound is refused with
+  `maximum-bytes-exceeded` at `$.reason` instead of `text-invalid`, so the
+  refusal names the bound; a blank or control-character reason still answers
+  `text-invalid`.
+- The Rust client refuses a review-task, holdings, own-decision, supervisory
+  or directory-target page whose `status` is `budget-exhausted` or
+  `source-unavailable` but which carries no `nextCursor`, as a malformed
+  response. The runtime always sends a continuation with a page that stopped
+  early; without one a caller could only restart and repeat the same partial
+  page.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

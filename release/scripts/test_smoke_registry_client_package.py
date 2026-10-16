@@ -19,9 +19,9 @@ NAMESPACES = {
     "breg": (
         "BaseRegistryClient",
         "BaseRegistryClientError",
-        "BRegRequestResultReference",
-        "BRegRetainedRequestProposal",
-        "BRegRetainedRequestHistoryPage",
+        "BRegProposal",
+        "BRegProposalCollection",
+        "BRegProposalPage",
     ),
     "casework": ("CaseworkClient", "CaseworkClientError"),
     "discovery": ("DiscoveryClient", "DiscoveryClientError"),

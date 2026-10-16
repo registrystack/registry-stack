@@ -51,24 +51,10 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(DEV_CLIENTS_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[
-        RemovedKey {
-            pointer: "/version",
-            replacement: "Remove version; apiVersion and kind identify the file.",
-        },
-        RemovedKey {
-            pointer: "/integrations/sources/*/requestTimeoutMilliseconds",
-            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
-        },
-        RemovedKey {
-            pointer: "/integrations/sources/*/connectTimeoutMilliseconds",
-            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
-        },
-        RemovedKey {
-            pointer: "/integrations/sources/*/reconciliationIntervalMilliseconds",
-            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
-        },
-    ],
+    removed_keys: &[RemovedKey {
+        pointer: "/version",
+        replacement: "Remove version; apiVersion and kind identify the file.",
+    }],
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -594,8 +580,8 @@ pub(super) fn against<'a>(
         None if !project.task_templates.is_empty() => vec![ConfigFinding::new(
             "casework.dev-clients.missing-integrations",
             "/integrations",
-            "casework.yaml declares task templates, which need integrations with source bindings and a taskAuthority",
-            "Add integrations with a binding for each source and a taskAuthority.",
+            "casework.yaml declares task templates, which need explicit task authority integrations",
+            "Add integrations.taskAuthority and the exact task-exchange service client.",
         )],
         None => Vec::new(),
     };
@@ -737,12 +723,12 @@ pub(super) fn bind<'a>(
             }
         }
     }
-    for (index, queue) in project.queues.iter().enumerate() {
+    for queue in &project.queues {
         if !clients.directory.iter().any(|team| team.queue == queue.id) {
             found.push(ConfigFinding::new(
                 "casework.dev-clients.unserved-queue",
                 "/directory",
-                format!("no team serves the queue casework.yaml declares at /queues/{index}, so caseworkctl doctor would not report ready"),
+                format!("no team serves the queue casework.yaml declares at /queues/{}, so caseworkctl doctor would not report ready", queue.id),
                 "Add a directory team serving that queue.",
             ));
         }
@@ -772,21 +758,49 @@ pub(super) fn principal(client_id: &str) -> String {
     registry_thunderid_tooling::local::agent_id("casework-local", client_id)
 }
 
-pub(super) fn require_stable_borrowed_principals(policy: &CaseworkProject) -> Result<()> {
-    if policy
-        .access_profiles
-        .iter()
-        .any(|profile| profile.principal_claim == "sub")
-    {
-        return Err(super::DevFailure::BorrowedPrincipalConfiguration {
-            source: anyhow::anyhow!(
-                "principalClaim sub resolves to the owner's subject, not the Casework local subject"
-            )
-            .into(),
+/// Resolve OIDC subjects under the exact retained issuer owner. Custom principal
+/// claims keep their authored meaning; only `sub` follows the borrowed issuer.
+pub(super) fn borrowed_subjects(
+    state: &State,
+    policy: &CaseworkProject,
+) -> Result<BTreeMap<String, String>> {
+    let Some(root) = super::borrowed_issuer(state)? else {
+        return Ok(BTreeMap::new());
+    };
+    let owner: Value =
+        serde_json::from_slice(&private::read(&root.join("state.json"), super::MAX_BYTES)?)?;
+    let namespace = owner["instanceId"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .context("the shared issuer owner has no subject namespace")?;
+    let registered: Value = serde_json::from_slice(&private::read(
+        &root.join("clients.json"),
+        super::MAX_BYTES,
+    )?)?;
+    let mut subjects = BTreeMap::new();
+    for client in &state.clients {
+        if !policy
+            .access_profiles
+            .iter()
+            .any(|profile| profile.id == client.profile && profile.principal_claim == "sub")
+        {
+            continue;
         }
-        .into());
+        if !registered["clients"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == client.id))
+        {
+            return Err(super::DevFailure::registration(anyhow::anyhow!(
+                "shared issuer owner has no client for the requested OIDC subject"
+            ))
+            .into());
+        }
+        subjects.insert(
+            client.id.clone(),
+            registry_thunderid_tooling::local::agent_id(namespace, &client.id),
+        );
     }
-    Ok(())
+    Ok(subjects)
 }
 
 pub(super) fn hex_lower(bytes: &[u8]) -> String {
@@ -837,7 +851,7 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     ] {
         private::directory(&root.join(directory))?;
     }
-    let borrowed = !state.sources.is_empty() || state.issuer_project.is_some();
+    let borrowed = state.issuer_project.is_some();
     let mut local_clients = Vec::new();
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
@@ -929,38 +943,30 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    if let Some(operator) = session_operator(state, clients)? {
-        write_yaml(&root.join("operator.yaml"), &operator)?;
-    }
+    write_yaml(
+        &root.join("operator.yaml"),
+        &session_operator(state, clients)?,
+    )?;
     Ok(())
 }
 
-/// The operator configuration a session writes for its clients, or `None`
-/// when the legacy source bridge writes it after exporting source credentials.
-fn session_operator(state: &State, clients: &Clients) -> Result<Option<Value>> {
-    // Explicit source bindings need a generated runtime for validation even
-    // when the issuer is borrowed.
-    let borrowed = !state.sources.is_empty() || state.issuer_project.is_some();
-    if borrowed && clients.integrations.is_none() {
-        return Ok(None);
-    }
+/// The runtime configuration for this session's explicit clients and provider connections.
+fn session_operator(state: &State, clients: &Clients) -> Result<Value> {
     let mut operator = operator(state);
     if let Some(integrations) = &clients.integrations {
         integrations.operator(state, clients, &mut operator)?;
     }
-    Ok(Some(operator))
+    Ok(operator)
 }
 
 /// Rewrite a retained session's operator configuration from its state, so a
 /// session an earlier release created carries every key this runtime reads.
 /// The session owns this file; its database and records are left in place.
 pub(super) fn refresh_operator(root: &Path, state: &State, clients: &Clients) -> Result<()> {
-    if let Some(operator) = session_operator(state, clients)? {
-        private::replace(
-            &root.join("operator.yaml"),
-            serde_norway::to_string(&operator)?.as_bytes(),
-        )?;
-    }
+    private::replace(
+        &root.join("operator.yaml"),
+        serde_norway::to_string(&session_operator(state, clients)?)?.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -997,25 +1003,6 @@ pub(super) fn database_credentials(root: &Path, state: &State) -> Result<()> {
 /// the session serves.
 pub(super) fn operator(state: &State) -> Value {
     let root = state.root();
-    let sources = state
-        .sources
-        .iter()
-        .filter_map(|(id, source)| {
-            source.binding.as_ref().map(|binding| (id.clone(), json!({
-        "baseUrl": binding.breg_url,
-        "readerProfile": "casework-reader",
-        "tokenEndpoint": binding.token_endpoint,
-        "clientAssertionAudience": state.issuer_origin(),
-        "resource": binding.audience,
-        "scopes": ["casework:source-reader"],
-        "clientIdRef": format!("secret:file/{id}-reader-client-id"),
-        "clientAssertionKeyRef": format!("secret:file/{id}-reader-assertion-key.jwk"),
-        "webhookSecretRef": format!("secret:file/{id}-webhook-key"),
-        "eventSource": binding.event_source,
-        "reconciliationIntervalMilliseconds": 5000
-    })))
-        })
-        .collect::<serde_json::Map<_, _>>();
     json!({
         "apiVersion": registry_casework::RUNTIME_CONFIG_API_VERSION,
         "kind": registry_casework::RUNTIME_CONFIG_KIND,
@@ -1050,7 +1037,7 @@ pub(super) fn operator(state: &State) -> Value {
             "path": root.join("audit/casework.ndjson"),
             "hashKeyRef": "secret:file/casework-audit-key"
         },
-        "sources": sources
+        "contextProviders": {}
     })
 }
 

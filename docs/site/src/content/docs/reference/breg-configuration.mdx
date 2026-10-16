@@ -60,14 +60,14 @@ declared field type and that the condition is valid for the event trigger.
 
 ## Indexes
 
-`entities[].indexes` declares btree indexes by `id` and ordered `fields`. The compiler appends the
+`recordTypes[].indexes` declares btree indexes by `id` and ordered `fields`. The compiler appends the
 record id as the last column of each declared index, because every list orders by the record id
 last; do not declare it. An index declares at most 31 fields: the appended record id takes the last
 of the 32 key columns PostgreSQL allows in an index, and the compiler refuses a longer index with
 `breg.index.fields-too-many`. Every `reference`
 field is indexed automatically unless a declared index or a unique constraint without `when`
 already leads with it. `bregctl check` reports the authoring findings
-`breg.entity.list-unindexed-filter` and `breg.entity.list-unindexed-sort` for a filterable or sortable
+`breg.record-type.list-unindexed-filter` and `breg.record-type.list-unindexed-sort` for a filterable or sortable
 list field that no index leads with. They fail a check only under `--deny-warnings`, and are not
 raised when a package is built.
 
@@ -78,7 +78,7 @@ raised when a package is built.
 
 ## Attachment storage
 
-Portable request entities declare `attachments[]`; deployment storage is selected
+Proposal Actions declare `execution.proposal.attachments[]`; deployment storage is selected
 only in `runtime.yaml`. Omit `attachmentStorage` or use `{type: database}` to keep
 content in PostgreSQL without another service. The optional `type: s3` binding
 requires `endpoint`, `bucket`, `region`, `accessKeyIdRef`, and

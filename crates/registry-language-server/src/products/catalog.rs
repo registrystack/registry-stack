@@ -5,54 +5,52 @@ use super::spec::{DocumentRules, FileRule, NameRule as N, ProductKind, ProductSp
 
 const BREG_DECLARATIONS: &[N] = &[
     N::global("project/id", "BReg registry"),
-    N::global("entities/*/id", "BReg entity"),
-    N::scoped("entities/*/fields/*/id", "BReg field", 1, "id"),
-    N::scoped("entities/*/attachments/*/id", "BReg attachment", 1, "id"),
-    N::scoped("entities/*/attachments/*/id", "BReg field", 1, "id"),
-    N::scoped("entities/*/derived/*/fields/*/id", "BReg field", 3, "id"),
+    N::global("recordTypes/*/id", "BReg record type"),
+    N::scoped("recordTypes/*/fields/*/id", "BReg field", 1, "id"),
+    N::scoped("recordTypes/*/derived/*/fields/*/id", "BReg field", 3, "id"),
     N::scoped(
-        "extendEntities/*/derived/*/fields/*/id",
+        "extendRecordTypes/*/derived/*/fields/*/id",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
-        "entities/*/selectorProfiles/*/id",
+        "recordTypes/*/selectorProfiles/*/id",
         "BReg selector profile",
         1,
         "id",
     ),
-    N::scoped("entities/*/readPaths/*/id", "BReg read path", 1, "id"),
+    N::scoped("recordTypes/*/readPaths/*/id", "BReg read path", 1, "id"),
     N::scoped(
-        "entities/*/accessProfiles/*/id",
-        "BReg entity access profile",
+        "recordTypes/*/accessProfiles/*/id",
+        "BReg record type access profile",
         1,
         "id",
     ),
-    N::scoped("entities/*/indexes/*/id", "BReg index", 1, "id"),
-    N::scoped("entities/*/derived/*/id", "BReg derivation", 1, "id"),
-    N::scoped("extendEntities/*/fields/*/id", "BReg field", 0, "entity"),
+    N::scoped("recordTypes/*/indexes/*/id", "BReg index", 1, "id"),
+    N::scoped("recordTypes/*/derived/*/id", "BReg derivation", 1, "id"),
     N::scoped(
-        "extendEntities/*/selectorProfiles/*/id",
+        "extendRecordTypes/*/fields/*/id",
+        "BReg field",
+        0,
+        "recordType",
+    ),
+    N::scoped(
+        "extendRecordTypes/*/selectorProfiles/*/id",
         "BReg selector profile",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
-        "extendEntities/*/readPaths/*/id",
+        "extendRecordTypes/*/readPaths/*/id",
         "BReg read path",
         0,
-        "entity",
+        "recordType",
     ),
     N::global("actions/*/id", "BReg action"),
     N::scoped("actions/*/inputs/*/id", "BReg action input", 1, "id"),
-    N::scoped("actions/*/effects/*/id", "BReg action effect", 1, "id"),
-    N::scoped(
-        "actions/*/handler/writes/*/id",
-        "BReg action effect",
-        3,
-        "id",
-    ),
+    N::scoped("actions/*/plan/effects/*/id", "BReg action effect", 1, "id"),
+    N::scoped("actions/*/plan/writes/*/id", "BReg action effect", 3, "id"),
     N::global("accessProfiles/*/id", "BReg access profile"),
     N::global("vocabularies/*/id", "BReg vocabulary"),
     N::global("evidenceProviders/*/id", "BReg Evidence provider"),
@@ -61,94 +59,277 @@ const BREG_DECLARATIONS: &[N] = &[
         "BReg recipient organization",
     ),
     N::global("recipients/groups/*/id", "BReg recipient group"),
-    N::global("manifestProjection/datasets/*/id", "BReg dataset"),
+    N::global("datasets/*/id", "BReg dataset"),
+    N::global("valueTypes/$key", "BReg value type"),
+    N::global("functions/*/id", "BReg function"),
+    N::global("reviewAuthorities/*/id", "BReg review authority"),
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/execution/proposal/attachments/*/id",
+            "BReg attachment",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/execution/proposal/reviewContext/fields/$key",
+            "BReg review context field",
+        )
+    },
     N::global("manifestProjection/dataServices/*/id", "BReg data service"),
 ];
 
 const BREG_REFERENCES: &[N] = &[
+    N::global("recordTypes/*/fields/*/typeRef", "BReg value type"),
+    N::global("extendRecordTypes/*/fields/*/typeRef", "BReg value type"),
+    N::global("actions/*/inputs/*/typeRef", "BReg value type"),
+    N::global("actions/*/plan/function", "BReg function"),
+    N::global(
+        "actions/*/execution/proposal/review/authority",
+        "BReg review authority",
+    ),
+    N::global(
+        "accessProfiles/*/permissions/proposals/*/reviewAuthority",
+        "BReg review authority",
+    ),
+    N::global(
+        "accessProfiles/*/permissions/proposals/*/action",
+        "BReg action",
+    ),
+    N::global(
+        "accessProfiles/*/permissions/proposals/*/targets/*/recordType",
+        "BReg record type",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/proposals/*/readableInputs/*",
+        "BReg action input",
+        0,
+        "action",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/proposals/*/readableContextFields/*",
+        "BReg review context field",
+        0,
+        "action",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/proposals/*/readableAttachments/*",
+        "BReg attachment",
+        0,
+        "action",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/proposals/*/writableAttachments/*",
+        "BReg attachment",
+        0,
+        "action",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/records/*/readPaths/*/path",
+        "BReg read path",
+        0,
+        "recordType",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/proposals/*/targets/*/rowBoundaries/*/field",
+        "BReg field",
+        0,
+        "recordType",
+    ),
+    N {
+        scope: Scope::BregAction,
+        ..N::global("actions/*/plan/inputs/*", "BReg action input")
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/plan/effects/*/target/fromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/plan/writes/*/target/fromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/commitGuards/targets/*/input",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/commitGuards/targets/*/equalsFromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/execution/proposal/reviewContext/fields/*/input",
+            "BReg action input",
+        )
+    },
+    N::global(
+        "actions/*/execution/proposal/reviewContext/fields/*/recordType",
+        "BReg record type",
+    ),
+    N::scoped(
+        "actions/*/execution/proposal/reviewContext/fields/*/fields/*",
+        "BReg field",
+        0,
+        "recordType",
+    ),
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/commitGuards/evidence/*/subjects/*/selectors/*/input",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/commitGuards/evidence/*/requires/*/equalsFromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregInputTarget("input"),
+        ..N::global("actions/*/commitGuards/targets/*/field", "BReg field")
+    },
+    N {
+        scope: Scope::BregInputTarget("input"),
+        ..N::global(
+            "actions/*/execution/proposal/reviewContext/fields/*/field",
+            "BReg field",
+        )
+    },
+    N {
+        scope: Scope::BregInputTarget("input"),
+        ..N::global(
+            "actions/*/commitGuards/evidence/*/subjects/*/selectors/*/field",
+            "BReg field",
+        )
+    },
+    N {
+        scope: Scope::BregTarget,
+        ..N::global("actions/*/plan/effects/*/clear/*", "BReg field")
+    },
+    N::scoped("recordTypes/*/display/titleField", "BReg field", 0, "id"),
+    N::global(
+        "actions/*/commitGuards/evidence/*/provider",
+        "BReg Evidence provider",
+    ),
     N::global("modules/*/id", "BReg module"),
     N::global("dependencies/*", "BReg module"),
-    N::global("extendEntities/*/entity", "BReg entity"),
-    N::global("entities/*/fields/*/target", "BReg entity"),
-    N::global("entities/*/fields/*/vocabulary", "BReg vocabulary"),
-    N::global("extendEntities/*/fields/*/target", "BReg entity"),
-    N::global("extendEntities/*/fields/*/vocabulary", "BReg vocabulary"),
+    N::global("extendRecordTypes/*/recordType", "BReg record type"),
+    N::global("recordTypes/*/fields/*/target", "BReg record type"),
+    N::global("recordTypes/*/fields/*/vocabulary", "BReg vocabulary"),
+    N::global("extendRecordTypes/*/fields/*/target", "BReg record type"),
+    N::global("extendRecordTypes/*/fields/*/vocabulary", "BReg vocabulary"),
     N {
         reports_unresolved: false,
-        ..N::global("entities/*/primaryDataset", "BReg dataset")
+        ..N::global("recordTypes/*/primaryDataset", "BReg dataset")
     },
     N::scoped(
-        "entities/*/selectorProfiles/*/fields/*",
-        "BReg field",
-        2,
-        "id",
-    ),
-    N::scoped("entities/*/constraints/*/fields/*", "BReg field", 2, "id"),
-    N::scoped("entities/*/constraints/*/left", "BReg field", 1, "id"),
-    N::scoped("entities/*/constraints/*/right", "BReg field", 1, "id"),
-    N::scoped("entities/*/constraints/*/field", "BReg field", 1, "id"),
-    N::scoped("entities/*/constraints/*/startField", "BReg field", 1, "id"),
-    N::scoped("entities/*/constraints/*/endField", "BReg field", 1, "id"),
-    N::scoped(
-        "entities/*/constraints/*/scopeFields/*",
+        "recordTypes/*/selectorProfiles/*/fields/*",
         "BReg field",
         2,
         "id",
     ),
     N::scoped(
-        "entities/*/constraints/*/when/*/field",
+        "recordTypes/*/constraints/*/fields/*",
+        "BReg field",
+        2,
+        "id",
+    ),
+    N::scoped("recordTypes/*/constraints/*/left", "BReg field", 1, "id"),
+    N::scoped("recordTypes/*/constraints/*/right", "BReg field", 1, "id"),
+    N::scoped("recordTypes/*/constraints/*/field", "BReg field", 1, "id"),
+    N::scoped(
+        "recordTypes/*/constraints/*/startField",
+        "BReg field",
+        1,
+        "id",
+    ),
+    N::scoped(
+        "recordTypes/*/constraints/*/endField",
+        "BReg field",
+        1,
+        "id",
+    ),
+    N::scoped(
+        "recordTypes/*/constraints/*/scopeFields/*",
+        "BReg field",
+        2,
+        "id",
+    ),
+    N::scoped(
+        "recordTypes/*/constraints/*/when/*/field",
         "BReg field",
         3,
         "id",
     ),
-    N::scoped("entities/*/indexes/*/fields/*", "BReg field", 2, "id"),
-    N::global("entities/*/readPaths/*/through", "BReg entity"),
-    N::global("entities/*/readPaths/*/to", "BReg entity"),
-    N::scoped("entities/*/geojson/geometryField", "BReg field", 0, "id"),
-    N::scoped("entities/*/temporal/startField", "BReg field", 0, "id"),
-    N::scoped("entities/*/temporal/endField", "BReg field", 0, "id"),
-    N::scoped("entities/*/temporal/scopeFields/*", "BReg field", 0, "id"),
+    N::scoped("recordTypes/*/indexes/*/fields/*", "BReg field", 2, "id"),
+    N::global("recordTypes/*/readPaths/*/through", "BReg record type"),
+    N::global("recordTypes/*/readPaths/*/to", "BReg record type"),
+    N::scoped("recordTypes/*/geojson/geometryField", "BReg field", 0, "id"),
+    N::scoped("recordTypes/*/temporal/startField", "BReg field", 0, "id"),
+    N::scoped("recordTypes/*/temporal/endField", "BReg field", 0, "id"),
     N::scoped(
-        "entities/*/accessProfiles/*/readableFields/*",
+        "recordTypes/*/temporal/scopeFields/*",
+        "BReg field",
+        0,
+        "id",
+    ),
+    N::scoped(
+        "recordTypes/*/accessProfiles/*/readableFields/*",
         "BReg field",
         2,
         "id",
     ),
     N::scoped(
-        "entities/*/accessProfiles/*/writableFields/*",
+        "recordTypes/*/accessProfiles/*/writableFields/*",
         "BReg field",
         2,
         "id",
     ),
     N::scoped(
-        "entities/*/accessProfiles/*/filterableFields/*",
+        "recordTypes/*/accessProfiles/*/filterableFields/*",
         "BReg field",
         2,
         "id",
     ),
     N::scoped(
-        "entities/*/accessProfiles/*/sortableFields/*",
+        "recordTypes/*/accessProfiles/*/sortableFields/*",
         "BReg field",
         2,
         "id",
     ),
     N::scoped(
-        "entities/*/accessProfiles/*/rowBoundaries/*/field",
+        "recordTypes/*/accessProfiles/*/rowBoundaries/*/field",
         "BReg field",
         3,
         "id",
     ),
     N::global(
-        "accessProfiles/*/permissions/entities/*/entity",
-        "BReg entity",
+        "accessProfiles/*/permissions/records/*/recordType",
+        "BReg record type",
     ),
     N::global(
         "accessProfiles/*/permissions/actions/*/action",
         "BReg action",
     ),
     N::global(
-        "accessProfiles/*/permissions/actions/*/targets/*/entity",
-        "BReg entity",
+        "accessProfiles/*/permissions/actions/*/targets/*/recordType",
+        "BReg record type",
     ),
     N::scoped(
         "accessProfiles/*/permissions/actions/*/results/*",
@@ -157,69 +338,73 @@ const BREG_REFERENCES: &[N] = &[
         "action",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/entities/*/readableFields/*",
+        "accessProfiles/*/permissions/records/*/readableFields/*",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/entities/*/writableFields/*",
+        "accessProfiles/*/permissions/records/*/writableFields/*",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/entities/*/filterableFields/*",
+        "accessProfiles/*/permissions/records/*/filterableFields/*",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/entities/*/sortableFields/*",
+        "accessProfiles/*/permissions/records/*/sortableFields/*",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/entities/*/rowBoundaries/*/field",
+        "accessProfiles/*/permissions/records/*/rowBoundaries/*/field",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
     N::scoped(
         "accessProfiles/*/permissions/actions/*/targets/*/rowBoundaries/*/field",
         "BReg field",
         0,
-        "entity",
+        "recordType",
     ),
-    N::global("actions/*/inputs/*/target", "BReg entity"),
+    N::global("actions/*/inputs/*/target", "BReg record type"),
     N::global("actions/*/inputs/*/vocabulary", "BReg vocabulary"),
-    N::global("actions/*/effects/*/target/entity", "BReg entity"),
-    N::global("actions/*/handler/writes/*/target/entity", "BReg entity"),
-    N::scoped(
-        "actions/*/handler/writes/*/fields/*",
-        "BReg field",
-        0,
-        "target.entity",
+    N::global(
+        "actions/*/plan/effects/*/target/recordType",
+        "BReg record type",
     ),
-    N::scoped(
-        "actions/*/effects/*/set/$key",
-        "BReg field",
-        0,
-        "target.entity",
+    N::global(
+        "actions/*/plan/writes/*/target/recordType",
+        "BReg record type",
     ),
-    N::scoped(
-        "actions/*/effects/*/set/*/fromField",
-        "BReg action input",
-        4,
-        "id",
-    ),
-    N::scoped(
-        "actions/*/effects/*/set/*/fromEffect",
-        "BReg action effect",
-        4,
-        "id",
-    ),
+    N {
+        scope: Scope::BregTarget,
+        ..N::global("actions/*/plan/writes/*/fields/*", "BReg field")
+    },
+    N {
+        scope: Scope::BregTarget,
+        ..N::global("actions/*/plan/effects/*/set/$key", "BReg field")
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/plan/effects/*/set/*/fromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/plan/effects/*/set/*/fromEffect",
+            "BReg action effect",
+        )
+    },
     N::global("manifestProjection/accessProfile", "BReg access profile"),
     N::global(
         "manifestProjection/dataServices/*/servesDatasets/*",
@@ -240,128 +425,112 @@ const BREG_FILES: &[FileRule] = &[
         relative_to_document: false,
         index_target: true,
     },
-    FileRule::root("actions/*/handler/script", false),
-    FileRule::root("actions/*/handler/module", false),
-    FileRule::root("entities/*/changeRequest/planner/script", false),
-    FileRule::root("entities/*/hooks/*/handler/script", false),
-    FileRule::root("entities/*/hooks/*/handler/module", false),
-    FileRule::root("entities/*/derived/*/sql", false),
-    FileRule::root("extendEntities/*/derived/*/sql", false),
+    FileRule::root("functions/*/source", false),
+    FileRule::root("recordTypes/*/hooks/*/handler/script", false),
+    FileRule::root("recordTypes/*/hooks/*/handler/module", false),
+    FileRule::root("recordTypes/*/derived/*/sql", false),
+    FileRule::root("extendRecordTypes/*/derived/*/sql", false),
 ];
 
 const BREG_MODULE_FILES: &[FileRule] = &[
     FileRule {
         relative_to_document: true,
-        ..FileRule::root("actions/*/handler/script", false)
+        ..FileRule::root("functions/*/source", false)
     },
     FileRule {
         relative_to_document: true,
-        ..FileRule::root("actions/*/handler/module", false)
+        ..FileRule::root("recordTypes/*/hooks/*/handler/script", false)
     },
     FileRule {
         relative_to_document: true,
-        ..FileRule::root("entities/*/changeRequest/planner/script", false)
+        ..FileRule::root("recordTypes/*/hooks/*/handler/module", false)
     },
     FileRule {
         relative_to_document: true,
-        ..FileRule::root("entities/*/hooks/*/handler/script", false)
+        ..FileRule::root("recordTypes/*/derived/*/sql", false)
     },
     FileRule {
         relative_to_document: true,
-        ..FileRule::root("entities/*/hooks/*/handler/module", false)
-    },
-    FileRule {
-        relative_to_document: true,
-        ..FileRule::root("entities/*/derived/*/sql", false)
-    },
-    FileRule {
-        relative_to_document: true,
-        ..FileRule::root("extendEntities/*/derived/*/sql", false)
+        ..FileRule::root("extendRecordTypes/*/derived/*/sql", false)
     },
 ];
 
 const CASEWORK_DECLARATIONS: &[N] = &[
     N::global("project/id", "Casework project"),
-    N::global("sources/*/id", "Casework source"),
-    N::global("queues/*/id", "Casework queue"),
-    N::global("accessProfiles/*/id", "Casework access profile"),
-    N::global("reviewKinds/*/id", "Casework review kind"),
-    N::scoped(
-        "reviewKinds/*/stages/*/id",
-        "Casework review stage",
-        1,
-        "id",
+    N::global("queues/$key", "Casework queue"),
+    N::global("accessProfiles/$key", "Casework access profile"),
+    N::global("teams/$key", "Casework team"),
+    N::global("contextProviders/$key", "Casework context provider"),
+    N::global(
+        "contextProviders/*/deploymentRef",
+        "Casework context provider deployment",
     ),
-    N::scoped(
-        "reviewKinds/*/outcomes/*/id",
-        "Casework review outcome",
-        1,
-        "id",
-    ),
-    N::global("reviewProducers/*/id", "Casework review producer"),
-    N::global("calendars/*/id", "Casework calendar"),
-    N::global("clocks/*/id", "Casework clock"),
-    N::global("taskTemplates/*/id", "Casework task template"),
+    N::global("reviewPolicies/$key", "Casework review policy"),
+    N::keyed("reviewPolicies/*/stages/*/id", "Casework review stage"),
+    N::keyed("reviewPolicies/*/outcomes/$key", "Casework review outcome"),
+    N {
+        scope: Scope::EnclosingKey,
+        reports_unresolved: false,
+        ..N::global(
+            "reviewPolicies/*/displaySchema/properties/$key",
+            "Casework context field",
+        )
+    },
+    N::global("trustedProducers/$key", "Casework trusted producer"),
+    N::global("calendars/$key", "Casework calendar"),
+    N::global("clocks/$key", "Casework clock"),
+    N::global("taskTemplates/$key", "Casework task template"),
 ];
 const CASEWORK_REFERENCES: &[N] = &[
+    N::global(
+        "reviewPolicies/*/context/provider",
+        "Casework context provider",
+    ),
+    N::keyed(
+        "reviewPolicies/*/routing/*/when/stage",
+        "Casework review stage",
+    ),
     N {
-        reports_unresolved: false,
-        ..N::scoped(
-            "sources/*/requests/*/entity",
-            "Casework request entity",
-            1,
-            "id",
-        )
-    },
-    N {
-        scope: Scope::Composite(&[(2, "id"), (0, "entity")]),
-        reports_unresolved: false,
-        ..N::global("sources/*/requests/*/projection/*", "Casework source field")
-    },
-    N {
-        scope: Scope::Composite(&[(2, "id"), (0, "entity")]),
+        scope: Scope::EnclosingKey,
         reports_unresolved: false,
         ..N::global(
-            "sources/*/requests/*/contextProjection/*",
-            "Casework source field",
+            "reviewPolicies/*/routing/*/when/fields/$key",
+            "Casework context field",
         )
     },
-    N {
-        scope: Scope::Composite(&[(5, "id"), (0, "entity")]),
-        reports_unresolved: false,
-        ..N::global(
-            "sources/*/requests/*/routing/*/when/fields/$key",
-            "Casework source field",
-        )
-    },
-    N::global("sources/*/requests/*/queue", "Casework queue"),
-    N::global("sources/*/requests/*/clock", "Casework clock"),
-    N::global("reviewKinds/*/stages/*/queue", "Casework queue"),
+    N::global("reviewPolicies/*/routing/*/queue", "Casework queue"),
+    N::global("reviewPolicies/*/stages/*/queue", "Casework queue"),
     N::global(
-        "reviewKinds/*/stages/*/decidingProfiles/*",
+        "reviewPolicies/*/stages/*/decidingProfiles/*",
         "Casework access profile",
     ),
-    N::global("reviewProducers/*/profile", "Casework access profile"),
+    N::global("reviewPolicies/*/clocks/*", "Casework clock"),
+    N::global("trustedProducers/*/profile", "Casework access profile"),
     N::global(
-        "reviewProducers/*/initiatorProfile",
+        "trustedProducers/*/initiatorProfile",
         "Casework access profile",
     ),
-    N::global("reviewProducers/*/kinds/*", "Casework review kind"),
-    N {
-        reports_unresolved: false,
-        ..N::global("reviewProducers/*/sourceNamespaces/*", "Casework source")
-    },
+    N::global(
+        "trustedProducers/*/reviewPolicies/*",
+        "Casework review policy",
+    ),
+    N::global("teams/*/serves/*", "Casework queue"),
+    N::global("teams/*/memberProfiles/*", "Casework access profile"),
+    N::global("teams/*/supervisorProfiles/*", "Casework access profile"),
+    N::global("calendars/*/holidaySet", "Casework holiday set"),
     N::global("clocks/*/calendar", "Casework calendar"),
     N::global("clocks/*/steps/*/action/reassign/queue", "Casework queue"),
-    N::global("sources/*/requests/*/routing/*/queue", "Casework queue"),
+    N::global("taskTemplates/*/eligibleTeams/*", "Casework team"),
     N::global(
         "taskTemplates/*/eligibleProfiles/*",
         "Casework access profile",
     ),
-    N::global("taskTemplates/*/source", "Casework source"),
-    N::global("taskTemplates/*/reviewKinds/*", "Casework review kind"),
-    N::global("sources/$key", "Casework source"),
+    N::global("taskTemplates/*/reviewPolicies/*", "Casework review policy"),
 ];
+const CASEWORK_RUNTIME_REFERENCES: &[N] = &[N::global(
+    "contextProviders/$key",
+    "Casework context provider deployment",
+)];
 
 const SCHEDULING_DECLARATIONS: &[N] = &[
     N::global("scheduling/id", "Scheduling project"),
@@ -419,43 +588,21 @@ const CASEWORK_DOCUMENTS: &[DocumentRules] = &[
         pattern: "@document",
         declarations: CASEWORK_DECLARATIONS,
         references: CASEWORK_REFERENCES,
-        files: &[FileRule::root("sources/*/description", true)],
+        files: &[
+            FileRule::root("reviewPolicies/*/displaySchema/$ref", false),
+            FileRule::root("reviewPolicies/*/resultSchema/$ref", false),
+        ],
     },
     DocumentRules {
         pattern: "runtime.yaml",
         declarations: &[],
-        references: &[N::global("sources/$key", "Casework source")],
+        references: CASEWORK_RUNTIME_REFERENCES,
         files: &[],
     },
     DocumentRules {
-        pattern: "@source-description",
-        declarations: &[
-            N::scoped(
-                "requests/*/requestEntity",
-                "Casework request entity",
-                0,
-                "sourceId",
-            ),
-            N {
-                scope: Scope::Composite(&[(0, "sourceId"), (0, "requestEntity")]),
-                ..N::global("requests/*/fields/*/field", "Casework source field")
-            },
-            N::scoped(
-                "request/requestEntity",
-                "Casework request entity",
-                0,
-                "sourceId",
-            ),
-            N {
-                scope: Scope::Composite(&[(0, "sourceId"), (0, "requestEntity")]),
-                ..N::global("request/fields/*/field", "Casework source field")
-            },
-        ],
-        references: &[
-            N::global("sourceId", "Casework source"),
-            N::global("request/review/policyId", "Casework review kind"),
-            N::global("requests/*/review/policyId", "Casework review kind"),
-        ],
+        pattern: "runtime.example.yaml",
+        declarations: &[],
+        references: CASEWORK_RUNTIME_REFERENCES,
         files: &[],
     },
     DocumentRules {
@@ -471,22 +618,44 @@ const CASEWORK_DOCUMENTS: &[DocumentRules] = &[
     },
     DocumentRules {
         pattern: "fixtures/*.yaml",
-        declarations: &[N::global("name", "Casework fixture")],
+        declarations: &[N::global("id", "Casework fixture")],
         references: &[
-            N::global("review/kind", "Casework review kind"),
-            N::global("source/id", "Casework source"),
-            N {
-                reports_unresolved: false,
-                ..N::scoped("source/requestEntity", "Casework request entity", 0, "id")
-            },
+            N::global("review/policy", "Casework review policy"),
             N::global("expect/queue", "Casework queue"),
             N::scoped(
                 "expect/outcomes/*",
                 "Casework review outcome",
                 0,
-                "review.kind",
+                "review.policy",
             ),
         ],
+        files: &[],
+    },
+    DocumentRules {
+        pattern: "fixtures/*.yml",
+        declarations: &[N::global("id", "Casework fixture")],
+        references: &[
+            N::global("review/policy", "Casework review policy"),
+            N::global("expect/queue", "Casework queue"),
+            N::scoped(
+                "expect/outcomes/*",
+                "Casework review outcome",
+                0,
+                "review.policy",
+            ),
+        ],
+        files: &[],
+    },
+    DocumentRules {
+        pattern: "holiday-sets/*.yaml",
+        declarations: &[N::global("holidaySet", "Casework holiday set")],
+        references: &[],
+        files: &[],
+    },
+    DocumentRules {
+        pattern: "holiday-sets/*.yml",
+        declarations: &[N::global("holidaySet", "Casework holiday set")],
+        references: &[],
         files: &[],
     },
 ];
@@ -606,6 +775,12 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
             "id.registrystack.org/formats/casework/project/",
             "CaseworkProject",
             CASEWORK_DOCUMENTS,
+        ),
+        ProductKind::Coordinator => (
+            "workflow.yaml",
+            "id.registrystack.org/formats/coordinator/project/v1alpha1",
+            "CoordinatorProject",
+            super::catalog_coordinator::DOCUMENTS,
         ),
         ProductKind::Scheduling => (
             "scheduling.yaml",

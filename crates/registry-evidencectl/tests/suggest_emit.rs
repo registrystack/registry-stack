@@ -137,28 +137,40 @@ fn base_inputs() -> EmitInputs {
 }
 
 fn file_contents<'a>(artifacts: &'a types::DraftArtifacts, bundle_relative_path: &str) -> &'a str {
-    artifacts
+    if let Some(file) = artifacts
         .files
         .iter()
         .find(|file| file.bundle_relative_path == bundle_relative_path)
-        .unwrap_or_else(|| panic!("expected a draft file at {bundle_relative_path}"))
-        .contents
-        .as_str()
-}
-
-fn assert_adjacent(text: &str, comment: &str, next_line_contains: &str) {
-    let lines: Vec<&str> = text.lines().collect();
-    let comment_index = lines
-        .iter()
-        .position(|line| line.contains(comment))
-        .unwrap_or_else(|| panic!("expected a line containing {comment:?} in:\n{text}"));
-    let next = lines
-        .get(comment_index + 1)
-        .unwrap_or_else(|| panic!("expected a line after {comment:?} in:\n{text}"));
-    assert!(
-        next.contains(next_line_contains),
-        "expected the line after {comment:?} to contain {next_line_contains:?}, got {next:?}"
-    );
+    {
+        return file.contents.as_str();
+    }
+    if let Some(name) = bundle_relative_path.strip_prefix("adapters/") {
+        let normalized = format!("functions/{name}");
+        return artifacts
+            .files
+            .iter()
+            .find(|file| file.bundle_relative_path == normalized)
+            .unwrap_or_else(|| panic!("expected a normalized Function asset at {normalized}"))
+            .contents
+            .as_str();
+    }
+    let source: serde_json::Value =
+        serde_norway::from_str(&artifacts.source_block).expect("source block parses");
+    let source = &source["sources"]["search-a"];
+    let inline = if bundle_relative_path.ends_with("-response.schema.yaml") {
+        &source["response"]["shape"]
+    } else if bundle_relative_path.ends_with("-parameters.schema.yaml") {
+        &source["adapterParametersSchema"]
+    } else if bundle_relative_path.ends_with("-facts.schema.yaml") {
+        &source["facts"]
+    } else {
+        panic!("expected a draft file at {bundle_relative_path}")
+    };
+    Box::leak(
+        serde_norway::to_string(inline)
+            .expect("inline schema renders")
+            .into_boxed_str(),
+    )
 }
 
 #[test]
@@ -170,32 +182,15 @@ fn response_schema_parses_and_carries_adjacent_annotations() {
         serde_norway::from_str(response_schema).expect("response schema parses as YAML");
     assert!(parsed.is_mapping());
 
-    assert_adjacent(
-        response_schema,
-        "# TODO(evidencectl): /results needs maxItems",
-        "results:",
+    assert!(artifacts.report.contains("/results"));
+    assert!(artifacts.report.contains("/results/*/status"));
+    assert_eq!(
+        parsed["properties"]["total"]["maximum"].as_i64(),
+        Some(1_000_000)
     );
-    assert_adjacent(
-        response_schema,
-        "# TODO(evidencectl): /results/*/status needs string length bounds",
-        "status:",
-    );
-    assert_adjacent(
-        response_schema,
-        "# derived from the OpenAPI schema",
-        "total:",
-    );
-
-    // event_date needs no bound comment: `format: date` alone satisfies the
-    // subset, so no BoundNeed exists for it in the fixture.
-    let event_date_index = response_schema
-        .lines()
-        .position(|line| line.trim() == "event_date:")
-        .expect("event_date property present");
-    let preceding = response_schema.lines().nth(event_date_index - 1).unwrap();
-    assert!(
-        !preceding.contains("TODO(evidencectl)") && !preceding.contains("derived from"),
-        "event_date should carry no bound annotation, got preceding line {preceding:?}"
+    assert_eq!(
+        parsed["properties"]["event_date"]["format"].as_str(),
+        Some("date")
     );
 }
 
@@ -231,7 +226,7 @@ fn a_flow_list_member_containing_a_comma_stays_one_member() {
 
     let block: serde_norway::Value =
         serde_norway::from_str(&artifacts.source_block).expect("source block parses as YAML");
-    let projection = block["sources"]["search-a"]["request"]["projection"]
+    let projection = block["sources"]["search-a"]["response"]["projection"]
         .as_sequence()
         .expect("projection is a sequence");
     assert_eq!(projection.len(), 2, "got {projection:?}");
@@ -270,11 +265,13 @@ fn a_bound_on_an_array_items_node_is_annotated_above_items() {
 
     let artifacts = emit::draft(&inputs).expect("draft");
     let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
-    assert_adjacent(
-        response_schema,
-        "# TODO(evidencectl): /tags/* needs string length bounds",
-        "items:",
+    assert_eq!(
+        serde_norway::from_str::<serde_norway::Value>(response_schema).unwrap()["properties"]
+            ["tags"]["items"]["type"]
+            .as_str(),
+        Some("string")
     );
+    assert!(artifacts.report.contains("/tags/*"));
 }
 
 /// `uniqueItems` and an array `const` narrow the accepted response, and the
@@ -328,49 +325,22 @@ fn facts_schema_stub_is_minimal_and_parses() {
     let parsed: serde_norway::Value =
         serde_norway::from_str(facts_schema).expect("facts schema parses as YAML");
     let mapping = parsed.as_mapping().expect("facts schema is a mapping");
+    assert_eq!(mapping.len(), 1);
     assert_eq!(
-        mapping
-            .get(serde_norway::Value::String("type".to_owned()))
-            .and_then(|v| v.as_str()),
-        Some("object")
+        mapping[&serde_norway::Value::String("placeholder-fact".to_owned())]["type"].as_str(),
+        Some("boolean")
     );
-    assert_eq!(
-        mapping
-            .get(serde_norway::Value::String(
-                "additionalProperties".to_owned()
-            ))
-            .and_then(|v| v.as_bool()),
-        Some(false)
-    );
-    let required = mapping
-        .get(serde_norway::Value::String("required".to_owned()))
-        .and_then(|v| v.as_sequence())
-        .expect("required is a sequence");
-    assert_eq!(required.len(), 1);
-    assert_eq!(required[0].as_str(), Some("placeholder_fact"));
-
-    let properties = mapping
-        .get(serde_norway::Value::String("properties".to_owned()))
-        .and_then(|v| v.as_mapping())
-        .expect("properties is a mapping");
-    assert_eq!(properties.len(), 1);
-    assert!(properties.contains_key(serde_norway::Value::String("placeholder_fact".to_owned())));
-
-    assert!(facts_schema.contains("TODO(evidencectl)"));
+    assert!(artifacts.report.contains("private fact"));
 }
 
-/// The parameters schema stub stays an empty-properties draft (the closed
-/// Version 1 subset admits no placeholder property), but it must carry a
-/// must-edit comment: without one, the schema-node validator's opaque
-/// "schema objects must declare bounded properties" is the reader's only
-/// signal that this file needs attention.
+/// The normalized Source keeps its fixed adapter parameters and their closed
+/// schema together so the generated project has no second schema artifact.
 #[test]
-fn parameters_schema_stub_is_empty_but_carries_a_must_edit_comment() {
+fn parameters_schema_is_closed_and_inline() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
     let parameters_schema = file_contents(&artifacts, "schemas/search-a-parameters.schema.yaml");
 
-    assert!(parameters_schema.contains("TODO(evidencectl)"));
-    assert!(parameters_schema.contains("http-json"));
+    assert!(artifacts.report.contains("preparation"));
 
     let parsed: serde_norway::Value =
         serde_norway::from_str(parameters_schema).expect("parameters schema parses as YAML");
@@ -494,21 +464,17 @@ fn source_block_parses_and_carries_only_mechanical_source_facts() {
     assert!(artifacts.source_block.contains("method: GET"));
     assert!(artifacts.source_block.contains("path: /v1/records"));
     assert!(artifacts.source_block.contains("value: application/json"));
-    assert!(artifacts
-        .source_block
-        .contains("projection: [/total, /event_date, /results/*/status]"));
-    assert!(artifacts
-        .source_block
-        .contains("baseUrl: https://api.example.invalid"));
-    assert!(artifacts
-        .source_block
-        .contains("responseSchema: schemas/search-a-response.schema.yaml"));
-    assert!(artifacts
-        .source_block
-        .contains("extractScript: adapters/search-a-extract.rhai"));
-    assert!(artifacts
-        .source_block
-        .contains("factSchema: schemas/search-a-facts.schema.yaml"));
+    assert_eq!(
+        parsed["sources"]["search-a"]["response"]["projection"]
+            .as_sequence()
+            .map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(
+        parsed["sources"]["search-a"]["extract"]["function"].as_str(),
+        Some("search-a-extract")
+    );
+    assert_eq!(parsed["functions"].as_sequence().map(Vec::len), Some(2));
 
     let source = &parsed["sources"]["search-a"];
     for governed in [
@@ -517,7 +483,6 @@ fn source_block_parses_and_carries_only_mechanical_source_facts() {
         "authentication",
         "selectorInputs",
         "prepareScript",
-        "adapterParameters",
         "preparationLimits",
     ] {
         assert!(source.get(governed).is_none(), "draft invented {governed}");
@@ -593,10 +558,7 @@ fn a_server_path_prefix_moves_onto_the_request_path() {
     let artifacts = emit::draft(&inputs).expect("draft");
     let block = &artifacts.source_block;
 
-    assert!(
-        block.contains("baseUrl: https://api.example.invalid:8443\n"),
-        "{block}"
-    );
+    assert!(!block.contains("baseUrl:"), "{block}");
     assert!(block.contains("path: /v1/records"), "{block}");
 }
 
@@ -641,9 +603,6 @@ fn source_block_leaves_base_url_absent_without_a_suggestion() {
     inputs.base_url_suggestion = None;
     let artifacts = emit::draft(&inputs).expect("draft");
 
-    assert!(artifacts
-        .source_block
-        .contains("OpenAPI document gives no fixed origin"));
     assert!(!artifacts.source_block.contains("baseUrl:"));
 }
 
@@ -656,8 +615,8 @@ fn an_explicit_base_url_is_active_and_overrides_the_openapi_suggestion() {
         serde_norway::from_str(&artifacts.source_block).expect("source block parses as YAML");
 
     assert_eq!(
-        parsed["sources"]["search-a"]["baseUrl"].as_str(),
-        Some("http://127.0.0.1:4010")
+        parsed["sources"]["search-a"]["connection"].as_str(),
+        Some("search-a")
     );
     assert!(!artifacts.source_block.contains("api.example.invalid"));
     assert!(artifacts
@@ -673,10 +632,10 @@ fn write_into_project_creates_directories_and_writes_every_file() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
     let written = emit::write_into_project(&project, &artifacts.files).expect("write");
-    assert_eq!(written.len(), 5);
+    assert_eq!(written.len(), 2);
 
     for file in &artifacts.files {
-        let path = project.join("bundle").join(&file.bundle_relative_path);
+        let path = project.join(&file.bundle_relative_path);
         assert!(path.exists(), "expected {path:?} to exist");
         let on_disk = std::fs::read_to_string(&path).expect("read written file");
         assert_eq!(on_disk, file.contents);
@@ -689,12 +648,8 @@ fn write_into_project_refuses_all_collisions_and_writes_nothing() {
     let project = temp.path().join("project");
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
-    let response_path = project
-        .join("bundle")
-        .join("schemas/search-a-response.schema.yaml");
-    let facts_path = project
-        .join("bundle")
-        .join("schemas/search-a-facts.schema.yaml");
+    let response_path = project.join("functions/search-a-prepare.rhai");
+    let facts_path = project.join("functions/search-a-extract.rhai");
     std::fs::create_dir_all(response_path.parent().unwrap()).expect("mkdir");
     std::fs::write(&response_path, b"pre-existing\n").expect("seed collision file 1");
     std::fs::write(&facts_path, b"pre-existing\n").expect("seed collision file 2");
@@ -705,9 +660,7 @@ fn write_into_project_refuses_all_collisions_and_writes_nothing() {
     assert!(message.contains(&response_path.display().to_string()));
     assert!(message.contains(&facts_path.display().to_string()));
 
-    let extract_path = project
-        .join("bundle")
-        .join("adapters/search-a-extract.rhai");
+    let extract_path = project.join("functions/unrelated.rhai");
     assert!(
         !extract_path.exists(),
         "a non-colliding file must not be written when any file collides"
@@ -739,10 +692,11 @@ fn an_operator_chosen_bound_is_reported_as_chosen_not_derived() {
 
     let artifacts = emit::draft(&inputs).expect("draft");
     let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
-    assert_adjacent(response_schema, "# chosen at the prompt", "total:");
-    assert!(
-        !response_schema.contains("# derived from"),
-        "{response_schema}"
+    assert_eq!(
+        serde_norway::from_str::<serde_norway::Value>(response_schema).unwrap()["properties"]
+            ["total"]["maximum"]
+            .as_i64(),
+        Some(1_000_000)
     );
 
     assert!(
@@ -1076,15 +1030,11 @@ fn drafted_yaml_escapes_control_characters_in_a_scalar() {
         .unwrap_or_default();
     let combined = format!("{}\n{}", artifacts.source_block, source_block);
 
-    assert!(
-        combined.contains(r"application/json\nx-injected"),
-        "a newline must be escaped rather than folded:\n{combined}"
-    );
-    // A raw newline inside the quoted scalar would make the injected key a
-    // sibling mapping entry.
-    assert!(
-        !combined.contains("\nx-injected: true"),
-        "the scalar must not break out into its own mapping key:\n{combined}"
+    let parsed: serde_norway::Value = serde_norway::from_str(&artifacts.source_block).unwrap();
+    assert_eq!(
+        parsed["sources"]["search-a"]["request"]["fixedHeaders"][0]["value"].as_str(),
+        Some("application/json\nx-injected: true"),
+        "the scalar must round-trip without becoming a sibling key:\n{combined}"
     );
 }
 
@@ -1102,8 +1052,10 @@ fn emitted_paths_are_project_relative() {
             text
         });
 
-    assert!(all.contains("schemas/search-a-response.schema.yaml"));
-    assert!(all.contains("adapters/search-a-extract.rhai"));
+    assert!(all.contains("functions/search-a-prepare.rhai"));
+    assert!(all.contains("functions/search-a-extract.rhai"));
+    assert!(!all.contains("schemas/search-a-response.schema.yaml"));
+    assert!(!all.contains("adapters/search-a-extract.rhai"));
     assert!(
         !all.contains("templates/bundle/"),
         "an evidencectl source path is not a path in the adopter's project:\n{all}"
@@ -1142,14 +1094,11 @@ fn a_root_level_array_carries_its_own_bound_annotation() {
     let artifacts = emit::draft(&inputs).expect("draft");
     let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
 
-    assert!(
-        response_schema.contains("TODO(evidencectl): (response root) needs maxItems"),
-        "the root array's own bound must be annotated:\n{response_schema}"
+    assert_eq!(
+        serde_norway::from_str::<serde_norway::Value>(response_schema).unwrap()["type"].as_str(),
+        Some("array")
     );
-    assert!(
-        !response_schema.contains("TODO(evidencectl):  "),
-        "an empty pointer must not render as blank text:\n{response_schema}"
-    );
+    assert!(artifacts.report.contains("response root"));
     assert!(
         !artifacts.report.contains("TODO(evidencectl):  "),
         "an empty pointer must not render as blank text in the report:\n{}",

@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: directory-contact
+    steps:
+      - id: create-contact
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data: {name: Example contact, email: contact@example.test, jurisdiction: zone-a}
+        expect:
+          outcome: success
+          status: 201
+          fields: {name: Example contact, email: contact@example.test, jurisdiction: zone-a}
+        capture: contact
+      - id: read-contact
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: contact}
+        expect:
+          outcome: success
+          status: 200
+          fields: {name: Example contact, email: contact@example.test, jurisdiction: zone-a}
+      - id: conceal-contact-outside-jurisdiction
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-foreign-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-b}
+        request: {type: get, recordCapture: contact}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

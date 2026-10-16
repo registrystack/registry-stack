@@ -18,6 +18,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
+use registry_breg::contract::{ActionHandlerKindSource, ActionPlanSource};
 use registry_breg::{
     api::{
         router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
@@ -34,7 +35,6 @@ use registry_breg::{
     },
 };
 use registry_platform_audit::AuditProfile;
-use registry_platform_hooks::HookHandlerSource;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -50,7 +50,7 @@ const PACKAGE: &str = "person-registration-wasm";
 /// exact values land in PostgreSQL, proving the guest's bytes (not any Rhai
 /// path) produced the effects.
 const PERSON_OUTCOME: &str = r#"{"effects":[{"id":"person","set":{"identifier":"9000000000001","display-name":"Mina Wasm"}}]}"#;
-const REGISTERED_OUTCOME: &str = r#"{"effects":[{"id":"person","set":{"identifier":"9000000000002","display-name":"Mina Registered"}},{"id":"registration","set":{"registration-code":"W-100","person":{"fromEffect":"person"},"register":{"fromField":"register"}}},{"id":"register","set":{"last-person":{"fromEffect":"person"}}}]}"#;
+const REGISTERED_OUTCOME: &str = r#"{"effects":[{"id":"person","set":{"identifier":"9000000000002","display-name":"Mina Registered"}},{"id":"registration","set":{"registration-code":"W-100","person":{"fromEffect":"person"},"register":{"fromInput":"register"}}},{"id":"register","set":{"last-person":{"fromEffect":"person"}}}]}"#;
 const REFUSAL_OUTCOME: &str = r#"{"refusal":{"code":"blank-name","field":"given-name"}}"#;
 
 fn hex_escape(bytes: &[u8]) -> String {
@@ -100,21 +100,26 @@ async fn setup() -> (
             "handlers/register-person-with-registration.wasm",
         ),
     ] {
-        let handler = project
+        let function_id = match &project
             .actions
-            .iter_mut()
+            .iter()
             .find(|action| action.id == action_id)
             .unwrap()
-            .handler
-            .as_mut()
-            .unwrap();
-        handler.handler = HookHandlerSource::Wasm {
-            module: module_path.to_owned(),
-            abi: handler.abi().map(str::to_owned),
+            .plan
+        {
+            ActionPlanSource::Function { function, .. } => function.clone(),
+            _ => panic!("the acceptance Action has a named plan"),
         };
+        let function = project
+            .functions
+            .iter_mut()
+            .find(|function| function.id == function_id)
+            .unwrap();
+        function.runtime = ActionHandlerKindSource::Wasm;
+        function.source = module_path.to_owned();
+        function.entrypoint = "handle".to_owned();
     }
-    // A third action with its own module that always returns the declared
-    // refusal, granted to the registrar beside the other invokes.
+    // A third named plan returns a declared refusal through a real module.
     let mut refuse = project
         .actions
         .iter()
@@ -122,11 +127,18 @@ async fn setup() -> (
         .unwrap()
         .clone();
     refuse.id = "refuse-person".to_owned();
-    let refuse_handler = refuse.handler.as_mut().unwrap();
-    refuse_handler.handler = HookHandlerSource::Wasm {
-        module: "handlers/refuse-person.wasm".to_owned(),
-        abi: refuse_handler.abi().map(str::to_owned),
-    };
+    if let ActionPlanSource::Function { function, .. } = &mut refuse.plan {
+        *function = "refuse-person-plan".to_owned();
+    }
+    let mut refuse_function = project
+        .functions
+        .iter()
+        .find(|function| function.id == "register-person-plan")
+        .unwrap()
+        .clone();
+    refuse_function.id = "refuse-person-plan".to_owned();
+    refuse_function.source = "handlers/refuse-person.wasm".to_owned();
+    project.functions.push(refuse_function);
     project.actions.push(refuse);
     let registrar = project
         .access_profiles
@@ -426,7 +438,7 @@ async fn wasm_handlers_execute_refuse_replay_and_apply_multi_effect_effects() {
     );
     assert_eq!(after_accept, counts(&database, &registry).await);
 
-    // The multi-effect guest wires fromEffect and fromField references and
+    // The multi-effect guest wires fromEffect and fromInput references and
     // the server applies all three writes atomically.
     let conditions = call(
         &format!("{coordinated}/target-conditions"),
@@ -478,7 +490,7 @@ async fn wasm_handlers_execute_refuse_replay_and_apply_multi_effect_effects() {
     .await;
     assert_eq!(registration.0, StatusCode::OK, "{}", registration.1);
     // The registration code is the guest's fixed value; its person and
-    // register references point at the emitted create and the fromField row.
+    // register references point at the emitted create and the fromInput row.
     assert_eq!(
         registration.1["data"]["domainData"]["registrationCode"],
         "W-100"
@@ -501,7 +513,7 @@ async fn wasm_handlers_execute_refuse_replay_and_apply_multi_effect_effects() {
     assert_eq!(
         registration.1["data"]["domainData"]["register"],
         json!(ID),
-        "fromField resolved the register reference input"
+        "fromInput resolved the register reference input"
     );
     let after_complete = counts(&database, &registry).await;
     assert_eq!(after_complete[0], 2, "second person created");

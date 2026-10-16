@@ -5,7 +5,7 @@ complete fixed-source artifacts. Existing authored sources and the OpenAPI
 authoring workflow need no manifest, import state, or migration.
 
 An export carries ordinary source, selector, schema, and adapter files. It does
-not contain question meaning, caller grants, credentials, installation hooks,
+not contain assertion meaning, caller grants, credentials, installation hooks,
 or executable setup commands. Import reads local files only. It never contacts
 the provider, runs external setup commands, creates authority, or starts a
 service. Target validation may execute reviewed bounded adapters against local
@@ -56,6 +56,16 @@ backslashes, or symbolic links. Files must be regular files with one hard link.
 The ordinary authoring compiler remains the authority for usable document
 names, types, references, and adapter contracts.
 
+Import normalizes those transport files into the existing `evidence.yaml`:
+Sources, selector profiles, and named Functions stay in that project, while
+Function programs live under `functions/`. Comparison reports use normalized
+artifact identities: `source-fragments/<sourceId>.json`,
+`selector-fragments/<selectorId>.json`, and `functions/<name>.rhai`. The fragment
+identities describe project entries; they are not separate authored files.
+Response and fact schemas are part of the Source fragment. Use the exact
+normalized identities in the report when resolving a conflict, rather than
+the original export paths.
+
 The `sourceId` and all artifact paths are stable identities. They must not
 contain an export directory name, provider revision, or content checksum.
 Moving an export directory does not change its identity. Reordering its
@@ -66,9 +76,9 @@ ID and shared artifacts by a stable, unambiguous technical identity.
 
 A provider's optional consumed-behavior identity belongs in the source's
 ordinary `behaviorRevision: sha256:<64 lowercase hexadecimal characters>`
-property. A manifest provenance change alone is not a runtime question
+property. A manifest provenance change alone is not a runtime definition
 revision. The authoring compiler and runtime own dependency closure and actual
-question revision computation.
+definition revision computation.
 
 ## Compare and accept
 
@@ -83,11 +93,11 @@ complete candidate set must agree with every installed owner of that artifact.
 Passing only one of two owners with changed shared bytes reports both owners
 and refuses application until their definitions agree.
 
-Comparison uses three separate inputs for each stable artifact path:
+Comparison uses three separate inputs for each normalized artifact identity:
 
-1. Exact bytes from the previously imported upstream export.
-2. Current authored bytes, including local changes or deletion.
-3. Exact bytes from the next export.
+1. The previously imported upstream content after normalization.
+2. Current project entries or Function bytes, including local changes or deletion.
+3. The next upstream content after normalization.
 
 If upstream is unchanged, current customization is preserved. If current bytes
 still match the previous upstream, an upstream change is safe to propose. If
@@ -98,16 +108,16 @@ an explicit choice, even if their bytes are identical.
 
 The report lists additions, changes, deletions, unchanged/customized/retained
 artifacts, previous and next owners, content checksums, conflicts, provenance
-changes, and structurally affected question names. Checksums identify authored
+changes, and structurally affected definition names. Checksums identify normalized
 artifact content, not deployment revisions. An optional `--target` asks the
-normal compiler/build path to compare actual question revisions under that
+normal compiler/build path to compare actual definition revisions under that
 complete target. Without it, the report contains structural impact only.
 Structural validation checks the complete source artifact graph and any
-existing questions without requiring a target, local credentials, or a first
-question. It includes each existing derivation's fact reads, so a next fact
+existing definitions without requiring a target, local credentials, or a first
+definition. It includes each existing derivation's fact reads, so a next fact
 schema that no longer declares a fact a derivation reads fails structural
-validation with `evidence.derivation.fact-undeclared`
-([CONFIG.md](CONFIG.md#the-derivation-program)). The report identifies its
+validation with `evidence.project.derivation-fact-undeclared`
+([CONFIG.md](CONFIG.md#sources-acquisition-and-functions)). The report identifies its
 validation kind explicitly. Target
 validation runs the ordinary compiled-bundle and fixture checks. If the current
 project cannot yet compile with that target, as before an initial source
@@ -134,9 +144,9 @@ an editor schema from `editors/configure.py`, and a file written with
   "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
   "kind": "EvidenceSourceResolution",
   "artifacts": {
-    "adapters/registry-status-extract.rhai": {"type": "keep"},
-    "schemas/registry-status-response.yaml": {"type": "adopt"},
-    "adapters/registry-status-prepare.rhai": {
+    "functions/registry-status-extract.rhai": {"type": "keep"},
+    "source-fragments/registry-status.json": {"type": "adopt"},
+    "functions/registry-status-prepare.rhai": {
       "type": "file",
       "path": "reviewed/registry-status-prepare.rhai"
     }

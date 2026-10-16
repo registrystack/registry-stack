@@ -1,6 +1,6 @@
 # Registry Stack client guidance
 
-This guide covers the six product clients, the Node.js and Python bindings
+This guide covers the seven product clients, the Node.js and Python bindings
 maintained for each of them, `registry-stack-client`, the unified
 native-package facades, and shared `registry-record` DTOs. Apply the owning
 product guide as well.
@@ -14,9 +14,9 @@ that every checkout or release ships it.
 
 | Area | Owns |
 |---|---|
-| `registry-{breg,casework,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
+| `registry-{breg,casework,coordinator,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
-| BReg, Casework, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
+| BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
 | `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
@@ -38,12 +38,13 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   sending, or a 5xx answer other than a typed failure the product returns only
   with the attempt rolled back), and never after a 4xx status line:
   `registry_platform_httputil::client::retry_keyed_mutation` owns its loop and
-  waits, the BReg, Casework, Messaging, and Scheduling clients expose the
-  count as `with_max_mutation_retries` (2 by default, at most 2, 0 disables),
-  and the resend repeats the caller's exact key, headers, and body. The other
+  waits, the BReg, Casework, Coordinator, Messaging, and Scheduling clients
+  expose the count as `with_max_mutation_retries` (2 by default, at most 2,
+  0 disables), and the resend repeats the caller's exact key, headers, and
+  body. The other
   clients never resend. Reads and unkeyed operations are never resent, and
   neither are Casework's review request create and cancel, which go through
-  the review client's single exchange. Those four clients treat a connection
+  the review client's single exchange. Those five clients treat a connection
   that was never established, a connect timeout included, as a known failure,
   and the Casework client's `mutation_class` is `Ambiguous` exactly when
   `is_outcome_unknown` holds.
@@ -75,6 +76,19 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   every instant they send as RFC 3339 before any request and add no Scheduling
   semantics: the closed problem catalogue and the hold, appointment, and
   availability documents come from the Rust client unchanged.
+- Coordinator run admission takes a caller-chosen idempotency key and
+  `{workflow, workflowRevision, input}`; a binding never generates the key.
+  Workflow discovery reads the permitted active contract. Fresh starts pin its revision;
+  unknown-admission recovery retains the original revision even after activation changes. Only the Rust client's bounded same-key retry resends an
+  admission; listing, status, inspection, reconciliation, same-command retry,
+  and cancellation are sent once, and the last two take no key. The
+  Coordinator's problem vocabulary is closed but lives in its runtime, which
+  no client may depend on: the Rust client holds each answered code to the
+  `family.reason` grammar and to its type URI, bindings pass that code through
+  unchanged instead of checking it against a catalogue, and the run status and
+  inspection documents come from the Rust client unchanged. A run is owned by
+  the caller that started it; the client grants no access to the product
+  records a workflow touches.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains
@@ -113,13 +127,13 @@ tree. `build:debug` builds the addon without writing the committed `index.js`
 or `index.d.ts`, and `check:types` generates both into ignored `.check` files and
 requires them to match the committed ones byte for byte. When a napi-rs CLI bump
 changes that output, `check:types` fails. Run `npm ci && npm run build` in each
-of the six `-client-node` directories, which rewrites both files with the
+of the seven `-client-node` directories, which rewrites both files with the
 pinned CLI (Discovery's loader normalizer included), and commit every
 `index.js` and `index.d.ts` together with the bump.
 
 For Python bindings, run from the changed `-client-py` directory, replacing
-`<product>` with `breg`, `casework`, `discovery`, `evidence`, `messaging`, or
-`scheduling`:
+`<product>` with `breg`, `casework`, `coordinator`, `discovery`, `evidence`,
+`messaging`, or `scheduling`:
 
 ```sh
 cargo build --locked -p registry-<product>-client-py --lib --features registry-<product>-client-py/extension-module
@@ -150,9 +164,9 @@ In checkouts containing the unified Node.js and Python packages, those packages
 are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
 Scheduling bindings. Published packages include Messaging from v0.38.0 and
 Scheduling from v0.40.0; earlier release assembly preserves its
-version-selected inventory. Source CI uses the explicit local
-`--include-messaging` and `--include-scheduling` overrides when assembling the
-current six bindings.
+version-selected inventory. The Coordinator binding is not part of the unified
+packages. Source CI uses the explicit local `--include-messaging` and
+`--include-scheduling` overrides when assembling the current six bindings.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo

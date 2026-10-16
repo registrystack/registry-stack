@@ -152,7 +152,7 @@ The Casework project declares the exact destination in a governed template:
 
 ```yaml
 taskTemplates:
-  - id: schedule-registry-update
+  schedule-registry-update:
     version: "1"
     label: Book a registry update
     eligibleTeams: [registry-review]
@@ -184,8 +184,7 @@ taskTemplates:
 `scheduling:commit` is an explicit scope registered at the exchange issuer. The
 Scheduling runtime derives mutation authority from the grant bounds rather than
 that scope. The native exchange uses the issuer-compatible `scheduling:read`
-handle, so this runtime sets `readsScope: scheduling:read`; `scheduling-read`
-remains the compatibility default. The read scope lets the same short-lived
+handle, which is the runtime's default `readsScope`. The read scope lets the same short-lived
 token select a currently published free start.
 
 Register `scheduling-agent` as a Casework `taskExchange` service client, and
@@ -211,7 +210,7 @@ taskGrantStatus:
     clientAssertionAudience: https://identity.example.test/realms/registry
     clientId: scheduling-task-status
     privateKeyRef: secret:file/scheduling-task-status-private-jwk
-    caseworkResource: urn:example:casework
+    statusResource: urn:example:casework
 ```
 
 Register `scheduling-task-status` with the identity provider for private-key

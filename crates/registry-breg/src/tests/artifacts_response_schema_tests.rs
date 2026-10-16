@@ -32,457 +32,25 @@ fn change_context_request_schema_rejects_present_empty_text() {
 }
 
 #[test]
-fn review_diagnostic_schema_bounds_machine_readable_retry_state() {
-    let schema = JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(&super::request_review_metadata_schema())
-        .expect("generated review diagnostic schema compiles");
-    let mut review = json!({
-        "submission": {
-            "state": "accepted",
-            "authority": "casework-main",
-            "requestId": "00000000-0000-4000-8000-000000000001",
-            "submissionDigest": effect_digest(),
-            "recoveryDeadline": "2026-09-27T01:00:00Z",
-            "policy": {"id": "request-review", "version": "1", "digest": effect_digest()}
-        },
-        "result": {"state": "pending"},
-        "delivery": {"state": "polling"},
-        "application": {
-            "mode": "automatic",
-            "state": "queued",
-            "executor": "registry-automatic",
-            "attempts": 3,
-            "nextAttemptAt": "2026-09-20T01:00:05Z"
-        },
-        "recovery": {"state": "none"}
-    });
-    assert!(schema.is_valid(&review));
-
-    review["submission"]
-        .as_object_mut()
-        .unwrap()
-        .remove("recoveryDeadline");
-    review["application"]
-        .as_object_mut()
-        .unwrap()
-        .remove("attempts");
-    review["application"]
-        .as_object_mut()
-        .unwrap()
-        .remove("nextAttemptAt");
-    assert!(schema.is_valid(&review));
-
-    review["application"]["attempts"] = json!(1001);
-    assert!(!schema.is_valid(&review));
-    review["application"]
-        .as_object_mut()
-        .unwrap()
-        .remove("attempts");
-    review["submission"]["recoveryDeadline"] = json!("x".repeat(129));
-    assert!(!schema.is_valid(&review));
-    review["submission"]
-        .as_object_mut()
-        .unwrap()
-        .remove("recoveryDeadline");
-    review["application"]["retryToken"] = json!("must-not-pass");
-    assert!(!schema.is_valid(&review));
-}
-
-#[test]
-fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
-    let registry = compiled_registry();
-    let openapi = generated_openapi(&registry);
-    let schema = response_validator(
-        &openapi,
-        route_path(&registry, "placement-correction-request", Operation::Get),
-        "get",
-        "200",
-    );
-    let digest = effect_digest();
-    let request_id = "00000000-0000-4000-8000-000000000001";
-    let placement_id = "00000000-0000-4000-8000-000000000010";
-    let replacement_site_id = "00000000-0000-4000-8000-000000000021";
-
-    assert_valid(
-        &schema,
-        &json!({
-            "data": {
-                "recordIdentifier": request_id,
-                "revisionIdentifier": "4",
-                "domainData": {
-                    "placement": placement_id,
-                    "proposedSite": replacement_site_id
-                },
-                "request": {
-                "bregState": "submitted",
-                "proposalVersion": 2,
-                "effectDigest": digest,
-                "editable": false,
-                "proposal": {
-                    "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"}
-                },
-                "actions": [{
-                    "operation": "apply-request",
-                    "method": "POST",
-                    "href": "/v1/records/placement-correction-requests/00000000-0000-4000-8000-000000000001/actions/apply?accessProfile=request-applier",
-                    "ifMatch": "\"breg-action\"",
-                    "proposalVersion": 2,
-                    "effectDigest": digest
-                }],
-                "application": {
-                    "applicationId": "00000000-0000-4000-8000-0000000000aa",
-                    "proposalVersion": 2,
-                    "effectDigest": digest,
-                    "appliedAt": "2026-08-31T01:02:03.700350Z",
-                    "reasonPresent": true,
-                    "reason": "  Verified against the site register. ตรวจสอบ 🙂  "
-                },
-                "history": {
-                    "proposals": [{
-                        "requestEntityId": "placement-correction-request",
-                        "requestId": request_id,
-                        "proposalVersion": 2,
-                        "bregState": "submitted",
-                        "current": true,
-                        "contractFingerprint": "sha256:contract",
-                        "detailErased": false,
-                        "applicationId": null,
-                        "resultLinkCount": 0,
-                        "resultLinks": [],
-                        "effectDigest": digest
-                    }],
-                    "nextAfterProposalVersion": null
-                }
-            },
-            },
-            "meta": {
-                "registryIdentifier": "change-request-openapi",
-                "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": "placement-correction-request"
-            }
-        }),
-    );
-
-    assert_valid(
-        &schema,
-        &json!({
-            "data": {
-                "recordIdentifier": request_id,
-                "revisionIdentifier": "9",
-                "domainData": {},
-                "request": {
-                "bregState": "applied",
-                "proposalVersion": 2,
-                "detailErased": true,
-                "editable": false,
-                "effectDigest": digest,
-                "application": {
-                    "applicationId": "00000000-0000-4000-8000-0000000000aa",
-                    "proposalVersion": 2,
-                    "reasonPresent": true
-                },
-                "history": {
-                    "proposals": [{
-                        "requestEntityId": "placement-correction-request",
-                        "requestId": request_id,
-                        "proposalVersion": 2,
-                        "bregState": "applied",
-                        "current": true,
-                        "contractFingerprint": "sha256:contract",
-                        "detailErased": true,
-                        "applicationId": "00000000-0000-4000-8000-0000000000aa",
-                        "resultLinkCount": 1,
-                        "resultLinks": [{
-                            "targetEntityId": "placement",
-                            "targetRecordId": placement_id,
-                            "targetRevision": 8
-                        }],
-                        "effectDigest": digest
-                    }],
-                    "nextAfterProposalVersion": null
-                }
-            },
-            },
-            "meta": {
-                "registryIdentifier": "change-request-openapi",
-                "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": "placement-correction-request"
-            }
-        }),
-    );
-
-    assert_invalid(
-        &schema,
-        &json!({
-            "data": {
-                "recordIdentifier": request_id,
-                "revisionIdentifier": "9",
-                "domainData": {},
-                "request": {
-                    "bregState": "applied",
-                    "proposalVersion": 2,
-                    "editable": false
-                }
-            },
-            "meta": {
-                "registryIdentifier": "change-request-openapi",
-                "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": "placement-correction-request"
-            }
-        }),
-    );
-    assert_invalid(
-        &schema,
-        &json!({
-            "data": {
-                "recordIdentifier": request_id,
-                "revisionIdentifier": "4",
-                "domainData": {
-                    "placement": placement_id,
-                    "proposedSite": replacement_site_id
-                },
-                "request": {
-                    "bregState": "submitted",
-                    "proposalVersion": 2,
-                    "editable": false,
-                    "operatorSecret": "must-not-be-modeled"
-                }
-            },
-            "meta": {
-                "registryIdentifier": "change-request-openapi",
-                "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": "placement-correction-request"
-            }
-        }),
-    );
-}
-
-#[test]
 fn served_field_projection_keeps_response_data_strict_but_subsettable() {
     let registry = compiled_registry();
     let openapi = generated_openapi(&registry);
-    let path = route_path(&registry, "placement-correction-request", Operation::Get);
-    let response_schema =
-        &openapi["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
-    let schema = JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(&json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$ref": "#/$defs/response",
-            "$defs": {"response": response_schema},
-            "components": {
-                "schemas": {
-                    "placement-correction-request": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["placement"],
-                        "properties": {
-                            "placement": {"type": "string", "format": "uuid"}
-                        }
-                    }
-                }
-            }
-        }))
-        .expect("served response schema compiles");
-
-    assert_valid(
-        &schema,
-        &json!({
-            "data": {
-                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
-                "revisionIdentifier": "4",
-                "domainData": {
-                    "placement": "00000000-0000-4000-8000-000000000010"
-                },
-                "request": {
-                    "bregState": "submitted",
-                    "proposalVersion": 2,
-                    "editable": false
-                }
-            },
-            "meta": {
-                "registryIdentifier": "change-request-openapi",
-                "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": "placement-correction-request"
-            }
-        }),
-    );
-    assert_invalid(
-        &schema,
-        &json!({
-            "data": {
-                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
-                "revisionIdentifier": "4",
-                "domainData": {
-                    "placement": "00000000-0000-4000-8000-000000000010",
-                    "proposedSite": "00000000-0000-4000-8000-000000000021"
-                },
-                "request": {
-                    "bregState": "submitted",
-                    "proposalVersion": 2,
-                    "editable": false
-                }
-            },
-            "meta": {
-                "registryIdentifier": "change-request-openapi",
-                "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": "placement-correction-request"
-            }
-        }),
-    );
-}
-
-#[test]
-fn current_proposal_schema_keeps_review_binding_closed() {
-    let registry = compiled_registry();
-    let openapi = generated_openapi(&registry);
-    let path = route_path(&registry, "placement-correction-request", Operation::Get);
-    let request_schema = &openapi["paths"][path]["get"]["responses"]["200"]["content"]
-        ["application/json"]["schema"]["properties"]["data"]["properties"]["request"];
-    let validator = inline_validator(&request_schema["properties"]["proposal"]);
-    assert_valid(
-        &validator,
-        &json!({"review": {"type": "required", "authority": "casework-main", "policyId": "request-review"}}),
-    );
-    assert_valid(&validator, &json!({"review": {"type": "none"}}));
-    assert_invalid(
-        &validator,
-        &json!({
-            "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"},
-            "unexpected": "value"
-        }),
-    );
-}
-
-#[test]
-fn target_get_schema_accepts_bounded_request_presence_annotations() {
-    let registry = compiled_registry();
-    let openapi = generated_openapi(&registry);
     let schema = response_validator(
         &openapi,
-        route_path(&registry, "placement", Operation::Get),
+        route_path(&registry, "contact", Operation::Get),
         "get",
         "200",
     );
-    let record = json!({
-        "data": {
-            "recordIdentifier": "00000000-0000-4000-8000-000000000010",
-            "revisionIdentifier": "8",
-            "domainData": {
-                "site": "00000000-0000-4000-8000-000000000020"
-            },
-            "requestPresence": {
-                "requests": [{
-                    "requestType": "placement-correction-request",
-                    "pending": true
-                }]
-            }
-        },
-        "meta": {
-            "registryIdentifier": "change-request-openapi",
-            "datasetIdentifier": "test-dataset",
-            "entityTypeIdentifier": "placement"
-        }
-    });
+    let mut record = json!({"data":{"recordIdentifier":"00000000-0000-4000-8000-000000000001", "revisionIdentifier":"1", "domainData":{"name":"Example"}}, "meta":{"registryIdentifier":"local-directory", "datasetIdentifier":"directory", "entityTypeIdentifier":"contact"}});
     assert_valid(&schema, &record);
-
-    let mut widened = record;
-    widened["data"]["requestPresence"]["requests"][0]["effectDigest"] = json!(effect_digest());
-    assert_invalid(&schema, &widened);
-}
-
-#[test]
-fn action_response_schema_matches_application_receipt_shape() {
-    let registry = compiled_registry();
-    let openapi = generated_openapi(&registry);
-    let component = &openapi["components"]["schemas"]["ChangeRequestActionResponse"];
-    assert!(component["required"]
-        .as_array()
-        .expect("action response required properties render")
-        .contains(&json!("snapshot")));
-    assert!(component["required"]
-        .as_array()
-        .expect("action response required properties render")
-        .contains(&json!("actorReference")));
-    assert_eq!(
-        component["properties"]["snapshot"]["maxLength"],
-        crate::query::MAX_OPAQUE_VALUE_BYTES
-    );
-    let schema = component_validator(&openapi, "ChangeRequestActionResponse");
-    let digest = effect_digest();
-
-    assert_valid(
-        &schema,
-        &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 10,
-            "snapshot": snapshot_reference(),
-            "actorReference": "actor-v1:opaque",
-            "request": {
-                "bregState": "applied",
-                "proposalVersion": 2,
-                "effectDigest": digest,
-                "application": {
-                    "applicationId": "00000000-0000-4000-8000-0000000000aa",
-                    "proposalVersion": 2,
-                    "effectDigest": digest,
-                    "appliedAt": "2026-08-31T01:02:03.700350Z"
-                }
-            }
-        }),
-    );
-
-    assert_invalid(
-        &schema,
-        &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 10,
-            "request": {
-                "bregState": "applied",
-                "proposalVersion": 2,
-                "effectDigest": digest,
-                "application": {
-                    "applicationId": "00000000-0000-4000-8000-0000000000aa",
-                    "proposalVersion": 2,
-                    "effectDigest": digest,
-                    "appliedAt": "2026-08-31T01:02:03.700350Z"
-                }
-            }
-        }),
-    );
-
-    assert_invalid(
-        &schema,
-        &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 10,
-            "snapshot": snapshot_reference(),
-            "request": {
-                "bregState": "applied",
-                "proposalVersion": 2,
-                "effectDigest": digest,
-                "application": {
-                    "id": "00000000-0000-4000-8000-0000000000aa",
-                    "proposalVersion": 2,
-                    "effectDigest": digest
-                }
-            }
-        }),
-    );
-}
-
-#[test]
-fn generated_request_metadata_exposes_effective_retention_policy() {
-    let registry = compiled_registry();
-    let openapi = generated_openapi(&registry);
-    let request = &openapi["components"]["schemas"]["placement-correction-request"]
-        ["x-registry-changeRequest"];
-    assert_eq!(request["retention"]["mode"], "operator-erase");
-    assert_eq!(
-        request["retention"]["effectivePolicy"]["erasedDetailMarker"],
-        "request.detailErased"
-    );
+    record["data"]["domainData"]["undeclared"] = json!("refused");
+    assert_invalid(&schema, &record);
+    record["data"]["domainData"]
+        .as_object_mut()
+        .unwrap()
+        .remove("undeclared");
+    record["data"]["request"] = json!({"bregState":"submitted"});
+    assert_invalid(&schema, &record);
 }
 
 #[test]
@@ -507,7 +75,7 @@ fn immediate_action_response_schema_filters_results_by_selected_profile() {
             "applicationId": "00000000-0000-4000-8000-000000000200",
             "results": {
                 "household": {
-                    "entity": "household",
+                    "recordType": "household",
                     "recordId": "00000000-0000-4000-8000-000000000100",
                     "revision": 13
                 }
@@ -521,7 +89,7 @@ fn immediate_action_response_schema_filters_results_by_selected_profile() {
             "applicationId": "00000000-0000-4000-8000-000000000200",
             "results": {
                 "person": {
-                    "entity": "person",
+                    "recordType": "person",
                     "recordId": "00000000-0000-4000-8000-000000000201",
                     "revision": 1
                 }
@@ -553,7 +121,7 @@ fn immediate_action_all_profile_response_schema_preserves_grant_result_shapes() 
             "applicationId": "00000000-0000-4000-8000-000000000200",
             "results": {
                 "household": {
-                    "entity": "household",
+                    "recordType": "household",
                     "recordId": "00000000-0000-4000-8000-000000000100",
                     "revision": 13
                 }
@@ -567,17 +135,17 @@ fn immediate_action_all_profile_response_schema_preserves_grant_result_shapes() 
             "applicationId": "00000000-0000-4000-8000-000000000200",
             "results": {
                 "person": {
-                    "entity": "person",
+                    "recordType": "person",
                     "recordId": "00000000-0000-4000-8000-000000000201",
                     "revision": 1
                 },
                 "membership": {
-                    "entity": "group-membership",
+                    "recordType": "group-membership",
                     "recordId": "00000000-0000-4000-8000-000000000202",
                     "revision": 1
                 },
                 "household": {
-                    "entity": "household",
+                    "recordType": "household",
                     "recordId": "00000000-0000-4000-8000-000000000100",
                     "revision": 14
                 }
@@ -591,12 +159,12 @@ fn immediate_action_all_profile_response_schema_preserves_grant_result_shapes() 
             "applicationId": "00000000-0000-4000-8000-000000000200",
             "results": {
                 "person": {
-                    "entity": "person",
+                    "recordType": "person",
                     "recordId": "00000000-0000-4000-8000-000000000201",
                     "revision": 1
                 },
                 "household": {
-                    "entity": "household",
+                    "recordType": "household",
                     "recordId": "00000000-0000-4000-8000-000000000100",
                     "revision": 14
                 }
@@ -625,7 +193,7 @@ fn immediate_action_all_profile_response_schema_allows_exact_sole_grant_results(
             "applicationId": "00000000-0000-4000-8000-000000000300",
             "results": {
                 "asset": {
-                    "entity": "asset",
+                    "recordType": "asset",
                     "recordId": "00000000-0000-4000-8000-000000000301",
                     "revision": 1
                 }
@@ -639,12 +207,12 @@ fn immediate_action_all_profile_response_schema_allows_exact_sole_grant_results(
             "applicationId": "00000000-0000-4000-8000-000000000300",
             "results": {
                 "asset": {
-                    "entity": "asset",
+                    "recordType": "asset",
                     "recordId": "00000000-0000-4000-8000-000000000301",
                     "revision": 1
                 },
                 "initial-inspection": {
-                    "entity": "inspection",
+                    "recordType": "inspection",
                     "recordId": "00000000-0000-4000-8000-000000000302",
                     "revision": 1
                 }
@@ -678,7 +246,7 @@ fn immediate_action_metadata_and_operation_filter_selected_profile() {
         metadata["resultEffects"],
         json!([{
             "effect": "household",
-            "entity": "household",
+            "recordType": "household",
             "operation": "patch"
         }])
     );
@@ -805,17 +373,6 @@ fn response_validator(openapi: &Value, path: &str, method: &str, status: &str) -
         .expect("response schema compiles")
 }
 
-fn component_validator(openapi: &Value, component: &str) -> JSONSchema {
-    JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(&json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$ref": format!("#/components/schemas/{component}"),
-            "components": openapi["components"].clone()
-        }))
-        .expect("component schema compiles")
-}
-
 fn inline_validator(schema: &Value) -> JSONSchema {
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
@@ -869,176 +426,262 @@ fn route_path<'a>(
         .expect("route exists")
 }
 
-fn effect_digest() -> &'static str {
-    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-}
-
-fn snapshot_reference() -> &'static str {
-    "breg1_018feaa0-68f9-4a45-b9e3-58436df07af7"
-}
-
 fn compiled_registry() -> CompiledRegistry {
-    let project = parse_project_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-openapi.example.test"},
-          "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
-            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
-          },{
-            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
-            "changeControl":{"requiredFor":["patch"]},
-            "fields":[
-              {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
-            ]
-          },{
-            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
-              {"id":"proposed-site","apiName":"proposedSite","type":"reference","target":"site","required":true,"classification":"internal"}
-            ],
-            "changeRequest":{
-              "retention":{"mode":"operator-erase"},
-              "effects":[{
-                "target":{"fromField":"placement"},
-                "operation":"patch",
-                "set":{"site":{"fromField":"proposed-site"}}
-              }],
-              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
-              "onApproved":{"mode":"manual"}
-            }
-          }],
-          "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request",
-              "operations":["get"],
-              "readableFields":["placement","proposed-site"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"request-submitter","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request",
-              "operations":["get","create","patch","submit-request"],
-              "readableFields":["placement","proposed-site"],
-              "writableFields":["placement","proposed-site"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request",
-              "operations":["get","apply-request"],
-              "readableFields":["placement"],
-              "applyTargets":[{"entity":"placement", "rowBoundaries": "unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"placement-viewer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement",
-              "operations":["get"],
-              "readableFields":["site"],
-              "requestPresence":[{
-                "requestType":"placement-correction-request",
-                "rowBoundaries":[{"field":"placement","claim":"placement_claim","operator":"equals"}]
-              }],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect("fixture parses");
-    compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
+    let project = crate::contract::parse_project_yaml(include_bytes!(
+        "../../../../products/breg/examples/minimal/registry.yaml"
+    ))
+    .unwrap();
+    compile_project(&project, &[], CompileProfile::Authoring).unwrap()
 }
 
 fn compiled_action_registry() -> CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://action-openapi.example.test"},
-          "entities":[{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
-            "fields":[
-              {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"internal"},
-              {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
-            ]
-          },{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
-            "fields":[
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
-            ]
-          },{
-            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"create-only",
-            "fields":[
-              {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
-              {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
-            ]
-          }],
-          "actions":[{
-            "id":"register-household-contact",
-            "inputs":[
-              {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "action-openapi",
+    "version": "1",
+    "defaultLanguage": "en",
+    "canonicalBaseIri": "https://action-openapi.example.test"
+  },
+  "actions": [
+    {
+      "id": "register-household-contact",
+      "inputs": [
+        {
+          "id": "household",
+          "apiName": "householdId",
+          "type": "reference",
+          "target": "household",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "person",
+            "target": {
+              "recordType": "person"
+            },
+            "operation": "create",
+            "set": {
+              "person-code": {
+                "fromInput": "person-code"
+              },
+              "legal-name": {
+                "fromInput": "legal-name"
+              }
+            }
+          },
+          {
+            "id": "membership",
+            "target": {
+              "recordType": "group-membership"
+            },
+            "operation": "create",
+            "set": {
+              "person": {
+                "fromEffect": "person"
+              },
+              "household": {
+                "fromInput": "household"
+              }
+            }
+          },
+          {
+            "id": "household",
+            "target": {
+              "fromInput": "household"
+            },
+            "operation": "patch",
+            "set": {
+              "contact-person": {
+                "fromEffect": "person"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "contact-registrar",
+      "default": true,
+      "principalClaim": "private_claim_name",
+      "requiredScopes": [
+        "registry:contact:register"
+      ],
+      "requiredPurposes": [
+        "contact-registration"
+      ],
+      "permissions": {
+        "actions": [
+          {
+            "action": "register-household-contact",
+            "operations": [
+              "invoke"
             ],
-            "effects":[{
-              "id":"person",
-              "target":{"entity":"person"},
-              "operation":"create",
-              "set":{
-                "person-code":{"fromField":"person-code"},
-                "legal-name":{"fromField":"legal-name"}
+            "targets": [
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "household"
+              },
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "person"
+              },
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "group-membership"
               }
-            },{
-              "id":"membership",
-              "target":{"entity":"group-membership"},
-              "operation":"create",
-              "set":{
-                "person":{"fromEffect":"person"},
-                "household":{"fromField":"household"}
+            ],
+            "results": [
+              "person",
+              "membership",
+              "household"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "contact-auditor",
+      "principalClaim": "other_private_claim",
+      "requiredScopes": [
+        "registry:contact:audit"
+      ],
+      "requiredPurposes": [
+        "contact-audit"
+      ],
+      "permissions": {
+        "actions": [
+          {
+            "action": "register-household-contact",
+            "operations": [
+              "invoke"
+            ],
+            "targets": [
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "household"
+              },
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "person"
+              },
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "group-membership"
               }
-            },{
-              "id":"household",
-              "target":{"fromField":"household"},
-              "operation":"patch",
-              "set":{"contact-person":{"fromEffect":"person"}}
-            }]
-          }],
-          "accessProfiles":[{
-            "id":"contact-registrar",
-            "default":true,
-            "principalClaim":"private_claim_name",
-            "requiredScopes":["registry:contact:register"],
-            "requiredPurposes":["contact-registration"],
-            "permissions":{"actions":[{
-              "action":"register-household-contact",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"household", "rowBoundaries": "unrestricted"},
-                {"entity":"person", "rowBoundaries": "unrestricted"},
-                {"entity":"group-membership", "rowBoundaries": "unrestricted"}
-              ],
-              "results":["person","membership","household"]
-            }]}
-          },{
-            "id":"contact-auditor",
-            "principalClaim":"other_private_claim",
-            "requiredScopes":["registry:contact:audit"],
-            "requiredPurposes":["contact-audit"],
-            "permissions":{"actions":[{
-              "action":"register-household-contact",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"household", "rowBoundaries": "unrestricted"},
-                {"entity":"person", "rowBoundaries": "unrestricted"},
-                {"entity":"group-membership", "rowBoundaries": "unrestricted"}
-              ],
-              "results":["household"]
-            }]}
-          }]
-        }"#,
+            ],
+            "results": [
+              "household"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "recordTypes": [
+    {
+      "id": "household",
+      "primaryDataset": "test-dataset",
+      "route": "households",
+      "mutationMode": "mutable",
+      "fields": [
+        {
+          "id": "household-code",
+          "apiName": "householdCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "contact-person",
+          "apiName": "contactPerson",
+          "type": "reference",
+          "target": "person",
+          "classification": "restricted"
+        }
+      ]
+    },
+    {
+      "id": "person",
+      "primaryDataset": "test-dataset",
+      "route": "people",
+      "mutationMode": "mutable",
+      "fields": [
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        }
+      ]
+    },
+    {
+      "id": "group-membership",
+      "primaryDataset": "test-dataset",
+      "route": "group-memberships",
+      "mutationMode": "create-only",
+      "fields": [
+        {
+          "id": "person",
+          "type": "reference",
+          "target": "person",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "household",
+          "type": "reference",
+          "target": "household",
+          "required": true,
+          "classification": "restricted"
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "test-dataset"
+    }
+  ]
+}"#,
     )
     .expect("fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
@@ -1047,53 +690,133 @@ fn compiled_action_registry() -> CompiledRegistry {
 fn compiled_asset_result_action_registry() -> CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://asset-action-openapi.example.test"},
-          "entities":[{
-            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create-only",
-            "fields":[
-              {"id":"asset-code","apiName":"assetCode","type":"string","maximumLength":64,"required":true,"classification":"internal"}
-            ]
-          },{
-            "id":"inspection","primaryDataset":"test-dataset","route":"inspections","mutationMode":"create-only",
-            "fields":[
-              {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"}
-            ]
-          }],
-          "actions":[{
-            "id":"register-asset",
-            "inputs":[
-              {"id":"asset-code","apiName":"assetCode","type":"string","maximumLength":64,"required":true,"classification":"internal"}
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "asset-action-openapi",
+    "version": "1",
+    "defaultLanguage": "en",
+    "canonicalBaseIri": "https://asset-action-openapi.example.test"
+  },
+  "actions": [
+    {
+      "id": "register-asset",
+      "inputs": [
+        {
+          "id": "asset-code",
+          "apiName": "assetCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "internal"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "asset",
+            "target": {
+              "recordType": "asset"
+            },
+            "operation": "create",
+            "set": {
+              "asset-code": {
+                "fromInput": "asset-code"
+              }
+            }
+          },
+          {
+            "id": "initial-inspection",
+            "target": {
+              "recordType": "inspection"
+            },
+            "operation": "create",
+            "set": {
+              "asset": {
+                "fromEffect": "asset"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "asset-registrar",
+      "default": true,
+      "principalClaim": "principal",
+      "requiredScopes": [
+        "registry:asset:register"
+      ],
+      "permissions": {
+        "actions": [
+          {
+            "action": "register-asset",
+            "operations": [
+              "invoke"
             ],
-            "effects":[{
-              "id":"asset",
-              "target":{"entity":"asset"},
-              "operation":"create",
-              "set":{"asset-code":{"fromField":"asset-code"}}
-            },{
-              "id":"initial-inspection",
-              "target":{"entity":"inspection"},
-              "operation":"create",
-              "set":{"asset":{"fromEffect":"asset"}}
-            }]
-          }],
-          "accessProfiles":[{
-            "id":"asset-registrar",
-            "default":true,
-            "principalClaim":"principal",
-            "requiredScopes":["registry:asset:register"],
-            "permissions":{"actions":[{
-              "action":"register-asset",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"asset", "rowBoundaries": "unrestricted"},
-                {"entity":"inspection", "rowBoundaries": "unrestricted"}
-              ],
-              "results":["asset"]
-            }]}
-          }]
-        }"#,
+            "targets": [
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "asset"
+              },
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "inspection"
+              }
+            ],
+            "results": [
+              "asset"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "recordTypes": [
+    {
+      "id": "asset",
+      "primaryDataset": "test-dataset",
+      "route": "assets",
+      "mutationMode": "create-only",
+      "fields": [
+        {
+          "id": "asset-code",
+          "apiName": "assetCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "internal"
+        }
+      ]
+    },
+    {
+      "id": "inspection",
+      "primaryDataset": "test-dataset",
+      "route": "inspections",
+      "mutationMode": "create-only",
+      "fields": [
+        {
+          "id": "asset",
+          "type": "reference",
+          "target": "asset",
+          "required": true,
+          "classification": "internal"
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "test-dataset"
+    }
+  ]
+}"#,
     )
     .expect("fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")

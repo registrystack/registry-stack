@@ -75,6 +75,8 @@ pub enum AuthorizationError {
 pub enum OfflineFixtureError {
     #[error("the offline fixture does not select one of the requirement's purposes")]
     Purpose,
+    #[error("the offline fixture must select one audience inside the definition ceiling")]
+    Audience,
     #[error(transparent)]
     Authorization(#[from] AuthorizationError),
 }
@@ -424,6 +426,15 @@ pub fn match_entitlement(
         .iter()
         .find(|candidate| candidate.id == request.requirement)
         .ok_or(AuthorizationError::Unauthorized)?;
+    if requirement.grant_ceiling.as_ref().is_some_and(|ceiling| {
+        !ceiling
+            .audiences
+            .iter()
+            .any(|audience| audience == context.evidence_audience())
+            || !ceiling.actor_kinds.contains(&context.actor_kind())
+    }) {
+        return Err(AuthorizationError::Unauthorized);
+    }
     if !requirement
         .purposes
         .iter()
@@ -805,6 +816,15 @@ pub fn resolve_offline_fixture_authorization(
     audience: &str,
 ) -> Result<ResolvedAuthorization, OfflineFixtureError> {
     let purpose = fixture_purpose(&requirement.purposes, common, case)?;
+    let audience = fixture_audience(
+        requirement
+            .grant_ceiling
+            .as_ref()
+            .map(|ceiling| ceiling.audiences.as_slice()),
+        common,
+        case,
+        audience,
+    )?;
     let subjects = if let Some(subjects) = case
         .get("subjects")
         .or_else(|| common.and_then(|value| value.get("subjects")))
@@ -830,6 +850,7 @@ pub fn resolve_offline_fixture_authorization(
     let request = EvidenceRequest {
         request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
         requirement: requirement.id.clone(),
+        expected_configuration_revision: None,
         purpose: purpose.to_owned(),
         subjects,
         holder_keys,
@@ -851,8 +872,8 @@ pub fn resolve_offline_fixture_authorization(
         })
         .ok_or(AuthorizationError::Unauthorized)?;
     let claims = case
-        .get("verified_token_claims")
-        .or_else(|| common.and_then(|value| value.get("verified_token_claims")))
+        .get("verifiedTokenClaims")
+        .or_else(|| common.and_then(|value| value.get("verifiedTokenClaims")))
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
     let uses_task_grant = configured_grant
@@ -937,6 +958,29 @@ pub fn resolve_offline_fixture_authorization(
 /// covers, in the case or in the inherited common block. The harness never
 /// chooses on the fixture's behalf, so offline evaluation reaches every
 /// authorized purpose and no purpose is silently skipped.
+fn fixture_audience<'a>(
+    ceiling: Option<&'a [String]>,
+    common: Option<&'a serde_json::Map<String, Value>>,
+    case: &'a serde_json::Map<String, Value>,
+    fallback: &'a str,
+) -> Result<&'a str, OfflineFixtureError> {
+    let selected = case
+        .get("audience")
+        .or_else(|| common.and_then(|common| common.get("audience")));
+    let audience = match selected {
+        Some(value) => value.as_str().ok_or(OfflineFixtureError::Audience)?,
+        None => match ceiling {
+            Some([only]) => only.as_str(),
+            Some(_) => return Err(OfflineFixtureError::Audience),
+            None => fallback,
+        },
+    };
+    if ceiling.is_some_and(|allowed| !allowed.iter().any(|entry| entry == audience)) {
+        return Err(AuthorizationError::Unauthorized.into());
+    }
+    Ok(audience)
+}
+
 fn fixture_purpose<'a>(
     purposes: &'a [String],
     common: Option<&serde_json::Map<String, Value>>,
@@ -1499,6 +1543,7 @@ mod tests {
         EvidenceRequest {
             request_nonce: "A".repeat(43),
             requirement: "urn:example:requirement:v1".to_owned(),
+            expected_configuration_revision: None,
             purpose: "purpose".to_owned(),
             subjects: Vec::new(),
             holder_keys,
@@ -1551,6 +1596,39 @@ mod tests {
         assert_eq!(
             fixture_purpose(&purposes, None, &fixture_object(serde_json::json!({}))),
             Ok("only-purpose")
+        );
+    }
+
+    #[test]
+    fn normalized_fixture_audience_uses_its_ceiling_and_rejects_outside_or_ambiguous_choices() {
+        let ceiling = vec!["urn:example:inside".to_owned()];
+        let empty = fixture_object(serde_json::json!({}));
+        assert_eq!(
+            fixture_audience(Some(&ceiling), None, &empty, "urn:legacy:fixture"),
+            Ok("urn:example:inside")
+        );
+        let outside = fixture_object(serde_json::json!({"audience":"urn:example:outside"}));
+        assert_eq!(
+            fixture_audience(Some(&ceiling), None, &outside, "urn:legacy:fixture"),
+            Err(AuthorizationError::Unauthorized.into())
+        );
+        let multiple = vec![
+            "urn:example:first".to_owned(),
+            "urn:example:second".to_owned(),
+        ];
+        assert_eq!(
+            fixture_audience(Some(&multiple), None, &empty, "urn:legacy:fixture"),
+            Err(OfflineFixtureError::Audience)
+        );
+        let common = fixture_object(serde_json::json!({"audience":"urn:example:first"}));
+        let case = fixture_object(serde_json::json!({"audience":"urn:example:second"}));
+        assert_eq!(
+            fixture_audience(Some(&multiple), Some(&common), &case, "urn:legacy:fixture"),
+            Ok("urn:example:second")
+        );
+        assert_eq!(
+            fixture_audience(None, None, &empty, "urn:legacy:fixture"),
+            Ok("urn:legacy:fixture")
         );
     }
 

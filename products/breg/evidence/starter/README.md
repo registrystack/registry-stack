@@ -1,73 +1,17 @@
-# Record status from BReg
+# BReg assertion authoring fragment
 
-This editable starter contains two questions and synthetic fixtures. Both questions
-reuse `registry-status` and permit either the code or registration-number selector.
-Their source, selectors, response schema, fixed fact schema and extraction adapter
-come from a reviewed `bregctl generate evidence-source` export. Import that export
-before anything else runs: until it lands the questions name a source and selector
-profiles the project does not hold, so `check` reports them missing and
-`fixtures run` and `build` refuse. There is no generated source copy to maintain
-here.
+This directory is an authoring fragment, not a complete EvidenceProject and not
+an `evidencectl init --starter` input. First initialize `../offline-starter` and
+import the explicit registry's Source as described in the parent README.
 
-`record-active` returns one boolean. `record-status-pair` returns the complete pair
-of complementary booleans for the same two-state vocabulary. The pair demonstrates
-complete multi-concept disclosure without revealing another record attribute.
-The derivations receive only `status`; the source adapter verifies the chosen
-identity before either question runs. A null or missing status is unavailable.
+Copy `functions/` and `fixtures/` into the editable project's corresponding
+directories. In its existing `evidence.yaml`, append the `functions` entries and
+merge the `assertionDefinitions` entries from `definitions.yaml.fragment`.
+This is ordinary authoring, not a separate import format. Do not replace the
+existing Sources, selector profiles, Functions or offline definition.
 
-The first fixture uses code and the second uses registration-number, exercising
-both alternatives through ordinary reference fixtures. Each covers positive,
-negative, missing and null status, exact unresolved lookup, identity refusal,
-source failure, output rejection and the duplicate-disclosure-family guard.
-Synthetic identity and private label canaries must stay out of assertions and
-diagnostics.
-
-The copied `targets/local/settings.yaml` is an explicit loopback teaching target.
-Review its authority and source connection, then set its absolute runtime paths.
-The fixed `registry` connection uses a dedicated BReg workload credential, separate
-from the Evidence caller and the registry operator. Stop the registry normally,
-then export the reviewed lookup for entity `record`, fact `status` and both
-selectors, repeating `--selector` for `by-code` and `by-registration-number`, and
-copy the existing credential pair into this project's owner-only secrets directory:
-
-```sh
-bregctl dev stop ../registry
-bregctl dev export-client ../registry --client source \
-  --client-id-file ./secrets/registry-client-id \
-  --assertion-key-file ./secrets/registry-client-key
-```
-
-Normal stop and start retains that pair.
-
-With the native binaries on PATH, create the target and import the export:
-
-```sh
-evidencectl target new ./targets/configured --settings ./targets/local/settings.yaml \
-  --signing-public-key ./secrets/signing-p256-public.jwk.json
-evidencectl source import ../exports/registry-status --project . --target ./targets/configured
-evidencectl fixtures run . --target ./targets/configured
-evidencectl test . --target ./targets/configured
-```
-
-`evidencectl source add ./registry ./evidence` connects a stopped
-registry in one guided operation instead, previewing the proposed source
-authority and performing it with `--apply`. It runs the matching `bregctl` for
-the registry side, so it needs both projects on one machine and a `bregctl`
-binary of the same version on `PATH`, or named by `--bregctl-bin` or
-`BREGCTL_BIN`. Each run exposes one selector, so this two-selector example keeps
-the export above; the `default-starter/` and `named-starter/` inputs take the
-guided path.
-
-After BReg dev has published the dedicated source credentials, rehearse both live
-services with `evidencectl dev start . --target ./targets/configured`.
-This starts Evidence and a separate stock caller issuer using generated local authority;
-it reuses the target's source connections and outbound TLS settings. The target's
-caller authentication and service identity remain the explicit build settings.
-
-Fixtures and tests replay recorded synthetic responses once the reviewed export is
-imported, and then need neither a running BReg nor source credentials to be
-present; before that import they refuse on the missing `registry-status` source.
-Serving the generated development package requires the separate caller issuer,
-BReg endpoint, source credentials, signing key and audit storage named in the
-reviewed target. A production deployment needs its own reviewed HTTPS target
-and transit signer before `evidencectl package` creates its immutable package.
+`record-active` answers one boolean using `by-code`. `record-status-pair` uses
+`by-registration-number` and releases the reviewed active/retired pair. Both
+reference the imported `registry-status` Source and have their own fixtures.
+A new complete target generated with `target new --local` gives each definition
+an explicit local grant; review that authority separately from source credentials.

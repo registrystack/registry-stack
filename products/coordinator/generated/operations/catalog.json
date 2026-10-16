@@ -1,0 +1,2236 @@
+{
+  "breg.invoke-action/v1": {
+    "declaredRefusal": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "One package-declared business refusal from a validated product response.\n\nThe code is deliberately absent from `Debug`; callers must opt in to reading\nor serializing it for an authored refusal branch.",
+      "properties": {
+        "refusalCode": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "refusalCode"
+      ],
+      "title": "invoke-breg-action declared-refusal output",
+      "type": "object"
+    },
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "breg",
+      "identity": {
+        "effect": "mutation",
+        "id": "breg.invoke-action/v1",
+        "keyRequirement": "required",
+        "product": "breg",
+        "readReceipt": false,
+        "recovery": "same-command",
+        "requiresPreparation": true,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "preconditions": {
+          "default": null
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "title": "breg.invoke-action/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "BRegActionResultReference": {
+          "description": "One disclosed effect reference in a successful action receipt.",
+          "properties": {
+            "recordId": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "recordType": {
+              "type": "string"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "recordType",
+            "recordId",
+            "revision"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Successful immediate-action application receipt.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "applicationId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BRegActionResultReference"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "action",
+        "applicationId",
+        "results"
+      ],
+      "title": "breg.invoke-action/v1 output",
+      "type": "object"
+    }
+  },
+  "breg.read-record/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "breg",
+      "identity": {
+        "effect": "read",
+        "id": "breg.read-record/v1",
+        "keyRequirement": "none",
+        "product": "breg",
+        "readReceipt": false,
+        "recovery": "read-again",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "GrantReference": {
+          "additionalProperties": false,
+          "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+          "properties": {
+            "expiresAt": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "expiresAt"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "type": "string"
+        },
+        "grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GrantReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "collection",
+        "recordId"
+      ],
+      "title": "breg.read-record/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "RegistryRecord": {
+          "additionalProperties": true,
+          "description": "One Registry Record v1 member.",
+          "properties": {
+            "domainData": {
+              "additionalProperties": true,
+              "description": "Project-defined record data. The registry project's entity schema owns these members, so check accepts any path beneath domainData and test and the runtime decide.",
+              "type": "object"
+            },
+            "recordIdentifier": {
+              "type": "string"
+            },
+            "revisionIdentifier": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "recordIdentifier",
+            "revisionIdentifier",
+            "domainData"
+          ],
+          "type": "object"
+        },
+        "RegistryRecordJsonLdContext": {
+          "oneOf": [
+            {
+              "const": "https://id.registrystack.org/contexts/registry-record/v1"
+            },
+            {
+              "items": {
+                "minLength": 1,
+                "pattern": "^[hH][tT][tT][pP][sS]://[^/?#\\s]+(?:[/?#][^\\s]*)?$",
+                "type": "string"
+              },
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "const": "https://id.registrystack.org/contexts/registry-record/v1"
+                }
+              ],
+              "type": "array",
+              "uniqueItems": true
+            }
+          ]
+        },
+        "RegistryRecordMeta": {
+          "additionalProperties": true,
+          "description": "The homogeneous Registry, primary dataset, and entity context shared by a\nsingle response or every member of a collection.",
+          "properties": {
+            "datasetIdentifier": {
+              "type": "string"
+            },
+            "entityTypeIdentifier": {
+              "type": "string"
+            },
+            "registryIdentifier": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "registryIdentifier",
+            "datasetIdentifier",
+            "entityTypeIdentifier"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": true,
+      "description": "One Registry Record v1 single-response envelope.",
+      "properties": {
+        "@context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RegistryRecordJsonLdContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/RegistryRecord"
+        },
+        "meta": {
+          "$ref": "#/$defs/RegistryRecordMeta"
+        }
+      },
+      "required": [
+        "data",
+        "meta"
+      ],
+      "title": "breg.read-record/v1 output",
+      "type": "object"
+    }
+  },
+  "casework.cancel-review-request/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "casework",
+      "identity": {
+        "effect": "mutation",
+        "id": "casework.cancel-review-request/v1",
+        "keyRequirement": "required",
+        "product": "casework",
+        "readReceipt": false,
+        "recovery": "same-command",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "PolicyBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        },
+        "ReviewRequestAccepted": {
+          "additionalProperties": false,
+          "properties": {
+            "policy": {
+              "$ref": "#/$defs/PolicyBinding"
+            },
+            "requestId": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectBinding"
+            },
+            "submissionDigest": {
+              "$ref": "#/$defs/ContentDigest"
+            }
+          },
+          "required": [
+            "requestId",
+            "subject",
+            "policy",
+            "submissionDigest"
+          ],
+          "type": "object"
+        },
+        "SubjectBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "type",
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "The input of `cancel-review-request`: the accepted request a submit step\nreturned and the reason Casework records with the cancellation.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ReviewRequestAccepted"
+        }
+      },
+      "required": [
+        "request",
+        "reason"
+      ],
+      "title": "casework.cancel-review-request/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "PolicyBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        },
+        "ReviewResult": {
+          "additionalProperties": false,
+          "properties": {
+            "availableUntil": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "completedAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "outcome": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "policy": {
+              "$ref": "#/$defs/PolicyBinding"
+            },
+            "publicReason": {
+              "description": "Text the decision gives for release to the subject's owner. It is\ndistinct from the reviewer's private reason, which never leaves\nCasework.",
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-maximum-utf8-bytes": 2000
+            },
+            "requestId": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "result": {
+              "additionalProperties": true,
+              "type": "object",
+              "x-maximum-canonical-bytes": 16384
+            },
+            "resultId": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ReviewResultStatus"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectBinding"
+            },
+            "submissionDigest": {
+              "$ref": "#/$defs/ContentDigest"
+            }
+          },
+          "required": [
+            "resultId",
+            "requestId",
+            "subject",
+            "policy",
+            "submissionDigest",
+            "status",
+            "completedAt",
+            "availableUntil"
+          ],
+          "type": "object"
+        },
+        "ReviewResultStatus": {
+          "enum": [
+            "approved",
+            "rejected",
+            "changes-requested",
+            "answered",
+            "cancelled",
+            "superseded"
+          ],
+          "type": "string"
+        },
+        "SubjectBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "type",
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "cancelled",
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/ReviewResult"
+            }
+          },
+          "required": [
+            "outcome",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "already-terminal",
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/ReviewResult"
+            }
+          },
+          "required": [
+            "outcome",
+            "result"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "casework.cancel-review-request/v1 output"
+    }
+  },
+  "casework.submit-review-request/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": {
+        "acceptedBinding": [
+          "requestId",
+          "subject",
+          "policy",
+          "submissionDigest"
+        ],
+        "authenticatedWake": true,
+        "authority": "current-review-producer",
+        "deadline": "original-wait-timeout-within-original-run-deadline",
+        "defaultIntervalSeconds": 900,
+        "maximumRetryAfterSeconds": 86400,
+        "minimumIntervalSeconds": 30,
+        "name": "result",
+        "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+        "profile": "casework-result",
+        "signalCarriesResult": false,
+        "terminalEvidence": "exact-authorized-review-result"
+      },
+      "connectionInterface": "casework",
+      "identity": {
+        "effect": "mutation",
+        "id": "casework.submit-review-request/v1",
+        "keyRequirement": "required",
+        "product": "casework",
+        "readReceipt": false,
+        "recovery": "same-command",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "HumanIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "issuer",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "PolicySelection": {
+          "additionalProperties": false,
+          "dependentRequired": {
+            "digest": [
+              "version"
+            ],
+            "version": [
+              "digest"
+            ]
+          },
+          "description": "Select the trusted provider's current policy, or require one exact binding.\nThe selector stays in the submission identity; acceptance records the concrete binding.",
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ReviewContext": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "const": "submitted",
+                  "type": "string"
+                },
+                "snapshot": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "x-maximum-canonical-bytes": 65536,
+                  "x-maximum-json-depth": 32,
+                  "x-maximum-json-nodes": 4096
+                }
+              },
+              "required": [
+                "mode",
+                "snapshot"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "binding": {
+                  "$ref": "#/$defs/SourceContextBinding"
+                },
+                "mode": {
+                  "const": "current-source",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "binding"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SourceContextBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reference"
+          ],
+          "type": "object"
+        },
+        "SubjectBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "type",
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/ReviewContext"
+        },
+        "initiator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy": {
+          "$ref": "#/$defs/PolicySelection"
+        },
+        "requesterReference": {
+          "type": "string"
+        },
+        "resultConstraints": {
+          "additionalProperties": true,
+          "type": "object",
+          "x-maximum-canonical-bytes": 16384
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectBinding"
+        }
+      },
+      "required": [
+        "policy",
+        "subject",
+        "requesterReference",
+        "context"
+      ],
+      "title": "casework.submit-review-request/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "PolicyBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        },
+        "SubjectBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "type",
+            "id",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/PolicyBinding"
+        },
+        "requestId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectBinding"
+        },
+        "submissionDigest": {
+          "$ref": "#/$defs/ContentDigest"
+        }
+      },
+      "required": [
+        "requestId",
+        "subject",
+        "policy",
+        "submissionDigest"
+      ],
+      "title": "casework.submit-review-request/v1 output",
+      "type": "object"
+    }
+  },
+  "evaluation.evaluate/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "evaluation",
+      "identity": {
+        "effect": "evaluation",
+        "id": "evaluation.evaluate/v1",
+        "keyRequirement": "none",
+        "product": "evaluation",
+        "readReceipt": false,
+        "recovery": "hold-after-dispatch",
+        "requiresPreparation": true,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectionMayLowerLimits": true,
+          "maximumRequestBytes": 65536,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "redirects": "refused",
+          "requestTimeoutMilliseconds": 8000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "Question": {
+          "description": "Authored questions are distinct from each provider's external DTO spelling.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "instructions": {
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "predicate",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "instructions"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "criteria": {
+                  "additionalProperties": false,
+                  "maxProperties": 32,
+                  "minProperties": 2,
+                  "patternProperties": {
+                    "^[a-z][a-z0-9_-]{0,63}$": {
+                      "pattern": "\\S",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "instructions": {
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "choice",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "instructions",
+                "criteria"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "criteria": {
+                  "items": {
+                    "pattern": "\\S",
+                    "type": "string"
+                  },
+                  "maxItems": 10,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "instructions": {
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "score",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "instructions",
+                "criteria"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "questions": {
+          "additionalProperties": false,
+          "maxProperties": 32,
+          "minProperties": 1,
+          "patternProperties": {
+            "^[a-z][a-z0-9_-]{0,63}$": {
+              "$ref": "#/$defs/Question"
+            }
+          },
+          "type": "object"
+        },
+        "state": {
+          "description": "The evaluated state: any JSON object, string or array.",
+          "type": [
+            "object",
+            "string",
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "questions"
+      ],
+      "title": "evaluation.evaluate/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "DecisionAnswer": {
+          "oneOf": [
+            {
+              "properties": {
+                "probability": {
+                  "type": "number"
+                },
+                "type": {
+                  "const": "predicate",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "probability"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "choice": {
+                  "type": "string"
+                },
+                "nativeConfidence": {
+                  "type": "number"
+                },
+                "probabilities": {
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "type": "object"
+                },
+                "type": {
+                  "const": "choice",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "choice",
+                "probabilities",
+                "nativeConfidence"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "legend": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "nativeConfidence": {
+                  "type": "number"
+                },
+                "probabilities": {
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "type": "object"
+                },
+                "score": {
+                  "type": "number"
+                },
+                "type": {
+                  "const": "score",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "score",
+                "legend",
+                "probabilities",
+                "nativeConfidence"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "refusal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "DecisionProtocol": {
+          "enum": [
+            "system-one",
+            "openai-decisions"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The evaluate-decision call output. Answers keep the authored question\nidentifiers; usage keeps the provider's own metadata spelling.",
+      "properties": {
+        "answers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DecisionAnswer"
+          },
+          "type": "object"
+        },
+        "protocol": {
+          "$ref": "#/$defs/DecisionProtocol"
+        },
+        "requestedModel": {
+          "type": "string"
+        },
+        "returnedModel": {
+          "type": "string"
+        },
+        "usage": true
+      },
+      "required": [
+        "protocol",
+        "requestedModel",
+        "returnedModel",
+        "answers",
+        "usage"
+      ],
+      "title": "evaluation.evaluate/v1 output",
+      "type": "object"
+    }
+  },
+  "external.get/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": {
+        "acceptedBinding": [
+          "saved-command"
+        ],
+        "authenticatedWake": false,
+        "authority": "bound-read-only-connection",
+        "deadline": "original-wait-timeout-within-original-run-deadline",
+        "intervalSource": "authored-completion",
+        "maximumRetryAfterSeconds": 86400,
+        "minimumIntervalSeconds": 30,
+        "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+        "profile": "bounded-poll",
+        "signalCarriesResult": false,
+        "specializationRequired": true,
+        "terminalEvidence": "typed-response-and-pinned-pure-interpretation"
+      },
+      "connectionInterface": "external-http",
+      "identity": {
+        "effect": "read",
+        "id": "external.get/v1",
+        "keyRequirement": "none",
+        "product": "external-http",
+        "readReceipt": false,
+        "recovery": "read-again",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectionMayLowerLimits": true,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "redirects": "refused",
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "query": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "external.get/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The external-get call output. The body is open here: the connection's\noperator-owned response schema constrains it in the runtime configuration.",
+      "properties": {
+        "body": {
+          "description": "The parsed JSON response body, or null for an empty body."
+        },
+        "status": {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "body"
+      ],
+      "title": "external.get/v1 output",
+      "type": "object"
+    }
+  },
+  "messaging.submit-message/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "messaging",
+      "identity": {
+        "effect": "mutation",
+        "id": "messaging.submit-message/v1",
+        "keyRequirement": "required",
+        "product": "messaging",
+        "readReceipt": true,
+        "recovery": "same-command-and-receipt",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "DirectContent": {
+          "additionalProperties": false,
+          "description": "Content a caller supplies instead of naming a template.",
+          "properties": {
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        "Recipient": {
+          "description": "Where one message goes: exactly one email address or one E.164 phone\nnumber, written `{\"email\": ...}` or `{\"phone\": ...}`.\n\nIts `Debug` never prints the contact, so a recipient that reaches a log\nthrough a derived `Debug` names only its kind.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "email": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "email"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "phone": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "phone"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "TemplateReference": {
+          "additionalProperties": false,
+          "description": "One template version, under `templates/<id>/<version>/`, as the wire\ncontract names it.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "The body of `POST /v1/messages`. Exactly one of `template` or `content`\nis present; `locale` and `data` accompany a template and nothing else.\nInstants are RFC 3339 strings the runtime parses.",
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "type": "null"
+            },
+            "data": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "locale": {
+              "type": "string"
+            },
+            "template": {
+              "$ref": "#/$defs/TemplateReference"
+            }
+          },
+          "required": [
+            "template",
+            "locale",
+            "data"
+          ]
+        },
+        {
+          "properties": {
+            "content": {
+              "$ref": "#/$defs/DirectContent"
+            },
+            "data": {
+              "type": "null"
+            },
+            "locale": {
+              "type": "null"
+            },
+            "template": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "content"
+          ]
+        }
+      ],
+      "properties": {
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectContent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "correlationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": true,
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "locale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notBefore": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "senderProfile": {
+          "type": "string"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemplateReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "$ref": "#/$defs/Recipient"
+        }
+      },
+      "required": [
+        "senderProfile",
+        "to"
+      ],
+      "title": "messaging.submit-message/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "MessageLinks": {
+          "additionalProperties": false,
+          "description": "The links a message answer carries.",
+          "properties": {
+            "cancel": {
+              "type": "string"
+            },
+            "self": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "self",
+            "cancel"
+          ],
+          "type": "object"
+        },
+        "MessageStatus": {
+          "description": "The public status of one message, derived from its dispatch state and\nits delivery report by [`derive_status`].",
+          "enum": [
+            "queued",
+            "sending",
+            "submitted",
+            "delivered",
+            "failed",
+            "expired",
+            "cancelled",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "The `202` answer to an accepted submission, and what a replayed key\nanswers again.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "links": {
+          "$ref": "#/$defs/MessageLinks"
+        },
+        "status": {
+          "$ref": "#/$defs/MessageStatus"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "links"
+      ],
+      "title": "messaging.submit-message/v1 output",
+      "type": "object"
+    }
+  },
+  "scheduling.create-appointment/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "scheduling",
+      "identity": {
+        "effect": "mutation",
+        "id": "scheduling.create-appointment/v1",
+        "keyRequirement": "required",
+        "product": "scheduling",
+        "readReceipt": true,
+        "recovery": "same-command-and-receipt",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "AdmissionRequest": {
+          "additionalProperties": false,
+          "description": "A request for one admission decision. The evaluator is pure: it resolves\nnothing, fetches nothing, and reads exactly what it is handed.",
+          "properties": {
+            "capabilities": {
+              "description": "The party's held capability references, matched against the offering's\nrequirements.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "channel": {
+              "description": "The authenticated channel, when the deployment allocates supply\nthrough channel subquotas.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "duplicateKey": {
+              "description": "The duplicate-active key, derived the same way the offering's policy\nprescribes.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "externalReferences": {
+              "default": [],
+              "description": "Opaque record links Scheduling retains with the hold or booking. Their\norder is not significant.",
+              "items": {
+                "$ref": "#/$defs/ExternalReference"
+              },
+              "type": "array"
+            },
+            "offering": {
+              "type": "string"
+            },
+            "party": {
+              "$ref": "#/$defs/PartyCounts"
+            },
+            "policyRevision": {
+              "description": "The policy revision the caller resolved the offering under.",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prerequisites": {
+              "description": "The party's held prerequisite references, matched against the\noffering's requirements.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "start": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "windowRevision": {
+              "description": "The window revision the caller resolved an arrival window under.",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "offering",
+            "start",
+            "party",
+            "policyRevision",
+            "capabilities",
+            "prerequisites"
+          ],
+          "type": "object"
+        },
+        "CreateAppointmentRequest": {
+          "additionalProperties": false,
+          "description": "The request behind `POST /v1/appointments`: confirm a held allocation, or\ncreate an appointment directly.",
+          "properties": {
+            "admission": {
+              "$ref": "#/$defs/AdmissionRequest",
+              "description": "The direct-create admission request."
+            },
+            "hold": {
+              "description": "Hold confirmation is not offered by Coordinator.",
+              "type": "null"
+            }
+          },
+          "required": [
+            "admission"
+          ],
+          "type": "object"
+        },
+        "ExternalReference": {
+          "additionalProperties": false,
+          "description": "An opaque link to a record owned by another product.\n\nScheduling stores and returns this tuple without resolving it. The\nidentifier names only the referenced record; callers must not put personal\ndata in any field.",
+          "properties": {
+            "identifier": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string"
+            },
+            "recordType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "product",
+            "recordType",
+            "identifier"
+          ],
+          "type": "object"
+        },
+        "GrantReference": {
+          "additionalProperties": false,
+          "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+          "properties": {
+            "expiresAt": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "expiresAt"
+          ],
+          "type": "object"
+        },
+        "PartyCounts": {
+          "additionalProperties": false,
+          "description": "The party summary capacity is derived from. Recipients are the people the\nservice is delivered to; attendees are everyone present, recipients\nincluded. A parent accompanying two children is three attendees and two\nrecipients, and consumes recipient units, never attendee counts.",
+          "properties": {
+            "attendees": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "recipients": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "recipients",
+            "attendees"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "appointment": {
+          "$ref": "#/$defs/CreateAppointmentRequest"
+        },
+        "grant": {
+          "$ref": "#/$defs/GrantReference"
+        }
+      },
+      "required": [
+        "grant",
+        "appointment"
+      ],
+      "title": "scheduling.create-appointment/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "AppointmentStateDocument": {
+          "description": "The lifecycle state of an appointment on the wire.",
+          "enum": [
+            "confirmed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "ExternalReference": {
+          "additionalProperties": false,
+          "description": "An opaque link to a record owned by another product.\n\nScheduling stores and returns this tuple without resolving it. The\nidentifier names only the referenced record; callers must not put personal\ndata in any field.",
+          "properties": {
+            "identifier": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string"
+            },
+            "recordType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "product",
+            "recordType",
+            "identifier"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "A confirmed appointment.",
+      "properties": {
+        "appointmentId": {
+          "type": "string"
+        },
+        "cancelledAt": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "externalReferences": {
+          "items": {
+            "$ref": "#/$defs/ExternalReference"
+          },
+          "type": "array"
+        },
+        "offering": {
+          "type": "string"
+        },
+        "policyRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resource": {
+          "description": "The pool member serving the appointment, for exact-time offerings.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AppointmentStateDocument"
+        },
+        "units": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "appointmentId",
+        "offering",
+        "start",
+        "end",
+        "resource",
+        "units",
+        "channel",
+        "revision",
+        "state",
+        "policyRevision",
+        "createdAt",
+        "cancelledAt",
+        "externalReferences"
+      ],
+      "title": "scheduling.create-appointment/v1 output",
+      "type": "object"
+    }
+  },
+  "scheduling.read-availability/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "scheduling",
+      "identity": {
+        "effect": "read",
+        "id": "scheduling.read-availability/v1",
+        "keyRequirement": "none",
+        "product": "scheduling",
+        "readReceipt": false,
+        "recovery": "read-again",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "GrantReference": {
+          "additionalProperties": false,
+          "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+          "properties": {
+            "expiresAt": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "expiresAt"
+          ],
+          "type": "object"
+        },
+        "LocalId": {
+          "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GrantReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "offering",
+        "start",
+        "end",
+        "limit"
+      ],
+      "title": "scheduling.read-availability/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "AvailabilityEntry": {
+          "description": "One availability answer entry. Exact-time offerings answer in grid slots;\narrival-window offerings answer in windows.",
+          "oneOf": [
+            {
+              "description": "A grid slot and how many pool members are still free across it.",
+              "properties": {
+                "end": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "free": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "kind": {
+                  "const": "slot",
+                  "type": "string"
+                },
+                "start": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "start",
+                "end",
+                "free"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A published window and its remaining recipient units, the caller's\nchannel slice included when the window reserves one for it.",
+              "properties": {
+                "channelRemaining": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "end": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "window",
+                  "type": "string"
+                },
+                "remaining": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "start": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "window": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "window",
+                "start",
+                "end",
+                "remaining",
+                "channelRemaining"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "One page of a bounded listing, with the opaque cursor that continues it.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AvailabilityEntry"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor"
+      ],
+      "title": "scheduling.read-availability/v1 output",
+      "type": "object"
+    }
+  },
+  "scheduling.read-service/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "scheduling",
+      "identity": {
+        "effect": "read",
+        "id": "scheduling.read-service/v1",
+        "keyRequirement": "none",
+        "product": "scheduling",
+        "readReceipt": false,
+        "recovery": "read-again",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "connectTimeoutMilliseconds": 1000,
+          "maximumResponseBytes": 65536,
+          "mutationRetries": 0,
+          "requestTimeoutMilliseconds": 2000
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$defs": {
+        "GrantReference": {
+          "additionalProperties": false,
+          "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+          "properties": {
+            "expiresAt": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "expiresAt"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GrantReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "scheduling.read-service/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "What `GET /v1/scheduling` answers: which deployment and which policy.",
+      "properties": {
+        "policyDigest": {
+          "type": "string"
+        },
+        "policyRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schedulingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schedulingId",
+        "policyRevision",
+        "policyDigest"
+      ],
+      "title": "scheduling.read-service/v1 output",
+      "type": "object"
+    }
+  }
+}

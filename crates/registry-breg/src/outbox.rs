@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use registry_platform_hooks::delivery::DeliveryCapture;
-use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
+use registry_platform_hooks::{
+    Causation, EnvelopeLimits, EventSubject, HookEnvelope, HookEnvelopeError,
+};
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
 use tokio_postgres::Transaction;
@@ -27,6 +29,11 @@ use crate::webhook::DELIVERY_SCHEMA;
 pub enum OutboxError {
     #[error("configured event projection is invalid")]
     InvalidProjection,
+    #[error(
+        "the event envelope is {size} bytes, over its {max}-byte delivery bound; \
+         project fewer or smaller fields into the event"
+    )]
+    EventTooLarge { size: usize, max: usize },
     #[error("mutation outbox is unavailable")]
     Unavailable,
 }
@@ -111,7 +118,7 @@ pub(crate) fn capture_envelope(
 ///
 /// `maximum_payload_bytes` is the compiled per-delivery bound. It measures the
 /// whole envelope, not the `data` object alone; an event with no compiled
-/// delivery carries the store's own 2 MiB bound.
+/// delivery carries the envelope's own 1 MiB signable bound.
 pub(crate) fn envelope_payload(
     envelope: &HookEnvelope,
     maximum_payload_bytes: Option<u32>,
@@ -124,7 +131,12 @@ pub(crate) fn envelope_payload(
     };
     envelope
         .to_canonical_bytes(&limits)
-        .map_err(|_| OutboxError::InvalidProjection)
+        .map_err(|error| match error {
+            HookEnvelopeError::PayloadTooLarge { size, max } => {
+                OutboxError::EventTooLarge { size, max }
+            }
+            _ => OutboxError::InvalidProjection,
+        })
 }
 
 /// Resolve the data contract id of every hook of `entity` that `trigger` fires.
@@ -214,12 +226,11 @@ pub(crate) async fn insert_configured_events(
         let snapshot = match mutation.trigger {
             EventTrigger::Created | EventTrigger::Patched => mutation.after,
             EventTrigger::Tombstoned => mutation.before,
-            EventTrigger::RequestLifecycle => return Err(OutboxError::InvalidProjection),
         }
         .ok_or(OutboxError::InvalidProjection)?;
         let values = projected_event_values(&entity.fields, &projection_fields, snapshot)?;
         let data = json!({
-            "entity": mutation.entity_id,
+            "recordType": mutation.entity_id,
             "recordId": mutation.record_id,
             "revision": mutation.record_revision,
             "trigger": trigger_name(mutation.trigger),
@@ -345,10 +356,7 @@ fn condition_matches(
         after_equals,
         before_is_null,
         after_is_null,
-    } = condition
-    else {
-        return Err(OutboxError::InvalidProjection);
-    };
+    } = condition;
     for field in changed {
         let before_value = before
             .and_then(|snapshot| snapshot.get(field))
@@ -544,7 +552,6 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request-lifecycle",
     }
 }
 
@@ -621,7 +628,7 @@ mod tests {
 
     fn projection() -> Value {
         json!({
-            "entity": "permit",
+            "recordType": "permit",
             "recordId": "8f14e45f-ceea-467a-9cc1-8b2a4b9e2a11",
             "revision": 3,
             "trigger": "created",
@@ -676,8 +683,8 @@ mod tests {
         let payload = envelope_payload(&envelope, None).expect("payload");
         let expected = concat!(
             r#"{"causation":{"hop":0,"root":"4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51"},"#,
-            r#""data":{"entity":"permit","packageRevision":"sha256:5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03","#,
-            r#""recordId":"8f14e45f-ceea-467a-9cc1-8b2a4b9e2a11","revision":3,"#,
+            r#""data":{"packageRevision":"sha256:5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03","#,
+            r#""recordId":"8f14e45f-ceea-467a-9cc1-8b2a4b9e2a11","recordType":"permit","revision":3,"#,
             r#""trigger":"created","values":{"status":"granted"}},"#,
             r#""dataschema":"urn:breg:event-schema:permits:permit:permit.granted:sha256:3f786850e387550fdab836ed7e6dc881de23001b","#,
             r#""id":"4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51","#,
@@ -708,9 +715,22 @@ mod tests {
         assert!(data_bytes < payload.len());
         let between = u32::try_from(data_bytes + 1).expect("bound");
         assert!(usize::try_from(between).expect("bound") < payload.len());
+        let refusal = envelope_payload(&envelope, Some(between)).unwrap_err();
         assert_eq!(
-            envelope_payload(&envelope, Some(between)).unwrap_err(),
-            OutboxError::InvalidProjection
+            refusal,
+            OutboxError::EventTooLarge {
+                size: payload.len(),
+                max: data_bytes + 1,
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "the event envelope is {} bytes, over its {}-byte delivery bound; \
+                 project fewer or smaller fields into the event",
+                payload.len(),
+                data_bytes + 1
+            )
         );
         let exact = u32::try_from(payload.len()).expect("bound");
         assert_eq!(
@@ -828,6 +848,8 @@ mod tests {
             (
                 "payload".to_owned(),
                 crate::model::CompiledField {
+                    display: Default::default(),
+                    relationship: None,
                     id: "payload".to_owned(),
                     field_type: crate::contract::FieldTypeSource::Structured {
                         max_bytes: 256,
@@ -844,6 +866,8 @@ mod tests {
             (
                 "secret".to_owned(),
                 crate::model::CompiledField {
+                    display: Default::default(),
+                    relationship: None,
                     id: "secret".to_owned(),
                     field_type: crate::contract::FieldTypeSource::String {
                         min_length: 0,

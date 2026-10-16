@@ -2,7 +2,7 @@ apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
 id: standalone-decision-offline
 review:
-  kind: decision
+  policy: decision
   display:
     summary: Confirm the prepared synthetic batch
     reference: synthetic-batch-0042

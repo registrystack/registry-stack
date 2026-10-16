@@ -239,6 +239,10 @@ fn registry(plan: &Plan) -> String {
             plan.model.display_name
         ),
     );
+    yaml.line(0, "datasets:");
+    yaml.entry(1, "- id", id);
+    yaml.line(2, "display:");
+    yaml.entry(3, "label", title);
     yaml.line(0, "manifestProjection:");
     yaml.entry(1, "accessProfile", OPERATOR_PROFILE);
     yaml.entry(
@@ -391,7 +395,7 @@ fn registry(plan: &Plan) -> String {
          filter by is indexed: the unique identifier and a reference are indexed already, and \
          every other one gets an `indexes` entry.",
     );
-    yaml.line(0, "entities:");
+    yaml.line(0, "recordTypes:");
     for entity in &plan.entities {
         yaml.comment(1, &format!("{} ({})", entity.concept, entity.concept_uri));
         yaml.entry(1, "- id", &entity.id);
@@ -442,9 +446,9 @@ fn registry(plan: &Plan) -> String {
          `breg.access.profile-unrestricted-collection` for it: it can list every record, and a \
          caller-supplied filter is not authorization. That is intended for a single \
          operations team; close it with a `rowBoundaries` entry or by removing `list`. \
-         `breg.access.profile-writable-row-boundary` follows for a bound field it can write: \
-         confirm that moving records between callers' rows is intended, or drop the field \
-         from `writableFields`.",
+         `breg.access.profile-writable-row-boundary` reports a patch that can move a record \
+         between values allowed by an `in` boundary. Keep boundary fields writable for \
+         create; use a separate patch permission if those fields must not change.",
     );
     if let Some(note) = sensitive_note(plan) {
         yaml.comment(0, &note);
@@ -462,7 +466,7 @@ fn registry(plan: &Plan) -> String {
     );
     yaml.line(2, "requiredPurposes: [registry-operations]");
     yaml.line(2, "permissions:");
-    yaml.line(3, "entities:");
+    yaml.line(3, "records:");
     for entity in &plan.entities {
         let all: Vec<&str> = entity.all_fields().map(|field| field.id.as_str()).collect();
         let filterable: Vec<&str> = entity
@@ -470,7 +474,7 @@ fn registry(plan: &Plan) -> String {
             .filter(|field| field.kind.filterable())
             .map(|field| field.id.as_str())
             .collect();
-        yaml.entry(4, "- entity", &entity.id);
+        yaml.entry(4, "- recordType", &entity.id);
         yaml.line(5, "rowBoundaries: unrestricted");
         yaml.line(5, "operations: [create, get, list, patch]");
         yaml.line(5, &format!("readableFields: {}", flow_list(&all)));
@@ -495,14 +499,14 @@ fn registry(plan: &Plan) -> String {
         );
         yaml.line(2, "requiredPurposes: [registry-reporting]");
         yaml.line(2, "permissions:");
-        yaml.line(3, "entities:");
+        yaml.line(3, "records:");
         for entity in readers {
             let readable: Vec<&str> = entity
                 .all_fields()
                 .filter(|field| field.classification != Classification::Restricted)
                 .map(|field| field.id.as_str())
                 .collect();
-            yaml.entry(4, "- entity", &entity.id);
+            yaml.entry(4, "- recordType", &entity.id);
             yaml.line(5, "rowBoundaries: unrestricted");
             yaml.line(5, "operations: [get, list]");
             yaml.line(5, &format!("readableFields: {}", flow_list(&readable)));
@@ -533,7 +537,9 @@ fn field_source(yaml: &mut Yaml, indent: usize, field: &PlannedField) {
             max_length,
         } => {
             if *min_length > 0 {
-                format!("type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}")
+                format!(
+                    "type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}"
+                )
             } else {
                 format!("type: string{required}, maximumLength: {max_length}")
             }
@@ -792,7 +798,7 @@ fn journeys(plan: &Plan) -> String {
         let capture = capture_id(&entity.id);
         let identifier_value = format!("{}-1", entity.id);
         yaml.line(3, &format!("- id: {}", fixture_id("create-", &entity.id)));
-        yaml.entry(4, "entity", &entity.id);
+        yaml.entry(4, "recordType", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
         operator_claims(&mut yaml, plan);
         yaml.line(4, "request:");
@@ -817,7 +823,7 @@ fn journeys(plan: &Plan) -> String {
         );
         yaml.entry(4, "capture", &capture);
         yaml.line(3, &format!("- id: {}", fixture_id("get-", &entity.id)));
-        yaml.entry(4, "entity", &entity.id);
+        yaml.entry(4, "recordType", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
         operator_claims(&mut yaml, plan);
         yaml.line(
@@ -836,7 +842,7 @@ fn journeys(plan: &Plan) -> String {
             ),
         );
         yaml.line(3, &format!("- id: {}", fixture_id("list-", &entity.route)));
-        yaml.entry(4, "entity", &entity.id);
+        yaml.entry(4, "recordType", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
         operator_claims(&mut yaml, plan);
         yaml.line(4, "request: {type: list}");
@@ -858,7 +864,7 @@ fn journeys(plan: &Plan) -> String {
                 fixture_id("read-", &format!("{}-as-{READER_PROFILE}", entity.route))
             ),
         );
-        yaml.entry(4, "entity", &entity.id);
+        yaml.entry(4, "recordType", &entity.id);
         yaml.entry(4, "accessProfile", READER_PROFILE);
         yaml.line(4, "claims:");
         yaml.entry(5, "principal", &reader_principal(plan));
@@ -1919,7 +1925,7 @@ mod tests {
             registry["manifestProjection"]["classificationCeiling"],
             "restricted"
         );
-        let entities = registry["entities"].as_array().expect("entities");
+        let entities = registry["recordTypes"].as_array().expect("entities");
         assert_eq!(entities.len(), 3);
         let person = &entities[0];
         assert_eq!(person["id"], "person");
@@ -1997,8 +2003,8 @@ mod tests {
         let profiles = registry["accessProfiles"].as_array().expect("profiles");
         assert_eq!(profiles[0]["id"], OPERATOR_PROFILE);
         assert_eq!(profiles[1]["id"], READER_PROFILE);
-        let reader_person = &profiles[1]["permissions"]["entities"][0];
-        assert_eq!(reader_person["entity"], "person");
+        let reader_person = &profiles[1]["permissions"]["records"][0];
+        assert_eq!(reader_person["recordType"], "person");
         let readable = reader_person["readableFields"]
             .as_array()
             .expect("readable");
@@ -2118,7 +2124,7 @@ mod tests {
     fn the_readme_names_what_no_field_links_and_the_concepts_that_would() {
         let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
              kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
-             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             recordTypes:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";
         let selection = Selection::parse("test", document.as_bytes()).expect("parses");
@@ -2157,7 +2163,7 @@ mod tests {
 
         let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
              kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
-             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             recordTypes:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";

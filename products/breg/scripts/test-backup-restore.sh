@@ -700,8 +700,9 @@ write_database_secrets "$original_database" original
 
 checkpoint "authoring a project with an event, a revision grant, and an import grant"
 project="$temporary_root/project"
-run_json "$temporary_root/init.json" init "$project"
-assert_json_ok "$temporary_root/init.json" init
+cp -R "$repository_root/products/breg/fixtures/generic-operator-workflows" "$project"
+run_json "$temporary_root/lock.json" project lock "$project"
+assert_json_ok "$temporary_root/lock.json" "project lock"
 python3 - "$project/registry.yaml" <<'PY'
 import sys
 from pathlib import Path
@@ -737,8 +738,8 @@ insert_after("accessProfiles:\n",
              "    requiredScopes: [registry:generic:load]\n"
              "    requiredPurposes: [registry-operations]\n"
              "    permissions:\n"
-             "      entities:\n"
-             "        - entity: record-group\n"
+             "      records:\n"
+             "        - recordType: record-group\n"
              "          rowBoundaries: unrestricted\n"
              "          operations: [import]\n"
              "          readableFields: [code, label]\n"
@@ -792,7 +793,7 @@ wait_for_receipts "the delivered event for the first record" \
 
 checkpoint "opening an import authority the backup will hold open"
 run_json "$temporary_root/authority-open.json" import-authority open --runtime-config "$original_config" \
-  --entity record-group --profile loader --max-items 5 --expires-in 2d \
+  --record-type record-group --profile loader --max-items 5 --expires-in 2d \
   --operator-reference restore-change-1 --reason "Restore proof import window"
 assert_json_ok "$temporary_root/authority-open.json" "import-authority open"
 authority_id=$(json_field "$temporary_root/authority-open.json" authority.authorityId)

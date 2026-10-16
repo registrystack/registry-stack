@@ -266,6 +266,10 @@ pub struct EvidenceRequestBatchAuditEvent {
     pub phase: EvidenceRequestBatchAuditPhase,
     pub requirement: String,
     pub bundle_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_grant_digest: Option<String>,
     pub purpose: String,
     pub requester_pseudonym: String,
     pub actor_kind: ActorKind,
@@ -296,6 +300,17 @@ pub struct EvidenceRequestBatchAuditEvent {
 }
 
 impl EvidenceRequestBatchAuditEvent {
+    #[must_use]
+    pub fn with_authority_revision(
+        mut self,
+        revision: Option<String>,
+        effective_digest: Option<String>,
+    ) -> Self {
+        self.authority_revision = revision;
+        self.effective_grant_digest = effective_digest;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         assurance_profile: AssuranceProfile,
@@ -316,6 +331,8 @@ impl EvidenceRequestBatchAuditEvent {
             phase,
             requirement,
             bundle_revision,
+            authority_revision: None,
+            effective_grant_digest: None,
             purpose,
             requester_pseudonym,
             actor_kind: ActorKind::Service,
@@ -337,6 +354,19 @@ impl EvidenceRequestBatchAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        if self.authority_revision.is_some() != self.effective_grant_digest.is_some()
+            || self
+                .authority_revision
+                .as_ref()
+                .is_some_and(|revision| !registry_platform_config::is_sha256_label(revision))
+            || self
+                .effective_grant_digest
+                .as_ref()
+                .is_some_and(|digest| !registry_platform_config::is_sha256_label(digest))
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+
         let common_valid = valid_uri(&self.event_id)
             && chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_ok()
             && (16..=128).contains(&self.operation.len())
@@ -535,6 +565,10 @@ pub struct EvidenceAuditEvent {
     pub phase: AuditPhase,
     pub requirement: String,
     pub bundle_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_grant_digest: Option<String>,
     pub purpose: String,
     pub requester_pseudonym: String,
     pub actor_kind: ActorKind,
@@ -587,6 +621,17 @@ pub struct EvidenceAuditEvent {
 }
 
 impl EvidenceAuditEvent {
+    #[must_use]
+    pub fn with_authority_revision(
+        mut self,
+        revision: Option<String>,
+        effective_digest: Option<String>,
+    ) -> Self {
+        self.authority_revision = revision;
+        self.effective_grant_digest = effective_digest;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         assurance_profile: AssuranceProfile,
@@ -610,6 +655,8 @@ impl EvidenceAuditEvent {
             phase,
             requirement,
             bundle_revision,
+            authority_revision: None,
+            effective_grant_digest: None,
             purpose,
             requester_pseudonym,
             actor_kind: ActorKind::Service,
@@ -634,6 +681,19 @@ impl EvidenceAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        if self.authority_revision.is_some() != self.effective_grant_digest.is_some()
+            || self
+                .authority_revision
+                .as_ref()
+                .is_some_and(|revision| !registry_platform_config::is_sha256_label(revision))
+            || self
+                .effective_grant_digest
+                .as_ref()
+                .is_some_and(|digest| !registry_platform_config::is_sha256_label(digest))
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+
         let any_release_field = self.disclosed_concepts.is_some()
             || self.evidence_id.is_some()
             || self.evidence_ids.is_some();
@@ -1068,6 +1128,10 @@ struct LocalAuthorizedOperationEvent {
     phase: AuditPhase,
     decision: AuditDecision,
     requirement: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effective_grant_digest: Option<String>,
     purpose: String,
     requester_pseudonym: String,
     response_protection: ResponseProtection,
@@ -1503,6 +1567,8 @@ impl From<&EvidenceAuditEvent> for LocalAuditOperationEvent {
             phase: event.phase,
             decision: event.decision,
             requirement: event.requirement.clone(),
+            authority_revision: event.authority_revision.clone(),
+            effective_grant_digest: event.effective_grant_digest.clone(),
             purpose: event.purpose.clone(),
             requester_pseudonym: event.requester_pseudonym.clone(),
             response_protection: event.response_protection,
@@ -1555,6 +1621,8 @@ fn coherent_request_batch_entries(
         && earlier.assurance_profile == later.assurance_profile
         && earlier.requirement == later.requirement
         && earlier.bundle_revision == later.bundle_revision
+        && earlier.authority_revision == later.authority_revision
+        && earlier.effective_grant_digest == later.effective_grant_digest
         && earlier.purpose == later.purpose
         && earlier.requester_pseudonym == later.requester_pseudonym
         && earlier.actor_kind == later.actor_kind
@@ -1571,6 +1639,8 @@ fn same_operation_context(access: &EvidenceAuditEvent, terminal: &EvidenceAuditE
         && access.assurance_profile == terminal.assurance_profile
         && access.requirement == terminal.requirement
         && access.bundle_revision == terminal.bundle_revision
+        && access.authority_revision == terminal.authority_revision
+        && access.effective_grant_digest == terminal.effective_grant_digest
         && access.purpose == terminal.purpose
         && access.requester_pseudonym == terminal.requester_pseudonym
         && access.actor_kind == terminal.actor_kind
@@ -2072,6 +2142,8 @@ mod tests {
             bundle_revision:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_owned(),
+            authority_revision: None,
+            effective_grant_digest: None,
             purpose: "fixture-procedure".to_owned(),
             requester_pseudonym:
                 "hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111"
@@ -4545,5 +4617,43 @@ mod tests {
             outcomes.iter().all(Result::is_err),
             "every waiter is told the writer stopped"
         );
+    }
+    #[test]
+    fn audit_authority_binding_is_complete_and_coherent_across_phases() {
+        let revision = format!("sha256:{}", "a".repeat(64));
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let mut access = fixture_multi_stage_release();
+        access.phase = AuditPhase::AccessAttempt;
+        access.decision = AuditDecision::Authorized;
+        access.disclosed_concepts = None;
+        access.evidence_id = None;
+        access.evidence_ids = None;
+        access.signing_key_id = None;
+        access.source_ids = None;
+        access.adapter_ids = None;
+        access.authority_revision = Some(revision.clone());
+        access.effective_grant_digest = Some(digest.clone());
+        assert!(access.validate_phase_fields().is_ok());
+        let mut terminal = access.clone();
+        assert!(same_operation_context(&access, &terminal));
+        terminal.authority_revision = Some(format!("sha256:{}", "c".repeat(64)));
+        assert!(!same_operation_context(&access, &terminal));
+        terminal = access.clone();
+        terminal.effective_grant_digest = Some(format!("sha256:{}", "d".repeat(64)));
+        assert!(!same_operation_context(&access, &terminal));
+        terminal = access.clone();
+        terminal.effective_grant_digest = None;
+        assert!(terminal.validate_phase_fields().is_err());
+        let view = serde_json::to_value(LocalAuditOperationEvent::from(&access)).unwrap();
+        assert_eq!(view["authorityRevision"], revision);
+        assert_eq!(view["effectiveGrantDigest"], digest);
+        let mut batch = local_two_item_request_batch("authority-batch-context");
+        for entry in &mut batch {
+            entry.authority_revision = Some(revision.clone());
+            entry.effective_grant_digest = Some(digest.clone());
+        }
+        assert!(coherent_request_batch_entries(&batch[0], &batch[1]));
+        batch[1].authority_revision = Some(format!("sha256:{}", "c".repeat(64)));
+        assert!(!coherent_request_batch_entries(&batch[0], &batch[1]));
     }
 }

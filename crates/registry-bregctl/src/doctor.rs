@@ -85,7 +85,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     {
         return diagnostic(
             "breg.field.pattern-syntax-invalid",
-            &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+            &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
             "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test before packaging; a failed activation requires restoration of the pre-activation backup before changing the pinned target",
         );
     }
@@ -270,9 +270,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "eventDestinations",
             "the event destination bindings were refused",
         ),
-        StartupError::RetainedWebhookBindings { .. } => unreachable!(
-            "retained webhook binding diagnostics return before the generic mapping"
-        ),
+        StartupError::RetainedWebhookBindings { .. } => {
+            unreachable!("retained webhook binding diagnostics return before the generic mapping")
+        }
         StartupError::ReviewBindings => (
             "startup.review-bindings.refused",
             "reviewBindings",
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(diagnostic.code, "breg.field.pattern-syntax-invalid");
         assert_eq!(
             diagnostic.path,
-            "entities[entry].fields[identifier].pattern"
+            "recordTypes[entry].fields[identifier].pattern"
         );
         for repair in [
             "correct the expression",

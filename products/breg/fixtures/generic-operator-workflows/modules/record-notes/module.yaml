@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json
+# A module contributes to the model from its own file, so a reusable part of a
+# registry can be reviewed and versioned separately from the project that adopts
+# it. `extendRecordTypes` adds to a Record type the module does not own.
+#
+# Raise `version` and re-run `bregctl project lock` after every edit
+# here; the project's `modules` entry pins this file by content digest.
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: record-notes
+version: 0.1.0
+extendRecordTypes:
+  # An optional field: without `required: true`, existing records stay valid and
+  # a create may omit it. Adding a field to the model grants nobody access to
+  # it; list it in an access profile's `readableFields` and `writableFields`
+  # before a caller can see or set it.
+  - recordType: record
+    fields:
+      - {id: internal-note, type: string, maximumLength: 500, classification: internal}

@@ -695,7 +695,7 @@ mod tests {
             {"id":"case-status","values":["open","sealed-by-court"]},
             {"id":"sealing-reason","values":["witness-protection"]}
           ],
-          "entities":[
+          "datasets":[{"id":"protected-cases"},{"id":"public-cases"}],"recordTypes":[
             {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
              "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
             {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",
@@ -705,8 +705,8 @@ mod tests {
              ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"entities":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"entities":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}}
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"records":[{"recordType":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"records":[{"recordType":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}}
           ]
         });
         let project =
@@ -751,6 +751,8 @@ mod tests {
     fn decimal_projection_preserves_the_canonical_string_wire_contract() {
         let projected = project_field(
             &CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "measurement".to_owned(),
                 field_type: FieldTypeSource::Decimal {

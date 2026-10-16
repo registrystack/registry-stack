@@ -6,6 +6,41 @@
         {
           "additionalProperties": false,
           "properties": {
+            "etagCapture": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "input": {
+              "default": {},
+              "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+              "type": "object",
+              "x-registry-foreign": "breg-http-api"
+            },
+            "proposalCapture": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "submissionCapture": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "transition": {
+              "$ref": "#/$defs/ProposalJourneyOperation"
+            },
+            "type": {
+              "const": "proposal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "transition"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "items": {
               "items": {
                 "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
@@ -267,109 +302,6 @@
             "type"
           ],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "etagCapture": {
-              "type": "string"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "submit-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "etagCapture": {
-              "type": "string"
-            },
-            "rebase": {
-              "type": "boolean"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "revise-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture",
-            "rebase"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "etagCapture": {
-              "type": "string"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "cancel-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "effectDigest": {
-              "$ref": "#/$defs/Digest"
-            },
-            "effectDigestCapture": {
-              "type": "string"
-            },
-            "etagCapture": {
-              "type": "string"
-            },
-            "proposalVersion": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "proposalVersionCapture": {
-              "type": "string"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "apply-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture"
-          ],
-          "type": "object"
         }
       ]
     },
@@ -462,11 +394,6 @@
       },
       "type": "object"
     },
-    "Digest": {
-      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
-      "pattern": "^sha256:[0-9a-f]{64}$",
-      "type": "string"
-    },
     "DirectClaimSource": {
       "anyOf": [
         {
@@ -489,9 +416,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "entityId": {
-          "type": "string"
-        },
         "fieldId": {
           "type": "string"
         },
@@ -505,6 +429,9 @@
           "$ref": "#/$defs/ExpectedOutcome"
         },
         "problemCode": {
+          "type": "string"
+        },
+        "recordType": {
           "type": "string"
         },
         "refusalCode": {
@@ -592,6 +519,22 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
+    "ProposalJourneyOperation": {
+      "enum": [
+        "start",
+        "get",
+        "edit",
+        "submit",
+        "revise",
+        "rebase",
+        "retry",
+        "cancel",
+        "apply",
+        "get-review-context",
+        "get-review-status"
+      ],
+      "type": "string"
+    },
     "StepSource": {
       "additionalProperties": false,
       "properties": {
@@ -617,15 +560,15 @@
         "claims": {
           "$ref": "#/$defs/ClaimsSource"
         },
-        "entity": {
-          "default": "",
-          "type": "string"
-        },
         "expect": {
           "$ref": "#/$defs/ExpectationSource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "recordType": {
+          "default": "",
+          "type": "string"
         },
         "request": {
           "$ref": "#/$defs/ActionSource"

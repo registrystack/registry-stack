@@ -42,7 +42,7 @@ fn sign_in_again(app: &App, request_id: &str, action: Action) -> Response {
 }
 
 fn sign_in_redirect(request_id: &str) -> Response {
-    let location = format!("/signin?return=%2Frequests%2F{request_id}");
+    let location = format!("/signin?return=%2Fproposals%2F{request_id}");
     (
         StatusCode::SEE_OTHER,
         [(
@@ -53,7 +53,7 @@ fn sign_in_redirect(request_id: &str) -> Response {
         .into_response()
 }
 
-/// Admit a request for `/requests/{id}` made for `action`: the identifier's
+/// Admit a request for `/proposals/{id}` made for `action`: the identifier's
 /// shape, the session, and the limit of the person it names, in that order.
 async fn admit<'a>(
     app: &App,
@@ -78,8 +78,8 @@ async fn admit<'a>(
 
 fn profile(app: &App) -> Profile<'_> {
     Profile {
-        entity: &app.entity,
-        target_field: &app.target_field,
+        action: &app.action,
+        target_input: &app.target_input,
         access_profile: &app.access_profile,
     }
 }
@@ -123,6 +123,7 @@ async fn refused(
     }
     match refusal {
         Refusal::NotFound => app.problem(Problem::NotFound),
+        Refusal::ActionChanged => app.problem(Problem::ActionChanged),
         Refusal::SignedOut => {
             end_session(app, caller.cookie, sign_in_again(app, request_id, action))
         }
@@ -157,17 +158,24 @@ fn render(
     status: StatusCode,
 ) -> Result<Response, Response> {
     let view = match review.submit {
-        Some(action) => {
+        Some(proposal) => {
             let (Ok(id), Ok(key)) = (random_token(), random_token()) else {
                 tracing::error!("the operating system random source failed");
                 return Err(app.problem(Problem::Internal));
             };
+            let key = format!("breg-review-{key}");
+            let idempotency = BRegIdempotencyKey::parse(key.clone())
+                .map_err(|_| app.problem(Problem::Internal))?;
+            let attempt = caller
+                .session
+                .registry
+                .prepare_proposal(&proposal, "submit", serde_json::json!({}), &idempotency)
+                .map_err(|_| app.problem(Problem::RegistryUnavailable))?;
             let view = View {
                 id: id.clone(),
                 request_id: request_id.to_owned(),
-                action,
+                attempt,
                 target: review.target.clone(),
-                idempotency_key: format!("breg-review-{key}"),
             };
             if !app.sessions.remember_view(caller.cookie, view) {
                 return Err(sign_in_again(app, request_id, answering));
@@ -178,7 +186,7 @@ fn render(
     };
     let page = ReviewPage {
         request_id,
-        entity_label: &review.entity_label,
+        action_label: &review.action_label,
         target_label: &review.target_label,
         current: &review.current,
         proposed: &review.proposed,
@@ -189,7 +197,7 @@ fn render(
     app.try_rendered(status, app.templates.review(&page))
 }
 
-/// `GET /requests/{id}`: read the draft and the record it changes under the
+/// `GET /proposals/{id}`: read the draft and the record it changes under the
 /// person's own token and render both.
 pub(crate) async fn review(
     State(app): State<Arc<App>>,
@@ -207,7 +215,7 @@ pub(crate) async fn review(
     let review = match registry::load(&caller.session.registry, &profile(&app), &request_id).await {
         Ok(review) => review,
         Err(refusal) => {
-            return refused(&app, &caller, Action::Read, &request_id, operation, refusal).await
+            return refused(&app, &caller, Action::Read, &request_id, operation, refusal).await;
         }
     };
     // The page is rendered before the read is audited, so a page that could
@@ -260,7 +268,7 @@ fn check_csrf(app: &App, form: &Form, session: &Current) -> Result<(), Response>
     }
 }
 
-/// `POST /requests/{id}/submit`: submit exactly the action the person saw,
+/// `POST /proposals/{id}/submit`: submit exactly the action the person saw,
 /// under the idempotency key bound to that view.
 pub(crate) async fn submit(
     State(app): State<Arc<App>>,
@@ -296,7 +304,7 @@ pub(crate) async fn submit(
                 operation,
                 refusal,
             )
-            .await
+            .await;
         }
     };
     // The action's precondition binds only the draft, so the page itself
@@ -322,18 +330,30 @@ pub(crate) async fn submit(
         )
         .unwrap_or_else(|response| response);
     };
-    let Ok(key) = BRegIdempotencyKey::parse(view.idempotency_key.clone()) else {
-        tracing::error!("a stored idempotency key is not valid");
-        if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
-            return response;
-        }
-        return app.problem(Problem::Internal);
-    };
-    let outcome = caller
+    // The saved attempt is immutable. Current Get authority and promoted
+    // submit recovery authority must still bind it before an exact retry.
+    let attempt = match caller
         .session
         .registry
-        .execute_lifecycle_action(&view.action, &key)
-        .await;
+        .recover_proposal(&review.proposal, &view.attempt)
+    {
+        Ok(attempt) => attempt,
+        Err(_) => {
+            if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
+                return response;
+            }
+            return render(
+                &app,
+                Action::Submit,
+                &caller,
+                &request_id,
+                review,
+                StatusCode::CONFLICT,
+            )
+            .unwrap_or_else(|response| response);
+        }
+    };
+    let outcome = caller.session.registry.execute_proposal(&attempt).await;
     match outcome {
         Ok(_) => {
             if let Err(error) = operation.finish(Outcome::Ok, None).await {
@@ -370,7 +390,7 @@ pub(crate) async fn submit(
                                 operation,
                                 refusal,
                             )
-                            .await
+                            .await;
                         }
                     };
                 if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {

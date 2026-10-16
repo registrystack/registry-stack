@@ -19,8 +19,8 @@ use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::model::CompiledEventDelivery;
 use registry_breg::mutation::{
-    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
-    MutationPlan, MutationRequest, PatchOperation,
+    install_mutation_schema, MutationBody, MutationError, MutationFaultPoint, MutationPlan,
+    MutationRequest, MutationTransaction, PatchOperation,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -156,7 +156,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     let lock_key =
         RegistryLockKey::derive("webhook-outbox-registry").expect("test lock identity is bounded");
 
-    let without_activation = MutationCoordinator::new(
+    let without_activation = MutationTransaction::new(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -179,7 +179,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     );
     assert_eq!(durable_counts(&database, table).await, before_missing);
 
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -223,7 +223,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     .into_iter()
     .enumerate()
     {
-        let faulted = MutationCoordinator::new_with_event_destinations(
+        let faulted = MutationTransaction::new_with_event_destinations(
             lock_key,
             Duration::from_secs(2),
             identity.clone(),
@@ -384,7 +384,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert_eq!(
         conditional_envelope.data,
         json!({
-            "entity": "case",
+            "recordType": "case",
             "recordId": raw_record_id,
             "revision": 3,
             "trigger": "patched",
@@ -708,11 +708,11 @@ async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_an
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -742,8 +742,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case","operations":["create","patch","get","list"],
+            "permissions":{"records":[{
+              "recordType":"case","operations":["create","patch","get","list"],
               "readableFields":["jurisdiction","label","payload","restricted_note"],
               "writableFields":["jurisdiction","label","payload","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -1032,7 +1032,7 @@ fn assert_capture_matches(
 
 fn expected_event_data(record_id: &str) -> Value {
     json!({
-        "entity": "case",
+        "recordType": "case",
         "recordId": record_id,
         "revision": 1,
         "trigger": "created",

@@ -33,7 +33,7 @@ class TaskGrantTests(unittest.TestCase):
             def respond(self):
                 body = self.rfile.read(int(self.headers.get("content-length", "0")))
                 requests.append((self.path, dict(self.headers), body))
-                if self.path.endswith("/task-templates"): value = {"itemRevision": 7, "templates": [preview]}
+                if self.path.endswith("/task-templates"): value = {"taskRevision": 7, "templates": [preview]}
                 elif self.path.endswith("/assertion"): value = {"assertion": "synthetic-assertion", "expiresAt": 2000000060, "grantExpiresAt": view["expiresAt"]}
                 elif self.path.endswith("/status"): value = {"active": False}
                 elif self.path.endswith("/revoke"): value = {"id": GRANT, "invalidated": True}
@@ -45,20 +45,22 @@ class TaskGrantTests(unittest.TestCase):
         try:
             client = CaseworkClient(f"http://127.0.0.1:{server.server_port}/")
             self.assertEqual(client.task_assertion_endpoint(GRANT), f"http://127.0.0.1:{server.server_port}/v1/task-grants/{GRANT}/assertion")
-            args = ("human-token", "staff", "source-reviewer", ITEM)
-            self.assertEqual(client.preview_task_templates(*args)["value"]["templates"], [preview])
-            self.assertEqual(client.list_task_grants(*args)["value"]["grants"], [view])
+            args = ("human-token", "staff", ITEM)
+            self.assertEqual(client.preview_review_task_templates(*args, source_profile="source-reviewer")["value"]["templates"], [preview])
+            self.assertEqual(client.list_review_task_grants(*args, source_profile="source-reviewer")["value"]["grants"], [view])
+            self.assertEqual(requests[0][0], f"/v1/review-tasks/{ITEM}/task-templates")
+            self.assertEqual(requests[1][0], f"/v1/review-tasks/{ITEM}/task-grants")
             approval = {"templateId": "verify-status", "templateVersion": "1"}
-            self.assertEqual(client.approve_task_grant(*args, 7, "caller-attempt-key", approval)["value"], view)
+            self.assertEqual(client.approve_review_task_grant(*args, 7, "caller-attempt-key", approval, "source-reviewer")["value"], view)
             headers = {k.lower(): v for k, v in requests[2][1].items()}
             self.assertEqual(headers["if-match"], '\"7\"')
             self.assertEqual(headers["idempotency-key"], "caller-attempt-key")
             self.assertEqual(json.loads(requests[2][2]), approval)
-            client.revoke_task_grant(*args, GRANT)
+            client.revoke_review_task_grant(*args, GRANT)
             self.assertEqual(requests[3][2], b"")
             self.assertEqual(client.task_assertion("bootstrap-token", GRANT)["value"], {"assertion": "synthetic-assertion", "expiresAt": 2000000060, "grantExpiresAt": view["expiresAt"]})
             self.assertEqual(client.task_grant_status("resource-token", GRANT)["value"], {"active": False})
-            for _, headers, _ in requests[:4]:
+            for _, headers, _ in requests[:3]:
                 headers = {k.lower(): v for k, v in headers.items()}
                 self.assertEqual(headers["registry-casework-profile"], "staff")
                 self.assertEqual(headers["registry-source-profile"], "source-reviewer")
@@ -66,15 +68,20 @@ class TaskGrantTests(unittest.TestCase):
                 headers = {k.lower(): v for k, v in headers.items()}
                 self.assertNotIn("registry-casework-profile", headers)
                 self.assertNotIn("registry-source-profile", headers)
+            self.assertEqual(client.preview_review_task_templates(*args)["value"]["templates"], [preview])
+            self.assertNotIn("registry-source-profile", {k.lower():v for k,v in requests[-1][1].items()})
             count = len(requests)
-            with self.assertRaises(CaseworkClientError): client.approve_task_grant(*args, 7, "caller-attempt-key", {**approval, "resource": "urn:other"})
-            with self.assertRaises(CaseworkClientError): client.approve_task_grant(*args, 7, "caller-attempt-key", {**approval, "authorizationMode": "deferred"})
+            for read in (client.preview_review_task_templates, client.list_review_task_grants):
+                with self.assertRaises(TypeError):
+                    read("human-token", "staff", "source-reviewer", ITEM)
+            with self.assertRaises(CaseworkClientError): client.approve_review_task_grant(*args, 7, "caller-attempt-key", {**approval, "resource": "urn:other"}, "source-reviewer")
+            with self.assertRaises(CaseworkClientError): client.approve_review_task_grant(*args, 7, "caller-attempt-key", {**approval, "authorizationMode": "deferred"}, "source-reviewer")
             with self.assertRaises(CaseworkClientError): client.task_assertion("bootstrap-token", "invalid")
             with self.assertRaises(CaseworkClientError): client.task_assertion_endpoint("invalid")
             self.assertEqual(len(requests), count)
             preview["authorizationMode"] = "unbounded"
             with self.assertRaises(CaseworkClientError) as refused:
-                client.preview_task_templates(*args)
+                client.preview_review_task_templates(*args, source_profile="source-reviewer")
             self.assertEqual(refused.exception.kind, "protocol")
         finally:
             server.shutdown(); thread.join(); server.server_close()

@@ -615,15 +615,6 @@ impl PostgresStatisticsService {
             .set_statement_budget(remaining_budget(deadline)?)
             .await
             .map_err(unavailable)?;
-        crate::mutation::install_request_visibility_context(
-            transaction.transaction(),
-            entity,
-            &claims,
-            self.audit.profile(),
-            &self.expected.database_id,
-        )
-        .await
-        .map_err(unavailable)?;
         install_statistics_evaluation_date(transaction.transaction(), &evaluation_date.to_string())
             .await
             .map_err(map_read_error)?;

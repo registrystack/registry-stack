@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
@@ -76,6 +76,19 @@ test('a closed object contributes no map-value entry', () => {
     properties: { version: { const: 1 } },
   });
   assert.deepEqual(pathsOf(fields), ['version']);
+});
+
+test('a boolean true schema retains an unconstrained property without inventing a shape', () => {
+  const fields = collectFields({
+    type: 'object',
+    required: ['reviewed'],
+    properties: { reviewed: true, forbidden: false },
+  });
+  assert.deepEqual(pathsOf(fields), ['reviewed']);
+  assert.equal(fields[0].required, 'yes');
+  assert.equal(fields[0].type, null);
+  assert.equal(fields[0].values, null);
+  assert.deepEqual(fields[0].constraints, []);
 });
 
 test('local references are resolved in place', () => {
@@ -612,8 +625,19 @@ test('every published schema declares whether it is frozen or adopter tooling', 
   }
   assert.equal(byId.get('bundle').status, 'frozen');
   assert.equal(byId.get('runtime').status, 'frozen');
-  assert.equal(byId.get('authoring-question').status, 'tooling');
-  assert.equal(byId.get('authoring-project-marker').status, 'tooling');
+  assert.equal(byId.get('authoring-project').status, 'tooling');
+  assert.equal(byId.get('authoring-target').status, 'tooling');
+  assert.equal(byId.get('authoring-target-authority').status, 'tooling');
+});
+
+test('the reference covers exactly every shipped authoring schema', async () => {
+  const shipped = (await readdir(resolve(repoRoot, 'crates/registry-evidencectl/schemas/authoring')))
+    .filter((file) => file.endsWith('.schema.json'))
+    .sort();
+  const documented = CONTRACTS.filter((contract) => contract.status === 'tooling')
+    .map((contract) => basename(contract.file))
+    .sort();
+  assert.deepEqual(documented, shipped, 'a shipped authoring schema has no current reference');
 });
 
 test('the committed schemas produce a valid reference for every configuration file', async () => {

@@ -76,6 +76,9 @@ project:
   defaultLanguage: en
 package:
   sourceRevision: field-encryption-source
+datasets:
+  - id: fixture-registry
+    display: {label: Fixture Dataset}
 manifestProjection:
   accessProfile: operator
   classificationCeiling: public
@@ -99,7 +102,7 @@ modules:
   - id: field-encryption-core
     version: 1.0.0
     digest: MODULE_DIGEST
-entities:
+recordTypes:
   - id: holder
     primaryDataset: fixture-registry
     route: holders
@@ -125,39 +128,6 @@ entities:
     classification: restricted
     fields:
       - {id: text, type: string, maximumLength: 200, required: true, classification: restricted}
-  - id: dossier
-    primaryDataset: fixture-registry
-    route: dossiers
-    mutationMode: mutable
-    changeControl: {requiredFor: [patch]}
-    classification: restricted
-    fields:
-      - {id: jurisdiction, type: string, maximumLength: 32, required: true, classification: public}
-      - {id: label, type: string, maximumLength: 128, required: true, classification: public}
-      - {id: code, type: string, maximumLength: 32, classification: restricted, encrypted: true}
-  - id: dossier-request
-    primaryDataset: fixture-registry
-    route: dossier-requests
-    mutationMode: mutable
-    classification: restricted
-    fields:
-      - {id: jurisdiction, type: string, maximumLength: 32, required: true, classification: public}
-      - {id: reason, type: string, maximumLength: 128, required: true, classification: public}
-      - {id: dossier, type: reference, target: dossier, required: true, classification: public}
-      - {id: code, type: string, maximumLength: 32, required: true, classification: public}
-      - {id: secret, type: string, maximumLength: 32, required: true, classification: restricted, encrypted: true}
-    attachments:
-      - {id: evidence, required: true, maximumBytes: 1024, contentTypes: [application/octet-stream], classification: restricted}
-    changeRequest:
-      effects:
-        - id: correct-label
-          target: {fromField: dossier}
-          operation: patch
-          set: {label: {fromField: reason}}
-      review:
-        type: none
-      onApproved: {mode: manual}
-      retention: {mode: operator-erase}
 accessProfiles:
   - id: operator
     default: true
@@ -165,8 +135,8 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: holder
+      records:
+        - recordType: holder
           operations: [create, get, list, patch, batch, lookup, revisions, snapshot]
           revisionAccess: true
           allowCount: true
@@ -176,44 +146,11 @@ accessProfiles:
             - {selector: by-secret, valueOrigin: request}
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        - entity: note
+        - recordType: note
           rowBoundaries: unrestricted
           operations: [create, get, list]
           readableFields: [text]
           writableFields: [text]
-        - entity: dossier
-          operations: [create, get, list]
-          readableFields: [jurisdiction, label, code]
-          writableFields: [jurisdiction, label, code]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        - entity: dossier-request
-          operations: [create, get, list, patch, submit-request, cancel-request, apply-request]
-          readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
-          writableFields: [jurisdiction, reason, dossier, code, secret, evidence]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
-          requestVisibility: owner
-          applyTargets:
-            - entity: dossier
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: applier
-    principalClaim: registry_principal
-    requiredScopes: unrestricted
-    requiredPurposes: [case-management]
-    permissions:
-      entities:
-        - entity: dossier-request
-          operations: [get, apply-request]
-          readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
-          writableFields: []
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
-          applyTargets:
-            - entity: dossier
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
 "#;
 
 const JOURNEY_SOURCE: &str = r#"journeys:
@@ -1223,16 +1160,6 @@ fn tamper_encrypted_member(snapshot: &[u8]) -> Vec<u8> {
     tampered
 }
 
-/// One action link of a request record, by operation name.
-fn find_action<'a>(record: &'a Value, operation: &str) -> &'a Value {
-    record["data"]["request"]["actions"]
-        .as_array()
-        .unwrap_or_else(|| panic!("request exposes actions: {record}"))
-        .iter()
-        .find(|action| action["operation"] == operation)
-        .unwrap_or_else(|| panic!("request exposes the {operation} action: {record}"))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn encrypted_fields_round_trip_and_store_only_envelopes() {
     let server = boot_live_server().await;
@@ -1937,7 +1864,7 @@ async fn patch_replaces_the_envelope_and_test_op_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
-// History, revision, review-snapshot, and attachment read edges
+// History and revision read edges
 // ---------------------------------------------------------------------------
 
 /// Create one holder, patch its secret, and return the record id. The holder
@@ -2162,264 +2089,6 @@ async fn tampered_revision_snapshot_fails_closed_and_sibling_surfaces_serve() {
     )
     .await;
     assert_eq!(notes.status(), StatusCode::OK);
-
-    server.shutdown().await;
-}
-
-/// One submitted dossier-request with an uploaded attachment: the draft, its
-/// evidence file, and the submission that freezes proposal version 1.
-async fn submitted_dossier_request(server: &LiveServer, dossier_id: &str) -> String {
-    let response = send(
-        server,
-        Method::POST,
-        "/v1/records/dossier-requests",
-        &[
-            ("content-type", "application/json".to_owned()),
-            ("idempotency-key", "dossier-request-create".to_owned()),
-        ],
-        Some(json!({ "data": {
-            "jurisdiction": "area-a",
-            "reason": "correct the label",
-            "dossier": dossier_id,
-            "code": "XYZ-9999",
-            "secret": "delta-nine",
-        }})),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED, "the draft creates");
-    let created = body_json(response).await;
-    let request_id = created["data"]["recordIdentifier"]
-        .as_str()
-        .expect("request identifier is present")
-        .to_owned();
-
-    let before = send(
-        server,
-        Method::GET,
-        &format!("/v1/records/dossier-requests/{request_id}"),
-        &[],
-        None,
-    )
-    .await;
-    assert_eq!(before.status(), StatusCode::OK);
-    let etag = response_etag(&before);
-
-    let uploaded = send_bytes_as(
-        server,
-        Method::PATCH,
-        &format!("/v1/records/dossier-requests/{request_id}/attachments/evidence"),
-        &[
-            ("content-type", "application/octet-stream".to_owned()),
-            ("idempotency-key", "dossier-evidence-upload".to_owned()),
-            ("if-match", etag),
-        ],
-        Some(b"dossier evidence".to_vec()),
-        &operator_token(),
-    )
-    .await;
-    assert_eq!(uploaded.status(), StatusCode::OK, "the attachment uploads");
-
-    // The upload advanced the record revision, so the submit action and its
-    // precondition come from a fresh read.
-    let after = send(
-        server,
-        Method::GET,
-        &format!("/v1/records/dossier-requests/{request_id}"),
-        &[],
-        None,
-    )
-    .await;
-    assert_eq!(after.status(), StatusCode::OK);
-    let after = body_json(after).await;
-    let submit = find_action(&after, "submit-request");
-    let submitted = send_as(
-        server,
-        Method::POST,
-        submit["href"].as_str().expect("submit href"),
-        &[
-            ("content-type", "application/json".to_owned()),
-            ("idempotency-key", "dossier-request-submit".to_owned()),
-            (
-                "if-match",
-                submit["ifMatch"].as_str().expect("submit etag").to_owned(),
-            ),
-        ],
-        Some(json!({})),
-        &operator_token(),
-    )
-    .await;
-    assert_eq!(submitted.status(), StatusCode::OK, "the request submits");
-    request_id
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn submitted_target_snapshot_stays_encrypted_at_rest() {
-    let server = boot_live_server().await;
-
-    let response = send(
-        &server,
-        Method::POST,
-        "/v1/records/dossiers",
-        &[
-            ("content-type", "application/json".to_owned()),
-            ("idempotency-key", "review-dossier-create".to_owned()),
-        ],
-        Some(json!({ "data": {
-            "jurisdiction": "area-a",
-            "label": "review-target",
-            "code": "ABC-1234",
-        }})),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let created = body_json(response).await;
-    let dossier_id = created["data"]["recordIdentifier"]
-        .as_str()
-        .expect("dossier identifier is present")
-        .to_owned();
-
-    let request_id = submitted_dossier_request(&server, &dossier_id).await;
-
-    // The stored target reference keeps the tagged member.
-    let base_snapshot: String = server
-        .booted
-        .database
-        .admin
-        .query_one(
-            "SELECT base_snapshot::text FROM registry_internal.registry_request_targets
-             WHERE request_entity_id = 'dossier-request' AND request_id = $1
-               AND target_entity_id = 'dossier'",
-            &[&Uuid::parse_str(&request_id).expect("request id is a UUID")],
-        )
-        .await
-        .expect("the stored target base snapshot reads")
-        .get(0);
-    assert!(
-        base_snapshot.contains("__bregEncryptedV1"),
-        "the stored base snapshot keeps the tagged member: {base_snapshot}"
-    );
-    assert!(!base_snapshot.contains("ABC-1234"));
-
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn attachment_authorization_over_encrypted_records_fails_closed() {
-    let server = boot_live_server().await;
-
-    let response = send(
-        &server,
-        Method::POST,
-        "/v1/records/dossiers",
-        &[
-            ("content-type", "application/json".to_owned()),
-            ("idempotency-key", "attachment-dossier-create".to_owned()),
-        ],
-        Some(json!({ "data": {
-            "jurisdiction": "area-a",
-            "label": "attachment-target",
-            "code": "ABC-1234",
-        }})),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let created = body_json(response).await;
-    let dossier_id = created["data"]["recordIdentifier"]
-        .as_str()
-        .expect("dossier identifier is present")
-        .to_owned();
-
-    let request_id = submitted_dossier_request(&server, &dossier_id).await;
-    let download = format!(
-        "/v1/records/dossier-requests/{request_id}/attachments/evidence?proposalVersion=1&accessProfile=applier"
-    );
-
-    // An authorized applier downloads the retained attachment.
-    let authorized = send_as(
-        &server,
-        Method::GET,
-        &download,
-        &[],
-        None,
-        &token_for("applier", "area-a"),
-    )
-    .await;
-    assert_eq!(authorized.status(), StatusCode::OK);
-    let bytes = body_bytes(authorized).await;
-    assert_eq!(bytes, b"dossier evidence");
-
-    // An applier outside the row boundary is refused without the bytes.
-    let unauthorized = send_as(
-        &server,
-        Method::GET,
-        &download,
-        &[],
-        None,
-        &token_for("applier", "area-b"),
-    )
-    .await;
-    assert_eq!(
-        unauthorized.status(),
-        StatusCode::NOT_FOUND,
-        "an excluded row cannot authorize attachment disclosure"
-    );
-
-    // Corrupt the tagged envelope in the retained target snapshot used by the
-    // current apply grant, so its row authorization refuses to open.
-    let request_uuid = Uuid::parse_str(&request_id).expect("request id is a UUID");
-    let stored = server
-        .booted
-        .database
-        .admin
-        .query_one(
-            "SELECT base_snapshot, after_snapshot
-             FROM registry_internal.registry_request_targets
-             WHERE request_entity_id = 'dossier-request' AND request_id = $1
-               AND proposal_version = 1 AND target_entity_id = 'dossier'",
-            &[&request_uuid],
-        )
-        .await
-        .expect("the retained target snapshots read");
-    let before: Value = stored.get(0);
-    let after: Value = stored.get(1);
-    let before = serde_json::to_vec(&before).expect("the retained base snapshot serializes");
-    let after = serde_json::to_vec(&after).expect("the retained after snapshot serializes");
-    let tampered_before: Value = serde_json::from_slice(&tamper_encrypted_member(&before))
-        .expect("the tampered base snapshot remains JSON");
-    let tampered_after: Value = serde_json::from_slice(&tamper_encrypted_member(&after))
-        .expect("the tampered after snapshot remains JSON");
-    server
-        .booted
-        .database
-        .admin
-        .execute(
-            "UPDATE registry_internal.registry_request_targets
-             SET base_snapshot = $1, after_snapshot = $2
-             WHERE request_entity_id = 'dossier-request' AND request_id = $3
-               AND proposal_version = 1 AND target_entity_id = 'dossier'",
-            &[&tampered_before, &tampered_after, &request_uuid],
-        )
-        .await
-        .expect("tampered target snapshot writes");
-
-    // The tampered envelope refuses the disclosure closed instead of
-    // authorizing it, value-free.
-    let refused = send_as(
-        &server,
-        Method::GET,
-        &download,
-        &[],
-        None,
-        &token_for("applier", "area-a"),
-    )
-    .await;
-    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let refused = body_json(refused).await;
-    assert_eq!(refused["code"], "runtime.field_encryption.unavailable");
-    assert!(
-        !refused.to_string().contains("delta"),
-        "the refusal stays value-free"
-    );
 
     server.shutdown().await;
 }

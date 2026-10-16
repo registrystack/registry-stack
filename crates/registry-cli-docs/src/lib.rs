@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 /// Build reference data for the supported Registry Stack command lines.
 pub fn catalog() -> Catalog {
     let mut binaries = vec![
+        command_reference(registry_coordinator::service::command(), None, None),
+        command_reference(registry_coordinator::cli::command(), None, None),
         command_reference(registry_evidence::command(), None, None),
         command_reference(registry_evidence_oid4vci::command(), None, None),
         command_reference(registry_evidencectl::command(), None, None),
@@ -118,6 +120,8 @@ mod tests {
                 "bregctl",
                 "casework",
                 "caseworkctl",
+                "coordinator",
+                "coordinatorctl",
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
@@ -128,6 +132,32 @@ mod tests {
                 "schedulingctl",
             ]
         );
+    }
+
+    #[test]
+    fn coordinator_publishes_authoring_and_authenticated_recovery_commands() {
+        let catalog = catalog();
+        for invocation in [
+            "coordinatorctl check",
+            "coordinatorctl test",
+            "coordinatorctl package",
+            "coordinatorctl apply",
+            "coordinatorctl start",
+            "coordinatorctl reconcile",
+            "coordinatorctl complete-execution-recovery",
+            "coordinatorctl release-admission-hold",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
+        let service = find_command(&catalog.binaries, "coordinator");
+        assert!(service
+            .options
+            .iter()
+            .any(|option| option.display.starts_with("--runtime-config ")));
+        assert!(service
+            .options
+            .iter()
+            .any(|option| option.display == "--recovery-only"));
     }
 
     #[test]
@@ -247,6 +277,7 @@ mod tests {
                     "metadata",
                     "sql",
                     "evidence-source",
+                    "sdk",
                 ]
         }));
         for invocation in [
@@ -437,20 +468,55 @@ mod tests {
     }
 
     #[test]
-    fn planner_test_requirements_match_both_accepted_modes() {
+    fn action_test_requirements_match_the_native_action_input_contract() {
         let parser = registry_bregctl::command();
+        for with_expect in [false, true] {
+            let mut arguments = vec![
+                "bregctl",
+                "project",
+                "action-test",
+                "example-project",
+                "--action",
+                "register-person",
+                "--input",
+                "input.json",
+                "--format",
+                "json",
+            ];
+            if with_expect {
+                arguments.extend(["--expect", "expected.json"]);
+            }
+            parser
+                .clone()
+                .try_get_matches_from(arguments)
+                .expect("a native Action test accepts its bounded input and optional expectation");
+        }
         for arguments in [
             vec![
                 "bregctl",
                 "project",
-                "planner-test",
+                "action-test",
+                "example-project",
+                "--action",
+                "register-person",
+            ],
+            vec![
+                "bregctl",
+                "project",
+                "action-test",
+                "example-project",
+                "--input",
+                "input.json",
+            ],
+            vec![
+                "bregctl",
+                "project",
+                "action-test",
                 "example-project",
                 "--entity",
                 "change-request",
                 "--request",
                 "request.json",
-                "--format",
-                "json",
             ],
             vec![
                 "bregctl",
@@ -461,20 +527,15 @@ mod tests {
                 "register-person",
                 "--input",
                 "input.json",
-                "--expect",
-                "expected.json",
-                "--format",
-                "json",
             ],
         ] {
-            parser
-                .clone()
-                .try_get_matches_from(arguments)
-                .expect("documented planner-test mode parses");
+            assert!(
+                parser.clone().try_get_matches_from(arguments).is_err(),
+                "incomplete or removed planner inputs are refused"
+            );
         }
-
         let reference = command_reference(parser, None, None);
-        let planner_test = find_command(&[reference], "bregctl project planner-test")
+        let action_test = find_command(&[reference], "bregctl project action-test")
             .constraints
             .iter()
             .filter(|constraint| constraint.kind == ConstraintKind::RequiresAll)
@@ -488,8 +549,6 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         let expected = [
-            ("--entity <ENTITY>", vec!["--request <JSON_FILE>"]),
-            ("--request <JSON_FILE>", vec!["--entity <ENTITY>"]),
             ("--action <ACTION>", vec!["--input <JSON_FILE>"]),
             ("--input <JSON_FILE>", vec!["--action <ACTION>"]),
             (
@@ -505,7 +564,7 @@ mod tests {
             )
         })
         .collect::<BTreeSet<_>>();
-        assert_eq!(planner_test, expected);
+        assert_eq!(action_test, expected);
     }
 
     #[test]
@@ -772,8 +831,8 @@ mod tests {
                 && constraint.arguments == ["--last-operation"]
         }));
 
-        let evidencectl_new = find_command(&catalog.binaries, "evidencectl new");
-        assert!(evidencectl_new.constraints.iter().any(|constraint| {
+        let evidencectl_init = find_command(&catalog.binaries, "evidencectl init");
+        assert!(evidencectl_init.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments
                     == [
@@ -782,7 +841,7 @@ mod tests {
                         "--starter <STARTER>",
                     ]
         }));
-        assert!(evidencectl_new
+        assert!(evidencectl_init
             .options
             .iter()
             .any(|argument| argument.display == "--profile <PROFILE>" && argument.always_required));
@@ -842,14 +901,11 @@ mod tests {
         }));
 
         let dev = find_command(&catalog.binaries, "evidencectl dev");
+        assert_eq!(dev.usage, "evidencectl dev [OPTIONS] <COMMAND>");
         assert_eq!(
-            dev.usage,
-            "evidencectl dev [OPTIONS]\n       evidencectl dev [OPTIONS] <COMMAND>"
+            find_command(&catalog.binaries, "evidencectl dev start").usage,
+            "evidencectl dev start [OPTIONS] [PROJECT]"
         );
-        assert!(dev
-            .options
-            .iter()
-            .any(|argument| { argument.display == "--detach" && !argument.always_required }));
 
         assert!(find_command(&catalog.binaries, "evidence-oid4vci check")
             .options

@@ -26,9 +26,7 @@ CLIENT_ID = "loadtest-driver"
 DATABASE_NAME = "breg_dev"
 DEV_POOL_MAX = 4
 BUILD_PROFILES = ("debug", "release")
-PROJECT_REPLACEMENTS = {
-    "  sourceRevision: business-establishments-acceptance-0.1.0": "  sourceRevision: business-establishments-loadtest-0.1.0",
-}
+SOURCE_REVISION = "business-establishments-loadtest-0.1.0"
 DEV_CLIENTS = """apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
 kind: BRegDevClients
 clients:
@@ -92,12 +90,6 @@ def reserve_ports() -> tuple[int, int, int]:
             listener.close()
 
 
-def _replace_once(source: str, expected: str, replacement: str) -> str:
-    if source.count(expected) != 1:
-        raise LoadtestError(f"fixture no longer has the expected line: {expected.strip()}")
-    return source.replace(expected, replacement, 1)
-
-
 def _without_nonrepresentative_journey(source: str) -> str:
     """Drop the alternate-claims case that cannot share a dev profile client."""
     kept: list[str] = []
@@ -123,10 +115,12 @@ def local_project(fixture: Path, project: Path) -> None:
         raise LoadtestError("load-test project output must not already exist")
     shutil.copytree(fixture, project, symlinks=False)
     registry = project / "registry.yaml"
-    source = registry.read_text(encoding="utf-8")
-    for expected, replacement in PROJECT_REPLACEMENTS.items():
-        source = _replace_once(source, expected, replacement)
-    registry.write_text(source, encoding="utf-8")
+    model = _read_json_object(registry)
+    package = model.get("package")
+    if not isinstance(package, dict) or not isinstance(package.get("sourceRevision"), str):
+        raise LoadtestError("business-establishments fixture must declare package.sourceRevision")
+    package["sourceRevision"] = SOURCE_REVISION
+    registry.write_text(json.dumps(model, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     journeys = project / "tests/journeys.yaml"
     journeys.write_text(
         _without_nonrepresentative_journey(journeys.read_text(encoding="utf-8")),

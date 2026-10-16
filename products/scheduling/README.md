@@ -146,7 +146,9 @@ refused command. `serve` also refuses a split runtime role missing a grant
 apply issues, naming `schedulingctl apply`. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
 so pending schema versions require `schedulingctl apply` before restart.
-v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database. Availability cursors last
+Before 1.0, a release reads only the state its immediate predecessor wrote, so
+upgrade one release at a time; a release that starts a fresh baseline says so
+in its release notes and is applied to a new database. Availability cursors last
 at most 15 minutes; callers should deduplicate entries by their start when a
 policy, records, or runtime change overlaps an in-flight listing.
 `records apply` is the one attributable operator write of a deployment's
@@ -207,22 +209,27 @@ The runtime has two outbound integration seams. Reminder dispatch is product
 notification work: a commitment mints the reminder intents its offering
 declares, each due a fixed number of minutes before the appointment, and a
 worker renders every due intent as one
-CloudEvents 1.0 event in canonical JSON and POSTs it to the configured
-reminder destination with `content-type: application/cloudevents+json`,
-exactly once per claim. A transport failure schedules an exponential retry, a
-refusal the retry classes do not cover holds the intent for the operator, and
-eight failed attempts hold it.
+shared hook envelope in canonical JSON, the same envelope an appointment
+observer receives, and POSTs it to the configured reminder destination with
+`content-type: application/json`, exactly once per claim. A transport
+failure schedules an exponential retry, a refusal the retry classes do not
+cover holds the intent for the operator, and eight failed attempts hold it.
 
 Every event carries the same envelope:
 
 | Field | Value |
 | --- | --- |
-| `specversion` | `1.0` |
 | `id` | the outbox intent's identifier |
-| `source` | the deployment's `scheduling.id` from the policy, and nothing else |
 | `type` | `org.registrystack.scheduling.` plus the intent's purpose |
-| `time` | when the intent fell due, RFC 3339 |
+| `source` | `urn:registrystack:scheduling:` plus the deployment's `scheduling.id` from the policy |
+| `time` | when the intent fell due, RFC 3339 in UTC at millisecond precision |
+| `subject` | `recordReference` `/v1/appointments/<id>` and `recordRevision`, the appointment revision the intent was minted for |
+| `dataschema` | `urn:registrystack:scheduling:reminder-data:` plus the intent's purpose |
 | `data` | the payload the runtime committed |
+| `causation` | a root chain: `root` is the event's own `id` and `hop` is `0` |
+
+A reminder is not signed: the destination authenticates the runtime through
+the optional bearer credential `destinations.reminders.bearerTokenRef` names.
 
 There are four purposes, so four types: `confirmation` and `change` carry the
 committed appointment's identifier, revision, offering, start, end, and the
@@ -319,7 +326,11 @@ expires and returns its capacity.
 Listing is per principal by design. A hold or appointment is owned by the
 verified token issuer and subject that booked it, so another principal sees an
 empty page even when it serves the same product, and an orchestrator that must
-observe its own outcomes books and reads under one principal. History and
+observe its own outcomes books and reads under one principal. An appointment
+an orchestrator books for a party is therefore the orchestrator's, not the
+party's: the party cannot see, reschedule, or cancel it in Scheduling. The
+official books for the party, and changes go through the process that booked
+it. History and
 audit carry the keyed pseudonym of that pair instead, derived with the audit
 hash key (`audit.hashKeyRef`), and decide nothing: rotating that key leaves
 every claim with its owner. The published

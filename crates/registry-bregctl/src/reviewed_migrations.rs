@@ -213,7 +213,11 @@ fn capture_directory(
             continue;
         }
         if !entry.is_file || reviewed_artifact_kind(&path).is_none() {
-            return Err(refusal("migration.review.path", "reviewedMigrations", "only regular reviewed migration artifacts in the package layout are accepted; remove unrelated files and symbolic links"));
+            return Err(refusal(
+                "migration.review.path",
+                "reviewedMigrations",
+                "only regular reviewed migration artifacts in the package layout are accepted; remove unrelated files and symbolic links",
+            ));
         }
         if files.len() >= MAX_PACKAGE_FILES {
             return Err(refusal(

@@ -38,11 +38,11 @@ use zeroize::Zeroizing;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "explicit one-million-unit measurement; run with --ignored --nocapture"]
 async fn million_unit_three_dimension_statistics_measurement() {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "load"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"statistics-load","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://load.example.test"},
-        "entities":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable",
+        "recordTypes":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","required":true,"classification":"internal"},
                 {"id":"category","type":"vocabulary-code","vocabulary":"category","required":true,"classification":"internal"},
@@ -50,8 +50,8 @@ async fn million_unit_three_dimension_statistics_measurement() {
                 {"id":"event-date","type":"date","required":true,"classification":"internal"}]}],
         "vocabularies":[{"id":"category","values":["a","b","c","d"]},
             {"id":"region","values":["north","south","east","west"]}],
-        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-            "entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted",
+        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "recordType":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted",
             "readableFields":["active","category","region","event-date"],
             "filterableFields":["active","category","region","event-date"]}],"datasets":[{"dataset":"units-by-category","operations":["read-live","publish","read-releases"]}]}},
             {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
@@ -208,10 +208,16 @@ async fn million_unit_three_dimension_statistics_measurement() {
     let response = app.call(request).await.unwrap();
     let publish_elapsed = start.elapsed();
     assert_eq!(response.status(), StatusCode::CREATED);
-    println!("statistics_load units=1000000 dimensions=3 cells={} seed_ms={:.3} live_compute_ms={:.3} publication_ms={:.3} disclosure_us={:.3} canonical_encoding_us={:.3} encoded_bytes={}",
-        live.cells.len(),seed_elapsed.as_secs_f64()*1000.,live_elapsed.as_secs_f64()*1000.,
-        publish_elapsed.as_secs_f64()*1000.,disclosure_elapsed.as_secs_f64()*1_000_000.,
-        encoding_elapsed.as_secs_f64()*1_000_000.,encoded.len());
+    println!(
+        "statistics_load units=1000000 dimensions=3 cells={} seed_ms={:.3} live_compute_ms={:.3} publication_ms={:.3} disclosure_us={:.3} canonical_encoding_us={:.3} encoded_bytes={}",
+        live.cells.len(),
+        seed_elapsed.as_secs_f64() * 1000.,
+        live_elapsed.as_secs_f64() * 1000.,
+        publish_elapsed.as_secs_f64() * 1000.,
+        disclosure_elapsed.as_secs_f64() * 1_000_000.,
+        encoding_elapsed.as_secs_f64() * 1_000_000.,
+        encoded.len()
+    );
     migration_task.abort();
     drop(app);
     database.cleanup().await;

@@ -101,7 +101,7 @@ package an operator activates deliberately. Its current limits are:
 
 Encrypted restricted fields add these limits:
 
-- Change-request flows cannot target an encrypted field.
+- Proposal plans cannot target an encrypted field.
 - One key version is active at a time; envelope-key rotation is not implemented.
 - A flip-on migration requires `history: erase-and-rebaseline` or
   `history: retain-plaintext-history`. Retaining plaintext history does not meet the database-read
@@ -115,7 +115,7 @@ Encrypted restricted fields add these limits:
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
     crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
     crates/registry-breg/src/runtime_config.rs, OperationalTimeouts;
-    crates/registry-breg/src/change_request.rs, breg.change-request.effect-field-encrypted;
+    crates/registry-breg/src/proposal_prepare.rs;
     crates/registry-breg/src/migration_plan.rs, ReviewedFieldEncryptionHistory;
     crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::blind_index. */}
 

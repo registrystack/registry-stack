@@ -234,8 +234,16 @@ async fn action_result_target_index_reaches_an_existing_activation_at_its_next_a
             successor_project.clone(),
             Some(active.package_digest.as_str()),
             &fresh_fingerprint,
-            PackageMigrationPlanInput::Successor {
+            PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new((*registry).clone()),
+                prior_schema_fingerprint: old_fingerprint.clone(),
+                migrations: vec![metadata_only_source(
+                    &registry,
+                    &successor_registry,
+                    &active.package_digest,
+                    &old_fingerprint,
+                    &fresh_fingerprint,
+                )],
             },
         )
     };
@@ -372,12 +380,15 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
         .iter()
         .map(|statement| statement.sql.as_str())
         .collect::<Vec<_>>();
-    assert!(changed_sql
-        .iter()
-        .any(|sql| sql.starts_with("DROP POLICY ")));
-    assert!(changed_sql
-        .iter()
-        .any(|sql| sql.starts_with("CREATE POLICY ")));
+    assert!(
+        changed_sql.is_empty(),
+        "scope-only authority changes need no schema rewrite"
+    );
+    assert_eq!(
+        action_registry.actions().actions[0].definition_revision,
+        changed_registry.actions().actions[0].definition_revision,
+        "current caller authority is separate from the unchanged Action plan meaning"
+    );
     let active_changed = apply_package(
         &database,
         &changed_package.package,
@@ -478,7 +489,7 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
 }
 
 /// A recipient organization added in a successor widens the recipient input
-/// of every consent-issuing action without review. The activated catalog must
+/// of every consent-issuing action and requires metadata review. The activated catalog must
 /// be exactly a fresh install of the successor, the action must accept the new
 /// recipient, and a key consumed under the prior contract must not replay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -534,8 +545,8 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
     assert_eq!(
         action_changes,
         vec![(
-            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-            CompiledRegistryChangeClass::CompatibleAdditive
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
         )],
         "{:#?}",
         changes.changes
@@ -551,8 +562,16 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
             successor_project,
             Some(active_initial.package_digest.as_str()),
             &fresh_fingerprint,
-            PackageMigrationPlanInput::Successor {
+            PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new((*initial_registry).clone()),
+                prior_schema_fingerprint: active_initial.schema_fingerprint.clone(),
+                migrations: vec![metadata_only_source(
+                    &initial_registry,
+                    &successor_registry,
+                    &active_initial.package_digest,
+                    &active_initial.schema_fingerprint,
+                    &fresh_fingerprint,
+                )],
             },
         ),
         package_context(),
@@ -573,8 +592,12 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
             "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38.drop",
             "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600.drop",
             "entity.consent-decision.field.recipient.vocabulary",
+            "entity.consent-decision.policy.registry_action_rls_insert_18c2deac1df83f2bbf7c42e1",
+            "entity.consent-decision.policy.registry_action_rls_select_f13c1f2f332145d8ba2b99c4",
+            "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38",
+            "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600",
         ],
-        "a recipient addition retires changed action policies before replacing the recipient check"
+        "a recipient addition retires Action policies before replacing the check, then reinstalls them"
     );
     // The recipient widens the action contract, whose fingerprint the action
     // policies embed, so the rehearsal must reconcile policies as activation
@@ -1241,20 +1264,21 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
     let actions = if required_scope.is_some() {
         r#""actions":[{
             "id":"register-household-contact",
+            "execution":{"mode":"immediate"},
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
               {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
-            "effects":[
-              {"id":"person","target":{"entity":"person"},"operation":"create",
-                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"membership","target":{"entity":"group-membership"},"operation":"create",
-                "set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"household","target":{"fromField":"household"},"operation":"patch",
+            "plan":{"type":"fixed","effects":[
+              {"id":"person","target":{"recordType":"person"},"operation":"create",
+                "set":{"person-code":{"fromInput":"person-code"},"legal-name":{"fromInput":"legal-name"},"jurisdiction":{"fromInput":"jurisdiction"}}},
+              {"id":"membership","target":{"recordType":"group-membership"},"operation":"create",
+                "set":{"person":{"fromEffect":"person"},"household":{"fromInput":"household"},"jurisdiction":{"fromInput":"jurisdiction"}}},
+              {"id":"household","target":{"fromInput":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
-            ]
+            ]}
           }],"#
             .to_owned()
     } else {
@@ -1274,9 +1298,9 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
                     "action":"register-household-contact",
                     "operations":["invoke"],
                     "targets":[
-                      {{"entity":"household","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
-                      {{"entity":"person","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
-                      {{"entity":"group-membership","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}}
+                      {{"recordType":"household","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
+                      {{"recordType":"person","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
+                      {{"recordType":"group-membership","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}}
                     ],
                     "results":["person","membership","household"]
                   }}]}}
@@ -1290,7 +1314,8 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
           "kind":"BRegProject",
           "project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
-          "entities":[{{
+          "datasets":[{{"id":"test-dataset"}}],
+          "recordTypes":[{{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{{"type":"unique","fields":["person-code"]}}],
             "fields":[

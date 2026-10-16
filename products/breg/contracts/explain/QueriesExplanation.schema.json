@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha5.schema.json",
   "title": "QueriesExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain queries`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType`, which is a passthrough of the compiled field-type source and is declared opaque wherever it appears.",
   "type": "object",
@@ -31,7 +31,7 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/queries-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/queries-explanation/v1alpha5"
     },
     "kind": {
       "const": "BRegQueriesExplanation"
@@ -42,14 +42,14 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "id", "routeId", "profile", "entity", "kind", "apiFields", "filterable",
+          "id", "routeId", "profile", "recordType", "kind", "apiFields", "filterable",
           "sortable", "allowCount", "selectors", "readPath", "wire", "bounds"
         ],
         "properties": {
           "id": { "$ref": "#/$defs/DerivedId" },
           "routeId": { "type": "string" },
           "profile": { "type": "string" },
-          "entity": { "type": "string" },
+          "recordType": { "type": "string" },
           "kind": { "enum": ["list", "current", "as-of", "snapshot"] },
           "apiFields": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },
           "selectors": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },

@@ -1,0 +1,1 @@
+{"operations":[{"allowCount":false,"entityId":"contact","filterFields":[],"id":"records.contact.directory-editor.list","kind":"list","maxPageSize":100,"processingFields":["email","jurisdiction","name"],"profileId":"directory-editor","projectionFields":["email","jurisdiction","name"],"routeId":"records.contact.list","sortFields":[],"stableTieBreaker":"record_id"}]}

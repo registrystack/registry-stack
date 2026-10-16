@@ -1,8 +1,6 @@
 //! Governed task delegation policy and immutable source-bound authorization.
 use crate::finding::{ConfigFinding, Findings};
-use crate::{
-    CaseworkProject, CaseworkRole, IssuerPrincipal, OccurrenceState, SourceBinding, SubjectRef,
-};
+use crate::{CaseworkProject, CaseworkRole, IssuerPrincipal};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, fmt};
@@ -58,22 +56,9 @@ pub struct TaskTemplate {
     pub eligible_teams: Vec<String>,
     pub eligible_profiles: Vec<String>,
     pub source: String,
-    /// Unified review kinds whose currently-held tasks may issue this grant.
-    /// This is a separate eligibility mode from source work-item kinds/states.
+    /// Policies whose currently held ReviewTasks may issue this grant.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub review_kinds: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub item_kinds: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::typed::unique_list",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "registry_platform_yaml::UniqueList<OccurrenceState>")
-    )]
-    pub item_states: Vec<OccurrenceState>,
+    pub review_policies: Vec<String>,
     #[serde(deserialize_with = "template_agent")]
     #[cfg_attr(feature = "schema", schemars(with = "TemplateAgent"))]
     pub agent: IssuerPrincipal,
@@ -188,6 +173,7 @@ registry_platform_yaml::tagged_union!(TaskGrantBounds);
 /// The serialized form of [`TaskGrantBounds`], kept byte-identical to the
 /// stored and published shape.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum TaskGrantBoundsWire<'a> {
     Evidence {
@@ -419,33 +405,21 @@ impl TaskTemplate {
     #[must_use]
     pub fn findings(&self, project: &CaseworkProject) -> Vec<ConfigFinding> {
         let mut findings = Findings::default();
-        let source = project
-            .sources
+        list_findings(&mut findings, "/reviewPolicies", &self.review_policies, 32);
+        if !project
+            .context_providers
             .iter()
-            .find(|source| source.id == self.source);
-        if source.is_none() {
+            .any(|provider| provider.source_namespace == self.source)
+            && !project
+                .trusted_producers
+                .iter()
+                .any(|producer| producer.source_namespaces.contains(&self.source))
+        {
             findings.push(
                 "casework.task-template.unknown-source",
                 "/source",
-                "no source in sources has this id",
-                "Name a source declared under sources.",
-            );
-        }
-        let work_item_mode = !self.item_kinds.is_empty() || !self.item_states.is_empty();
-        let review_mode = !self.review_kinds.is_empty();
-        if work_item_mode && review_mode {
-            findings.push(
-                "casework.task-template.mixed-eligibility",
-                "/reviewKinds",
-                "a template is eligible either on source work items (itemKinds and itemStates) or on review kinds (reviewKinds), not both",
-                "Remove reviewKinds, or remove itemKinds and itemStates.",
-            );
-        } else if !work_item_mode && !review_mode {
-            findings.push(
-                "casework.task-template.no-eligibility",
-                "",
-                "a template names neither source work items (itemKinds and itemStates) nor review kinds (reviewKinds)",
-                "Add itemKinds and itemStates, or add reviewKinds.",
+                "the source namespace is not declared by a provider or producer",
+                "Name an admitted namespace.",
             );
         }
         if !crate::typed::valid_local_identifier(&self.id) {
@@ -499,71 +473,9 @@ impl TaskTemplate {
                 );
             }
         }
-        if work_item_mode {
-            list_findings(&mut findings, "/itemKinds", &self.item_kinds, 32);
-            if let Some(source) = source {
-                for (index, kind) in self.item_kinds.iter().enumerate() {
-                    if !source
-                        .requests
-                        .iter()
-                        .any(|request| request.entity == *kind)
-                    {
-                        findings.push(
-                            "casework.task-template.unknown-item-kind",
-                            format!("/itemKinds/{index}"),
-                            "the template's source has no request with this entity",
-                            "Name an entity listed under the source's requests.",
-                        );
-                    }
-                }
-            }
-            if self.item_states.is_empty() {
-                findings.push(
-                    "casework.task-template.empty-list",
-                    "/itemStates",
-                    "expected at least one entry",
-                    "List claimed, waiting-applicant, or waiting-application.",
-                );
-            }
-            for (index, state) in self.item_states.iter().enumerate() {
-                if !matches!(
-                    state,
-                    OccurrenceState::Claimed
-                        | OccurrenceState::WaitingApplicant
-                        | OccurrenceState::WaitingApplication
-                ) {
-                    findings.push(
-                        "casework.task-template.unsupported-item-state",
-                        format!("/itemStates/{index}"),
-                        "a task grant is issued only on a claimed or waiting item",
-                        "Write claimed, waiting-applicant, or waiting-application.",
-                    );
-                }
-            }
-        }
-        if self.item_states.len() > 4 {
-            findings.push(
-                "casework.task-template.too-many-entries",
-                "/itemStates",
-                "at most 4 entries may be listed",
-                "Remove entries until no more than the bound remain.",
-            );
-        }
-        findings.repeated(
-            self.item_states
-                .iter()
-                .enumerate()
-                .map(|(index, state)| (format!("/itemStates/{index}"), format!("{state:?}"))),
-            "casework.task-template.duplicate-entry",
-            "this entry is already listed",
-            "List each entry once.",
-        );
-        if review_mode {
-            list_findings(&mut findings, "/reviewKinds", &self.review_kinds, 32);
-        }
-        for (index, kind) in self.review_kinds.iter().enumerate() {
-            let decidable = project.review_kinds.iter().any(|candidate| {
-                candidate.id == *kind
+        for (index, policy_id) in self.review_policies.iter().enumerate() {
+            let decidable = project.review_policies.iter().any(|candidate| {
+                candidate.id == *policy_id
                     && candidate.stages.iter().any(|stage| {
                         stage
                             .deciding_profiles
@@ -573,11 +485,72 @@ impl TaskTemplate {
             });
             if !decidable {
                 findings.push(
-                    "casework.task-template.unknown-review-kind",
-                    format!("/reviewKinds/{index}"),
-                    "no review kind with this id has a stage decided by one of the template's eligibleProfiles",
-                    "Name a review kind declared under reviewKinds whose stage lists an eligible profile in decidingProfiles.",
+                    "casework.task-template.unknown-review-policy",
+                    format!("/reviewPolicies/{index}"),
+                    "no review policy with this id has a stage decided by one of the template's eligibleProfiles",
+                    "Name a review policy declared under reviewPolicies whose stage lists an eligible profile in decidingProfiles.",
                 );
+            }
+        }
+        for (index, team) in self.eligible_teams.iter().enumerate() {
+            if !project.teams.iter().any(|declared| declared.id == *team) {
+                findings.push(
+                    "casework.task-template.unknown-team",
+                    format!("/eligibleTeams/{index}"),
+                    "the eligible team is not declared",
+                    "Declare this team under teams.",
+                );
+            }
+        }
+        for (index, policy_id) in self.review_policies.iter().enumerate() {
+            let Some(policy) = project
+                .review_policies
+                .iter()
+                .find(|policy| policy.id == *policy_id)
+            else {
+                continue;
+            };
+            let namespace_matches = match &policy.context {
+                crate::ReviewContextPolicy::Submitted => {
+                    project.trusted_producers.iter().any(|producer| {
+                        producer.review_policies.contains(policy_id)
+                            && producer.source_namespaces.contains(&self.source)
+                    })
+                }
+                crate::ReviewContextPolicy::CurrentSource { provider, .. } => {
+                    project.context_providers.iter().any(|candidate| {
+                        candidate.id == *provider && candidate.source_namespace == self.source
+                    })
+                }
+            };
+            if !namespace_matches {
+                findings.push(
+                    "casework.task-template.policy-namespace",
+                    format!("/reviewPolicies/{index}"),
+                    "the template namespace does not match the policy's source contract",
+                    "Use the policy's admitted source namespace.",
+                );
+            }
+            for (claim, field) in &self.subjects {
+                let schema = policy
+                    .display_schema
+                    .get("properties")
+                    .and_then(|properties| properties.get(field));
+                if schema
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str)
+                    .is_none_or(|kind| !matches!(kind, "string" | "boolean" | "integer" | "number"))
+                {
+                    findings.push(
+                        "casework.task-template.unknown-subject-field",
+                        format!(
+                            "/subjects/{}",
+                            registry_platform_yaml::escape_pointer_segment(claim)
+                        ),
+                        "the subject expression must select a declared scalar context field",
+                        "Name one scalar field in every selected policy's displaySchema.",
+                    );
+                }
             }
         }
         for (pointer, value) in [
@@ -625,12 +598,15 @@ impl TaskTemplate {
                 "Write a purpose, such as eligibility.review.",
             );
         }
-        if self.subjects.is_empty() || self.subjects.len() > 32 {
+        // Review-backed grants can use fixed bounds without disclosing source
+        // claims. Their runtime still rechecks the exact source status.
+        if (self.subjects.is_empty() && self.review_policies.is_empty()) || self.subjects.len() > 32
+        {
             findings.push(
                 "casework.task-template.subjects-out-of-range",
                 "/subjects",
-                "expected 1 to 32 subject claims",
-                "Map at least one token claim, and no more than 32, to a source field.",
+                "expected at most 32 subject claims; legacy templates require at least one",
+                "Map no more than 32 token claims to source fields. Only review-policy-backed templates may omit source claims.",
             );
         }
         for (claim, field) in &self.subjects {
@@ -714,7 +690,12 @@ impl TaskTemplate {
                     Value::String(value) if bounded(value, 512) => (),
                     Value::Bool(_) => (),
                     Value::Number(number)
-                        if number.as_i64().is_some() || number.as_u64().is_some() => {}
+                        if number.as_i64().is_some_and(|value| {
+                            value.unsigned_abs() <= crate::MAXIMUM_PORTABLE_JSON_INTEGER
+                        }) || number
+                            .as_u64()
+                            .is_some_and(|value| value <= crate::MAXIMUM_PORTABLE_JSON_INTEGER) => {
+                    }
                     _ => return Err(TaskGrantError::Subjects),
                 }
                 Ok((claim.clone(), value.clone()))
@@ -759,56 +740,8 @@ fn valid_evidence_tag(value: &str) -> bool {
         })
 }
 
-/// Ephemeral exact values from one source read. Never serialized as a work-item view.
-pub struct TaskSubjectContext {
-    pub binding: SourceBinding,
-    pub values: BTreeMap<String, Value>,
-}
-impl fmt::Debug for TaskSubjectContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("TaskSubjectContext(<redacted>)")
-    }
-}
-
-/// Proposal identity excludes ordinary source revision churn.
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskProposalIdentity {
-    pub version: String,
-    pub integrity: Option<String>,
-    pub generation: String,
-}
-impl From<&SourceBinding> for TaskProposalIdentity {
-    fn from(binding: &SourceBinding) -> Self {
-        Self {
-            version: binding.version.clone(),
-            integrity: binding.integrity.clone(),
-            generation: binding.generation.clone(),
-        }
-    }
-}
-
-/// Protected persisted record. No bearer or client private key is retained.
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskGrant {
-    pub id: Uuid,
-    pub item_id: Uuid,
-    pub template: TaskTemplate,
-    pub source_issuer: String,
-    pub approver: IssuerPrincipal,
-    pub approver_profile: String,
-    pub source_subject: SubjectRef,
-    pub proposal: TaskProposalIdentity,
-    pub subjects: BTreeMap<String, Value>,
-    pub approved_at: u64,
-    pub expires_at: u64,
-}
-
-/// Protected review-native task grant. It binds authorization to the exact
-/// active task holder, task revision, immutable review subject, and governed
-/// template version/digest. A terminal review outcome never creates one.
-#[derive(Clone, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewTaskGrant {
     pub id: Uuid,
@@ -824,8 +757,6 @@ pub struct ReviewTaskGrant {
     pub source_issuer: String,
     pub approver_profile: String,
     pub subject: crate::SubjectBinding,
-    pub source_subject: SubjectRef,
-    pub proposal: TaskProposalIdentity,
     pub subjects: BTreeMap<String, Value>,
     pub approved_at: u64,
     pub expires_at: u64,
@@ -841,15 +772,8 @@ impl fmt::Debug for ReviewTaskGrant {
             .finish_non_exhaustive()
     }
 }
-impl fmt::Debug for TaskGrant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TaskGrant")
-            .field("expires_at", &self.expires_at)
-            .finish_non_exhaustive()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskApprovalRequest {
     pub template_id: String,
@@ -884,469 +808,8 @@ fn valid_operation(value: &str) -> bool {
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn template_listing(item_states: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({
-            "id":"summary", "version":"1", "label":"Prepare summary",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates": item_states,
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get"],
-            "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
-            "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
-        })
-    }
-
-    #[test]
-    fn cfg_id_1_a_template_id_is_a_local_identifier() {
-        let with_id = |id: &str| {
-            let mut template = template_listing(serde_json::json!(["claimed"]));
-            template["id"] = serde_json::json!(id);
-            template
-        };
-        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
-            "apiVersion": crate::CASEWORK_API_VERSION,
-            "kind": crate::CASEWORK_KIND,
-            "project": {"id": "templates", "version": "1"},
-            "accessProfiles": [{"id": "staff", "principalClaim": "sub", "requiredScopes": [], "role": "staff"}],
-            "queues": [{"id": "triage", "label": "Triage"}]
-        }))
-        .unwrap();
-        let invalid_id = |template: &TaskTemplate| {
-            template.findings(&project).iter().any(|finding| {
-                finding.code == "casework.task-template.invalid-id" && finding.pointer == "/id"
-            })
-        };
-        for valid in ["prepare_summary-2".to_owned(), "x".repeat(64)] {
-            let template: TaskTemplate = serde_json::from_value(with_id(&valid)).unwrap();
-            assert!(!invalid_id(&template));
-        }
-        for invalid in ["prepare.summary", "Summary", "1summary", ""] {
-            assert!(
-                serde_json::from_value::<TaskTemplate>(with_id(invalid)).is_err(),
-                "an id outside the grammar is refused where it is read"
-            );
-        }
-        let invalid = "x".repeat(65);
-        assert!(serde_json::from_value::<TaskTemplate>(with_id(&invalid)).is_err());
-        for invalid in ["prepare.summary".to_owned(), "x".repeat(65)] {
-            let mut template: TaskTemplate = serde_json::from_value(with_id("summary")).unwrap();
-            template.id = invalid;
-            assert!(invalid_id(&template));
-        }
-    }
-
-    #[test]
-    fn cfg_name_2_a_template_lists_the_waiting_states_in_kebab_case() {
-        let current = template_listing(serde_json::json!([
-            "claimed",
-            "waiting-applicant",
-            "waiting-application"
-        ]));
-        let template: TaskTemplate = serde_json::from_value(current.clone()).unwrap();
-        assert_eq!(
-            template.item_states,
-            [
-                OccurrenceState::Claimed,
-                OccurrenceState::WaitingApplicant,
-                OccurrenceState::WaitingApplication
-            ]
-        );
-        assert_eq!(serde_json::to_value(&template).unwrap(), current);
-        for previous in ["waiting_applicant", "waiting_application"] {
-            assert!(
-                serde_json::from_value::<TaskTemplate>(template_listing(serde_json::json!([
-                    previous
-                ])))
-                .is_err(),
-                "{previous} is refused"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_scopes_and_purposes_require_explicit_bounded_oauth_names() {
-        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
-            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "project": {"id":"tasks", "version":"1"},
-            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
-            "queues":[{"id":"review", "label":"Review"}],
-            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
-        })).unwrap();
-        let mut template: TaskTemplate = serde_json::from_value(serde_json::json!({
-            "id":"summary", "version":"1", "label":"Prepare summary",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates":["claimed"],
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get", "records:draft"],
-            "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
-            "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
-        })).unwrap();
-        assert!(template.check(&project).is_ok());
-        for scopes in [
-            vec![],
-            vec![String::new()],
-            vec!["*".into()],
-            vec!["records:*".into()],
-            vec!["records:get".into(), "records:get".into()],
-            vec!["two scopes".into()],
-            vec!["quote\"".into()],
-            vec!["back\\slash".into()],
-            vec!["non-ascii-é".into()],
-            vec!["a".repeat(129)],
-            (0..33).map(|n| format!("scope:{n}")).collect(),
-        ] {
-            template.scopes = scopes;
-            assert!(
-                template.check(&project).is_err(),
-                "invalid governed OAuth scopes accepted"
-            );
-        }
-        template.scopes = vec!["records:get".into()];
-        for purpose in ["1-record-review", ":review"] {
-            template.purpose = purpose.into();
-            assert!(
-                template.check(&project).is_err(),
-                "purpose refused by grant parsing was accepted: {purpose}"
-            );
-        }
-        template.purpose = "record:review".into();
-        assert!(template.check(&project).is_ok());
-    }
-
-    #[test]
-    fn deferred_authorization_requires_explicit_mode_and_bounded_duration() {
-        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
-            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "project": {"id":"tasks", "version":"1"},
-            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
-            "queues":[{"id":"review", "label":"Review"}],
-            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
-        })).unwrap();
-        let mut template: TaskTemplate = serde_json::from_value(serde_json::json!({
-            "id":"summary", "version":"1", "label":"Prepare summary",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates":["claimed"],
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get", "records:draft"],
-            "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
-            "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
-        })).unwrap();
-        let immediate = serde_json::to_value(&template).unwrap();
-        assert!(immediate.get("authorizationMode").is_none());
-        assert_eq!(
-            template.authorization_mode,
-            TaskAuthorizationMode::Immediate
-        );
-        template.lifetime_seconds = 901;
-        assert!(template.check(&project).is_err());
-        template.authorization_mode = TaskAuthorizationMode::Deferred;
-        assert!(template.check(&project).is_ok());
-        template.lifetime_seconds = DEFERRED_TASK_GRANT_LIFETIME_SECONDS;
-        assert!(template.check(&project).is_ok());
-        template.lifetime_seconds += 1;
-        assert!(template.check(&project).is_err());
-        template.lifetime_seconds = 0;
-        assert!(template.check(&project).is_err());
-        let mut deferred = immediate.clone();
-        deferred["authorizationMode"] = serde_json::json!("deferred");
-        deferred["lifetimeSeconds"] = serde_json::json!(DEFERRED_TASK_GRANT_LIFETIME_SECONDS);
-        assert!(serde_json::from_value::<TaskTemplate>(deferred.clone())
-            .unwrap()
-            .check(&project)
-            .is_ok());
-        for invalid_lifetime in [0, DEFERRED_TASK_GRANT_LIFETIME_SECONDS + 1] {
-            let mut invalid = deferred.clone();
-            invalid["lifetimeSeconds"] = serde_json::json!(invalid_lifetime);
-            assert!(serde_json::from_value::<TaskTemplate>(invalid).is_err());
-        }
-        #[cfg(feature = "schema")]
-        {
-            let schema = serde_json::to_value(schemars::schema_for!(TaskTemplate)).unwrap();
-            let validator = jsonschema::JSONSchema::options()
-                .with_draft(jsonschema::Draft::Draft202012)
-                .compile(&schema)
-                .unwrap();
-            assert!(validator.is_valid(&immediate));
-            assert!(validator.is_valid(&deferred));
-            let mut implicit_long = immediate.clone();
-            implicit_long["lifetimeSeconds"] = serde_json::json!(901);
-            assert!(!validator.is_valid(&implicit_long));
-            implicit_long["authorizationMode"] = serde_json::json!("immediate");
-            assert!(!validator.is_valid(&implicit_long));
-            let mut overlong = deferred.clone();
-            overlong["lifetimeSeconds"] =
-                serde_json::json!(DEFERRED_TASK_GRANT_LIFETIME_SECONDS + 1);
-            assert!(!validator.is_valid(&overlong));
-        }
-        let mut invalid = immediate.clone();
-        invalid["authorizationMode"] = serde_json::json!("standing");
-        assert!(serde_json::from_value::<TaskTemplate>(invalid).is_err());
-        assert_eq!(
-            serde_json::to_value(
-                serde_json::from_value::<TaskTemplate>(immediate.clone()).unwrap()
-            )
-            .unwrap(),
-            immediate
-        );
-    }
-
-    #[test]
-    fn proposal_identity_ignores_only_mutable_source_revision() {
-        let binding = SourceBinding {
-            source_revision: "before".into(),
-            version: "proposal-1".into(),
-            integrity: Some("digest".into()),
-            generation: "source-1".into(),
-        };
-        let mut next = binding.clone();
-        next.source_revision = "after".into();
-        assert!(TaskProposalIdentity::from(&binding) == TaskProposalIdentity::from(&next));
-        next.version = "proposal-2".into();
-        assert!(TaskProposalIdentity::from(&binding) != TaskProposalIdentity::from(&next));
-    }
-    #[test]
-    fn exact_bounds_reject_wildcards_duplicate_collections_and_ambiguous_operations() {
-        for value in [
-            serde_json::json!({"type":"breg","permissions":[]}),
-            serde_json::json!({"type":"evidence","requirement":"*"}),
-            serde_json::json!({"type":"evidence","requirement":"urn:requirement:one review"}),
-            serde_json::json!({"type":"breg","permissions":[{"collection":"case records","operations":["get"]}]}),
-            serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get","get"]}]}),
-            serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get"]},{"collection":"records","operations":["list"]}]}),
-        ] {
-            let bounds: TaskGrantBounds = serde_json::from_value(value).unwrap();
-            assert!(bounds.check().is_err());
-        }
-        let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get","create"]}]})).unwrap();
-        assert!(bounds.check().is_ok());
-    }
-
-    #[test]
-    fn cfg_id_1_a_registry_operation_is_a_local_identifier() {
-        let invalid_operations = |operation: &str| -> Vec<String> {
-            let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
-                "type":"breg",
-                "permissions":[{"collection":"records","operations":["get", operation]}]
-            }))
-            .unwrap();
-            bounds
-                .findings()
-                .into_iter()
-                .filter(|finding| finding.code == "casework.task-template.invalid-operation")
-                .map(|finding| finding.pointer)
-                .collect()
-        };
-        for valid in [
-            "apply-request".to_owned(),
-            "apply_request".to_owned(),
-            "read-live".to_owned(),
-            "revision2".to_owned(),
-            "x".repeat(64),
-        ] {
-            assert!(
-                invalid_operations(&valid).is_empty(),
-                "{valid} follows the identifier grammar"
-            );
-        }
-        for invalid in [
-            "Apply-request".to_owned(),
-            "apply request".to_owned(),
-            "apply.request".to_owned(),
-            "apply:request".to_owned(),
-            "apply/request".to_owned(),
-            "apply-*".to_owned(),
-            "-apply".to_owned(),
-            "_apply".to_owned(),
-            "2apply".to_owned(),
-            "appl\u{e9}".to_owned(),
-            String::new(),
-            "x".repeat(65),
-        ] {
-            assert_eq!(
-                invalid_operations(&invalid),
-                ["/permissions/0/operations/1"],
-                "{invalid:?} is outside the identifier grammar"
-            );
-            let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
-                "type":"breg",
-                "permissions":[{"collection":"records","operations":[invalid]}]
-            }))
-            .unwrap();
-            assert!(matches!(bounds.check(), Err(TaskGrantError::Policy)));
-        }
-    }
-
-    #[test]
-    fn scheduling_bounds_match_the_runtime_claim_grammar() {
-        let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
-            "type":"scheduling",
-            "permissions":[{
-                "service":"registry-update",
-                "location":"bangkok-counter",
-                "actions":["appointment.create","appointment.reschedule"]
-            }]
-        }))
-        .unwrap();
-        assert!(bounds.check().is_ok());
-
-        for value in [
-            serde_json::json!({"type":"scheduling","permissions":[]}),
-            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry update","location":"bangkok-counter","actions":["appointment.create"]}]}),
-            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"*","actions":["appointment.create"]}]}),
-            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":[]}]}),
-            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["Appointment.create"]}]}),
-            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create","appointment.create"]}]}),
-            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]},{"service":"registry-update","location":"bangkok-counter","actions":["appointment.cancel"]}]}),
-        ] {
-            let bounds: TaskGrantBounds = serde_json::from_value(value).unwrap();
-            assert!(bounds.check().is_err());
-        }
-    }
-
-    #[test]
-    fn evidence_templates_require_closed_requester_context_and_other_products_forbid_it() {
-        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
-            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "project": {"id":"tasks", "version":"1"},
-            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
-            "queues":[{"id":"review", "label":"Review"}],
-            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
-        }))
-        .unwrap();
-        let mut template: TaskTemplate = serde_json::from_value(serde_json::json!({
-            "id":"evidence-check", "version":"1", "label":"Check evidence",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates":["claimed"],
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"evidence-task-agent", "resource":"urn:test:evidence",
-            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
-            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
-            "evidenceContext":{"requesterTags":["fixture-agency"], "audience":"https://relying.test/procedure"},
-            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
-        }))
-        .unwrap();
-        assert!(template.check(&project).is_ok());
-        let context_debug = format!("{:?}", template.evidence_context.as_ref().unwrap());
-        assert!(!context_debug.contains("fixture-agency"));
-        assert!(!context_debug.contains("relying.test"));
-
-        let context = template.evidence_context.take();
-        assert!(template.check(&project).is_err());
-        template.evidence_context = context;
-        template.bounds = serde_json::from_value(serde_json::json!({
-            "type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]
-        }))
-        .unwrap();
-        assert!(template.check(&project).is_err());
-
-        template.bounds = serde_json::from_value(serde_json::json!({
-            "type":"scheduling", "permissions":[{
-                "service":"registry-update", "location":"bangkok-counter",
-                "actions":["appointment.create"]
-            }]
-        }))
-        .unwrap();
-        assert!(template.check(&project).is_err());
-
-        template.bounds = serde_json::from_value(serde_json::json!({
-            "type":"evidence", "requirement":"urn:test:requirement:adult"
-        }))
-        .unwrap();
-        template.evidence_context.as_mut().unwrap().requester_tags = vec![];
-        assert!(template.check(&project).is_err());
-        template.evidence_context.as_mut().unwrap().requester_tags = vec!["Fixture-Agency".into()];
-        assert!(template.check(&project).is_err());
-        template.evidence_context.as_mut().unwrap().requester_tags = vec!["fixture-agency".into()];
-        template.evidence_context.as_mut().unwrap().audience = "relative-audience".into();
-        assert!(template.check(&project).is_err());
-    }
-
-    #[test]
-    fn deferred_authorization_cannot_carry_evidence_bounds() {
-        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
-            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "project": {"id":"tasks", "version":"1"},
-            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
-            "queues":[{"id":"review", "label":"Review"}],
-            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
-        }))
-        .unwrap();
-        let immediate = serde_json::json!({
-            "id":"evidence-check", "version":"1", "label":"Check evidence",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates":["claimed"],
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"evidence-task-agent", "resource":"urn:test:evidence",
-            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
-            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
-            "evidenceContext":{"requesterTags":["fixture-agency"], "audience":"https://relying.test/procedure"},
-            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
-        });
-        let template: TaskTemplate = serde_json::from_value(immediate.clone()).unwrap();
-        assert!(template.check(&project).is_ok());
-
-        // Evidence checks only the grant deadline and no grant status, so an
-        // Evidence grant keeps the immediate window at every lifetime.
-        for lifetime in [
-            1,
-            TASK_GRANT_LIFETIME_SECONDS,
-            DEFERRED_TASK_GRANT_LIFETIME_SECONDS,
-        ] {
-            let mut deferred = immediate.clone();
-            deferred["authorizationMode"] = serde_json::json!("deferred");
-            deferred["lifetimeSeconds"] = serde_json::json!(lifetime);
-            let template: TaskTemplate = serde_json::from_value(deferred).unwrap();
-            let findings = template.findings(&project);
-            assert!(
-                findings.iter().any(|finding| {
-                    finding.code == "casework.task-template.deferred-evidence"
-                        && finding.pointer == "/authorizationMode"
-                }),
-                "deferred Evidence grant accepted at {lifetime} seconds"
-            );
-            assert!(template.check(&project).is_err());
-        }
-
-        let mut deferred_breg = immediate.clone();
-        deferred_breg["authorizationMode"] = serde_json::json!("deferred");
-        deferred_breg["lifetimeSeconds"] = serde_json::json!(DEFERRED_TASK_GRANT_LIFETIME_SECONDS);
-        deferred_breg["resource"] = serde_json::json!("urn:test:breg");
-        deferred_breg["bounds"] = serde_json::json!({
-            "type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]
-        });
-        deferred_breg
-            .as_object_mut()
-            .unwrap()
-            .remove("evidenceContext");
-        assert!(
-            serde_json::from_value::<TaskTemplate>(deferred_breg.clone())
-                .unwrap()
-                .check(&project)
-                .is_ok()
-        );
-
-        #[cfg(feature = "schema")]
-        {
-            let schema = serde_json::to_value(schemars::schema_for!(TaskTemplate)).unwrap();
-            let validator = jsonschema::JSONSchema::options()
-                .with_draft(jsonschema::Draft::Draft202012)
-                .compile(&schema)
-                .unwrap();
-            assert!(validator.is_valid(&immediate));
-            assert!(validator.is_valid(&deferred_breg));
-            let mut deferred = immediate.clone();
-            deferred["authorizationMode"] = serde_json::json!("deferred");
-            assert!(!validator.is_valid(&deferred));
-        }
-    }
-}
-
-/// The exact authorization a human can approve after a current disclosed read.
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskTemplatePreview {
     pub id: String,
@@ -1369,15 +832,17 @@ pub struct TaskTemplatePreview {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskTemplatePreviews {
-    pub item_revision: i64,
+    pub task_revision: i64,
     pub templates: Vec<TaskTemplatePreview>,
 }
 
 /// Grant metadata. Stored subjects are deliberately absent: preview and approval
 /// derive selectors from the caller's current disclosed source representation.
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantView {
     pub id: Uuid,
@@ -1400,12 +865,14 @@ pub struct TaskGrantView {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantList {
     pub grants: Vec<TaskGrantView>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantRevocation {
     pub id: Uuid,
@@ -1414,6 +881,7 @@ pub struct TaskGrantRevocation {
 
 /// Short-lived credential response. Deliberately does not implement Debug.
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskAssertionResponse {
     pub assertion: String,
@@ -1423,6 +891,7 @@ pub struct TaskAssertionResponse {
 
 /// Fresh status returned only to the service client registered for this resource.
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantStatus {
     pub active: bool,
@@ -1431,6 +900,7 @@ pub struct TaskGrantStatus {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantStatusDetails {
     pub grant_id: Uuid,

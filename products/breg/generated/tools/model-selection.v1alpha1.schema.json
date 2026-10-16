@@ -123,12 +123,6 @@
       "description": "The format and version this file is written in.",
       "type": "string"
     },
-    "entities": {
-      "items": {
-        "$ref": "#/$defs/EntitySelection"
-      },
-      "type": "array"
-    },
     "kind": {
       "const": "BRegModelSelection",
       "description": "The kind of document this file is.",
@@ -145,6 +139,12 @@
       "description": "The model version the selection was written against. When present it\nmust equal the embedded snapshot's declared version label. Several\nrevisions of the model can share one version label, so this alone does\nnot pin a revision; `modelRevision` does.",
       "type": "string"
     },
+    "recordTypes": {
+      "items": {
+        "$ref": "#/$defs/EntitySelection"
+      },
+      "type": "array"
+    },
     "registry": {
       "$ref": "#/$defs/RegistrySelection"
     },
@@ -160,7 +160,7 @@
     "kind",
     "model",
     "registry",
-    "entities"
+    "recordTypes"
   ],
   "title": "Base Registry Engine model selection",
   "type": "object"

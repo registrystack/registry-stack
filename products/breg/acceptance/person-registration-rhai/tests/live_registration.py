@@ -36,7 +36,7 @@ def main() -> None:
     invalid_project = output / "invalid-pattern-project"
     shutil.copytree(args.project, invalid_project)
     invalid_config = yaml.safe_load((invalid_project / "registry.yaml").read_text(encoding="utf-8"))
-    for entity in invalid_config["entities"]:
+    for entity in invalid_config["recordTypes"]:
         if entity["id"] == "person":
             for field in entity["fields"]:
                 if field["id"] == "identifier":
@@ -51,7 +51,7 @@ def main() -> None:
     diagnostics = json.loads(invalid.stdout).get("diagnostics", [])
     if invalid.returncode == 0 or not any(
         item.get("code") == "breg.field.pattern-syntax-invalid"
-        and item.get("path") == "entities[person].fields[identifier].pattern"
+        and item.get("path") == "recordTypes[person].fields[identifier].pattern"
         for item in diagnostics
     ):
         raise SystemExit("invalid native pattern did not produce its field-addressed schema-test diagnostic")

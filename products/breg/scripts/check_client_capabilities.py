@@ -197,7 +197,7 @@ def check(root: Path = ROOT) -> list[str]:
                 }
                 errors += require_accounted(media, set(inventory["representations"]), f"response representation on {route}")
 
-    rust_source = "\n".join(path.read_text() for path in (root / "crates/registry-breg-client/src").glob("*.rs"))
+    rust_source = "\n".join(path.read_text() for path in (root / "crates/registry-breg-client/src").rglob("*.rs"))
     rust_methods = set(re.findall(r"pub\s+(?:async\s+)?fn\s+(\w+)\s*[<(]", rust_source))
     node_types = (root / "crates/registry-breg-client-node/client.d.ts").read_text()
     node_methods = set(re.findall(r"^\s+(\w+)\s*(?:<[^>]+>)?\(", node_types, re.M))

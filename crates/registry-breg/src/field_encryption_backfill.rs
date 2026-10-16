@@ -118,8 +118,8 @@ pub struct FieldEncryptionBackfillFieldPreflight {
     /// Retained journal revisions, recorded before the boundary, that carry
     /// the field member: the rows the chosen history path erases or accepts.
     pub journal_row_count: u64,
-    pub request_target_row_count: u64,
-    pub request_proposal_row_count: u64,
+    pub proposal_target_row_count: u64,
+    pub proposal_submission_row_count: u64,
     pub idempotency_row_count: u64,
     pub outbox_row_count: u64,
     /// Authored record identifiers whose normalized values would collide on
@@ -393,7 +393,7 @@ async fn field_preflight(
     let request_targets = transaction
         .query_one(
             "SELECT count(*)::bigint
-               FROM registry_internal.registry_request_targets
+               FROM registry_internal.registry_proposal_targets
               WHERE target_entity_id = $1
                 AND (base_snapshot ? $2 OR after_snapshot ? $2)",
             &[&entity_id, &field_id],
@@ -403,7 +403,7 @@ async fn field_preflight(
     let request_proposals = transaction
         .query_one(
             "SELECT count(*)::bigint
-               FROM registry_internal.registry_request_proposals AS proposal
+               FROM registry_internal.registry_proposal_submissions AS proposal
               WHERE snapshot IS NOT NULL
                 AND (
                     EXISTS (
@@ -463,9 +463,9 @@ async fn field_preflight(
         unique_blind_index: field.blind.is_some_and(|blind| blind.unique),
         plaintext_row_count,
         journal_row_count,
-        request_target_row_count: u64::try_from(request_targets.get::<_, i64>(0))
+        proposal_target_row_count: u64::try_from(request_targets.get::<_, i64>(0))
             .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?,
-        request_proposal_row_count: u64::try_from(request_proposals.get::<_, i64>(0))
+        proposal_submission_row_count: u64::try_from(request_proposals.get::<_, i64>(0))
             .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?,
         idempotency_row_count: u64::try_from(idempotency.get::<_, i64>(0))
             .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?,
@@ -514,8 +514,8 @@ pub struct FieldEncryptionHistoryErasureOutcome {
     pub scrubbed_change_context_count: u64,
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
-    pub scrubbed_request_target_count: u64,
-    pub scrubbed_request_proposal_count: u64,
+    pub scrubbed_proposal_target_count: u64,
+    pub scrubbed_proposal_submission_count: u64,
     pub removed_descriptor_count: u64,
     pub rebaseline: HistoryRebaselineOutcome,
 }
@@ -601,7 +601,7 @@ pub async fn erase_field_encryption_history(
     // run ends, so a run that stops before its terminal still answers it.
     let mut lifecycle_attempt = None;
     let (_, _, needs_rebaseline, lifecycle_reference) =
-        scrub_plaintext_request_snapshots(client, &request, &mut lifecycle_attempt).await?;
+        scrub_plaintext_proposal_snapshots(client, &request, &mut lifecycle_attempt).await?;
     let mut erased_any = false;
     loop {
         let targets = pending_erase_targets(client, &request).await?;
@@ -671,8 +671,8 @@ pub async fn erase_field_encryption_history(
         scrubbed_change_context_count: counts.scrubbed_change_context_count,
         scrubbed_outbox_payload_count: counts.scrubbed_outbox_payload_count,
         scrubbed_cached_response_count: counts.scrubbed_cached_response_count,
-        scrubbed_request_target_count: counts.scrubbed_request_target_count,
-        scrubbed_request_proposal_count: counts.scrubbed_request_proposal_count,
+        scrubbed_proposal_target_count: counts.scrubbed_proposal_target_count,
+        scrubbed_proposal_submission_count: counts.scrubbed_proposal_submission_count,
         removed_descriptor_count: counts.removed_descriptor_count,
         rebaseline,
     };
@@ -701,12 +701,11 @@ pub async fn erase_field_encryption_history(
 
 /// Clear whole request snapshots when their frozen originating package
 /// predates a recorded erase-and-rebaseline flip and they mention its field.
-/// Package order comes from the migration ledger, and for the revisions a
-/// pre-ledger database named, from the order an earlier release's adoption
-/// kept; it never comes from request revision timing: a draft can predate the flip while its frozen
+/// Package order comes from the current migration ledger; it never comes from
+/// request revision timing: a draft can predate the flip while its frozen
 /// proposal and target snapshots are created afterward. This also reaches canceled and rejected creates
 /// whose target never produced a retained record revision.
-async fn scrub_plaintext_request_snapshots(
+async fn scrub_plaintext_proposal_snapshots(
     client: &mut Client,
     request: &FieldEncryptionHistoryErasureRequest<'_>,
     lifecycle_attempt: &mut Option<registry_platform_audit::AuditRequest>,
@@ -721,6 +720,7 @@ async fn scrub_plaintext_request_snapshots(
     let head = lock_history_head(&transaction)
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    verify_retained_revision_indexes(&transaction).await?;
     let flip_state = transaction
         .query_one(
             "SELECT
@@ -733,7 +733,9 @@ async fn scrub_plaintext_request_snapshots(
                      SELECT 1
                        FROM registry_internal.registry_field_encryption_flips
                       WHERE history_choice = 'erase-and-rebaseline'
-                        AND history_commit_position IS NULL
+                        AND (history_commit_position IS NULL
+                            OR NOT EXISTS (SELECT 1 FROM registry_internal.registry_migrations AS activation
+                                WHERE activation.activation_id::text = boundary_package_revision))
                  )",
             &[],
         )
@@ -769,16 +771,12 @@ async fn scrub_plaintext_request_snapshots(
         .query_one(
             "WITH package_positions AS (
                  SELECT activation_id::text AS package_revision,
-                        apply_order AS package_sequence,
-                        1::bigint AS inferred_count
+                        apply_order AS package_sequence
                    FROM registry_internal.registry_migrations
-                 UNION ALL
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              SELECT EXISTS (
                  SELECT 1
-                   FROM registry_internal.registry_request_proposals AS proposal
+                   FROM registry_internal.registry_proposal_submissions AS proposal
                    JOIN registry_internal.registry_field_encryption_flips AS flip
                      ON flip.history_choice = 'erase-and-rebaseline'
                    LEFT JOIN package_positions AS boundary
@@ -812,10 +810,10 @@ async fn scrub_plaintext_request_snapshots(
                         )
                         OR EXISTS (
                             SELECT 1
-                              FROM registry_internal.registry_request_targets AS target
-                             WHERE target.request_entity_id = proposal.request_entity_id
-                               AND target.request_id = proposal.request_id
-                               AND target.proposal_version = proposal.proposal_version
+                              FROM registry_internal.registry_proposal_targets AS target
+                             WHERE target.action_id = proposal.action_id
+                               AND target.proposal_id = proposal.proposal_id
+                               AND target.submission_version = proposal.submission_version
                                AND target.erased_at IS NULL
                                AND target.target_entity_id = flip.entity_id
                                AND (
@@ -827,9 +825,7 @@ async fn scrub_plaintext_request_snapshots(
                     AND (
                         proposal.snapshot ->> 'originatingPackage' IS NULL
                         OR boundary.package_revision IS NULL
-                        OR boundary.inferred_count <> 1
                         OR origin.package_revision IS NULL
-                        OR origin.inferred_count <> 1
                     )
              )",
             &[],
@@ -843,18 +839,14 @@ async fn scrub_plaintext_request_snapshots(
 
     // Targets must be scrubbed while their parent proposal still carries the
     // frozen originating package used to classify the snapshot as pre-flip.
-    let scrubbed_request_target_count = transaction
+    let scrubbed_proposal_target_count = transaction
         .execute(
             "WITH package_positions AS (
                  SELECT activation_id::text AS package_revision,
-                        apply_order AS package_sequence,
-                        1::bigint AS inferred_count
+                        apply_order AS package_sequence
                    FROM registry_internal.registry_migrations
-                 UNION ALL
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM registry_internal.registry_pre_ledger_package_positions
              )
-             UPDATE registry_internal.registry_request_targets AS target
+             UPDATE registry_internal.registry_proposal_targets AS target
                 SET base_snapshot = NULL,
                     after_snapshot = NULL,
                     erased_at = transaction_timestamp()
@@ -864,15 +856,13 @@ async fn scrub_plaintext_request_snapshots(
                       FROM registry_internal.registry_field_encryption_flips AS flip
                       JOIN package_positions AS boundary
                         ON boundary.package_revision = flip.boundary_package_revision
-                       AND boundary.inferred_count = 1
-                      JOIN registry_internal.registry_request_proposals AS proposal
-                        ON proposal.request_entity_id = target.request_entity_id
-                       AND proposal.request_id = target.request_id
-                       AND proposal.proposal_version = target.proposal_version
+                      JOIN registry_internal.registry_proposal_submissions AS proposal
+                        ON proposal.action_id = target.action_id
+                       AND proposal.proposal_id = target.proposal_id
+                       AND proposal.submission_version = target.submission_version
                       JOIN package_positions AS origin
                         ON origin.package_revision =
                            proposal.snapshot ->> 'originatingPackage'
-                       AND origin.inferred_count = 1
                      WHERE flip.history_choice = 'erase-and-rebaseline'
                        AND target.target_entity_id = flip.entity_id
                        AND (
@@ -886,18 +876,14 @@ async fn scrub_plaintext_request_snapshots(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
 
-    let scrubbed_request_proposal_count = transaction
+    let scrubbed_proposal_submission_count = transaction
         .execute(
             "WITH package_positions AS (
                  SELECT activation_id::text AS package_revision,
-                        apply_order AS package_sequence,
-                        1::bigint AS inferred_count
+                        apply_order AS package_sequence
                    FROM registry_internal.registry_migrations
-                 UNION ALL
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM registry_internal.registry_pre_ledger_package_positions
              )
-             UPDATE registry_internal.registry_request_proposals AS proposal
+             UPDATE registry_internal.registry_proposal_submissions AS proposal
                 SET snapshot = NULL,
                     erased_at = transaction_timestamp()
               WHERE proposal.snapshot IS NOT NULL
@@ -907,11 +893,9 @@ async fn scrub_plaintext_request_snapshots(
                       FROM registry_internal.registry_field_encryption_flips AS flip
                       JOIN package_positions AS boundary
                         ON boundary.package_revision = flip.boundary_package_revision
-                       AND boundary.inferred_count = 1
                       JOIN package_positions AS origin
                         ON origin.package_revision =
                            proposal.snapshot ->> 'originatingPackage'
-                       AND origin.inferred_count = 1
                      WHERE flip.history_choice = 'erase-and-rebaseline'
                        AND origin.package_sequence < boundary.package_sequence
                        AND (
@@ -944,7 +928,8 @@ async fn scrub_plaintext_request_snapshots(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
 
-    let scrubbed_any = scrubbed_request_target_count != 0 || scrubbed_request_proposal_count != 0;
+    let scrubbed_any =
+        scrubbed_proposal_target_count != 0 || scrubbed_proposal_submission_count != 0;
     let has_pending_revisions: bool = transaction
         .query_one(
             "SELECT EXISTS (
@@ -952,7 +937,7 @@ async fn scrub_plaintext_request_snapshots(
                    FROM registry_internal.registry_field_encryption_flips AS flip
                    JOIN registry_internal.registry_revisions AS revision
                      ON revision.entity_id = flip.entity_id
-                   LEFT JOIN registry_internal.registry_revision_commit_members AS member
+                   JOIN registry_internal.registry_revision_commit_members AS member
                      ON member.entity_id = revision.entity_id
                     AND member.record_id = revision.record_id
                     AND member.record_revision = revision.record_revision
@@ -961,10 +946,7 @@ async fn scrub_plaintext_request_snapshots(
                     AND revision.erased_at IS NULL
                     AND revision.package_revision <> flip.boundary_package_revision
                     AND convert_from(revision.snapshot, 'UTF8')::jsonb ? flip.field_id
-                    AND (
-                        member.commit_position < flip.history_commit_position
-                        OR member.commit_position IS NULL
-                    )
+                    AND member.commit_position < flip.history_commit_position
              )",
             &[],
         )
@@ -999,8 +981,8 @@ async fn scrub_plaintext_request_snapshots(
                 &transaction,
                 &lifecycle_reference,
                 LifecycleProgressKind::RequestScrub,
-                scrubbed_request_target_count,
-                scrubbed_request_proposal_count,
+                scrubbed_proposal_target_count,
+                scrubbed_proposal_submission_count,
             )
             .await?;
         }
@@ -1013,20 +995,48 @@ async fn scrub_plaintext_request_snapshots(
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     Ok((
-        scrubbed_request_target_count,
-        scrubbed_request_proposal_count,
+        scrubbed_proposal_target_count,
+        scrubbed_proposal_submission_count,
         needs_rebaseline,
         lifecycle_reference,
     ))
+}
+
+/// Every retained revision belongs to its committed mutation. Missing members
+/// must refuse erasure rather than disappear from indexed target selection.
+async fn verify_retained_revision_indexes(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<(), FieldEncryptionHistoryErasureError> {
+    let missing: bool = transaction
+        .query_one(
+            "SELECT EXISTS (
+            SELECT 1 FROM registry_internal.registry_revisions AS revision
+            WHERE revision.snapshot IS NOT NULL AND revision.erased_at IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM registry_internal.registry_revision_commit_members AS member
+                    WHERE member.entity_id = revision.entity_id
+                        AND member.record_id = revision.record_id
+                        AND member.record_revision = revision.record_revision
+                )
+        )",
+            &[],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?
+        .get(0);
+    if missing {
+        return Err(FieldEncryptionHistoryErasureError::Unavailable);
+    }
+    Ok(())
 }
 
 /// Enumerate the records whose retained history still carries a plaintext
 /// member a flip declared erase-and-rebaseline for.
 ///
 /// A revision qualifies from durable flip provenance, never from value shape.
-/// Indexed revisions precede the flip's exclusive history position. Unindexed
-/// revisions are legacy pre-commit-index rows because post-install writes add
-/// their commit member atomically. The boundary package itself is excluded, as
+/// Indexed revisions precede the flip's exclusive history position. Retained
+/// revisions without a commit member are corrupt and refused. The boundary
+/// package itself is excluded, as
 /// are later indexed encrypted revisions from subsequent packages.
 async fn pending_erase_targets(
     client: &mut Client,
@@ -1039,6 +1049,7 @@ async fn pending_erase_targets(
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
+    verify_retained_revision_indexes(&transaction).await?;
     let rows = transaction
         .query(
             "WITH pending_boundaries AS (
@@ -1047,7 +1058,7 @@ async fn pending_erase_targets(
                    FROM registry_internal.registry_field_encryption_flips AS flip
                    JOIN registry_internal.registry_revisions AS revision
                      ON revision.entity_id = flip.entity_id
-                   LEFT JOIN registry_internal.registry_revision_commit_members AS member
+                   JOIN registry_internal.registry_revision_commit_members AS member
                      ON member.entity_id = revision.entity_id
                     AND member.record_id = revision.record_id
                     AND member.record_revision = revision.record_revision
@@ -1056,10 +1067,7 @@ async fn pending_erase_targets(
                     AND revision.erased_at IS NULL
                     AND revision.package_revision <> flip.boundary_package_revision
                     AND convert_from(revision.snapshot, 'UTF8')::jsonb ? flip.field_id
-                    AND (
-                        member.commit_position < flip.history_commit_position
-                        OR member.commit_position IS NULL
-                    )
+                    AND member.commit_position < flip.history_commit_position
                   GROUP BY flip.entity_id, revision.record_id
              ), ranked AS (
                  SELECT boundary.entity_id, boundary.record_id,
@@ -1113,8 +1121,8 @@ struct FieldEncryptionLifecycleCounts {
     scrubbed_change_context_count: u64,
     scrubbed_outbox_payload_count: u64,
     scrubbed_cached_response_count: u64,
-    scrubbed_request_target_count: u64,
-    scrubbed_request_proposal_count: u64,
+    scrubbed_proposal_target_count: u64,
+    scrubbed_proposal_submission_count: u64,
     removed_descriptor_count: u64,
 }
 
@@ -1209,8 +1217,8 @@ async fn record_lifecycle_progress(
     transaction: &tokio_postgres::Transaction<'_>,
     lifecycle_reference: &str,
     kind: LifecycleProgressKind,
-    scrubbed_request_target_count: u64,
-    scrubbed_request_proposal_count: u64,
+    scrubbed_proposal_target_count: u64,
+    scrubbed_proposal_submission_count: u64,
 ) -> Result<(), FieldEncryptionHistoryErasureError> {
     let count = |value: u64| {
         i64::try_from(value).map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)
@@ -1219,13 +1227,13 @@ async fn record_lifecycle_progress(
         .execute(
             "INSERT INTO registry_internal.registry_field_encryption_lifecycle_progress
                     (lifecycle_reference, progress_kind,
-                     scrubbed_request_target_count, scrubbed_request_proposal_count)
+                     scrubbed_proposal_target_count, scrubbed_proposal_submission_count)
              VALUES ($1, $2, $3, $4)",
             &[
                 &lifecycle_reference,
                 &kind.as_str(),
-                &count(scrubbed_request_target_count)?,
-                &count(scrubbed_request_proposal_count)?,
+                &count(scrubbed_proposal_target_count)?,
+                &count(scrubbed_proposal_submission_count)?,
             ],
         )
         .await
@@ -1258,10 +1266,10 @@ async fn aggregate_lifecycle_counts(
                  COALESCE(sum(scrubbed_cached_response_count) FILTER (
                      WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum(scrubbed_request_target_count) FILTER (
+                 COALESCE(sum(scrubbed_proposal_target_count) FILTER (
                      WHERE progress_kind = 'request-scrub'
                  ), 0)::bigint,
-                 COALESCE(sum(scrubbed_request_proposal_count) FILTER (
+                 COALESCE(sum(scrubbed_proposal_submission_count) FILTER (
                      WHERE progress_kind = 'request-scrub'
                  ), 0)::bigint,
                  COALESCE(sum(removed_descriptor_count) FILTER (
@@ -1284,8 +1292,8 @@ async fn aggregate_lifecycle_counts(
         scrubbed_change_context_count: count(3)?,
         scrubbed_outbox_payload_count: count(4)?,
         scrubbed_cached_response_count: count(5)?,
-        scrubbed_request_target_count: count(6)?,
-        scrubbed_request_proposal_count: count(7)?,
+        scrubbed_proposal_target_count: count(6)?,
+        scrubbed_proposal_submission_count: count(7)?,
         removed_descriptor_count: count(8)?,
     })
 }
@@ -1317,8 +1325,8 @@ fn erase_history_entry(
             "scrubbedChangeContextCount": outcome.scrubbed_change_context_count,
             "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
             "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
-            "scrubbedRequestTargetCount": outcome.scrubbed_request_target_count,
-            "scrubbedRequestProposalCount": outcome.scrubbed_request_proposal_count,
+            "scrubbedProposalTargetCount": outcome.scrubbed_proposal_target_count,
+            "scrubbedProposalSubmissionCount": outcome.scrubbed_proposal_submission_count,
             "removedDescriptorCount": outcome.removed_descriptor_count,
             "baselinePosition": outcome.rebaseline.baseline_position,
             "coveragePolicy": "per_record_erasure_then_single_rebaseline",

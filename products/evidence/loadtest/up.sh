@@ -7,6 +7,7 @@ repository_root=$(cd -- "$product_dir/../.." && pwd -P)
 support="$loadtest_dir/support/loadenv.py"
 run_dir="$loadtest_dir/.run"
 tracked="$loadtest_dir/project"
+canonical_project="$product_dir/examples/standalone"
 
 usage() {
   printf '%s\n' 'usage: products/evidence/loadtest/up.sh [--debug]' >&2
@@ -61,6 +62,7 @@ registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.
   -p registry-evidence -p registry-evidencectl --bins >/dev/null
 evidence_bin="$repository_root/target/$build_profile/evidence"
 evidencectl="$repository_root/target/$build_profile/evidencectl"
+export EVIDENCE_BIN="$evidence_bin"
 project="$run_dir/project"
 mock_pid=""
 
@@ -94,9 +96,24 @@ read -r mock_port evidence_port issuer_port < <(python3 "$support" ports)
 
 printf '%s\n' '== Preparing the synthetic adult-status project'
 python3 "$support" openapi --template "$tracked/source.openapi.yaml" --port "$mock_port" --out "$run_dir/source.openapi.yaml"
-"$evidencectl" init "$project" --openapi "$run_dir/source.openapi.yaml" --profile local >"$run_dir/init.log"
-python3 "$support" local-project --tracked "$tracked" --project "$project" --pool "$run_dir/pool"
-"$evidencectl" --format json check "$project" >"$run_dir/check-report.json"
+python3 "$support" local-project \
+  --tracked "$canonical_project" \
+  --project "$project" \
+  --pool "$run_dir/pool" \
+  --source-openapi "$run_dir/source.openapi.yaml" \
+  --mock-port "$mock_port"
+{
+  "$evidencectl" keygen signing \
+    --output-dir "$project/.generated/secrets"
+  "$evidencectl" keygen secret \
+    --output "$project/.generated/secrets/audit-hmac-key"
+  "$evidencectl" keygen secret \
+    --output "$project/.generated/secrets/subject-binding-hmac-key"
+  "$evidencectl" keygen token \
+    --output "$project/.generated/secrets/synthetic-source-token"
+} >"$run_dir/keygen.log"
+"$evidencectl" --format json check "$project" \
+  --target "$project/local-target.yaml" >"$run_dir/check-report.json"
 "$evidencectl" source mock check "$project" >"$run_dir/mock-check.log"
 
 # Each load client is a distinct principal, so the per-principal limit of the
@@ -110,9 +127,10 @@ printf '%s\n' "== Registering $load_clients synthetic load clients"
   # are still written owner-only by evidencectl itself.
   umask 022
   cd -- "$project"
-  "$evidencectl" access policy add loadtest --question adult-status >/dev/null
   while IFS= read -r client; do
-    "$evidencectl" access client add "$client" --policy loadtest --generate-local-key >/dev/null
+    "$evidencectl" access client add "$client" \
+      --access-profile standalone-service \
+      --generate-local-key >/dev/null
   done < <(python3 "$support" clients --count "$load_clients")
 )
 

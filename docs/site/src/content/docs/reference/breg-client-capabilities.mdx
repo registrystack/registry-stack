@@ -36,13 +36,13 @@ outcomes, errors, attachments, and lifecycle promotion.
 ## Metadata and upgrade compatibility
 
 Parsed metadata retains operation selectors, relationship paths, reference-operation details,
-vocabulary labels, immediate actions, and change-request capabilities.
+vocabulary labels, native Actions, and Proposal capabilities.
 Spatial query descriptors identify the geometry property, CRS84 coordinates, and allowed spans.
 Batch and tombstone descriptors carry their executable request contracts.
 Labels, reference descriptions, and paths convey no additional authority.
 The server filters every descriptor using the current caller and selected profile.
 
-Select an immediate action by action identifier and profile, or a batch or tombstone by entity
+Select an Action by Action identifier and profile, or a batch or tombstone by Record type
 identifier and profile.
 Selection binds the operation to the source, package revision, profile, route, and request contract.
 A missing optional descriptor on an older server can still be read; an absent executable contract
@@ -54,7 +54,7 @@ not invoke those operations.
 These additions require no database migration and do not change grants or retention.
 
 {/* Evidence: crates/registry-breg-client/src/metadata.rs,
-    crates/registry-breg-client/tests/metadata_contract.rs,
+    crates/registry-breg-client/src/metadata_tests.rs,
     crates/registry-breg/src/api/metadata.rs */}
 
 ## Native spatial queries
@@ -110,10 +110,10 @@ Current authority and retained-history coverage still govern every read.
 Individual revision retrieval and revision lists return bounded inert JSON bytes.
 Read `body` as a Buffer in Node or bytes in Python and use a lossless JSON parser when needed.
 Revision lists return at most the newest 100 retained revisions and have no continuation.
-Proposal history is different: read the record's `request.history.nextAfterProposalVersion`, then
-pass that value as `requestHistoryAfterProposalVersion` to the next record get
-(`request_history_after_proposal_version` in Python).
-Stop when that history cursor is null.
+Proposal observations use the exact Action revision, submission version, and effect
+digest. Read the bound Proposal through its promoted self link; Revise or Rebase
+makes the earlier binding stale. Current application status is local to that
+frozen submission and never silently follows its successor.
 
 A relationship read takes the entity route, source-record UUID, and configured path route as three
 separate arguments.

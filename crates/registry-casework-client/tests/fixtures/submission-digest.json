@@ -1,0 +1,33 @@
+{
+  "producer": "teaching-requester",
+  "sourceNamespace": "standalone",
+  "request": {
+    "requesterReference": "BATCH-É-🧭",
+    "subject": {
+      "version": "1",
+      "type": "batch",
+      "source": "standalone",
+      "id": "batch-42",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "context": {
+      "snapshot": {
+        "z": "Zürich",
+        "😀": "astral key",
+        "": "BMP key",
+        "a": {
+          "b": 2,
+          "a": 1
+        },
+        "lines": "one\ntwo"
+      },
+      "mode": "submitted"
+    },
+    "policy": {
+      "version": "1",
+      "id": "decision",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "expectedSubmissionDigest": "sha256:c0778294f1097edb93f7d23e089d343ceba79bf943afe010fb477d9b6c514073"
+}

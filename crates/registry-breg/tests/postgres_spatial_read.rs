@@ -2322,6 +2322,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+      "datasets":[{{"id":"test-dataset"}}],
       "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
     }}"#
     )
@@ -2330,7 +2331,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
 fn spatial_registry_module_source() -> &'static str {
     r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core",
       "version":"1",
-      "entities":[{
+      "recordTypes":[{
         "id":"service-site",
         "primaryDataset":"test-dataset",
         "route":"service-sites",
@@ -2503,11 +2504,11 @@ fn spatial_region_label_sql() -> &'static str {
 }
 
 fn plain_geojson_registry_source() -> &'static str {
-    r#"{
+    r#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"plain-site",
         "primaryDataset":"test-dataset",
         "route":"plain-sites",
@@ -2524,8 +2525,8 @@ fn plain_geojson_registry_source() -> &'static str {
         "default":true,
         "principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],
-        "permissions":{"entities":[{
-          "entity":"plain-site",
+        "permissions":{"records":[{
+          "recordType":"plain-site",
           "operations":["create","get","list"],
           "readableFields":["code","location"],
           "writableFields":["code","location"],

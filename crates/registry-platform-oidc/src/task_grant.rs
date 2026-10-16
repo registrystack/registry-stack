@@ -66,7 +66,6 @@ impl TaskGrantStatusBinding {
             .any(|value| {
                 value.is_empty() || value.len() > 512 || value.chars().any(char::is_control)
             })
-            || self.subjects.is_empty()
             || self.subjects.len() > 32
             || self.subjects.iter().any(|(key, value)| {
                 key.is_empty()

@@ -129,11 +129,11 @@ fn bbox_grant_derives_postgis_projection_policy_and_inventory() {
 fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
     compile_project(
         &parse_project_json(
-            br#"{
+            br#"{"datasets":[{"id": "test-dataset"}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"spatial-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "entities":[{
+              "recordTypes":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","tombstone":true,"classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -142,8 +142,8 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                  "entity":"site","operations":["create","get","list","patch","tombstone"],
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                  "recordType":"site","operations":["create","get","list","patch","tombstone"],
                   "readableFields":["code","location"],"writableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
                   "rowBoundaries": "unrestricted"
@@ -160,11 +160,11 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -177,8 +177,8 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"site","operations":["create","get","list","patch"],
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"site","operations":["create","get","list","patch"],
               "readableFields":["code","location","map-label"],
               "writableFields":["code","location"],
               "filterableFields":["map-label"],
@@ -205,11 +205,11 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"zone","primaryDataset":"test-dataset","route":"zones","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -229,12 +229,12 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"zone","operations":["create","get","list"],
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"zone","operations":["create","get","list"],
               "readableFields":["code","label"],"writableFields":["code","label"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"site","operations":["create","get","list","patch"],
+              "recordType":"site","operations":["create","get","list","patch"],
               "readableFields":["code","zone","location","map-label"],
               "writableFields":["code","zone","location"],
               "filterableFields":["map-label"],
@@ -364,11 +364,11 @@ fn bbox_cross_entity_derived_dependency_keeps_ordinary_view_inventory() {
 fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
     let registry = compile_project(
         &parse_project_json(
-            br#"{
+            br#"{"datasets":[{"id": "test-dataset"}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"ordinary-point","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "entities":[{
+              "recordTypes":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
@@ -377,8 +377,8 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                  "entity":"site","operations":["get","list"],"readableFields":["code","location"],
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                  "recordType":"site","operations":["get","list"],"readableFields":["code","location"],
                   "rowBoundaries": "unrestricted"
                 }]}
               }]

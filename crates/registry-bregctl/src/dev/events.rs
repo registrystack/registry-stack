@@ -10,13 +10,13 @@ use axum::{
     routing::post,
     Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use hmac::{Hmac, KeyInit, Mac};
 use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
+use registry_platform_hooks::{
+    receiver::{verify_delivery, DeliveryFreshness, SignedDelivery},
+    EnvelopeLimits, HookEnvelope,
+};
 use serde_json::{json, Value};
-use sha2::Sha256;
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -25,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::oneshot;
@@ -33,17 +33,6 @@ use zeroize::Zeroizing;
 
 const MAX_BODY: usize = 1024 * 1024;
 const MAX_STORAGE: u64 = 16 * 1024 * 1024;
-const SIGNED_HEADERS: [&str; 9] = [
-    "ce-specversion",
-    "ce-id",
-    "ce-source",
-    "ce-type",
-    "ce-time",
-    "ce-dataschema",
-    "x-registry-event-generation",
-    "x-registry-delivery-attempt",
-    "x-registry-delivery-time",
-];
 
 pub(super) struct Receiver {
     stop: Option<oneshot::Sender<()>>,
@@ -59,6 +48,7 @@ struct Inbox {
 struct Delivery {
     id: String,
     destination_id: String,
+    matching: Vec<(String, String)>,
     data_schema: String,
     source: String,
     schema: jsonschema::JSONSchema,
@@ -83,6 +73,7 @@ impl Delivery {
             .map_err(|_| anyhow::anyhow!("compiled local event schema cannot be validated"))?;
         Ok(Self {
             id: delivery.id.clone(),
+            matching: Vec::new(),
             destination_id: delivery
                 .destination_id
                 .clone()
@@ -106,18 +97,52 @@ impl Receiver {
         // The local receiver stands in for a remote destination, so it holds
         // the url deliveries only; a local handler runs inside the engine and
         // never reaches an HTTP receiver.
-        let deliveries = compiled
+        let mut deliveries: BTreeMap<(String, String), Delivery> = BTreeMap::new();
+        for delivery in compiled
             .event_deliveries()
             .deliveries
             .iter()
             .filter(|delivery| delivery.destination_id.is_some())
-            .map(|delivery| {
-                Ok((
-                    (delivery.event_id.clone(), delivery.entity_id.clone()),
-                    Delivery::compile(&compiled, delivery, instance_id)?,
-                ))
-            })
-            .collect::<Result<_>>()?;
+        {
+            let keys = match &delivery.owner {
+                registry_breg::model::CompiledEventOwner::RecordType { record_type, .. } => {
+                    vec![(delivery.event_id.clone(), record_type.clone())]
+                }
+                registry_breg::model::CompiledEventOwner::ProposalAction { action } => {
+                    let owner = compiled
+                        .actions()
+                        .actions
+                        .iter()
+                        .find(|entry| &entry.id == action)
+                        .context("Proposal observer Action is missing")?;
+                    let registry_breg::model::CompiledActionExecution::Proposal { proposal } =
+                        &owner.execution
+                    else {
+                        bail!("Proposal observer Action mode is invalid")
+                    };
+                    let hook = proposal
+                        .hooks
+                        .iter()
+                        .find(|hook| hook.id == delivery.event_id)
+                        .context("Proposal observer declaration is missing")?;
+                    registry_breg::proposal_hooks::matching_transitions(&hook.transitions)
+                        .map(|transition| {
+                            (format!("proposal.{}", transition.as_str()), action.clone())
+                        })
+                        .collect()
+                }
+            };
+            for key in keys {
+                if let Some(existing) = deliveries.get_mut(&key) {
+                    existing.matching.push((
+                        delivery.id.clone(),
+                        delivery.destination_id.clone().expect("URL delivery"),
+                    ));
+                } else {
+                    deliveries.insert(key, Delivery::compile(&compiled, delivery, instance_id)?);
+                }
+            }
+        }
         Self::start_with_deliveries(root, port, deliveries)
     }
 
@@ -216,7 +241,11 @@ async fn receive(
     };
     let Some(delivery) = inbox.deliveries.get(&(
         record["eventType"].as_str().unwrap_or_default().to_owned(),
-        record["entity"].as_str().unwrap_or_default().to_owned(),
+        record["recordType"]
+            .as_str()
+            .or_else(|| record["actionId"].as_str())
+            .unwrap_or_default()
+            .to_owned(),
     )) else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -235,12 +264,29 @@ async fn receive(
             "local webhook verification refused",
         );
     }
-    record["deliveryId"] = Value::String(delivery.id.clone());
-    record["destinationId"] = Value::String(delivery.destination_id.clone());
+    if delivery.matching.is_empty() {
+        record["deliveryId"] = Value::String(delivery.id.clone());
+        record["destinationId"] = Value::String(delivery.destination_id.clone());
+    } else {
+        // The signed transport identifies the event, not its subscription.
+        // Keep the candidate subscriptions instead of guessing which sent it.
+        let matching = std::iter::once((&delivery.id, &delivery.destination_id))
+            .chain(
+                delivery
+                    .matching
+                    .iter()
+                    .map(|(id, destination)| (id, destination)),
+            )
+            .map(|(id, destination)| json!({"deliveryId":id,"destinationId":destination}))
+            .collect::<Vec<_>>();
+        record["matchingDeliveries"] = json!(matching);
+    }
     match append(&inbox.root, &record) {
         Ok(()) => (StatusCode::NO_CONTENT, ""),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-            "local event storage unavailable: verify owner-only permissions and the 16 MiB inbox bound"),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "local event storage unavailable: verify owner-only permissions and the 16 MiB inbox bound",
+        ),
     }
 }
 
@@ -278,61 +324,49 @@ fn digest(value: &str) -> bool {
 }
 
 fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)> {
-    let signed = SIGNED_HEADERS
-        .iter()
-        .map(|name| header(headers, name))
-        .collect::<Result<Vec<_>>>()?;
-    if signed[0] != "1.0"
-        || header(headers, "content-type")? != "application/json"
+    // Authenticity is the shared Version 1 receiver's reading; what follows is
+    // this inbox's local policy over the verified attributes.
+    let verified = verify_delivery(
+        SignedDelivery {
+            method: "POST",
+            request_target: "/events",
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            body,
+            key,
+        },
+        DeliveryFreshness::Within {
+            now: SystemTime::now(),
+            skew: Duration::from_secs(30),
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("webhook verification refused: {error}"))?;
+    if verified.content_type != "application/json"
         || header(headers, "accept")? != "application/json"
         || body.is_empty()
-        || body.len() > MAX_BODY
     {
         bail!("webhook profile is invalid");
     }
-    let event_id = uuid::Uuid::parse_str(signed[1]).context("webhook event identity is invalid")?;
-    if event_id.to_string() != signed[1] {
+    let event_id =
+        uuid::Uuid::parse_str(verified.id).context("webhook event identity is invalid")?;
+    if event_id.to_string() != verified.id {
         bail!("webhook event identity must be canonical");
     }
     let event_time =
-        OffsetDateTime::parse(signed[4], &Rfc3339).context("webhook event time is invalid")?;
-    let delivery_time =
-        OffsetDateTime::parse(signed[8], &Rfc3339).context("webhook delivery time is invalid")?;
-    if (OffsetDateTime::now_utc() - delivery_time).abs() > time::Duration::seconds(30) {
-        bail!("webhook delivery time is stale");
-    }
-    let generation = positive(signed[6])?;
-    let attempt = positive(signed[7])?;
-    let idempotency_key = header(headers, "idempotency-key")?;
+        OffsetDateTime::parse(verified.time, &Rfc3339).context("webhook event time is invalid")?;
+    let generation = positive(verified.generation)?;
+    let attempt = positive(verified.attempt)?;
+    let idempotency_key = verified.idempotency_key;
     if !digest(idempotency_key) {
         bail!("webhook idempotency key is invalid");
     }
-    let signature = header(headers, "x-registry-signature")?
-        .strip_prefix("v1=")
-        .context("webhook signature version is invalid")?;
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature)
-        .map_err(|_| anyhow::anyhow!("webhook signature encoding is invalid"))?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).context("webhook key is invalid")?;
-    mac.update(b"breg-webhook-signature-v1");
-    for value in signed.iter().map(|value| value.as_bytes()).chain([
-        b"POST".as_slice(),
-        b"/events".as_slice(),
-        b"application/json".as_slice(),
-        idempotency_key.as_bytes(),
-        body,
-    ]) {
-        mac.update(&(value.len() as u64).to_be_bytes());
-        mac.update(value);
-    }
-    mac.verify_slice(&signature)
-        .map_err(|_| anyhow::anyhow!("webhook signature is invalid"))?;
     let envelope = HookEnvelope::from_canonical_bytes(body, &EnvelopeLimits::default())
         .map_err(|_| anyhow::anyhow!("webhook envelope is invalid"))?;
-    if envelope.id != signed[1]
-        || envelope.event_type != signed[3]
-        || envelope.source != signed[2]
-        || envelope.dataschema != signed[5]
+    if envelope.id != verified.id
+        || envelope.event_type != verified.event_type
+        || envelope.source != verified.source
+        || envelope.dataschema != verified.data_schema
         || envelope.time != event_time
     {
         bail!("webhook envelope does not match its signed delivery attributes");
@@ -341,10 +375,41 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     let object = data
         .as_object()
         .context("webhook envelope data must be an object")?;
-    let lifecycle = data["trigger"] == "request-lifecycle";
-    if object.len() != if lifecycle { 7 } else { 6 }
+    let registry = verified
+        .source
+        .strip_prefix("urn:registrystack:registry:")
+        .and_then(|source| source.split_once(":instance:"))
+        .filter(|(registry, instance)| !registry.is_empty() && !instance.is_empty())
+        .context("webhook source is invalid")?
+        .0;
+    if envelope.dataschema == registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA {
+        static SCHEMA: std::sync::LazyLock<jsonschema::JSONSchema> =
+            std::sync::LazyLock::new(|| {
+                jsonschema::JSONSchema::options()
+                    .with_draft(jsonschema::Draft::Draft202012)
+                    .should_validate_formats(true)
+                    .compile(&registry_breg::proposal_hooks::proposal_event_schema())
+                    .expect("fixed native Proposal event schema")
+            });
+        if !SCHEMA.is_valid(&data)
+            || verified.event_type
+                != format!(
+                    "proposal.{}",
+                    data["transition"].as_str().unwrap_or_default()
+                )
+            || data["revision"].as_i64() != Some(envelope.subject.record_revision)
+        {
+            bail!("webhook Proposal event data shape is invalid");
+        }
+        let record = json!({"eventId":verified.id,"eventType":verified.event_type,"actionId":data["actionId"],
+            "trigger":"proposal-lifecycle","transition":data["transition"],"deliveryId":null,
+            "idempotencyKey":idempotency_key,"generation":generation,"attempt":attempt,"status":"received",
+            "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data});
+        return Ok((record, data));
+    }
+    if object.len() != 6
         || ![
-            "entity",
+            "recordType",
             "recordId",
             "revision",
             "trigger",
@@ -353,16 +418,15 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         ]
         .iter()
         .all(|field| object.contains_key(*field))
-        || (lifecycle && !data["request"].is_object())
         || !data["values"].is_object()
         || data["revision"].as_u64().is_none_or(|n| n == 0)
         || !data["packageRevision"].as_str().is_some_and(digest)
-        || !data["entity"]
+        || !data["recordType"]
             .as_str()
             .is_some_and(|entity| !entity.is_empty() && entity.len() <= 64)
         || !matches!(
             data["trigger"].as_str(),
-            Some("created" | "patched" | "tombstoned" | "request-lifecycle")
+            Some("created" | "patched" | "tombstoned")
         )
         || !data["recordId"].as_str().is_some_and(|id| {
             uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
@@ -370,24 +434,22 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     {
         bail!("webhook envelope data shape is invalid");
     }
-    let registry = signed[2]
-        .strip_prefix("urn:registrystack:registry:")
-        .and_then(|source| source.split_once(":instance:"))
-        .filter(|(registry, instance)| !registry.is_empty() && !instance.is_empty())
-        .context("webhook source is invalid")?
-        .0;
     let prefix = format!(
         "urn:breg:event-schema:{registry}:{}:{}:",
-        data["entity"]
+        data["recordType"]
             .as_str()
             .context("webhook entity is invalid")?,
-        signed[3]
+        verified.event_type
     );
-    if !signed[5].strip_prefix(&prefix).is_some_and(digest) {
+    if !verified
+        .data_schema
+        .strip_prefix(&prefix)
+        .is_some_and(digest)
+    {
         bail!("webhook schema does not match event metadata");
     }
     let record = json!({
-        "eventId":signed[1],"eventType":signed[3],"entity":data["entity"],
+        "eventId":verified.id,"eventType":verified.event_type,"recordType":data["recordType"],
         "trigger":data["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
         "generation":generation,"attempt":attempt,"status":"received",
         "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data["values"]
@@ -436,7 +498,9 @@ fn append(root: &Path, record: &Value) -> Result<()> {
     let mut bytes = private::read(&path, MAX_STORAGE)?;
     let line = serde_json::to_vec(record)?;
     if bytes.len() as u64 + line.len() as u64 + 1 > MAX_STORAGE {
-        bail!("local event inbox reached its 16 MiB bound; stop the session and move the journal to an owner-only location before restarting");
+        bail!(
+            "local event inbox reached its 16 MiB bound; stop the session and move the journal to an owner-only location before restarting"
+        );
     }
     if !bytes.is_empty() && !bytes.ends_with(b"\n") {
         bail!("local event inbox has an incomplete record");
@@ -494,7 +558,10 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
                         key.as_str(),
                         "eventId"
                             | "eventType"
-                            | "entity"
+                            | "recordType"
+                            | "actionId"
+                            | "transition"
+                            | "matchingDeliveries"
                             | "trigger"
                             | "deliveryId"
                             | "destinationId"
@@ -516,6 +583,21 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::Sha256;
+
+    const SIGNED_HEADERS: [&str; 9] = [
+        "ce-specversion",
+        "ce-id",
+        "ce-source",
+        "ce-type",
+        "ce-time",
+        "ce-dataschema",
+        "x-registry-event-generation",
+        "x-registry-delivery-attempt",
+        "x-registry-delivery-time",
+    ];
     use registry_breg::{
         compiler::{compile_project, CompileProfile},
         contract::{parse_project_json, EventTrigger},
@@ -536,45 +618,17 @@ mod tests {
         if vocabulary {
             field = json!({"id":"label", "type":"vocabulary-code", "vocabulary":"labels", "values":["projected-value-canary", "ready"], "classification":"internal"});
         }
-        let mut project = json!({
+        let project = json!({
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
             "package":{"sourceRevision":"test"},
-            "entities":[{
+            "datasets":[{"id":"test-dataset","display":{"label":"Test dataset"}}],
+            "recordTypes":[{
                 "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
-                "classification":"internal", "fields":[field],
+                "fields":[field],
                 "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"type":"url","destinationId":"local-hook"}}]
             }]
         });
-        if trigger == EventTrigger::RequestLifecycle {
-            project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"target", "type":"reference", "target":"target-record", "required":true, "classification":"internal"
-            }));
-            project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"proposed-label", "type":"string", "maximumLength":64, "required":true, "classification":"internal"
-            }));
-            project["entities"][0]["changeRequest"] = json!({
-                "effects":[{"target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"proposed-label"}}}],
-                "review":{"type":"required","authority":"casework", "policyId":"record-change"},
-                "onApproved":{"mode":"manual"}
-            });
-            project["entities"].as_array_mut().unwrap().push(json!({
-                "id":"target-record", "primaryDataset":"test-dataset", "route":"target-records", "mutationMode":"mutable", "classification":"internal",
-                "changeControl":{"requiredFor":["patch"]},
-                "fields":[{"id":"label", "type":"string", "maximumLength":64, "classification":"internal"}]
-            }));
-        }
-        if trigger == EventTrigger::RequestLifecycle {
-            project["accessProfiles"] = json!([{
-                "id":"operator", "default":true, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                "permissions":{"entities":[{
-                    "entity":"record", "operations":["create", "get", "list", "patch", "submit-request", "apply-request"],
-                    "readableFields":["label", "target", "proposed-label"],
-                    "writableFields":["label", "target", "proposed-label"], "rowBoundaries":"unrestricted",
-                    "applyTargets":[{"entity":"target-record", "rowBoundaries":"unrestricted"}]
-                }]}
-            }]);
-        }
         let project = parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
         let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
         let mut delivery = Delivery::compile(
@@ -647,7 +701,7 @@ mod tests {
     /// The product projection a delivered envelope carries as `data`.
     fn event_data() -> Value {
         json!({
-            "entity":"record", "recordId":"00000000-0000-4000-8000-000000000002",
+            "recordType":"record", "recordId":"00000000-0000-4000-8000-000000000002",
             "revision":1,"trigger":"created","packageRevision":format!("sha256:{}", "0".repeat(64)),
             "values":{"label":"projected-value-canary"}
         })
@@ -972,62 +1026,6 @@ mod tests {
     }
 
     #[test]
-    fn signed_lifecycle_requests_must_match_the_complete_generated_contract() {
-        let (root, port, _receiver) = fixture_with_contract(EventTrigger::RequestLifecycle, false);
-        let valid = json!({
-            "proposalVersion":1, "workflowRevision":2, "transition":"submit",
-            "fromState":"draft", "toState":"submitted",
-            "effectDigest":null, "deduplicationKey":"sha256:synthetic",
-            "reasonPresent":false
-        });
-        let mut invalid = vec![json!({})];
-        let mut missing_presence = valid.clone();
-        missing_presence
-            .as_object_mut()
-            .unwrap()
-            .remove("reasonPresent");
-        invalid.push(missing_presence);
-        for (field, value) in [
-            ("proposalVersion", json!("one")),
-            ("workflowRevision", json!(0)),
-            ("transition", json!(false)),
-            ("fromState", json!(1)),
-            ("toState", json!([])),
-            ("effectDigest", json!(7)),
-            ("deduplicationKey", Value::Null),
-            ("reasonPresent", Value::Null),
-            ("reasonPresent", json!(true)),
-            ("reason", json!("not present")),
-            ("undeclared", json!(true)),
-        ] {
-            let mut request = valid.clone();
-            request[field] = value;
-            invalid.push(request);
-        }
-        for request_body in invalid {
-            let mut data = event_data();
-            data["trigger"] = json!("request-lifecycle");
-            data["request"] = request_body;
-            let (headers, body) = signed_data(1, 1, data);
-            assert_eq!(request(port, headers, body), 401);
-            assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
-        }
-        let mut data = event_data();
-        data["trigger"] = json!("request-lifecycle");
-        data["request"] = valid;
-        data["values"]["label"] = Value::Null;
-        let (headers, body) = signed_data(1, 1, data);
-        assert_eq!(request(port, headers, body), 204);
-        assert_eq!(
-            report(root.path(), true).unwrap()["deliveries"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-
-    #[test]
     fn unsafe_or_full_storage_refuses_acknowledgement_and_recovers() {
         let (root, port, _receiver) = fixture();
         let path = root.path().join("events.jsonl");
@@ -1137,5 +1135,37 @@ mod tests {
         assert!(report(root.path(), false).is_err());
         assert!(clear(root.path()).is_err());
         assert!(target.exists());
+    }
+
+    #[test]
+    fn native_proposal_receipts_verify_the_fixed_contract_and_exact_transition() {
+        let mut headers = event_headers(1, 1);
+        headers.insert("ce-type", HeaderValue::from_static("proposal.submitted"));
+        headers.insert(
+            "ce-dataschema",
+            HeaderValue::from_static(registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA),
+        );
+        let data = json!({"actionId":"correct-name","actionRevision":format!("sha256:{}","a".repeat(64)),
+            "proposalId":"00000000-0000-4000-8000-000000000002","submissionVersion":1,"revision":1,
+            "fromState":"draft","state":"submitted","transition":"submitted","effectDigest":null,
+            "authorityKind":"caller","systemApplyGrantRevision":null,"turn":"official"});
+        let key = URL_SAFE_NO_PAD.encode([7; 32]);
+        let body = envelope_bytes(&headers, data.clone());
+        sign(&mut headers, &body);
+        let (record, projection) = verify(key.as_bytes(), &headers, &body).unwrap();
+        assert_eq!(record["actionId"], "correct-name");
+        assert!(record.get("recordType").is_none());
+        assert_eq!(projection, data);
+        for member in ["input", "context", "attachments", "actor"] {
+            let mut widened = data.clone();
+            widened[member] = json!("private-canary");
+            let body = envelope_bytes(&headers, widened);
+            sign(&mut headers, &body);
+            assert!(verify(key.as_bytes(), &headers, &body).is_err());
+        }
+        headers.insert("ce-type", HeaderValue::from_static("proposal.applied"));
+        let body = envelope_bytes(&headers, data);
+        sign(&mut headers, &body);
+        assert!(verify(key.as_bytes(), &headers, &body).is_err());
     }
 }

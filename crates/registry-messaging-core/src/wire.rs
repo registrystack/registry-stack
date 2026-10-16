@@ -19,6 +19,7 @@ use crate::receipt::DeliveryReport;
 /// Its `Debug` never prints the contact, so a recipient that reaches a log
 /// through a derived `Debug` names only its kind.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum Recipient {
     Email(String),
@@ -77,6 +78,7 @@ impl fmt::Debug for Recipient {
 /// is present; `locale` and `data` accompany a template and nothing else.
 /// Instants are RFC 3339 strings the runtime parses.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubmitMessageRequest {
     pub sender_profile: String,
@@ -154,6 +156,7 @@ impl SubmitMessageRequest {
 /// The public status of one message, derived from its dispatch state and
 /// its delivery report by [`derive_status`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum MessageStatus {
     Queued,
@@ -282,6 +285,7 @@ pub const fn derive_status(dispatch: MessageDispatch, report: MessageReport) -> 
 
 /// The links a message answer carries.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct MessageLinks {
     #[serde(rename = "self")]
@@ -302,6 +306,7 @@ impl MessageLinks {
 /// The `202` answer to an accepted submission, and what a replayed key
 /// answers again.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageReceipt {
     pub id: String,

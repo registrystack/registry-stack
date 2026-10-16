@@ -367,7 +367,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     if selection.entities.is_empty() {
         return Err(diagnostic(
             "init.selection.entities",
-            "/entities",
+            "/recordTypes",
             "a selection names at least one concept",
         ));
     }
@@ -496,7 +496,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     for name in &enums.inline {
         let path = vocabulary_pointers
             .get(name)
-            .map_or("/entities", String::as_str);
+            .map_or("/recordTypes", String::as_str);
         vocabularies.push(resolve_vocabulary(path, &model.enums[name])?);
     }
     vocabularies.sort_by(|left, right| left.id.cmp(&right.id));
@@ -505,7 +505,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         if !seen.insert(vocabulary.id.as_str()) {
             return Err(diagnostic(
                 "init.selection.vocabulary-collision",
-                "/entities",
+                "/recordTypes",
                 &format!(
                     "two enumerations derive the same vocabulary identifier `{}`",
                     vocabulary.id
@@ -560,7 +560,7 @@ struct EntityIndex {
 
 /// The JSON pointer to the selected entity at `position`.
 fn entity_pointer(position: usize) -> String {
-    format!("/entities/{position}")
+    format!("/recordTypes/{position}")
 }
 
 fn resolve_entity(
@@ -831,7 +831,7 @@ fn field_kind(
                     return Err(format!(
                         "more than one selected entity fits `{name}`; name one with `target`: {}",
                         names(several.iter().map(|entry| entry.id.as_str()))
-                    ))
+                    ));
                 }
             }
         }
@@ -1472,7 +1472,7 @@ mod tests {
     #[test]
     fn a_large_enumeration_becomes_a_bounded_code_unless_the_selection_inlines_it() {
         let plan = resolved(
-            "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n",
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: preferred_language\n",
         );
         assert_eq!(
             field(&plan, "person", "preferred-language").kind,
@@ -1483,7 +1483,7 @@ mod tests {
         );
         assert!(plan.vocabularies.is_empty());
         let plan = resolved(
-            "entities:\n  - concept: Person\n    properties:\n      - name: occupation\n\
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: occupation\n\
              vocabularies:\n  - enum: Occupation\n    mode: inline\n",
         );
         assert_eq!(
@@ -1498,7 +1498,7 @@ mod tests {
     #[test]
     fn an_inline_override_above_the_code_list_bound_is_refused() {
         let error = refused(
-            "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
              vocabularies:\n  - enum: Language\n    mode: inline\n",
         );
         assert_eq!(error.code, "init.selection.vocabulary-size");
@@ -1513,7 +1513,7 @@ mod tests {
     #[test]
     fn a_small_enumeration_becomes_a_code_when_the_selection_says_so() {
         let plan = resolved(
-            "entities:\n  - concept: Person\n    properties:\n      - name: sex\n\
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: sex\n\
              vocabularies:\n  - enum: Sex\n    mode: code\n",
         );
         assert_eq!(
@@ -1529,12 +1529,12 @@ mod tests {
     #[test]
     fn a_vocabulary_override_no_property_draws_from_is_refused() {
         let error = refused(
-            "entities:\n  - concept: Person\n    properties:\n      - name: sex\n\
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: sex\n\
              vocabularies:\n  - enum: Language\n    mode: inline\n",
         );
         assert_eq!(error.code, "init.selection.vocabulary-unused");
         let error = refused(
-            "entities:\n  - concept: Person\n    properties:\n      - name: sex\n\
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: sex\n\
              vocabularies:\n  - enum: Colour\n    mode: inline\n",
         );
         assert_eq!(error.code, "init.selection.vocabulary-unknown");
@@ -1543,7 +1543,7 @@ mod tests {
     #[test]
     fn sensitivity_becomes_a_restricted_field_and_the_ceiling_follows() {
         let plan = resolved(
-            "entities:\n  - concept: Person\n    properties:\n      - name: given_name\n      - name: marital_status\n",
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: given_name\n      - name: marital_status\n",
         );
         assert_eq!(
             field(&plan, "person", "given-name").classification,
@@ -1554,27 +1554,29 @@ mod tests {
             Classification::Restricted
         );
         assert_eq!(plan.classification_ceiling, Classification::Restricted);
-        let plan =
-            resolved("entities:\n  - concept: Person\n    properties:\n      - name: given_name\n");
+        let plan = resolved(
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: given_name\n",
+        );
         assert_eq!(plan.classification_ceiling, Classification::Internal);
     }
 
     #[test]
     fn an_entity_classification_is_taken_from_the_selection_and_checked() {
         let plan = resolved(
-            "entities:\n  - concept: Person\n    classification: restricted\n    properties:\n      - name: given_name\n",
+            "recordTypes:\n  - concept: Person\n    classification: restricted\n    properties:\n      - name: given_name\n",
         );
         assert_eq!(plan.entities[0].classification, Classification::Restricted);
         let error = refused(
-            "entities:\n  - concept: Person\n    classification: secret\n    properties:\n      - name: given_name\n",
+            "recordTypes:\n  - concept: Person\n    classification: secret\n    properties:\n      - name: given_name\n",
         );
         assert_eq!(error.code, "init.selection.classification");
     }
 
     #[test]
     fn an_unselected_value_concept_becomes_a_closed_structured_object() {
-        let plan =
-            resolved("entities:\n  - concept: Household\n    properties:\n      - name: address\n");
+        let plan = resolved(
+            "recordTypes:\n  - concept: Household\n    properties:\n      - name: address\n",
+        );
         let FieldKind::Structured { max_bytes, schema } =
             &field(&plan, "household", "address").kind
         else {
@@ -1598,7 +1600,7 @@ mod tests {
         // with `Person` unselected they are carried inline, and the field
         // holding them must be classified for the most protected of them.
         let plan = resolved(
-            "entities:\n  - concept: FunctioningProfile\n    properties:\n      - name: respondent\n",
+            "recordTypes:\n  - concept: FunctioningProfile\n    properties:\n      - name: respondent\n",
         );
         let respondent = field(&plan, "functioning-profile", "respondent");
         let FieldKind::Structured { schema, .. } = &respondent.kind else {
@@ -1609,8 +1611,9 @@ mod tests {
         assert_eq!(plan.classification_ceiling, Classification::Restricted);
         // `Address` carries nothing sensitive, so `household.address` stays
         // where its own annotation puts it.
-        let plan =
-            resolved("entities:\n  - concept: Household\n    properties:\n      - name: address\n");
+        let plan = resolved(
+            "recordTypes:\n  - concept: Household\n    properties:\n      - name: address\n",
+        );
         assert_eq!(
             field(&plan, "household", "address").classification,
             Classification::Internal
@@ -1626,7 +1629,7 @@ mod tests {
             };
             &schema["properties"]["values"]["items"]
         }
-        let body = "entities:\n  - concept: FunctioningProfile\n    properties:\n      - name: mobility_aid_types\n";
+        let body = "recordTypes:\n  - concept: FunctioningProfile\n    properties:\n      - name: mobility_aid_types\n";
         let plan = resolved(body);
         assert!(items(&plan, "functioning-profile", "mobility-aid-types")["enum"].is_array());
         let plan = resolved(&format!(
@@ -1635,7 +1638,7 @@ mod tests {
         let item = items(&plan, "functioning-profile", "mobility-aid-types");
         assert!(item["enum"].is_null(), "{item}");
         assert_eq!(item["maxLength"], CODE_MAX_LENGTH);
-        let body = "entities:\n  - concept: Instrument\n    properties:\n      - name: language_of_administration\n";
+        let body = "recordTypes:\n  - concept: Instrument\n    properties:\n      - name: language_of_administration\n";
         let plan = resolved(body);
         let item = items(&plan, "instrument", "language-of-administration");
         assert!(item["enum"].is_null(), "{item}");
@@ -1647,8 +1650,9 @@ mod tests {
 
     #[test]
     fn a_bounded_code_is_sized_for_the_longest_code_of_its_enumeration() {
-        let plan =
-            resolved("entities:\n  - concept: Person\n    properties:\n      - name: occupation\n");
+        let plan = resolved(
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: occupation\n",
+        );
         let longest = model().enums["Occupation"]
             .values
             .iter()
@@ -1664,7 +1668,7 @@ mod tests {
             }
         );
         let plan = resolved(
-            "entities:\n  - concept: Instrument\n    properties:\n      - name: language_of_administration\n",
+            "recordTypes:\n  - concept: Instrument\n    properties:\n      - name: language_of_administration\n",
         );
         let FieldKind::Structured { schema, .. } =
             &field(&plan, "instrument", "language-of-administration").kind
@@ -1679,7 +1683,7 @@ mod tests {
 
     #[test]
     fn a_registry_identifier_leaves_room_for_the_names_derived_from_it() {
-        let mut selection = selection("entities:\n  - concept: Person\n");
+        let mut selection = selection("recordTypes:\n  - concept: Person\n");
         selection.registry.id = "a".repeat(55);
         let error = resolve(&selection, model()).expect_err("refused");
         assert_eq!(error.code, "init.selection.identifier");
@@ -1758,7 +1762,7 @@ mod tests {
     #[test]
     fn an_entity_no_field_connects_to_another_is_reported_with_what_would() {
         let plan = resolved(
-            "entities:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Person\n    properties:\n      - name: given_name\n  - concept: School\n    properties:\n      - name: name\n",
+            "recordTypes:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Person\n    properties:\n      - name: given_name\n  - concept: School\n    properties:\n      - name: name\n",
         );
         assert_eq!(plan.unlinked_entities(), ["household", "person", "school"]);
         let membership = plan
@@ -1769,12 +1773,12 @@ mod tests {
         assert_eq!(membership.links[0].fits, ["Household"]);
 
         let linked = resolved(
-            "entities:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Person\n    properties:\n      - name: given_name\n  - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n  - concept: School\n    properties:\n      - name: name\n",
+            "recordTypes:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Person\n    properties:\n      - name: given_name\n  - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n  - concept: School\n    properties:\n      - name: name\n",
         );
         assert_eq!(linked.unlinked_entities(), ["school"]);
 
         let alone =
-            resolved("entities:\n  - concept: School\n    properties:\n      - name: name\n");
+            resolved("recordTypes:\n  - concept: School\n    properties:\n      - name: name\n");
         assert!(
             alone.unlinked_entities().is_empty(),
             "one entity has nothing to link to"
@@ -1784,7 +1788,7 @@ mod tests {
     #[test]
     fn a_concept_valued_property_becomes_a_reference_once_the_concept_is_selected() {
         let plan = resolved(
-            "entities:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Address\n    properties:\n      - name: city\n",
+            "recordTypes:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Address\n    properties:\n      - name: city\n",
         );
         assert_eq!(
             field(&plan, "household", "address").kind,
@@ -1796,7 +1800,7 @@ mod tests {
 
     #[test]
     fn a_reference_with_several_fitting_entities_needs_a_target() {
-        let body = "entities:\n  - concept: Person\n    id: adult\n    properties:\n      - name: given_name\n  - concept: Person\n    id: child\n    properties:\n      - name: given_name\n  - concept: GroupMembership\n    properties:\n      - name: person";
+        let body = "recordTypes:\n  - concept: Person\n    id: adult\n    properties:\n      - name: given_name\n  - concept: Person\n    id: child\n    properties:\n      - name: given_name\n  - concept: GroupMembership\n    properties:\n      - name: person";
         let error = refused(&format!("{body}\n"));
         assert_eq!(error.code, "init.selection.property-unsupported");
         assert!(error.message.contains("adult, child"), "{}", error.message);
@@ -1813,8 +1817,9 @@ mod tests {
 
     #[test]
     fn a_property_holding_many_concepts_is_refused_with_the_way_out() {
-        let error =
-            refused("entities:\n  - concept: Location\n    properties:\n      - name: geocodes\n");
+        let error = refused(
+            "recordTypes:\n  - concept: Location\n    properties:\n      - name: geocodes\n",
+        );
         assert_eq!(error.code, "init.selection.property-unsupported");
         assert!(
             error.message.contains("as its own entity"),
@@ -1826,7 +1831,7 @@ mod tests {
     #[test]
     fn a_geometry_becomes_a_structured_field_and_a_coordinate_a_decimal() {
         let plan = resolved(
-            "entities:\n  - concept: Location\n    properties:\n      - name: geometry\n      - name: latitude\n      - name: administrative_level\n",
+            "recordTypes:\n  - concept: Location\n    properties:\n      - name: geometry\n      - name: latitude\n      - name: administrative_level\n",
         );
         let FieldKind::Structured { max_bytes, schema } =
             &field(&plan, "location", "geometry").kind
@@ -1850,25 +1855,27 @@ mod tests {
 
     #[test]
     fn an_unknown_property_names_what_the_concept_carries() {
-        let error =
-            refused("entities:\n  - concept: Person\n    properties:\n      - name: shoe_size\n");
+        let error = refused(
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: shoe_size\n",
+        );
         assert_eq!(error.code, "init.selection.property-unknown");
         assert!(error.message.contains("given_name"), "{}", error.message);
     }
 
     #[test]
     fn an_abstract_concept_is_refused_with_its_concrete_descendants() {
-        let error = refused("entities:\n  - concept: Group\n    properties:\n      - name: name\n");
+        let error =
+            refused("recordTypes:\n  - concept: Group\n    properties:\n      - name: name\n");
         assert_eq!(error.code, "init.selection.concept-abstract");
         assert!(error.message.contains("Household"), "{}", error.message);
-        let error = refused("entities:\n  - concept: Widget\n");
+        let error = refused("recordTypes:\n  - concept: Widget\n");
         assert_eq!(error.code, "init.selection.concept-unknown");
     }
 
     #[test]
     fn refusals_never_repeat_what_the_selection_wrote() {
         const MARKER: &str = "Q7ZK2W-Planted";
-        let person = "entities:\n  - concept: Person\n";
+        let person = "recordTypes:\n  - concept: Person\n";
         for (body, code, path) in [
             (
                 format!("modelVersion: {MARKER}\n{person}"),
@@ -1881,24 +1888,24 @@ mod tests {
                 "/modelRevision",
             ),
             (
-                format!("entities:\n  - concept: {MARKER}\n"),
+                format!("recordTypes:\n  - concept: {MARKER}\n"),
                 "init.selection.concept-unknown",
-                "/entities/0/concept",
+                "/recordTypes/0/concept",
             ),
             (
-                format!("entities:\n  - concept: Person\n    id: {MARKER}\n"),
+                format!("recordTypes:\n  - concept: Person\n    id: {MARKER}\n"),
                 "init.selection.identifier",
-                "/entities/0/id",
+                "/recordTypes/0/id",
             ),
             (
-                format!("entities:\n  - concept: Person\n    classification: {MARKER}\n"),
+                format!("recordTypes:\n  - concept: Person\n    classification: {MARKER}\n"),
                 "init.selection.classification",
-                "/entities/0/classification",
+                "/recordTypes/0/classification",
             ),
             (
                 format!("{person}    properties:\n      - name: {MARKER}\n"),
                 "init.selection.property-unknown",
-                "/entities/0/properties/0",
+                "/recordTypes/0/properties/0",
             ),
             (
                 format!("{person}vocabularies:\n  - enum: {MARKER}\n    mode: inline\n"),
@@ -1907,12 +1914,12 @@ mod tests {
             ),
             (
                 format!(
-                    "entities:\n  - concept: Household\n    properties:\n      - name: name\n  \
+                    "recordTypes:\n  - concept: Household\n    properties:\n      - name: name\n  \
                      - concept: GroupMembership\n    properties:\n      - name: group\n        \
                      target: {MARKER}\n"
                 ),
                 "init.selection.property-unsupported",
-                "/entities/1/properties/0",
+                "/recordTypes/1/properties/0",
             ),
         ] {
             let error = refused(&body);
@@ -1925,24 +1932,24 @@ mod tests {
     #[test]
     fn identifiers_and_routes_are_validated_and_unique() {
         assert_eq!(
-            refused("entities:\n  - concept: Person\n    id: Person\n").code,
+            refused("recordTypes:\n  - concept: Person\n    id: Person\n").code,
             "init.selection.identifier"
         );
         assert_eq!(
-            refused("entities:\n  - concept: Person\n  - concept: Person\n").code,
+            refused("recordTypes:\n  - concept: Person\n  - concept: Person\n").code,
             "init.selection.entity-duplicate"
         );
         assert_eq!(
-            refused("entities:\n  - concept: Person\n    route: people\n  - concept: Household\n    route: people\n").code,
+            refused("recordTypes:\n  - concept: Person\n    route: people\n  - concept: Household\n    route: people\n").code,
             "init.selection.route-duplicate"
         );
         assert_eq!(
-            refused("entities:\n  - concept: Person\n    properties:\n      - name: sex\n      - name: sex\n").code,
+            refused("recordTypes:\n  - concept: Person\n    properties:\n      - name: sex\n      - name: sex\n").code,
             "init.selection.property-duplicate"
         );
-        assert_eq!(refused("entities: []\n").code, "init.selection.entities");
+        assert_eq!(refused("recordTypes: []\n").code, "init.selection.entities");
         let plan = resolved(
-            "entities:\n  - concept: Person\n    id: citizen\n    route: citizenry\n    identifierField: national-number\n",
+            "recordTypes:\n  - concept: Person\n    id: citizen\n    route: citizenry\n    identifierField: national-number\n",
         );
         assert_eq!(plan.entities[0].id, "citizen");
         assert_eq!(plan.entities[0].route, "citizenry");
@@ -1953,26 +1960,27 @@ mod tests {
     fn an_identifier_field_the_compiler_keeps_for_itself_is_refused() {
         for name in ["id", "revision", "created_at", "record-id", "deleted-at"] {
             let error = refused(&format!(
-                "entities:\n  - concept: Person\n    identifierField: {name}\n"
+                "recordTypes:\n  - concept: Person\n    identifierField: {name}\n"
             ));
             assert_eq!(error.code, "init.selection.field-reserved", "{name}");
-            assert_eq!(error.path, "/entities/0/identifierField");
+            assert_eq!(error.path, "/recordTypes/0/identifierField");
         }
-        let plan = resolved("entities:\n  - concept: Person\n    identifierField: person-number\n");
+        let plan =
+            resolved("recordTypes:\n  - concept: Person\n    identifierField: person-number\n");
         assert_eq!(plan.entities[0].identifier.id, "person-number");
     }
 
     #[test]
     fn field_identifiers_deriving_one_api_name_are_refused() {
         let error = refused(
-            "entities:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
+            "recordTypes:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
         );
         assert_eq!(error.code, "init.selection.field-name-collision");
-        assert_eq!(error.path, "/entities/0/properties/0");
+        assert_eq!(error.path, "/recordTypes/0/properties/0");
         assert!(error.message.contains("givenName"), "{}", error.message);
         assert!(resolve(
             &selection(
-                "entities:\n  - concept: Person\n    identifierField: person-number\n    properties:\n      - name: given_name\n",
+                "recordTypes:\n  - concept: Person\n    identifierField: person-number\n    properties:\n      - name: given_name\n",
             ),
             model()
         )
@@ -1984,17 +1992,17 @@ mod tests {
         let others = "  - concept: Household\n    properties:\n      - name: name\n";
         for property in ["given_name", "sex"] {
             let error = refused(&format!(
-                "entities:\n  - concept: Person\n    properties:\n      - name: {property}\n        target: household\n{others}"
+                "recordTypes:\n  - concept: Person\n    properties:\n      - name: {property}\n        target: household\n{others}"
             ));
             assert_eq!(error.code, "init.selection.property-target", "{property}");
-            assert_eq!(error.path, "/entities/0/properties/0");
+            assert_eq!(error.path, "/recordTypes/0/properties/0");
         }
     }
 
     #[test]
     fn an_entity_only_its_own_records_link_is_reported_as_unlinked() {
         let plan = resolved(
-            "entities:\n  - concept: Location\n    properties:\n      - name: parent_location\n  - concept: School\n    properties:\n      - name: name\n",
+            "recordTypes:\n  - concept: Location\n    properties:\n      - name: parent_location\n  - concept: School\n    properties:\n      - name: name\n",
         );
         assert_eq!(
             field(&plan, "location", "parent-location").kind,
@@ -2027,8 +2035,9 @@ mod tests {
 
     #[test]
     fn a_geometry_refuses_coordinates_its_type_does_not_carry() {
-        let plan =
-            resolved("entities:\n  - concept: Location\n    properties:\n      - name: geometry\n");
+        let plan = resolved(
+            "recordTypes:\n  - concept: Location\n    properties:\n      - name: geometry\n",
+        );
         let FieldKind::Structured { schema, .. } = &field(&plan, "location", "geometry").kind
         else {
             panic!("geometry is structured");
@@ -2062,7 +2071,7 @@ mod tests {
     #[test]
     fn an_inlined_concept_keeps_the_shape_of_its_temporal_values() {
         let plan = resolved(
-            "entities:\n  - concept: FunctioningProfile\n    properties:\n      - name: respondent\n",
+            "recordTypes:\n  - concept: FunctioningProfile\n    properties:\n      - name: respondent\n",
         );
         let FieldKind::Structured { schema, .. } =
             &field(&plan, "functioning-profile", "respondent").kind
@@ -2079,7 +2088,7 @@ mod tests {
 
     #[test]
     fn a_model_version_pin_must_match_the_snapshot() {
-        let mut selection = selection("entities:\n  - concept: Person\n");
+        let mut selection = selection("recordTypes:\n  - concept: Person\n");
         selection.model_version = Some("0.0.1".to_owned());
         let error = resolve(&selection, model()).expect_err("refused");
         assert_eq!(error.code, "init.selection.model-version");
@@ -2089,7 +2098,7 @@ mod tests {
 
     #[test]
     fn a_model_revision_pin_must_match_the_snapshot() {
-        let mut selection = selection("entities:\n  - concept: Person\n");
+        let mut selection = selection("recordTypes:\n  - concept: Person\n");
         assert!(
             resolve(&selection, model()).is_ok(),
             "a selection naming no revision is accepted"

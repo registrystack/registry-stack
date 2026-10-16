@@ -680,13 +680,75 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_grant_cannot_bypass_proposal_required_create_policy() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let registry = Arc::new(compiled_registry_with_create_policy(true));
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("native controlled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: "batch-registry",
+            database_id: "batch-database",
+            label: "package-controlled-batch-1",
+        },
+    )
+    .await
+    .expect("controlled package is active");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+            .expect("keyed audit profile"),
+    );
+    let app = mutation_router(
+        pool,
+        registry.clone(),
+        identity,
+        RegistryLockKey::derive("batch-registry").expect("registry lock"),
+        audit,
+        None,
+    );
+    let table = &registry.entities()["widget"].physical_table;
+    let before = effect_counts(&database, table).await;
+    let response = send_json(
+        &app,
+        "/v1/records/widgets:batch?accessProfile=batch-creator",
+        Some(claims(PRINCIPAL, "case-management", "zone-a")),
+        "controlled-batch-key",
+        json!({"items":[{"operation":"create","data":{
+            "jurisdiction":"zone-a","label":"proposal-required","quantity":1
+        }}]}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        effect_counts(&database, table).await.without_audit(),
+        before.without_audit(),
+        "a batch grant creates no Record, revision, event, commit or receipt when policy requires a Proposal"
+    );
+    database.cleanup().await;
+}
+
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(
+    compiled_registry_with_create_policy(false)
+}
+
+fn compiled_registry_with_create_policy(
+    proposal_required: bool,
+) -> registry_breg::CompiledRegistry {
+    let mut project = parse_project_json(
         br#"{
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "datasets":[{"id":"test-dataset"}],
+          "recordTypes":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "constraints":[{"type":"unique","fields":["label"]}],
@@ -705,8 +767,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","get","patch","batch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","get","patch","batch"],
               "readableFields":["jurisdiction","label","locked","quantity"],
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -714,8 +776,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"batch-creator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","batch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","batch"],
               "readableFields":["jurisdiction","label","locked","quantity"],
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -723,8 +785,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","patch","batch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","patch","batch"],
               "readableFields":["label"],
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -733,6 +795,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         }"#,
     )
     .expect("batch fixture parses");
+    if proposal_required {
+        project.entities[0].mutation_policy = Some(
+            serde_json::from_value(json!({"create":"proposal-required"}))
+                .expect("native mutation policy"),
+        );
+    }
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("batch fixture compiles to trusted inventories")
 }

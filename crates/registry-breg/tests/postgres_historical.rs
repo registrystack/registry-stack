@@ -996,11 +996,11 @@ fn compiled_timestamp_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::CompiledRegistry {
-    let project = r#"{
+    let project = r#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"household-code","type":"string","minimumLength":2,"maximumLength":32,"required":true,"classification":"internal"},
@@ -1018,16 +1018,16 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       "accessProfiles":[{
         "id":"historian","default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "permissions":{"entities":[{
-          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
+        "permissions":{"records":[{
+          "recordType":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
         }]}
       },{
         "id":"archivist","principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "permissions":{"entities":[{
-          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
+        "permissions":{"records":[{
+          "recordType":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries": "unrestricted"
         }]}

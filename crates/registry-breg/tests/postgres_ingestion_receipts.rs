@@ -807,7 +807,8 @@ const FIXTURE_HEAD: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "entities":[{
+  "datasets":[{"id":"test-dataset"}],
+  "recordTypes":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
@@ -822,8 +823,8 @@ const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
-    "permissions":{"entities":[{
-      "entity":"widget","operations":["create","get","patch","batch"],
+    "permissions":{"records":[{
+      "recordType":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

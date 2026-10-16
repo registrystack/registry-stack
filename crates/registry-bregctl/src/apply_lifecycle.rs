@@ -8,15 +8,16 @@ use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, operator_reference_is_well_formed,
     plan_verified_package, read_activation_status, read_recorded_registry_state,
-    successor_plan_is_empty_for_predecessor, ActivationDeployment, ActivationPlan,
-    ActivationStatus, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
-    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
-    RecordedRegistryState,
+    successor_plan_is_empty, ActivationDeployment, ActivationPlan, ActivationStatus,
+    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, RecordedRegistryState,
 };
 use registry_breg::package::{
-    load_package, MigrationInspectionSummary, PackageError, VerifiedPredecessorPackage,
+    load_package, MigrationInspectionSummary, PackageError, VerifiedPackage,
+    VerifiedPredecessorPackage,
 };
-use registry_breg::postgres::ConnectionConfig;
+use registry_breg::postgres::{ConnectionConfig, ExpectedRegistryIdentity};
+use registry_breg::proposal_retention::ProposalActivationCompatibilityInventory;
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 
 #[derive(Debug)]
@@ -41,6 +42,7 @@ pub(crate) enum ApplyLifecycleError {
     BackupArgument,
     Runtime,
     Audit,
+    ProposalCompatibility,
     Apply(MigrationError),
 }
 
@@ -258,7 +260,7 @@ fn execute(
         let predecessor = config
             .load_active_predecessor_package()
             .map_err(ApplyLifecycleError::CurrentPackage)?;
-        if successor_plan_is_empty_for_predecessor(&target, &predecessor) {
+        if successor_plan_is_empty(&target) {
             return Err(ApplyLifecycleError::Apply(MigrationError::EmptyPlan));
         }
         Some(predecessor)
@@ -337,6 +339,14 @@ fn execute(
         ),
         LifecycleMode::Plan => None,
     };
+    // Planning never activates service bindings or performs Review HTTP. The
+    // Apply proof uses only already accepted immutable Request/Result reads.
+    let proposal_compatibility = match (mode, current_identity.as_ref()) {
+        (LifecycleMode::Apply, Some(current)) => runtime.block_on(
+            prepare_proposal_compatibility(&config, &connection, current, &target),
+        )?,
+        _ => None,
+    };
     let backup_evidence = backup_arguments
         .iter()
         .map(|backup| {
@@ -379,13 +389,14 @@ fn execute(
     }
     .with_destructive_backup_evidence(&backup_evidence)
     .with_event_destination_compatibility_inventory(&event_destination_compatibility);
+    if let Some(inventory) = proposal_compatibility.as_ref() {
+        apply = apply.with_proposal_activation_compatibility(inventory);
+    }
     if let Some(reference) = request.operator_reference {
         apply = apply.with_operator_reference(reference);
     }
     if let Some(package) = current_package.as_ref() {
-        apply = apply
-            .with_predecessor_migration_baseline(package.migration_baseline())
-            .with_predecessor_engine_capabilities(package);
+        apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
     }
     if let Some(descriptor) = current_history_descriptor.as_ref() {
         apply = apply.with_predecessor_history_descriptor(descriptor);
@@ -427,6 +438,49 @@ fn execute(
             ApplyLifecycleActivation::Successor
         },
     }))
+}
+
+async fn prepare_proposal_compatibility(
+    config: &RuntimeConfig,
+    connection: &ConnectionConfig,
+    current: &ExpectedRegistryIdentity,
+    target: &VerifiedPackage,
+) -> Result<Option<ProposalActivationCompatibilityInventory>, ApplyLifecycleError> {
+    let Some(authorities) = config
+        .activate_review_authorities(target.registry())
+        .map_err(ApplyLifecycleError::RuntimeConfig)?
+    else {
+        if target.registry().actions().actions.iter().any(|action| matches!(
+            &action.execution,
+            registry_breg::model::CompiledActionExecution::Proposal { proposal }
+                if matches!(proposal.review, registry_breg::model::CompiledProposalReview::Required { .. })
+        )) {
+            eprintln!("warning: Review authority bindings are absent; affected retained Proposals will require rebase or cancellation after activation.");
+        }
+        return Ok(None);
+    };
+    let pool = connection
+        .build_pool()
+        .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
+    match registry_breg::proposal_retention::prepare_proposal_activation_compatibility(
+        &pool,
+        current,
+        target,
+        &authorities,
+        std::time::Duration::from_secs(30),
+    )
+    .await
+    {
+        Ok(inventory) if !inventory.is_empty() => Ok(Some(inventory)),
+        Ok(_) => Ok(None),
+        Err(registry_breg::mutation::MutationError::Unavailable) => {
+            eprintln!(
+                "warning: The retained Review closure could not be verified; affected Proposals will require rebase or cancellation after activation."
+            );
+            Ok(None)
+        }
+        Err(_) => Err(ApplyLifecycleError::ProposalCompatibility),
+    }
 }
 
 fn validate_field_encryption_custody(

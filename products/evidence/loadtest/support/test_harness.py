@@ -82,7 +82,7 @@ class EvidenceStub:
                         {"authorization": self.headers.get("Authorization"), "accept": self.headers.get("Accept"), "body": body}
                     )
                     count = len(stub.requests)
-                subject = body["subjects"][0]["selector"]["values"]["person_id"]
+                subject = body["subjects"][0]["selector"]["values"]["record-id"]
                 if limit_after is not None and count > limit_after:
                     self._reply(429, "application/problem+json", {"code": limited_code}, {"Retry-After": retry_after})
                 elif subject.startswith("lt-absent-"):
@@ -223,7 +223,11 @@ class EvidenceHarnessTests(unittest.TestCase):
             self.assertEqual(len(base64.urlsafe_b64decode(nonce + "=")), 32)
         bodies = [request["body"] for request in stub.requests]
         self.assertEqual({body["requirement"] for body in bodies}, {loadenv.REQUIREMENT})  # type: ignore[index]
-        absent = [body for body in bodies if body["subjects"][0]["selector"]["values"]["person_id"].startswith("lt-absent-")]  # type: ignore[index]
+        absent = [
+            body
+            for body in bodies
+            if body["subjects"][0]["selector"]["values"]["record-id"].startswith("lt-absent-")  # type: ignore[index]
+        ]
         self.assertEqual(len(absent), 2)
         for identifier in ("lt-subject-", "lt-absent-", "requestNonce", "Bearer"):
             self.assertNotIn(identifier, samples)
@@ -259,35 +263,47 @@ class EvidenceHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project = root / "project"
-            project.mkdir()
-            (project / "evidence-project.yaml").write_text(
-                "apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\n"
-                "kind: EvidenceAuthoringProject\n",
-                encoding="utf-8",
-            )
+            source_openapi = root / "source.openapi.yaml"
+            loadenv.render_openapi(LOADTEST / "project/source.openapi.yaml", 4711, source_openapi)
             pool = root / "pool"
-            loadenv.local_project(LOADTEST / "project", project, pool)
+            canonical = REPOSITORY / "products/evidence/examples/standalone"
+            loadenv.local_project(canonical, project, pool, source_openapi, 4711)
             plan = (project / "mocks/source.yaml").read_text(encoding="utf-8")
             self.assertEqual(plan.count("      - name: lt-subject-"), loadenv.SUBJECTS)
             self.assertLessEqual(loadenv.SUBJECTS, 256, "evidencectl source mock allows 256 cases per operation")
             self.assertEqual(len(list((project / "mocks/cases").glob("*.json"))), loadenv.SUBJECTS)
             case = json.loads((project / "mocks/cases/lt-subject-0005.json").read_text(encoding="utf-8"))
-            self.assertEqual(case["person_id"], "lt-subject-0005")
-            self.assertTrue(case["date_of_birth"].startswith("201"))
+            self.assertEqual(case["total"], 1)
+            self.assertEqual(case["record"]["record_id"], "lt-subject-0005")
+            self.assertTrue(case["record"]["birth_date"].startswith("201"))
+            self.assertEqual(case["record"]["address_canary"], loadenv.PRIVATE_SOURCE_CANARY)
             facts = json.loads((pool / "pool-facts.json").read_text(encoding="utf-8"))
             self.assertEqual(facts, {"subjects": 200, "adultSubjects": 160, "minorSubjects": 40, "absentSubjects": 50})
             subjects = (pool / "subjects.txt").read_text(encoding="utf-8").split()
             absent = (pool / "absent.txt").read_text(encoding="utf-8").split()
+            private_canaries = (pool / "private-canaries.txt").read_text(encoding="utf-8").split()
             self.assertEqual(len(subjects), 200)
             self.assertFalse(set(subjects) & set(absent))
+            self.assertEqual(private_canaries, [loadenv.PRIVATE_SOURCE_CANARY])
             self.assertEqual(
-                (project / "questions/adult-status.yaml").read_text(encoding="utf-8"),
-                (LOADTEST / "project/questions/adult-status.yaml").read_text(encoding="utf-8"),
+                (project / "evidence.yaml").read_text(encoding="utf-8"),
+                (canonical / "evidence.yaml").read_text(encoding="utf-8"),
             )
+            self.assertIn(
+                "origin: http://127.0.0.1:4711",
+                (project / "local-target.yaml").read_text(),
+            )
+            self.assertFalse((project / "access").exists())
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.local_project(LOADTEST / "project", project, root / "second-pool")
+                loadenv.local_project(canonical, project, root / "second-pool", source_openapi, 4711)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.local_project(LOADTEST / "project", root / "uninitialised", root / "third-pool")
+                loadenv.local_project(
+                    root / "missing",
+                    root / "second-project",
+                    root / "third-pool",
+                    source_openapi,
+                    4711,
+                )
 
     def test_birth_dates_are_deterministic_and_minors_stay_minors_for_years(self) -> None:
         for index in range(1, loadenv.SUBJECTS + 1):
@@ -593,7 +609,8 @@ class EvidenceHarnessTests(unittest.TestCase):
         self.assertIn("DYLD_FALLBACK_LIBRARY_PATH", run)
         self.assertIn("DYLD_FALLBACK_LIBRARY_PATH", down)
         self.assertIn("--secret-file", run)
-        self.assertIn("--seed-pool", run)
+        self.assertEqual(run.count("--seed-pool"), 3)
+        self.assertIn('private-canaries.txt"', run)
         self.assertIn("dev stop", down)
         self.assertIn("dev clean", down)
         self.assertIn("mock-pid", down)

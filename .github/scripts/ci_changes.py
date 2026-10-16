@@ -97,6 +97,10 @@ SHARDS = {
         "registry-evidencectl",
     ),
     "developer-tools": (
+        "registry-coordinator",
+        "registry-coordinator-client",
+        "registry-coordinator-client-node",
+        "registry-coordinator-client-py",
         "registry-thunderid-tooling",
         "registry-cli-docs",
         "registry-cli-reference",
@@ -121,6 +125,7 @@ STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
+        "registry-coordinator",
         "registry-breg",
         "registry-breg-mcp",
         "registry-breg-review",
@@ -138,6 +143,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 # job builds; a change to one, or to anything it links, runs the corpus.
 CONFIG_CHECK_PACKAGES = frozenset(
     {
+        "registry-coordinator",
         "registry-breg-mcp",
         "registry-breg-review",
         "registry-bregctl",
@@ -254,6 +260,7 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
     "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
     "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
+    "products/evidence/examples/standalone/**",
     "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
     "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
     "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
@@ -272,8 +279,8 @@ EVIDENCE_TUTORIAL_INPUTS = (
 
 # Every input the Base Registry Engine tutorial gate replays or is built from:
 # the page runner, the pages whose frontmatter it replays, and the build inputs
-# of the binaries it runs. The same job runs the request-attachments acceptance
-# check.
+# of the binaries it runs. Native Proposal attachments are exercised by the
+# PostgreSQL lane.
 BREG_TUTORIAL_INPUTS = (
     "Cargo.lock",
     "Cargo.toml",
@@ -285,8 +292,7 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
     "docs/site/src/content/docs/tutorials/review-registry-changes.mdx",
-    "products/breg/acceptance/request-attachments/**",
-    "products/breg/scripts/test-request-attachments.py",
+    "docs/site/src/content/docs/tutorials/send-registry-events-to-a-webhook.mdx",
 )
 
 # Every input the Registry Casework tutorial gate replays or is built from: the
@@ -329,11 +335,11 @@ MESSAGING_TUTORIAL_INPUTS = (
 EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS = (
     (
         "crates/registry-evidence-authoring/src/**",
-        "crates/registry-evidence-authoring/src/model.rs",
+        "crates/registry-evidence-authoring/src/project.rs",
     ),
     (
         "crates/registry-evidencectl/src/**",
-        "crates/registry-evidencectl/src/authoring.rs",
+        "crates/registry-evidencectl/src/normalized.rs",
     ),
     (
         "crates/registry-evidence/src/bundle.rs",
@@ -387,6 +393,9 @@ MESSAGING_BINDING_PACKAGES = frozenset(
 SCHEDULING_BINDING_PACKAGES = frozenset(
     {"registry-scheduling-client-node", "registry-scheduling-client-py"}
 )
+COORDINATOR_BINDING_PACKAGES = frozenset(
+    {"registry-coordinator-client-node", "registry-coordinator-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
@@ -394,6 +403,7 @@ NATIVE_BINDING_PACKAGES = (
     | CASEWORK_BINDING_PACKAGES
     | MESSAGING_BINDING_PACKAGES
     | SCHEDULING_BINDING_PACKAGES
+    | COORDINATOR_BINDING_PACKAGES
 )
 
 # The breg-contracts matrix lanes. Review runs the first; the merge queue, the
@@ -1060,6 +1070,8 @@ def classify(
                 seeds.update(SCHEDULING_PACKAGES)
             elif path.startswith("products/messaging/"):
                 seeds.update(MESSAGING_PACKAGES)
+            elif path.startswith("products/coordinator/"):
+                seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
                 # Catalog-only tooling does not require the full Rust matrix.
                 pass
@@ -1218,6 +1230,7 @@ def classify(
             "products/casework/generated/registry-casework.openapi.json",
             "products/messaging/generated/registry-messaging.openapi.json",
             "products/scheduling/generated/registry-scheduling.openapi.json",
+            "products/coordinator/generated/openapi/coordinator.openapi.json",
             # The client capabilities page imports this inventory at build.
             "products/breg/contracts/client-capabilities.json",
             "products/breg/evidence/**",
@@ -1356,8 +1369,8 @@ def classify(
                 }
             )
 
-    # The PostgreSQL lane starts the real Evidence service. This is an
-    # integration test edge, not a production runtime Cargo dependency.
+    # The PostgreSQL lane starts real Evidence and the native citizen journey.
+    # Their test-only edges are not production runtime Cargo dependencies.
     breg_contracts = (
         registry_record_cross_product
         or bool(affected & BREG_PACKAGES)
@@ -1409,6 +1422,7 @@ def classify(
         ) and bool(affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})),
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
+        "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

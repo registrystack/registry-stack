@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! An action input migrates without review only when every code it gained is
-//! new to its vocabulary in the same revision. An input that starts accepting
-//! a code its vocabulary already had changes what the action does, so it stays
-//! a reviewed action change.
+//! Frozen native Action revisions always require review when their accepted
+//! vocabulary or target-field contract changes. Record field widening remains
+//! independently additive; it does not authorize automatic Action migration.
 
 #![cfg(feature = "runtime")]
 
@@ -11,8 +10,7 @@ use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set,
-    compiled_registry_change_set_from_baseline, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, CompiledRegistryChangeSet, CompiledRegistryMigrationBaseline,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryChangeSet,
 };
 use registry_breg::CompiledRegistry;
 
@@ -24,10 +22,11 @@ const CONSENT_MODULE: &str = include_str!(
 const CONSENT_CORE_MODULE: &str = include_str!(
     "../../../products/breg/fixtures/consent-person-registry/modules/consent-person-registry-core/module.yaml"
 );
-const ASSET_PROJECT: &str =
-    include_str!("../../../products/breg/fixtures/asset-registration-actions/registry.yaml");
+const ASSET_PROJECT: &str = include_str!(
+    "../../../products/breg/fixtures/asset-registration-actions-compact/registry.yaml"
+);
 const ASSET_MODULE: &str = include_str!(
-    "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
+    "../../../products/breg/fixtures/asset-registration-actions-compact/modules/asset-registration-actions-core/module.yaml"
 );
 
 const WITHDRAW_DECISION: &str = "{id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [withdrawn], required: true, classification: internal}";
@@ -93,6 +92,10 @@ fn a_withdraw_action_that_starts_accepting_given_is_a_reviewed_action_change() {
             CompiledRegistryChangeClass::AccessOrDisclosureChange
         )
     );
+    assert!(!changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::FieldVocabularyCodesAdded));
     assert!(
         change_set_to_applicable_migration_plan(&changes).is_err(),
         "a withdraw action that can now give consent needs review"
@@ -100,7 +103,7 @@ fn a_withdraw_action_that_starts_accepting_given_is_a_reviewed_action_change() {
 }
 
 #[test]
-fn a_recipient_new_to_its_vocabulary_migrates_the_actions_that_pick_it_up() {
+fn a_new_recipient_requires_review_for_the_actions_that_pick_it_up() {
     let before = consent(CONSENT_PROJECT, CONSENT_MODULE);
     let project = replace_once(
         CONSENT_PROJECT,
@@ -119,16 +122,19 @@ fn a_recipient_new_to_its_vocabulary_migrates_the_actions_that_pick_it_up() {
         assert_eq!(
             action_change(&changes, action),
             (
-                CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-                CompiledRegistryChangeClass::CompatibleAdditive
+                CompiledRegistryChangeCode::ActionChanged,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange
             )
         );
     }
-    assert!(change_set_to_applicable_migration_plan(&changes).is_ok());
+    assert!(changes.changes.iter().any(|change| change.code
+        == CompiledRegistryChangeCode::FieldVocabularyCodesAdded
+        && change.class == CompiledRegistryChangeClass::CompatibleAdditive));
+    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
 
 #[test]
-fn a_purpose_new_to_its_vocabulary_migrates_the_actions_that_pick_it_up() {
+fn a_new_purpose_requires_review_for_the_actions_that_pick_it_up() {
     let before = consent(CONSENT_PROJECT, CONSENT_MODULE);
     let project = replace_once(
         CONSENT_PROJECT,
@@ -141,17 +147,20 @@ fn a_purpose_new_to_its_vocabulary_migrates_the_actions_that_pick_it_up() {
     assert_eq!(
         action_change(&changes, "give-person-consent"),
         (
-            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-            CompiledRegistryChangeClass::CompatibleAdditive
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
         )
     );
-    assert!(change_set_to_applicable_migration_plan(&changes).is_ok());
+    assert!(changes.changes.iter().any(|change| change.code
+        == CompiledRegistryChangeCode::FieldVocabularyCodesAdded
+        && change.class == CompiledRegistryChangeClass::CompatibleAdditive));
+    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
 
-/// A new code alone is additive, but an input that also picks up a code its
-/// vocabulary already had is not, even in the same revision.
+/// New Record vocabulary codes are additive. Both existing and new accepted
+/// input codes change the frozen Action and require review.
 #[test]
-fn a_new_code_does_not_carry_an_existing_code_through_review() {
+fn new_and_existing_input_codes_both_require_action_review() {
     let before = consent(CONSENT_PROJECT, CONSENT_MODULE);
     let project = replace_once(
         CONSENT_PROJECT,
@@ -184,8 +193,8 @@ fn a_new_code_does_not_carry_an_existing_code_through_review() {
     assert_eq!(
         action_change(&changes, "withdraw-person-consent"),
         (
-            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-            CompiledRegistryChangeClass::CompatibleAdditive
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
         )
     );
 }
@@ -217,48 +226,32 @@ fn an_action_status_widened_to_an_existing_code_is_a_reviewed_action_change() {
     assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
 
-/// A retained baseline written before input vocabularies were recorded cannot
-/// tell a new code from an existing one, so it fails closed to review.
 #[test]
-fn a_baseline_without_input_vocabularies_keeps_every_widening_under_review() {
+fn an_unrelated_vocabulary_leaves_every_action_semantically_unchanged() {
     let before = consent(CONSENT_PROJECT, CONSENT_MODULE);
     let project = replace_once(
         CONSENT_PROJECT,
-        "values: [food-assistance, health-referral]",
-        "values: [food-assistance, health-referral, school-meals]",
+        "vocabularies:\n",
+        "vocabularies:\n  - id: unrelated-status\n    values: [active, inactive]\n",
     );
     let after = consent(&project, CONSENT_MODULE);
-    let mut baseline = serde_json::to_value(CompiledRegistryMigrationBaseline::from_compiled(
-        "prior-package",
-        &before,
-    ))
-    .unwrap();
+    let changes = compiled_registry_change_set(&before, &after, "prior-package");
     assert!(
-        baseline["actions"]
-            .as_object_mut()
-            .unwrap()
-            .remove("inputVocabularies")
-            .is_some(),
-        "the baseline records the vocabularies its action inputs use"
+        changes.changes.iter().all(|change| !matches!(
+            change.code,
+            CompiledRegistryChangeCode::ActionAdded
+                | CompiledRegistryChangeCode::ActionChanged
+                | CompiledRegistryChangeCode::ActionRemoved
+        )),
+        "{:#?}",
+        changes.changes
     );
-    let baseline: CompiledRegistryMigrationBaseline = serde_json::from_value(baseline).unwrap();
-    let changes = compiled_registry_change_set_from_baseline(&baseline, &after, "prior-package");
-
-    assert_eq!(
-        action_change(&changes, "give-person-consent"),
-        (
-            CompiledRegistryChangeCode::ActionChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange
-        )
-    );
-    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
 
-/// A raised `text` limit on a field of the entity the actions target, which
-/// no action input sets, keeps every request they accepted valid, so each
-/// keeps its contract; a lowered limit does not.
+/// Widening and narrowing a retained target field both change the frozen
+/// Action revision, while the Record field widening keeps its additive code.
 #[test]
-fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
+fn a_raised_target_text_limit_is_additive_for_the_record_and_reviewed_for_actions() {
     const SOURCE_REFERENCE: &str =
         "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
     let with_limit = |max_length: u32| {
@@ -300,13 +293,16 @@ fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
         assert_eq!(
             action_change(&widened, action),
             (
-                CompiledRegistryChangeCode::ActionTargetFieldsWidened,
-                CompiledRegistryChangeClass::CompatibleAdditive
+                CompiledRegistryChangeCode::ActionChanged,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange
             )
         );
     }
+    assert!(widened.changes.iter().any(|change| change.code
+        == CompiledRegistryChangeCode::FieldLengthWidened
+        && change.class == CompiledRegistryChangeClass::CompatibleAdditive));
     assert_eq!(changes.len(), 7, "{changes:?}");
-    assert!(change_set_to_applicable_migration_plan(&widened).is_ok());
+    assert!(change_set_to_applicable_migration_plan(&widened).is_err());
 
     let narrowed = compiled_registry_change_set(
         &before,
@@ -324,7 +320,7 @@ fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
 }
 
 #[test]
-fn a_lowered_string_minimum_on_a_targeted_entity_keeps_the_action_contracts() {
+fn a_lowered_target_string_minimum_is_additive_for_the_record_and_reviewed_for_actions() {
     const SOURCE_REFERENCE: &str =
         "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
     let with_minimum = |min_length: u32| {
@@ -366,13 +362,16 @@ fn a_lowered_string_minimum_on_a_targeted_entity_keeps_the_action_contracts() {
         assert_eq!(
             action_change(&lowered, action),
             (
-                CompiledRegistryChangeCode::ActionTargetFieldsWidened,
-                CompiledRegistryChangeClass::CompatibleAdditive
+                CompiledRegistryChangeCode::ActionChanged,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange
             )
         );
     }
+    assert!(lowered.changes.iter().any(|change| change.code
+        == CompiledRegistryChangeCode::FieldLengthWidened
+        && change.class == CompiledRegistryChangeClass::CompatibleAdditive));
     assert_eq!(changes.len(), 7, "{changes:?}");
-    assert!(change_set_to_applicable_migration_plan(&lowered).is_ok());
+    assert!(change_set_to_applicable_migration_plan(&lowered).is_err());
 
     let raised = compiled_registry_change_set(
         &before,

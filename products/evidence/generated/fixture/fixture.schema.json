@@ -1,44 +1,445 @@
 {
   "$defs": {
+    "CoequalCase": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "companionBundle": {
+          "type": "string"
+        },
+        "derivationRuns": {
+          "type": "boolean"
+        },
+        "derivationSelectorInputs": {
+          "x-registry-foreign": "json"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "expectedLookup": {
+          "type": "string"
+        },
+        "expectedPublicProblem": {
+          "type": "string"
+        },
+        "expectedSubjectRoles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expectedValue": {
+          "x-registry-foreign": "json"
+        },
+        "expectedValues": {
+          "x-registry-foreign": "json"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "injectedDerivation": {
+          "x-registry-foreign": "json"
+        },
+        "legalLocalDate": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "selectorOverrides": {
+          "x-registry-foreign": "json"
+        },
+        "selectors": {
+          "x-registry-foreign": "json"
+        },
+        "signedSuccess": {
+          "type": "boolean"
+        },
+        "source": {
+          "x-registry-foreign": "json"
+        },
+        "sourceFailure": {
+          "type": "string"
+        },
+        "sources": {
+          "x-registry-foreign": "json"
+        },
+        "subjects": {
+          "x-registry-foreign": "json"
+        },
+        "verifiedTokenClaims": {
+          "x-registry-foreign": "json"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "CoequalCommon": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "derivationSelectorInputs": {
+          "x-registry-foreign": "json"
+        },
+        "expectedRequestParts": {
+          "x-registry-foreign": "json"
+        },
+        "expectedTransport": {
+          "x-registry-foreign": "json"
+        },
+        "legalLocalDate": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "selector": {
+          "x-registry-foreign": "json"
+        },
+        "selectors": {
+          "x-registry-foreign": "json"
+        },
+        "subjects": {
+          "x-registry-foreign": "json"
+        },
+        "verifiedTokenClaims": {
+          "x-registry-foreign": "json"
+        }
+      },
+      "type": "object"
+    },
+    "CoequalFixture": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/evidence/fixture/v1alpha1"
+        },
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/CoequalCase"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array"
+        },
+        "coequalAcceptanceDefinition": {
+          "const": true,
+          "type": "boolean"
+        },
+        "common": {
+          "$ref": "#/$defs/CoequalCommon"
+        },
+        "kind": {
+          "const": "EvidenceFixture"
+        },
+        "privacyExpectation": {
+          "$ref": "#/$defs/CoequalPrivacy"
+        },
+        "providerContract": {
+          "x-registry-foreign": "json"
+        },
+        "syntheticOnly": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "syntheticOnly",
+        "coequalAcceptanceDefinition",
+        "cases",
+        "apiVersion",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "CoequalPrivacy": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnosticsExclude": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidenceContains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidenceExcludes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "memberInputs": {
+          "type": "string"
+        },
+        "minimizationClaim": {
+          "type": "string"
+        },
+        "subjectBindings": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "ReferenceCase": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "bundleMutation": {
+          "type": "string"
+        },
+        "declaredUnresolved": {
+          "const": true,
+          "type": "boolean"
+        },
+        "derivationMutation": {
+          "type": "string"
+        },
+        "derivationParameterMutation": {
+          "x-registry-foreign": "json"
+        },
+        "expected": {
+          "$ref": "#/$defs/ReferenceExpected"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "requestMutation": {
+          "type": "string"
+        },
+        "response": {
+          "x-registry-foreign": "json"
+        },
+        "responses": {
+          "x-registry-foreign": "json"
+        },
+        "selectorOverrides": {
+          "x-registry-foreign": "json"
+        },
+        "selectors": {
+          "x-registry-foreign": "json"
+        },
+        "sourceFailure": {
+          "type": "string"
+        },
+        "statementMutation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ReferenceCommon": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "derivationSelectorInputs": {
+          "x-registry-foreign": "json"
+        },
+        "expectedFetchRequestParts": {
+          "x-registry-foreign": "json"
+        },
+        "expectedFetchTransport": {
+          "x-registry-foreign": "json"
+        },
+        "expectedRequestParts": {
+          "x-registry-foreign": "json"
+        },
+        "expectedTransport": {
+          "x-registry-foreign": "json"
+        },
+        "extract": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "selectors": {
+          "x-registry-foreign": "json"
+        },
+        "verifiedTokenClaims": {
+          "x-registry-foreign": "json"
+        }
+      },
+      "type": "object"
+    },
+    "ReferenceExpected": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle": {
+          "type": "string"
+        },
+        "derivationRuns": {
+          "type": "boolean"
+        },
+        "entityReferenceCount": {
+          "format": "uint64",
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "expectedTransport": {
+          "x-registry-foreign": "json"
+        },
+        "facts": {
+          "x-registry-foreign": "json"
+        },
+        "lookup": {
+          "type": "string"
+        },
+        "outputGate": {
+          "type": "string"
+        },
+        "publicProblem": {
+          "type": "string"
+        },
+        "rawReferencesDisclosed": {
+          "type": "boolean"
+        },
+        "rejectedBefore": {
+          "type": "string"
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "sourceRequestCount": {
+          "format": "uint64",
+          "maximum": 2,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "value": {
+          "x-registry-foreign": "json"
+        },
+        "values": {
+          "x-registry-foreign": "json"
+        }
+      },
+      "type": "object"
+    },
+    "ReferenceFixture": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/evidence/fixture/v1alpha1"
+        },
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/ReferenceCase"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array"
+        },
+        "common": {
+          "$ref": "#/$defs/ReferenceCommon"
+        },
+        "kind": {
+          "const": "EvidenceFixture"
+        },
+        "privacyExpectation": {
+          "$ref": "#/$defs/ReferencePrivacy"
+        },
+        "syntheticOnly": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "syntheticOnly",
+        "cases",
+        "apiVersion",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ReferencePrivacy": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnosticsExclude": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidenceContains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidenceExcludes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": true,
+  "else": {
+    "$ref": "#/$defs/ReferenceFixture"
+  },
+  "if": {
+    "properties": {
+      "coequalAcceptanceDefinition": {
+        "const": true
+      }
+    },
+    "required": [
+      "coequalAcceptanceDefinition"
+    ]
+  },
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/evidence/fixture/v1alpha1"
     },
     "cases": {
-      "description": "The cases, which together cover every required category.",
-      "items": {
-        "additionalProperties": true,
-        "properties": {
-          "declaredUnresolved": {
-            "const": true
-          },
-          "id": {
-            "$ref": "#/$defs/LocalId"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "type": "object",
-        "x-registry-passthrough": "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know"
-      },
       "maxItems": 256,
       "minItems": 1,
       "type": "array"
-    },
-    "common": {
-      "description": "What every case starts from.",
-      "type": "object",
-      "x-registry-passthrough": "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know"
     },
     "kind": {
       "const": "EvidenceFixture"
@@ -46,11 +447,12 @@
   },
   "required": [
     "apiVersion",
-    "kind",
-    "synthetic_only",
-    "cases"
+    "kind"
   ],
+  "then": {
+    "$ref": "#/$defs/CoequalFixture"
+  },
   "title": "Evidence fixture set",
   "type": "object",
-  "x-registry-passthrough": "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know"
+  "unevaluatedProperties": false
 }

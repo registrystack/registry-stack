@@ -81,25 +81,33 @@ pub fn looks_like_url(value: &str) -> bool {
 /// introduced by a server whose own response was already protected by the
 /// scheme of the hop before it.
 pub fn check_url(value: &str) -> Result<Url> {
-    let url = Url::parse(value).with_context(|| format!("parsing `{value}` as a URL"))?;
+    let url = Url::parse(value).map_err(|_| {
+        safe_url_refusal(
+            "evidence.openapi.url-malformed",
+            "The OpenAPI URL is malformed.",
+            "Pass a complete HTTPS URL, a numeric loopback HTTP URL, or a local file path.",
+        )
+    })?;
 
     // Reported without quoting the URL back: the thing that makes it
     // unacceptable is the credential inside it, and echoing it to a terminal
     // or a scrollback buffer is exactly what should not happen to a secret.
     if !url.username().is_empty() || url.password().is_some() {
-        bail!(
-            "the OpenAPI URL carries credentials in its authority; pass a URL without them, and \
-             fetch a description that needs authentication with your own client and pass the file"
-        );
+        return Err(safe_url_refusal(
+            "evidence.openapi.url-credentials",
+            "The OpenAPI URL carries credentials in its authority.",
+            "Pass a URL without credentials, or fetch an authenticated description with your own client and pass the local file.",
+        ));
     }
     // A query is routinely where signed URLs and API keys live, and a
     // fragment is client-side state rather than part of the fetched resource.
     // Reject both without echoing either value into terminal output.
     if url.query().is_some() || url.fragment().is_some() {
-        bail!(
-            "the OpenAPI URL carries a query or fragment; pass a stable URL without either, or \
-             fetch the description with your own client and pass the local file"
-        );
+        return Err(safe_url_refusal(
+            "evidence.openapi.url-components",
+            "The OpenAPI URL carries a query or fragment.",
+            "Pass a stable URL without a query or fragment, or fetch the description with your own client and pass the local file.",
+        ));
     }
 
     match url.scheme() {
@@ -107,16 +115,40 @@ pub fn check_url(value: &str) -> Result<Url> {
         "http" => match url.host() {
             Some(Host::Ipv4(address)) if address.is_loopback() => {}
             Some(Host::Ipv6(address)) if address.is_loopback() => {}
-            _ => bail!(
-                "`{url}` is plain http to a host that is not loopback; a description read in the \
-                 clear can be tampered with, and it decides what the drafted projection reads. \
-                 Use https, or a numeric loopback host such as `http://127.0.0.1:8080/...` for a \
-                 local server"
-            ),
+            _ => {
+                return Err(safe_url_refusal(
+                    "evidence.openapi.url-insecure",
+                    "The OpenAPI URL uses plain HTTP to a host that is not numeric loopback.",
+                    "Use HTTPS, or use a numeric loopback host for a local server.",
+                ))
+            }
         },
-        scheme => bail!("`{scheme}` URLs are not fetched; pass an https URL, or a local file path"),
+        _ => {
+            return Err(safe_url_refusal(
+                "evidence.openapi.url-scheme",
+                "The OpenAPI URL uses a scheme that Evidence does not fetch.",
+                "Pass an HTTPS URL, a numeric loopback HTTP URL, or a local file path.",
+            ))
+        }
     }
     Ok(url)
+}
+
+fn safe_url_refusal(
+    code: &'static str,
+    message: &'static str,
+    action: &'static str,
+) -> anyhow::Error {
+    crate::SafeCliFailure {
+        operational: false,
+        code: code.to_owned(),
+        artifact: "OpenAPI input".to_owned(),
+        path: "--openapi".to_owned(),
+        message: message.to_owned(),
+        suggested_action: action.to_owned(),
+        cause: None,
+    }
+    .into()
 }
 
 /// Fetches `url` and returns the document text, refusing a body past
@@ -142,10 +174,18 @@ pub fn get(url: &Url, max_bytes: u64) -> Result<String> {
         .call()
     {
         Ok(response) => response,
-        Err(ureq::Error::Status(status, _)) => bail!(
-            "fetching {url} returned HTTP {status}; a description behind authentication has to be \
-             fetched with your own client and passed as a file"
-        ),
+        Err(ureq::Error::Status(status, _)) => {
+            return Err(crate::SafeCliFailure {
+                operational: true,
+                code: "evidence.openapi.http-status".to_owned(),
+                artifact: "OpenAPI input".to_owned(),
+                path: "--openapi".to_owned(),
+                message: format!("The OpenAPI server returned HTTP {status}."),
+                suggested_action: "Confirm the server publishes this description without authentication, or fetch it with your own client and pass the local file.".to_owned(),
+                cause: None,
+            }
+            .into())
+        }
         Err(error) => return Err(error).with_context(|| format!("fetching {url}")),
     };
 

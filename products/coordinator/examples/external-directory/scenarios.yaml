@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic bounded directory replies. No endpoint or credential is contacted.
+# Scenarios do not run the automatic retries: a 429, 502, 503 or 504 reply
+# stands for the final attempt, the one that hands its status to the workflow.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: office-found
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 200, body: {items: [{id: north-office}]}}
+  expect:
+    path: [lookup, result, found]
+    state: completed
+    outcome: {type: named, value: office-found}
+    output: {officeId: north-office}
+- id: directory-entry-not-found
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 404, body: null}
+  expect:
+    path: [lookup, result, missing]
+    state: completed
+    outcome: {type: named, value: no-directory-entry}
+    output: null
+- id: empty-directory-result
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 200, body: {items: []}}
+  expect:
+    path: [lookup, result, missing]
+    state: completed
+    outcome: {type: named, value: no-directory-entry}
+    output: null
+- id: directory-rate-limited-on-the-last-attempt
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 429, body: null}
+  expect:
+    path: [lookup, result, unavailable]
+    state: completed
+    outcome: {type: named, value: directory-unavailable}
+    output: null
+- id: gateway-fails-on-the-last-attempt
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 502, body: null}
+  expect:
+    path: [lookup, result, unavailable]
+    state: completed
+    outcome: {type: named, value: directory-unavailable}
+    output: null
+- id: directory-unavailable-on-the-last-attempt
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 503, body: null}
+  expect:
+    path: [lookup, result, unavailable]
+    state: completed
+    outcome: {type: named, value: directory-unavailable}
+    output: null
+- id: gateway-times-out-on-the-last-attempt
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 504, body: null}
+  expect:
+    path: [lookup, result, unavailable]
+    state: completed
+    outcome: {type: named, value: directory-unavailable}
+    output: null
+- id: directory-transport-unavailable
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: retryable
+      code: external-unavailable
+  expect:
+    path: [lookup]
+    state: retryable
+    outcome: {type: none}

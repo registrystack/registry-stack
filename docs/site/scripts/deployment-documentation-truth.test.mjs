@@ -63,10 +63,11 @@ test('current docs stay under /dev/ while the newest published release is the re
   assert.equal(current.source, 'registry-stack-main');
   const readmeLines = new Set(readme.split(/\r?\n/));
   assert.equal(
-    readmeLines.has(
-      '| Serve governed record APIs from PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |',
-    ),
-    true,
+    readme.split(/\r?\n/).filter((line) =>
+      line.includes('](https://docs.registrystack.org/dev/tutorials/first-breg/)'),
+    ).length,
+    1,
+    'the README has one BReg starting point linked to the development tutorial',
   );
   assert.equal(
     [...readmeLines].some((line) => line.includes('/start/pre-1.0-cutover/')),
@@ -219,7 +220,7 @@ test('glossary defers issue 361 without describing an implemented project-root b
     /href="https:\/\/github\.com\/registrystack\/registry-stack\/issues\/361"/,
   );
   assert.match(glossary, /Current source does not generate, sign, verify, or activate a project-root bundle/);
-  assert.match(glossary, /no Registry Stack coordinator binds or atomically activates them/);
+  assert.match(glossary, /no Registry Stack component binds or atomically activates them/);
   assert.match(glossary, /this is not atomic project activation/);
   assert.doesNotMatch(glossary, /root manifest binds compatible Relay and Notary/i);
   assert.doesNotMatch(glossary, /One activated deployment-bundle generation/i);

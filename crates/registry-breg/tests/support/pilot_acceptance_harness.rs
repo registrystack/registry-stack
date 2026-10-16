@@ -373,15 +373,9 @@ impl FixtureSources {
         let mut parsed_modules = Vec::new();
         let mut module_assets = Vec::new();
         let project_planners = project
-            .entities
+            .functions
             .iter()
-            .filter_map(|entity| {
-                entity
-                    .change_request
-                    .as_ref()
-                    .and_then(|request| request.planner.as_ref())
-                    .map(|planner| planner.script.clone())
-            })
+            .map(|function| function.source.clone())
             .collect::<BTreeSet<_>>();
         for asset_path in project_planners {
             module_assets.push(ModuleAssetSource {
@@ -593,14 +587,19 @@ fn write_runtime_config(
     write_secret(&secrets.join("audit-key"), &[0x6b; 32]);
     write_secret(&secrets.join("cursor-key"), &[0x43; 32]);
     let review_authorities = registry
-        .entities()
-        .values()
-        .filter_map(|entity| entity.change_request.as_ref())
-        .filter_map(|request| match &request.review {
-            registry_breg::model::CompiledChangeRequestReview::Required(requirement) => {
-                Some(requirement.authority.as_str())
+        .actions()
+        .actions
+        .iter()
+        .filter_map(|action| match &action.execution {
+            registry_breg::model::CompiledActionExecution::Proposal { proposal } => {
+                match &proposal.review {
+                    registry_breg::model::CompiledProposalReview::Required {
+                        authority, ..
+                    } => Some(authority.as_str()),
+                    registry_breg::model::CompiledProposalReview::None => None,
+                }
             }
-            registry_breg::model::CompiledChangeRequestReview::None => None,
+            registry_breg::model::CompiledActionExecution::Immediate => None,
         })
         .collect::<BTreeSet<_>>();
     let review_authority_config = if review_authorities.is_empty() {

@@ -23,8 +23,8 @@ use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::idempotency::{IdempotencyPolicy, PermittedResponseHeader};
 use registry_breg::mutation::{
-    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
-    MutationOutcome, MutationPlan, MutationRequest, PatchOperation,
+    install_mutation_schema, MutationBody, MutationError, MutationFaultPoint, MutationOutcome,
+    MutationPlan, MutationRequest, MutationTransaction, PatchOperation,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
@@ -222,7 +222,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
             .expect("test owns a strong keyed audit profile"),
     );
-    let coordinator = MutationCoordinator::new(
+    let coordinator = MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),
@@ -920,7 +920,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         )
         .await
         .expect("test can simulate activation of a same-schema package revision");
-    let changed_package_coordinator = MutationCoordinator::new(
+    let changed_package_coordinator = MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         changed_identity,
@@ -990,8 +990,8 @@ async fn prepared_mutation_registry(
 fn audited_coordinator(
     database: &TestDatabase,
     identity: &registry_breg::postgres::ExpectedRegistryIdentity,
-) -> MutationCoordinator {
-    MutationCoordinator::new(
+) -> MutationTransaction {
+    MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),
@@ -1217,7 +1217,7 @@ async fn two_runtimes_audit_concurrent_mutations_through_their_own_writers() {
     let table = &compiled.entities()["widget"].physical_table;
     let before = durable_counts(&database, table).await;
 
-    let run = |runtime: usize, coordinator: MutationCoordinator| {
+    let run = |runtime: usize, coordinator: MutationTransaction| {
         let pool = pool.clone();
         let create_plan = &create_plan;
         let claims = &claims;
@@ -1877,7 +1877,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    let operator_entities = operator_metadata["entities"]
+    let operator_entities = operator_metadata["recordTypes"]
         .as_array()
         .expect("operator metadata entities");
     let operator_operations = |entity_id: &str| {
@@ -1904,7 +1904,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    let case_entities = case_metadata["entities"]
+    let case_entities = case_metadata["recordTypes"]
         .as_array()
         .expect("case metadata entities");
     let case_operations = |entity_id: &str| {
@@ -3397,11 +3397,11 @@ fn assert_identical_problems(left: &(StatusCode, Vec<u8>), right: &(StatusCode, 
 
 fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"row-boundary-batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "constraints":[{"type":"unique","fields":["label"]}],
@@ -3414,8 +3414,8 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","get","list","patch","batch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","get","list","patch","batch"],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -3430,11 +3430,11 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
 
 fn located_refusal_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"located-refusal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
@@ -3448,8 +3448,8 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","get","list","patch","batch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","get","list","patch","batch"],
               "readableFields":["jurisdiction","label","quantity","is-flagged"],
               "writableFields":["jurisdiction","label","quantity","is-flagged"],
               "filterableFields":["label"],
@@ -3459,8 +3459,8 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"keeper","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["get","list","patch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["get","list","patch"],
               "readableFields":["jurisdiction","label","secret"],
               "writableFields":["secret"],
               "filterableFields":["secret"],
@@ -3470,8 +3470,8 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"drafter","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-drafting"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","get"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","get"],
               "readableFields":["jurisdiction","label"],
               "writableFields":["jurisdiction","label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -3843,11 +3843,11 @@ fn api_claims_with_principal_and_scopes(
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,"classification":"public",
             "constraints":[{"type":"unique","fields":["label"]}],
             "fields":[
@@ -3877,8 +3877,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","get","list","patch","tombstone"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","get","list","patch","tombstone"],
               "readableFields":["jurisdiction","label","note","quantity"],
               "writableFields":["jurisdiction","label","note","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -3886,24 +3886,24 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"review-operator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["create","get","list","patch","tombstone"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["create","get","list","patch","tombstone"],
               "readableFields":["jurisdiction","label","note","quantity"],
               "writableFields":["jurisdiction","label","note","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
           },{
             "id":"label-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["get","list"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["get","list"],
               "readableFields":["label"],
               "rowBoundaries": "unrestricted"
             }]}
           },{
             "id":"label-editor","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget","operations":["get","patch"],
+            "permissions":{"records":[{
+              "recordType":"widget","operations":["get","patch"],
               "readableFields":["label"],
               "writableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -3911,13 +3911,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"case-operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"log","operations":["create","get","list"],
+            "permissions":{"records":[{
+              "recordType":"log","operations":["create","get","list"],
               "readableFields":["jurisdiction","message"],
               "writableFields":["jurisdiction","message"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             },{
-              "entity":"archive","operations":["create","get","list","patch"],
+              "recordType":"archive","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","name"],
               "writableFields":["jurisdiction","name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -4293,7 +4293,7 @@ async fn assert_patch_preserved_omitted_field(
         .await
         .expect("administrator can inspect configured post-write event");
     let expected_data = json!({
-        "entity": "widget",
+        "recordType": "widget",
         "recordId": record_id,
         "revision": 2,
         "trigger": "patched",
@@ -4527,8 +4527,8 @@ fn coordinator_with_audit_key(
     database: &TestDatabase,
     identity: &registry_breg::postgres::ExpectedRegistryIdentity,
     audit_key: u8,
-) -> MutationCoordinator {
-    MutationCoordinator::new(
+) -> MutationTransaction {
+    MutationTransaction::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
         identity.clone(),

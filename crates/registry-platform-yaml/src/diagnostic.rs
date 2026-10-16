@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Whether a diagnostic refuses the input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
@@ -27,6 +28,7 @@ impl Severity {
 /// it; `line` and `column` are 1-based and absent when the problem concerns
 /// the file as a whole.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
     pub file: String,
@@ -39,6 +41,7 @@ pub struct Source {
 /// A second place that explains a diagnostic, such as the first occurrence
 /// of a duplicate. Human output prints it as a `note:` line.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Related {
     pub file: String,
@@ -56,6 +59,7 @@ pub struct Related {
 /// expected envelope. It never repeats a scalar value read from a file or the
 /// environment (CFG-SEC-3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     pub severity: Severity,

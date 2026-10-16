@@ -4,7 +4,7 @@ journeys:
   - id: register-and-transfer-facility
     steps:
       - id: create-operator
-        entity: operator
+        recordType: operator
         accessProfile: operator-administrator
         claims:
           principal: synthetic-operator-administrator
@@ -54,7 +54,7 @@ journeys:
             operatorId: {recordCapture: operator}
         expect: {outcome: success, status: 200}
       - id: read-as-current-owner
-        entity: facility
+        recordType: facility
         accessProfile: facility-owner
         claims:
           principal: owner-a
@@ -67,7 +67,7 @@ journeys:
           status: 200
           fields: {facilityCode: FAC-001, owner: owner-a}
       - id: create-inactive-operator
-        entity: operator
+        recordType: operator
         accessProfile: operator-administrator
         claims:
           principal: synthetic-operator-administrator
@@ -149,7 +149,7 @@ journeys:
         captureResults:
           facility: transferred-facility
       - id: former-owner-is-concealed
-        entity: facility
+        recordType: facility
         accessProfile: facility-owner
         claims:
           principal: owner-a
@@ -159,7 +159,7 @@ journeys:
         request: {type: get, recordCapture: facility}
         expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
       - id: destination-owner-can-read
-        entity: facility
+        recordType: facility
         accessProfile: facility-owner
         claims:
           principal: owner-b

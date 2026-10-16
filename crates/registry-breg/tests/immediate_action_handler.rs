@@ -7,33 +7,33 @@ use registry_breg::{
     },
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_json, ModuleAssetSource},
-    model::{CompiledAction, CompiledActionMutation, CompiledActionValue},
+    model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue},
 };
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 fn project() -> Value {
-    json!({
+    json!({"datasets":[{"id": "test-dataset"}],"functions":[{"id":"register-person-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
+        "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
-        "actions":[{"id":"register-person","inputs":[
+        "actions":[{"execution":{"mode":"immediate"},"id":"register-person","inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
-            {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
-            {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
-            {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
-        ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
+        ],"plan":{"type":"function","function":"register-person-plan","inputs":["given-name", "family-name", "person"],"writes":[
+            {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
+            {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
+            {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
+        ],"refusals":[{"code":"blank-name","label":"A name is required."}]}}],
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
     })
 }
 fn compile(source: Value, script: &str) -> Result<CompiledAction, registry_breg::CompileFailure> {
-    let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let source = parse_project_json(&serde_json::to_vec(&source).unwrap())?;
     compile_project_with_assets(
         &source,
         &[],
@@ -63,21 +63,21 @@ fn result(expression: &str) -> String {
 
 #[test]
 fn handler_computes_from_authored_input_ids_and_omits_slots() {
-    let outcome = evaluate(r#"fn handle(ctx) { let name = ctx.inputs["given-name"]; name.trim(); #{effects:[#{id:"person",set:#{name:name,friend:#{fromField:"person"}}}]} }"#).unwrap();
+    let outcome = evaluate(r#"fn handle(ctx) { let name = ctx.inputs["given-name"]; name.trim(); #{effects:[#{id:"person",set:#{name:name,friend:#{fromInput:"person"}}}]} }"#).unwrap();
     let ActionHandlerOutcome::Effects(effects) = outcome else {
         panic!("effects expected")
     };
     assert_eq!(effects.len(), 1);
     assert_eq!(effects[0].id, "person");
-    assert!(effects[0].mutations.contains(&CompiledActionMutation::Set {
+    assert!(effects[0].mutations.contains(&CompiledPlanMutation::Set {
         field: "name".into(),
-        value: CompiledActionValue::Literal {
+        value: CompiledPlanValue::Literal {
             value: json!("Mina")
         }
     }));
-    assert!(effects[0].mutations.contains(&CompiledActionMutation::Set {
+    assert!(effects[0].mutations.contains(&CompiledPlanMutation::Set {
         field: "friend".into(),
-        value: CompiledActionValue::FromInput {
+        value: CompiledPlanValue::FromInput {
             input: "person".into()
         }
     }));
@@ -135,7 +135,7 @@ fn handler_rejects_slot_and_value_contract_violations() {
         r#"#{effects:[#{id:"person",target:#{entity:"person"},set:#{name:"Mina"}}]}"#,
         r#"#{effects:[#{id:"person",operation:"create",set:#{name:"Mina"}}]}"#,
         r#"#{effects:[#{id:"person",set:#{unknown:"Mina"}}]}"#,
-        r#"#{effects:[#{id:"person",set:#{friend:#{fromField:"person"}}}]}"#,
+        r#"#{effects:[#{id:"person",set:#{friend:#{fromInput:"person"}}}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:()}}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:5}}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:"Mina"},clear:["friend"]}]}"#,
@@ -143,7 +143,7 @@ fn handler_rejects_slot_and_value_contract_violations() {
         r#"#{effects:[#{id:"existing",clear:["friend","friend"]}]}"#,
         r#"#{effects:[#{id:"existing"}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:"550e8400-e29b-41d4-a716-446655440000"}}]}"#,
-        r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromField:"given-name"}}}]}"#,
+        r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromInput:"given-name"}}}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"existing"}}},#{id:"existing",clear:["friend"]}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"friend",set:#{name:"Sam",friend:#{fromEffect:"person"}}}]}"#,
@@ -153,13 +153,13 @@ fn handler_rejects_slot_and_value_contract_violations() {
 }
 
 #[test]
-fn handler_orders_symbolic_creates_and_permits_optional_patch_clears() {
-    let ActionHandlerOutcome::Effects(effects) = evaluate(&result(r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"friend",set:#{name:"Sam"}},#{id:"existing",clear:["friend"]}]}"#)).unwrap() else { panic!("effects expected") };
+fn handler_preserves_ordered_symbolic_creates_and_permits_optional_patch_clears() {
+    let ActionHandlerOutcome::Effects(effects) = evaluate(&result(r#"#{effects:[#{id:"friend",set:#{name:"Sam"}},#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"existing",clear:["friend"]}]}"#)).unwrap() else { panic!("effects expected") };
     let position = |id| effects.iter().position(|effect| effect.id == id).unwrap();
     assert!(position("friend") < position("person"));
     assert_eq!(
         effects[position("existing")].mutations,
-        vec![CompiledActionMutation::Clear {
+        vec![CompiledPlanMutation::Clear {
             field: "friend".into()
         }]
     );
@@ -169,7 +169,7 @@ fn handler_orders_symbolic_creates_and_permits_optional_patch_clears() {
 fn local_handler_diagnostics_name_compiled_fields_and_preserve_runtime_errors() {
     for (expression, kind, slot, field, message) in [
         (
-            r#"#{effects:[#{id:"person",set:#{friend:#{fromField:"person"}}}]}"#,
+            r#"#{effects:[#{id:"person",set:#{friend:#{fromInput:"person"}}}]}"#,
             ActionHandlerError::Ceiling,
             "person",
             "name",
@@ -204,7 +204,7 @@ fn local_handler_diagnostics_name_compiled_fields_and_preserve_runtime_errors() 
             "Create effects cannot clear fields; omit optional fields or set a value.",
         ),
         (
-            r#"#{effects:[#{id:"existing",set:#{friend:#{fromField:"person"}},clear:["friend"]}]}"#,
+            r#"#{effects:[#{id:"existing",set:#{friend:#{fromInput:"person"}},clear:["friend"]}]}"#,
             ActionHandlerError::Ceiling,
             "existing",
             "friend",
@@ -465,9 +465,9 @@ fn handler_optional_inputs_preserve_absence_and_explicit_null() {
         };
         assert_eq!(
             effects[0].mutations,
-            vec![CompiledActionMutation::Set {
+            vec![CompiledPlanMutation::Set {
                 field: "name".into(),
-                value: CompiledActionValue::Literal {
+                value: CompiledPlanValue::Literal {
                     value: json!(expected)
                 },
             }]
@@ -520,6 +520,10 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
             .as_array_mut()
             .unwrap()
             .push(input.clone());
+        source["actions"][0]["plan"]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("extra"));
         let failure = compile(source, &script).unwrap_err();
         let diagnostic = failure
             .diagnostics()
@@ -531,21 +535,19 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
             format!("actions[register-person].inputs[extra].{member}")
         );
         assert!(diagnostic.message.contains(repair));
-        assert!(diagnostic.message.contains("registry.action-handler/v1"));
+        assert!(diagnostic.message.contains("registry.action-plan/v1"));
 
         // The same declared input is valid for an action with fixed effects.
         let mut fixed = project();
-        fixed["actions"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("handler");
+        fixed["actions"][0]["plan"] = json!({"type":"fixed","effects":[]});
+        fixed.as_object_mut().unwrap().remove("functions");
         fixed["actions"][0]["inputs"] = json!([
             input,
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
         ]);
-        fixed["actions"][0]["effects"] = json!([{
-            "id":"person","target":{"entity":"person"},"operation":"create",
-            "set":{"name":{"fromField":"name"}}
+        fixed["actions"][0]["plan"]["effects"] = json!([{
+            "id":"person","target":{"recordType":"person"},"operation":"create",
+            "set":{"name":{"fromInput":"name"}}
         }]);
         fixed["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
         let fixed = parse_project_json(&serde_json::to_vec(&fixed).unwrap()).unwrap();
@@ -564,6 +566,10 @@ fn handler_string_declarations_cover_the_full_unicode_boundary() {
             .push(json!({
                 "id":"extra","type":kind,"maximumLength":4096,"classification":"restricted"
             }));
+        source["actions"][0]["plan"]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("extra"));
         let action = compile(source.clone(), &script).unwrap();
         let mut input = inputs();
         input["extra"] = json!("\u{1f642}".repeat(4096));
@@ -669,10 +675,10 @@ fn handler_accepts_supported_scalars_and_rejects_oversized_timestamp_input() {
 #[test]
 fn handler_cannot_write_an_existing_field_outside_its_narrower_slot() {
     let mut source = project();
-    source["actions"][0]["handler"]["writes"][2]["fields"] = json!(["name"]);
+    source["actions"][0]["plan"]["writes"][2]["fields"] = json!(["name"]);
     let action = compile(
         source,
-        &result(r#"#{effects:[#{id:"existing",set:#{friend:#{fromField:"person"}}}]}"#),
+        &result(r#"#{effects:[#{id:"existing",set:#{friend:#{fromInput:"person"}}}]}"#),
     )
     .unwrap();
     assert!(action
@@ -736,20 +742,17 @@ fn handler_rejects_ambiguous_sources_and_binds_governed_semantics() {
     let valid = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
     let action = compile(project(), &valid).unwrap();
     for (pointer, value) in [
-        ("/actions/0/handler/abi", json!("registry.action-plan/v1")),
-        ("/actions/0/handler/script", json!("../outside.rhai")),
-        ("/actions/0/handler/writes/0/id", json!("friend")),
-        ("/actions/0/handler/writes/0/fields", json!(["friend"])),
+        ("/functions/0/abi", json!("registry.action-handler/v2")),
+        ("/functions/0/source", json!("../outside.rhai")),
+        ("/actions/0/plan/writes/0/id", json!("friend")),
+        ("/actions/0/plan/writes/0/fields", json!(["friend"])),
+        ("/actions/0/plan/writes/0/fields", json!(["name", "name"])),
         (
-            "/actions/0/handler/writes/0/fields",
-            json!(["name", "name"]),
-        ),
-        (
-            "/actions/0/handler/writes/0/fields",
+            "/actions/0/plan/writes/0/fields",
             json!(["name", "unknown"]),
         ),
         (
-            "/actions/0/handler/refusals",
+            "/actions/0/plan/refusals",
             json!([{"code":"blank-name","label":""}]),
         ),
         ("/actions/0/inputs/2/required", json!(false)),
@@ -759,7 +762,7 @@ fn handler_rejects_ambiguous_sources_and_binds_governed_semantics() {
         assert!(compile(source, &valid).is_err(), "{pointer}");
     }
     let mut mixed = project();
-    mixed["actions"][0]["effects"] = json!([{"id":"fixed","target":{"entity":"person"},"operation":"create","set":{"name":{"fromField":"given-name"}}}]);
+    mixed["actions"][0]["plan"]["effects"] = json!([{"id":"fixed","target":{"recordType":"person"},"operation":"create","set":{"name":{"fromInput":"given-name"}}}]);
     assert!(compile(mixed, &valid).is_err());
     for script in [
         "fn plan(ctx) { #{} }",
@@ -770,29 +773,29 @@ fn handler_rejects_ambiguous_sources_and_binds_governed_semantics() {
         assert!(compile(project(), script).is_err());
     }
     assert_ne!(
-        action.contract_fingerprint,
+        action.definition_revision,
         compile(project(), &(valid.clone() + "\n// governed change"))
             .unwrap()
-            .contract_fingerprint
+            .definition_revision
     );
     let mut changed = project();
-    changed["actions"][0]["handler"]["refusals"][0]["label"] =
-        json!("A supplied name is required.");
-    assert_ne!(
-        action.contract_fingerprint,
-        compile(changed, &valid).unwrap().contract_fingerprint
+    changed["actions"][0]["plan"]["refusals"][0]["label"] = json!("A supplied name is required.");
+    assert_eq!(
+        action.definition_revision,
+        compile(changed, &valid).unwrap().definition_revision,
+        "a refusal label is presentation, not the governed application contract"
     );
     let mut changed = project();
-    changed["actions"][0]["handler"]["writes"][0]["fields"] = json!(["name"]);
+    changed["actions"][0]["plan"]["writes"][0]["fields"] = json!(["name"]);
     assert_ne!(
-        action.contract_fingerprint,
-        compile(changed, &valid).unwrap().contract_fingerprint
+        action.definition_revision,
+        compile(changed, &valid).unwrap().definition_revision
     );
     let mut changed = project();
-    changed["entities"][0]["fields"][0]["pattern"] = json!("^.+$");
+    changed["recordTypes"][0]["fields"][0]["pattern"] = json!("^.+$");
     assert_ne!(
-        action.contract_fingerprint,
-        compile(changed, &valid).unwrap().contract_fingerprint
+        action.definition_revision,
+        compile(changed, &valid).unwrap().definition_revision
     );
 }
 
@@ -812,43 +815,43 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     };
 
     let mut source = project();
-    source["entities"][0]["fields"][0]["classification"] = json!("public");
+    source["recordTypes"][0]["fields"][0]["classification"] = json!("public");
     assert_diagnostic(
         source,
         "breg.action.handler-classification-ceiling",
-        "actions[register-person].handler.writes[slot=person].fields[field=name]",
+        "actions[id=register-person].plan.writes[slot=person].fields[field=name]",
     );
 
     let mut source = project();
-    source["actions"][0]["handler"]["refusals"] = json!([
+    source["actions"][0]["plan"]["refusals"] = json!([
         {"code":"blank-name","label":"A name is required."},
         {"code":"blank-name","label":"A second label cannot redefine the same code."},
     ]);
     assert_diagnostic(
         source,
         "breg.action.handler-refusal-invalid",
-        "actions[register-person].handler.refusals",
+        "actions[id=register-person].plan.refusals",
     );
 
     let mut source = project();
-    source["actions"][0]["effects"] = json!([{"id":"fixed","target":{"entity":"person"},"operation":"create","set":{"name":{"fromField":"given-name"}}}]);
+    source["actions"][0]["plan"]["effects"] = json!([{"id":"fixed","target":{"recordType":"person"},"operation":"create","set":{"name":{"fromInput":"given-name"}}}]);
     assert_diagnostic(
         source,
-        "breg.action.implementation-exclusive",
-        "actions[register-person]",
+        "config.unknown-key",
+        "project.actions[0].plan.effects",
     );
 
     let mut source = project();
-    source["actions"][0]["handler"]["writes"]
+    source["actions"][0]["plan"]["writes"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id":"overlap","target":{"fromField":"person"},"operation":"patch","fields":["name"],
+            "id":"overlap","target":{"fromInput":"person"},"operation":"patch","fields":["name"],
         }));
     assert_diagnostic(
         source,
         "breg.action.effect-overlapping-write",
-        "actions[register-person].handler.writes[slot=overlap].fields[field=name]",
+        "actions[id=register-person].plan.writes[slot=overlap].fields[field=name]",
     );
 
     let mut source = project();
@@ -860,25 +863,25 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     );
 
     let mut source = project();
-    source["actions"][0]["handler"]["writes"] = Value::Array((0..17).map(|index| json!({
-        "id":format!("slot-{index}"),"target":{"entity":"person"},"operation":"create","fields":["name"],
+    source["actions"][0]["plan"]["writes"] = Value::Array((0..17).map(|index| json!({
+        "id":format!("slot-{index}"),"target":{"recordType":"person"},"operation":"create","fields":["name"],
     })).collect());
     assert_diagnostic(
         source,
-        "breg.action.bounds-targets",
-        "actions[register-person].handler.writes",
+        "breg.action.handler-slots-bound",
+        "actions[id=register-person].plan.writes",
     );
 
     let mut source = project();
     for index in 0..128 {
         let field = format!("flag-{index}");
-        source["entities"][0]["fields"]
+        source["recordTypes"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
                 "id":field,"type":"boolean","classification":"restricted",
             }));
-        source["actions"][0]["handler"]["writes"][0]["fields"]
+        source["actions"][0]["plan"]["writes"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!(field));
@@ -886,15 +889,15 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     assert_diagnostic(
         source,
         "breg.action.bounds-field-mutations",
-        "actions[register-person].handler.writes",
+        "actions[register-person].plan.writes",
     );
 
     let mut source = project();
-    source["entities"][0]["fields"][0]["maximumLength"] = json!(1_000_000);
+    source["recordTypes"][0]["fields"][0]["maximumLength"] = json!(1_000_000);
     assert_diagnostic(
         source,
         "breg.action.bounds-snapshot-bytes",
-        "actions[register-person].handler.writes",
+        "actions[register-person].plan.writes",
     );
 }
 
@@ -935,7 +938,11 @@ fn handler_source_diagnostics_distinguish_assets_parse_positions_and_entrypoints
         assert_eq!(diagnostics.len(), 1, "{code}: {:?}", failure.diagnostics());
         assert_eq!(
             diagnostics[0].path,
-            "actions[register-person].handler.script"
+            if code == "breg.action.handler-entrypoint" {
+                "functions[id=register-person-plan].entrypoint"
+            } else {
+                "functions[id=register-person-plan].source"
+            }
         );
         assert!(!diagnostics[0].message.contains("private_source_canary"));
         if code == "breg.action.handler-parse" {
@@ -1053,7 +1060,9 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
 
     let action = source["actions"].take();
     source.as_object_mut().unwrap().remove("actions");
-    let module_value = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"actions","version":"1","actions":action});
+    let functions = source["functions"].take();
+    source.as_object_mut().unwrap().remove("functions");
+    let module_value = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"actions","version":"1","actions":action,"functions":functions});
     let module =
         registry_breg::contract::parse_module_json(&serde_json::to_vec(&module_value).unwrap())
             .unwrap();
@@ -1082,12 +1091,10 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
 #[test]
 fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
     let mut source = project();
-    source["actions"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("handler");
+    source["actions"][0]["plan"] = json!({"type":"fixed","effects":[]});
+    source.as_object_mut().unwrap().remove("functions");
     source["actions"][0]["inputs"][0]["maximumLength"] = json!(160);
-    source["actions"][0]["effects"] = json!([{"id":"person","target":{"entity":"person"},"operation":"create","set":{"name":{"fromField":"given-name"}}}]);
+    source["actions"][0]["plan"]["effects"] = json!([{"id":"person","target":{"recordType":"person"},"operation":"create","set":{"name":{"fromInput":"given-name"}}}]);
     source["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
     let compile = |source: &Value| {
         let project = parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap();
@@ -1103,28 +1110,28 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
         .get("handler")
         .is_none());
     assert_eq!(
-        before.contract_fingerprint,
-        compile(&source).contract_fingerprint
+        before.definition_revision,
+        compile(&source).definition_revision
     );
-    source["entities"][0]["fields"][0]["pattern"] = json!("^.+$");
+    source["recordTypes"][0]["fields"][0]["pattern"] = json!("^.+$");
     assert_ne!(
-        before.contract_fingerprint,
-        compile(&source).contract_fingerprint
+        before.definition_revision,
+        compile(&source).definition_revision
     );
 }
 
 #[test]
 fn handler_rejects_reference_to_a_create_of_an_incompatible_entity() {
     let mut source = project();
-    let mut second = source["entities"][0].clone();
+    let mut second = source["recordTypes"][0].clone();
     second["id"] = json!("organization");
     second["route"] = json!("organizations");
-    source["entities"].as_array_mut().unwrap().push(second);
-    source["actions"][0]["handler"]["writes"][1]["target"]["entity"] = json!("organization");
+    source["recordTypes"].as_array_mut().unwrap().push(second);
+    source["actions"][0]["plan"]["writes"][1]["target"]["recordType"] = json!("organization");
     source["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"entity":"organization","rowBoundaries":"unrestricted"}));
+        .push(json!({"recordType":"organization","rowBoundaries":"unrestricted"}));
     let script = result(
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"friend",set:#{name:"Company"}}]}"#,
     );

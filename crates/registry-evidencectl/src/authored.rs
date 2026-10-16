@@ -59,18 +59,6 @@ pub(crate) fn read_authored_file(path: &Path, description: &str) -> Result<Vec<u
     Ok(bytes)
 }
 
-/// A document this binary embeds, such as a published JSON Schema, as a JSON
-/// value. It is read through the shared YAML subset without the authored
-/// file rules: the document is reviewed with the binary, not written by an
-/// author.
-pub(crate) fn embedded_document(name: &str, text: &str) -> Result<Value> {
-    Reader::new(name)
-        .scan(text.as_bytes())
-        .map_err(|report| anyhow::anyhow!("the embedded {name} is not readable YAML: {report}"))?
-        .map(|node| node.to_json_value())
-        .with_context(|| format!("the embedded {name} is empty"))
-}
-
 /// A whole file's root node as a JSON value, or `null` for an empty file.
 pub(crate) fn node_value(node: Option<Node>) -> Value {
     node.map_or(Value::Null, |node| node.to_json_value())
@@ -340,22 +328,6 @@ impl Gathered {
         self.report.extend(report);
     }
 
-    pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
-        self.report.push(diagnostic);
-    }
-
-    pub(crate) fn has_errors(&self) -> bool {
-        self.report.has_errors()
-    }
-
-    /// Stop with every problem gathered so far when any of them is an error.
-    pub(crate) fn checkpoint(&self) -> Result<()> {
-        if self.report.has_errors() {
-            return Err(self.report().into());
-        }
-        Ok(())
-    }
-
     /// The gathered problems, with the count of files read.
     pub(crate) fn report(&self) -> Report {
         let mut report = self.report.clone();
@@ -432,6 +404,54 @@ pub(crate) fn report_in(error: &anyhow::Error) -> Option<&Report> {
         .find_map(|cause| cause.downcast_ref::<Report>())
 }
 
+/// Recover the runtime's existing native JSON diagnostic channel without
+/// interpreting or recreating any validation rule.
+pub(crate) fn runtime_refusal(stdout: &[u8]) -> Option<Report> {
+    let document: Value = serde_json::from_slice(stdout).ok()?;
+    if document.get("ok") != Some(&Value::Bool(false)) {
+        return None;
+    }
+    let diagnostics: Vec<Diagnostic> =
+        serde_json::from_value(document.get("diagnostics")?.clone()).ok()?;
+    let report = Report::new(diagnostics);
+    report.has_errors().then_some(report)
+}
+
+/// A compiled fixture is a byte-identical copy of its authored file, so its
+/// positions and related ID sites carry through to the authored project path.
+pub(crate) fn runtime_bundle_refusal(
+    report: Report,
+    bundle: &Path,
+    project: &Path,
+    fixtures: &[String],
+) -> Report {
+    let rebase_file = |file: &str| match Path::new(file).strip_prefix(bundle) {
+        Ok(relative)
+            if fixtures
+                .iter()
+                .any(|fixture| Path::new(fixture) == relative) =>
+        {
+            project.join(relative).to_string_lossy().into_owned()
+        }
+        _ => file.to_owned(),
+    };
+    Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                if let Some(source) = diagnostic.source.as_mut() {
+                    source.file = rebase_file(&source.file);
+                }
+                for related in &mut diagnostic.related {
+                    related.file = rebase_file(&related.file);
+                }
+                diagnostic
+            })
+            .collect(),
+    )
+}
+
 /// Render a value as block YAML with every sequence indented beneath its key,
 /// the form the convention's examples use. `serde_norway` writes a sequence
 /// at its key's column, so each such block is shifted two columns right,
@@ -493,6 +513,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn runtime_rebase_changes_only_explicit_captured_fixture_paths() {
+        let fixture: Diagnostic = serde_json::from_value(serde_json::json!({
+            "severity":"error","code":"config.duplicate-id","path":"/cases/1/id","message":"duplicate","suggestedAction":"Use unique IDs.",
+            "source":{"file":"/staged/bundle/fixtures/a.yaml","line":6,"column":9},
+            "related":[{"file":"/staged/bundle/fixtures/a.yaml","path":"/cases/0/id","line":5,"column":9,"message":"first ID"}]
+        })).unwrap();
+        let mut generated = fixture.clone();
+        generated.source.as_mut().unwrap().file = "/staged/bundle/evidence.yaml".to_owned();
+        generated.related[0].file = "/staged/bundle/generated.yaml".to_owned();
+        let report = runtime_bundle_refusal(
+            Report::new(vec![fixture, generated]),
+            Path::new("/staged/bundle"),
+            Path::new("./authored"),
+            &["fixtures/a.yaml".to_owned()],
+        );
+        let fixture = &report.diagnostics()[0];
+        assert_eq!(
+            fixture.source.as_ref().unwrap().file,
+            "./authored/fixtures/a.yaml"
+        );
+        assert_eq!(fixture.related[0].file, "./authored/fixtures/a.yaml");
+        assert_eq!(fixture.related[0].line, Some(5));
+        let generated = &report.diagnostics()[1];
+        assert_eq!(
+            generated.source.as_ref().unwrap().file,
+            "/staged/bundle/evidence.yaml"
+        );
+        assert_eq!(generated.related[0].file, "/staged/bundle/generated.yaml");
+    }
+
+    #[test]
     fn sequences_are_indented_beneath_their_keys_at_every_depth() {
         let value = serde_json::json!({
             "a": ["x", "y"],
@@ -538,11 +589,5 @@ mod tests {
         let kept = placed(diagnostic, &root);
         let source = kept.source.as_ref().unwrap();
         assert_eq!((source.line, source.column), (None, None));
-    }
-
-    #[test]
-    fn an_embedded_document_reads_as_json() {
-        let value = embedded_document("schema", "type: object\nrequired: [id]\n").unwrap();
-        assert_eq!(value["required"][0], "id");
     }
 }

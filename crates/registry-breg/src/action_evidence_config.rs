@@ -70,10 +70,10 @@ pub fn activate(
 ) -> Result<Option<Arc<ActionEvidenceEvaluator>>, crate::runtime_config::RuntimeConfigError> {
     use crate::runtime_config::RuntimeConfigError as Error;
     let required = required_provider_ids(registry);
-    if required != bindings.keys().cloned().collect() {
+    if bindings.keys().any(|id| !required.contains(id)) {
         return Err(Error::InvalidBinding);
     }
-    if required.is_empty() {
+    if bindings.is_empty() {
         return Ok(None);
     }
     let mut activated = BTreeMap::new();
@@ -132,13 +132,13 @@ fn required_provider_ids(registry: &CompiledRegistry) -> BTreeSet<String> {
             .iter()
             .map(|capability| capability.provider.clone())
     });
-    let reviewed_requests = registry
-        .entities()
-        .values()
-        .filter_map(|entity| entity.change_request.as_ref())
-        .flat_map(|request| request.application.preconditions.evidence.iter())
-        .map(|evidence| evidence.capability.provider.clone());
-    immediate.chain(reviewed_requests).collect()
+    let commit_guards = registry
+        .actions()
+        .actions
+        .iter()
+        .flat_map(|action| action.commit_evidence.iter())
+        .map(|guard| guard.capability.provider.clone());
+    immediate.chain(commit_guards).collect()
 }
 
 fn token_provider(
@@ -204,45 +204,26 @@ fn token_provider(
 }
 
 #[cfg(test)]
+use crate::action_evidence_fixture as evidence_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        compiler::{compile_project_with_assets, CompileProfile},
-        contract::{parse_project_yaml, ModuleAssetSource},
-    };
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn an_action_declaring_no_evidence_activates_no_evaluator_and_extra_bindings_fail_closed() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/person-registration-rhai");
-        let project =
-            parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-        assert!(project
+        let compiled = super::evidence_fixture::registry(false);
+        assert!(compiled
+            .actions()
             .actions
             .iter()
             .any(|action| action.handler.is_some()));
-        assert!(project
+        assert!(compiled
+            .actions()
             .actions
             .iter()
-            .all(|action| action.evidence.is_empty()));
-        let assets: Vec<_> = project
-            .actions
-            .iter()
-            .filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .and_then(|handler| handler.script().map(str::to_owned))
-            })
-            .map(|script| ModuleAssetSource {
-                module: None,
-                bytes: std::fs::read(root.join(&script)).unwrap(),
-                path: script,
-            })
-            .collect();
-        let compiled =
-            compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
+            .all(|action| action.evidence.is_empty() && action.commit_evidence.is_empty()));
         let secrets = SecretResolver::new(
             [registry_platform_config::SecretProvider::File],
             "/private/tmp",
@@ -350,74 +331,22 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_request_guards_require_activation_even_without_an_immediate_action() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/farmer-landholding-evidence");
-        let project =
-            parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-        let mut assets: Vec<_> = project
-            .actions
-            .iter()
-            .filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .and_then(|handler| handler.script().map(str::to_owned))
-            })
-            .map(|script| ModuleAssetSource {
-                module: None,
-                bytes: std::fs::read(root.join(&script)).unwrap(),
-                path: script,
-            })
-            .collect();
-        assets.push(ModuleAssetSource {
-            module: None,
-            path: "evidence/farmer-contracts.json".into(),
-            bytes: std::fs::read(root.join("evidence/farmer-contracts.json")).unwrap(),
-        });
-        let compiled =
-            compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
-        let capability = compiled
-            .actions()
-            .actions
-            .iter()
-            .flat_map(|action| action.evidence.iter())
-            .next()
-            .expect("the fixture has governed Evidence")
-            .clone();
-        let mut document = serde_json::to_value(compiled).unwrap();
-        for action in document["actionInventory"]["actions"]
-            .as_array_mut()
-            .unwrap()
-        {
-            action["evidence"] = serde_json::json!([]);
-            action.as_object_mut().unwrap().remove("handler");
-        }
-        let request = document["entities"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-            .next()
-            .unwrap();
-        request["changeRequest"] = serde_json::json!({
-            "requestEntityId": "synthetic-request",
-            "contractFingerprint": format!("sha256:{}", "0".repeat(64)),
-            "retentionMode": "retain",
-            "review": {"type": "none"},
-            "onApproved": {"mode": "manual"},
-            "application": {
-                "preconditions": {"evidence": [{"capability": capability, "subjects": {}, "requires": []}]}
-            },
-            "effects": [], "actions": [],
-            "applyPermissions": [], "presencePermissions": [], "targetEntities": [],
-            "maximumTargets": 1, "maximumFieldMutations": 1, "maximumSnapshotBytes": 1
-        });
-        let compiled: CompiledRegistry = serde_json::from_value(document).unwrap();
+    fn proposal_commit_guards_require_activation_without_plan_evidence() {
+        let compiled = super::evidence_fixture::registry(true);
         assert!(compiled
             .actions()
             .actions
             .iter()
-            .all(|action| action.handler.is_none()));
+            .all(|action| action.evidence.is_empty()));
+        assert!(compiled
+            .actions()
+            .actions
+            .iter()
+            .any(|action| !action.commit_evidence.is_empty()
+                && matches!(
+                    action.execution,
+                    crate::model::CompiledActionExecution::Proposal { .. }
+                )));
         assert_eq!(
             required_provider_ids(&compiled),
             BTreeSet::from(["farmer-registry".to_owned()])
@@ -427,10 +356,12 @@ mod tests {
             "/private/tmp",
         )
         .unwrap();
-        assert!(matches!(
-            activate(&compiled, &BTreeMap::new(), &secrets),
-            Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
-        ));
+        assert!(
+            activate(&compiled, &BTreeMap::new(), &secrets)
+                .unwrap()
+                .is_none(),
+            "missing optional integrations defer dependent Actions without preventing startup"
+        );
         let binding = EvidenceProviderConfig {
             base_url: Url::new("https://evidence.example").unwrap(),
             trust_binding_id: "reviewed".into(),

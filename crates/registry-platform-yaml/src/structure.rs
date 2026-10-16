@@ -238,23 +238,33 @@ impl Builder<'_, '_> {
                     self.stack.push(frame);
                 }
                 Event::SequenceEnd | Event::MappingEnd => {
+                    // The scanner includes trailing whitespace and comments in
+                    // explicit closing-token spans. A node ends just after its
+                    // delimiter; implicit block endings keep the parser span.
+                    let offset = self.byte_offset(content.index());
+                    let closing = self.text[offset..].chars().next();
+                    let end = if matches!(
+                        (&event, closing),
+                        (Event::SequenceEnd, Some(']')) | (Event::MappingEnd, Some('}'))
+                    ) {
+                        Position {
+                            line: span.start.line,
+                            column: span.start.column + 1,
+                        }
+                    } else {
+                        span.end
+                    };
                     let Some(frame) = self.stack.pop() else {
                         continue;
                     };
                     let node = match frame {
                         Frame::Sequence { start, items, .. } => Node {
                             value: NodeValue::Sequence(items),
-                            span: Span {
-                                start,
-                                end: span.end,
-                            },
+                            span: Span { start, end },
                         },
                         Frame::Mapping { start, entries, .. } => Node {
                             value: NodeValue::Mapping(entries),
-                            span: Span {
-                                start,
-                                end: span.end,
-                            },
+                            span: Span { start, end },
                         },
                     };
                     if self.expects_key() {
@@ -917,7 +927,7 @@ fn leading_tab_position(lines: &[&str], line: usize) -> Option<Position> {
                 return Some(Position {
                     line,
                     column: offset + 1,
-                })
+                });
             }
             _ => return None,
         }

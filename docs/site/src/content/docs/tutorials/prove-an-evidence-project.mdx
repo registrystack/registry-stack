@@ -1,6 +1,6 @@
 ---
 title: Prove an Evidence Gateway project
-description: Add fixtures that describe your own requirement and run them through the Evidence Gateway evaluator before a production build.
+description: Add synthetic fixtures to a normalized Evidence project and run its fixed Sources, Functions, Outputs, complete grants, and privacy boundary offline.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,204 +14,161 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
-  skip: how-to against the reader's own project; no fixed scenario to replay
+  skip: continues the normalized project created by Get your first Evidence Gateway assertion
 ---
 
-Start with an editable project: the directory `evidencectl init` created, holding `questions/`,
-`derivations/`, `fixtures/`, and its source objects. It has no `runtime.yaml` and no `bundle/`;
-those belong to the candidate `evidencectl package` produces later. If you need to create a project,
-[connect an institution source from OpenAPI](../connect-an-institution-source/) or
-[get your first assertion](../first-evidence-assertion/) before adding fixtures. Fixtures are
-executable claims about your own Evidence Gateway project. They are not sample data for a first
-run and they must not be generated from an unrelated domain.
+Use fixtures after the Source, AssertionDefinition, Functions, Outputs, and complete target grants
+are ready for review. This how-to continues the writable `adult-status` project from [Get your first
+Evidence Gateway assertion](../first-evidence-assertion/).
 
-Use them when your source, requirement, and derivation are ready for review. Local assurance lets a
-project load without them, but the run below is not a formality you can pass with an empty suite: a
-run that evaluated no case refuses with `no case was evaluated, so this run proves nothing: every
-fixture the project references must declare at least one case`. Production and evidence-grade
-assurance require complete fixture coverage before the bundle loads.
+Fixtures are executable, synthetic claims about that project. Evaluation loads the production
+bundle, runs the fixed Source boundary, executes the named extraction and derivation Functions,
+applies the output gate, signs, verifies, and checks privacy expectations. It does not start HTTP,
+authenticate a token, contact a provider, resolve source credentials, or write the production audit
+log.
 
-## Add the governance each question hands off
+## Connect each definition to its fixture
 
-The fixture runner compiles the editable project the way a production build compiles it, so the
-governance a candidate needs is required before the first fixture run, not at build time. Give
-every question a `governance` block and every answer a stable concept `uri`:
+The normalized model keeps each fixture reference with its definition in `evidence.yaml`:
 
 ```yaml
-answers:
-  - concept: is_adult
-    uri: urn:example:concept:adult-status:v1
-    type: boolean
-governance:
-  requirement: urn:example:requirement:adult-status:v1
-  kind: criterion
-  referenceFrameworks: [urn:example:framework:adult-status:v1]
-  evidenceType: urn:example:evidence-type:adult-status:v1
-  validitySeconds: 300
-  observationTimezone: UTC
-  fixtures: fixtures/adult-status.yaml
-  disclosureFamilies: [urn:example:disclosure-family:adult-status]
+assertionDefinitions:
+  adult-status:
+    fixtures: fixtures/adult-status.yaml
 ```
 
-Three rules decide whether the run starts at all:
+The same definition declares its semantics, purpose, grant ceiling, subjects, acquisition Source,
+derive Function, Outputs, validity, subject binding, and response representations. Do not recreate
+those decisions inside the fixture.
 
-- A question with no `governance` block stops the run with `evidencectl: compiling editable project
-  for fixture evaluation: every production question requires governance`.
-- An answer with no `uri` stops it with `every production answer requires one stable concept uri`.
-- `governance.fixtures` must be exactly `fixtures/<name>.yaml`, a path inside the project. No
-  requirement, framework, Evidence Type, disclosure family, or concept identifier may be one of the
-  disposable `urn:registrystack:evidence:local:` URIs that a local generation issues.
+`local-target.yaml` selects `dev-authority.yaml`. That authority contains complete grants for the
+target: one grant supplies the definition, purpose, audience rule, representation, subject binding,
+and all subject selector value origins. A client assigned an access profile gains no authority that
+the matching complete grant and definition ceiling do not already permit.
 
-The project a local tutorial leaves behind satisfies none of this, so adding governance is the
-first change to make here. The Evidence authoring form reference states these three beside the
-other refusals a project meets on the way to a candidate, under
-[Rules that block a build](../../products/registry-evidence/authoring-form/#rules-that-block-a-build).
-
-## Write cases for your requirement
-
-Place the fixture file under `fixtures/` in the editable project and name it from the question's
-`governance.fixtures`. Keep every value synthetic and sanitized.
-
-Cover behavior your reviewers need to approve:
-
-- one ordinary positive result;
-- one legitimate negative value, or an unresolved case when false would be misleading;
-- each important boundary in the derivation;
-- missing required facts, which the extractor generated from OpenAPI fails as
-  `source.unavailable` rather than as a `no_match` or `ambiguous` outcome; get a real `no_match` or
-  `ambiguous` by hand-editing the extractor, as
-  [Finish extraction and facts](../connect-an-institution-source/#finish-extraction-and-facts)
-  covers;
-- mistyped required facts;
-- malformed and unavailable source responses;
-- output outside the governed codelist or schema;
-- privacy expectations proving source fields and selector values stay out of evidence and
-  diagnostics;
-- anti-reconstruction cases for concepts that must not be released together.
-
-The fixture format is closed. Start from the
-[fixture contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md),
-then keep only cases that express your project.
-
-## Run the project suite
-
-From any directory, run:
+Run the project check before changing fixtures:
 
 ```sh
-evidencectl check "<evidence-project>" --deny-warnings
-evidencectl test "<evidence-project>"
+evidencectl check . \
+  --target local-target.yaml \
+  --deny-warnings
 ```
 
-The first command validates authored completeness without contacting a source, identity provider,
-or database. It reports each gap with its file path and a corrective action. The second command
-asks the `evidence` binary for its version first and refuses one that is not its own,
-then compiles the editable project into a private staging bundle, runs `evidence bundle-check`
-against it, discovers the fixture files the compiled bundle captured, and drives each one through
-`evidence bundle-evaluate`; pass `--evidence-bin` when the matching binary is not the first
-`evidence` on `PATH`. The run does not start HTTP, resolve a source credential, call the source, or
-write the production audit log. The served HTTP path remains a separate integration check.
+A complete result with zero warnings proves that the project, target, authority, references, and
+authored limits agree. It does not contact the Source or prove target-host dependencies.
 
-A passing run reports the check and one line per fixture:
+## Write synthetic cases
+
+Keep every fixture under `fixtures/`, set `syntheticOnly: true`, and use the current
+`EvidenceFixture` envelope. Put shared observation time, selectors, and transport expectations in
+`common`; each case then states one input variation and its expected outcome.
+
+Keep the cases that reviewers need to approve:
+
+- an ordinary positive result and a legitimate negative value;
+- important time, number, and codelist boundaries in the derivation;
+- no match and ambiguity when the Source exposes those distinct outcomes;
+- missing or mistyped facts and unavailable or malformed Source responses;
+- output outside the declared Output contract;
+- statement, parameter, and row-bound refusals for a SQLite Source;
+- privacy canaries that must stay out of evidence and diagnostics;
+- anti-reconstruction cases for outputs that must not be released together.
+
+For an HTTP Source, a case supplies a synthetic provider response. For a SQLite Source, the fixture
+supplies SQL that creates one synthetic extract, and cases supply selectors. The evaluator executes
+the reviewed statement against a temporary read-only SQLite file, so a recorded result cannot hide a
+broken statement.
+
+The fixture grammar is closed. An unknown key, unknown mutation, unsupported expectation, missing
+case, or real-data marker refuses evaluation. Use the [fixture
+contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md)
+when adding a case form.
+
+## Run the complete suite
+
+From the `adult-status` project directory, run:
+
+```sh
+evidencectl test . \
+  --target local-target.yaml \
+  --deny-warnings
+```
+
+The maintained standalone project reports:
 
 ```text
 PASS: check
-PASS: fixtures/adult-status.yaml (8 cases)
-2 passed, 0 failed (8 cases evaluated)
+PASS: fixtures/adult-status.yaml (10 cases)
+PASS: fixtures/legal-parent-relationship.yaml (9 cases)
+PASS: fixtures/professional-licence-status.yaml (10 cases)
+PASS: fixtures/residence-region.yaml (9 cases)
+5 passed, 0 failed (38 cases evaluated)
+Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
 ```
 
-Use JSON output in CI:
+`evidencectl` first resolves a matching `evidence` binary. It then compiles the project and selected
+target into private staging, checks the bundle, and delegates every fixture decision to the Evidence
+runtime. A version mismatch refuses before fixture evaluation; install matching binaries or put the
+matching `evidence` first on `PATH`.
+
+Use machine output in CI and keep the report with the build evidence rather than in the authored
+project:
 
 ```sh
-evidencectl test "<evidence-project>" --format json > fixture-report.json
+evidencectl --format json test . \
+  --target local-target.yaml \
+  --deny-warnings \
+  > "<private-build-evidence>/fixture-report.json"
 ```
 
-Treat any failed case, missing reference, unknown field, or unsupported expectation as a failed
-build input. Do not convert a real failure into an ignored case.
+Treat a failed case, missing reference, warning, unknown field, or unsupported expectation as a
+failed build input. Do not turn a real failure into an ignored case.
 
-## Read a failed case
+## Explain one case
 
-A failure names the contract that broke, which says a case failed but not where it stopped. Ask the
-run to explain itself:
+Select one fixture and case when a result needs diagnosis:
 
 ```sh
-evidencectl test "<evidence-project>" --explain
+evidencectl test . \
+  --target local-target.yaml \
+  --fixture fixtures/adult-status.yaml \
+  --case boundary-at-bangkok-midnight \
+  --explain \
+  --deny-warnings
 ```
 
-Each fixture prints one JSON trace after its result line. The trace holds one entry per case, with
-the case `id`, its `expectedResult` and `observedResult`, the `reasonCode` the run settled on, and
-one `stages` entry for every stage that case reached: `prepare`, `acquire`, `extract`, `derive`,
-`validate`, and `sign`. Every stage carries its own `status` and a short `note`, such as the keys a
-response was projected to or the concepts the output gate accepted. A failed case adds `failure` and
-`findingCodes`, and its `stages` list stops at the stage that ended the case, so read that last entry
-first.
+The trace names the case's expected and observed result classes, reason code, and every stage it
+reached. Read the final stage first. `prepare`, `acquire`, `extract`, `derive`, `validate`, `expect`,
+and `sign` entries report identifiers, counts, and shapes. A failed case adds a failure and finding
+codes and stops at the stage that ended it.
 
-To explain one fixture on its own, or one case inside it, name them. The paths are the ones the
-compiled bundle captured, which are the project's own `fixtures/` paths:
+The trace never prints a response, fact, derived value, or selector value. Evaluation also refuses
+a trace containing a value listed in `privacyExpectation.diagnosticsExclude`. `--explain` changes
+no outcome or exit code.
+
+## Package the proved revision
+
+Package only the exact project and target revision that passed. Choose a new output directory outside
+the authoring project:
 
 ```sh
-evidencectl test "<evidence-project>" \
-  --fixture "fixtures/<cases>.yaml" --case "<case-id>" --explain
+evidencectl package . \
+  --target local-target.yaml \
+  --output ../evidence-candidate
 ```
 
-The trace reports shapes: member names, counts, and identifiers. It never prints a response, fact,
-derived, or selector value, and a run whose trace holds a value the fixture declared under
-`privacy_expectation.diagnostics_exclude` is refused before the trace is printed. The flag changes
-no outcome, exit code, or message, and it is offline only: a served request is diagnosed from its
-public problem and the audit log instead.
+The candidate contains `bundle/`, `runtime.yaml`, and `compiled-authority.yaml`. Packaging repeats
+the runtime bundle checks, but it does not install the bundle, activate authority, resolve secrets,
+open a production extract, contact a token issuer, or initialize the signer and audit destination.
 
-## Check the deployable inputs
-
-An editable project has no runtime document to check. Its deployment target keeps `runtime.yaml`
-outside the package and points `package.root` at the installed package. Run `evidence check`
-against that target runtime after installing the package:
-
-```sh
-evidence check --runtime-config "<deployment-target>/runtime.yaml"
-```
-
-This validates the complete captured bundle, scripts, schemas, codelists, key references, and
-runtime bindings offline, and reports every problem it finds with its file, line, and column. It
-reads no secret material and contacts no service, so it runs the same anywhere.
-
-During local authoring, keep the project writable so changes are convenient. Freeze inputs only
-for the deployable revision: make the runtime and bundle non-writable to the service identity, or
-mount them read-only, then prove those exact bytes on the target host:
-
-```sh
-evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
-```
-
-The target-host proof also refuses writable inputs, reads the secret material, initializes the
-configured signer, so a production or evidence-grade candidate needs its Transit proxy already
-running, and checks the source credentials and access-token JWKS the service needs.
-
-## Hand off the reviewed inputs
-
-Evidencectl has no generic `promote` command. Your deployment system owns approval, artifact
-transport, rollback, and environment binding. Use `evidencectl package` to create a new candidate
-from the editable project and one explicit production target.
-
-Build and hand off only when these facts are recorded together:
-
-1. The fixture suite passed against the editable inputs and generated package.
-2. `evidence check --require-runtime-dependencies` accepted the exact installed package and target
-   runtime on the target host.
-3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
-   codelists, purposes, audiences, and privacy expectations.
-4. The environment supplies a governed public signing key and matching Transit binding, plus
-   independent owner-only subject-binding and audit secrets.
-5. The deployed package digest matches the reviewed package and the runtime pins it with
-   `package.expectedDigest`.
-6. Readiness passes, followed by one authorized HTTP-path check using synthetic data.
-
-Build a complete governed bundle for each environment. Each target owns its identities, endpoints,
-audiences, public keys, authority bindings, runtime paths, secret references, audit storage,
-listener settings, and trust files. Promote the reviewed editable source revision, then build
-staging and production candidates separately. [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
-covers the target-host ceremony.
+For a deployment handoff, record the passing fixture report, reviewed source revision, candidate
+digest, target and authority review, and the later target-host proof together. Follow [Build and
+deploy an Evidence Gateway project](../build-and-deploy-evidence-project/) to install the candidate,
+activate its complete authority, and run `evidence check --require-runtime-dependencies` on the
+target host.
 
 ## Next
 
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
 - [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
-- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)

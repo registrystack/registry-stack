@@ -88,8 +88,8 @@ path = "tests/postgres_webhook_delivery.rs"
 required-features = ["postgres-test"]
 
 [[test]]
-name = "postgres_hook_proposals"
-path = "tests/postgres_hook_proposals.rs"
+name = "postgres_hook_changes"
+path = "tests/postgres_hook_changes.rs"
 required-features = ["postgres-test"]
 
 [[test]]
@@ -316,6 +316,7 @@ registry-platform-httpsec = { workspace = true, features = ["server"], optional 
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
 registry-review-client = { workspace = true, optional = true }
+registry-review-protocol.workspace = true
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
 jsonschema.workspace = true
@@ -381,3 +382,233 @@ required-features = ["postgres-test", "tooling"]
 name = "postgres_field_encryption"
 path = "tests/postgres_field_encryption.rs"
 required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_refactor"
+path = "tests/postgres_refactor.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal"
+path = "tests/postgres_proposal.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal_human_recovery"
+path = "tests/postgres_proposal_human_recovery.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_reviewed_change_example"
+path = "tests/postgres_reviewed_change_example.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_proposal_hooks"
+path = "tests/postgres_proposal_hooks.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_proposal_review_delivery"
+path = "tests/postgres_proposal_review_delivery.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal_security"
+path = "tests/postgres_proposal_security.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal_s3"
+path = "tests/postgres_proposal_s3.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_facility_proposal"
+path = "tests/postgres_facility_proposal.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_action_task_grants"
+path = "tests/postgres_action_task_grants.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_generated_console"
+path = "tests/postgres_generated_console.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_native_retention"
+path = "tests/postgres_native_retention.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "action_vocabulary_codes"
+path = "tests/action_vocabulary_codes.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "frozen_rhai_package"
+path = "tests/frozen_rhai_package.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "http_auth"
+path = "tests/http_auth.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "http_read_only"
+path = "tests/http_read_only.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "issuer_portability"
+path = "tests/issuer_portability.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "migration_plan"
+path = "tests/migration_plan.rs"
+required-features = ["runtime", "tooling"]
+
+[[test]]
+name = "package_change_plan"
+path = "tests/package_change_plan.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "postgres_access_log"
+path = "tests/postgres_access_log.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_action_evidence_retention"
+path = "tests/postgres_action_evidence_retention.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_action_evidence_targets"
+path = "tests/postgres_action_evidence_targets.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_consent_examples"
+path = "tests/postgres_consent_examples.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_history_rebaseline"
+path = "tests/postgres_history_rebaseline.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_import_authority"
+path = "tests/postgres_import_authority.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_ingestion_contract"
+path = "tests/postgres_ingestion_contract.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_ingestion_receipts"
+path = "tests/postgres_ingestion_receipts.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_ingestion_runs"
+path = "tests/postgres_ingestion_runs.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_logical_sql_names"
+path = "tests/postgres_logical_sql_names.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_mutation_logical_names"
+path = "tests/postgres_mutation_logical_names.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_read_cancellation"
+path = "tests/postgres_read_cancellation.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_read_dependencies"
+path = "tests/postgres_read_dependencies.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_record_profile_conformance"
+path = "tests/postgres_record_profile_conformance.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_startup"
+path = "tests/postgres_startup.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_statistics_byte_limits"
+path = "tests/postgres_statistics_byte_limits.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_statistics_first_period"
+path = "tests/postgres_statistics_first_period.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_statistics_history"
+path = "tests/postgres_statistics_history.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_statistics_load"
+path = "tests/postgres_statistics_load.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_statistics_stock"
+path = "tests/postgres_statistics_stock.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_tombstone_revision"
+path = "tests/postgres_tombstone_revision.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_unauthenticated_refusals"
+path = "tests/postgres_unauthenticated_refusals.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_workspace_metadata"
+path = "tests/postgres_workspace_metadata.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "review_context_package"
+path = "tests/review_context_package.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "runtime_config"
+path = "tests/runtime_config.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "startup_http"
+path = "tests/startup_http.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "startup_ordering"
+path = "tests/startup_ordering.rs"
+required-features = ["runtime"]

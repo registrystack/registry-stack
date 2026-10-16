@@ -18,22 +18,16 @@ fn action(script: &str) -> registry_breg::model::CompiledAction {
         .join("../../products/breg/acceptance/farmer-landholding-evidence");
     let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
     let mut assets: Vec<_> = project
-        .actions
+        .functions
         .iter()
-        .filter_map(|action| {
-            action
-                .handler
-                .as_ref()
-                .and_then(|handler| handler.script().map(str::to_owned))
-        })
-        .map(|handler_script| ModuleAssetSource {
+        .map(|function| ModuleAssetSource {
             module: None,
-            bytes: if handler_script.ends_with("register-landholding.rhai") {
+            path: function.source.clone(),
+            bytes: if function.source.ends_with("register-landholding.rhai") {
                 script.as_bytes().to_vec()
             } else {
-                std::fs::read(root.join(&handler_script)).unwrap()
+                std::fs::read(root.join(&function.source)).unwrap()
             },
-            path: handler_script,
         })
         .collect();
     assets.extend(
@@ -67,7 +61,9 @@ fn invalid_helper_types_poison_caught_calls_before_resolver_and_effects() {
         "evidence::resolve(\"unknown\", #{})",
         "evidence::resolve(\"farmer-status\", #{farmer: #{\"farmer-number\": 42}})",
     ] {
-        let script = format!("fn handle(ctx) {{ try {{ {call}; }} catch (error) {{ }} try {{ evidence::resolve(\"farmer-status\", #{{farmer: #{{\"farmer-number\": \"TH-00042\"}}}}); }} catch (error) {{ }} #{{effects: [#{{id: \"landholding\", set: #{{\"farmer-number\": \"TH-00042\", \"parcel-code\": \"P42\"}}}}]}} }}");
+        let script = format!(
+            "fn plan(ctx) {{ try {{ {call}; }} catch (error) {{ }} try {{ evidence::resolve(\"farmer-status\", #{{farmer: #{{\"farmer-number\": \"TH-00042\"}}}}); }} catch (error) {{ }} #{{effects: [#{{id: \"landholding\", set: #{{\"farmer-number\": \"TH-00042\", \"parcel-code\": \"P42\"}}}}]}} }}"
+        );
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = calls.clone();
         let result = evaluate_action_with_evidence(
@@ -86,7 +82,7 @@ fn invalid_helper_types_poison_caught_calls_before_resolver_and_effects() {
 
 #[test]
 fn repeated_capability_and_invalid_mock_output_poison_the_whole_evaluation() {
-    let script = "fn handle(ctx) { let subjects = #{farmer: #{\"farmer-number\": \"TH-00042\"}}; try { evidence::resolve(\"farmer-status\", subjects); evidence::resolve(\"farmer-status\", subjects); } catch (error) {} #{effects: [#{id: \"landholding\", set: #{\"farmer-number\": \"TH-00042\", \"parcel-code\": \"P42\"}}]} }";
+    let script = "fn plan(ctx) { let subjects = #{farmer: #{\"farmer-number\": \"TH-00042\"}}; try { evidence::resolve(\"farmer-status\", subjects); evidence::resolve(\"farmer-status\", subjects); } catch (error) {} #{effects: [#{id: \"landholding\", set: #{\"farmer-number\": \"TH-00042\", \"parcel-code\": \"P42\"}}]} }";
     for response in [json!({"active":true}), json!({"active":"canary-value"})] {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = calls.clone();

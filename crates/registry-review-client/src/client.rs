@@ -11,8 +11,9 @@ use registry_platform_httputil::{
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
     ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_REQUESTS_PATH,
-    REVIEW_RESULTS_FEED_PATH,
+    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PROFILE_HEADER,
+    REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER,
+    REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -29,12 +30,8 @@ use crate::{
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-const CASEWORK_PROFILE_HEADER: &str = "registry-casework-profile";
-const VALIDATION_PATH_HEADER: &str = "registry-casework-validation-path";
-const VALIDATION_REASON_HEADER: &str = "registry-casework-validation-reason";
 const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
-const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-casework/";
 
 pub struct ReviewClient {
     http: reqwest::Client,
@@ -104,7 +101,7 @@ impl ReviewClient {
             .await?;
         check_accepted(
             &complete.value,
-            &request.kind,
+            &request.policy,
             &request.subject,
             expected_submission_digest,
             &complete.trace_id,
@@ -131,11 +128,35 @@ impl ReviewClient {
         auth: ReviewAuth<'_>,
         expected: &ReviewRequestAccepted,
     ) -> Result<ReviewResultResponse, ReviewClientError> {
+        self.result_observation(auth, expected).await.outcome
+    }
+
+    pub async fn result_observation(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+    ) -> crate::ReviewResultObservation {
+        let mut retry_after = registry_platform_httputil::client::RetryAfter::Absent;
+        let outcome = self.result_exchange(auth, expected, &mut retry_after).await;
+        crate::ReviewResultObservation {
+            outcome,
+            retry_after,
+        }
+    }
+
+    async fn result_exchange(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+        retry_after: &mut registry_platform_httputil::client::RetryAfter,
+    ) -> Result<ReviewResultResponse, ReviewClientError> {
         let request_id = expected.request_id;
         let url = self.url_from_constant(&review_result_path(request_id))?;
         let response = self
             .send(self.authorized(self.http.get(url), &auth)?)
             .await?;
+        *retry_after =
+            registry_platform_httputil::client::RetryAfter::from_headers(response.headers());
         let status = response.status();
         let trace_id = response_trace(status, response.headers())?;
         match status {
@@ -273,10 +294,10 @@ impl ReviewClient {
     ) -> Result<RequestBuilder, ReviewClientError> {
         auth.check().map_err(ReviewClientError::invalid_request)?;
         let profile = HeaderValue::from_str(auth.profile)
-            .map_err(|_| ReviewClientError::invalid_request("the Casework profile is invalid"))?;
+            .map_err(|_| ReviewClientError::invalid_request("the review profile is invalid"))?;
         Ok(request
             .header(AUTHORIZATION, auth.token.authorization_header_value())
-            .header(HeaderName::from_static(CASEWORK_PROFILE_HEADER), profile)
+            .header(HeaderName::from_static(REVIEW_PROFILE_HEADER), profile)
             .header(ACCEPT, JSON_MEDIA_TYPE))
     }
 
@@ -403,13 +424,13 @@ impl ReviewClient {
         let trace_id = known_trace_id.or_else(|| response_trace(status, response.headers()).ok());
         let validation_paths = response
             .headers()
-            .get_all(VALIDATION_PATH_HEADER)
+            .get_all(REVIEW_VALIDATION_PATH_HEADER)
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         let validation_reasons = response
             .headers()
-            .get_all(VALIDATION_REASON_HEADER)
+            .get_all(REVIEW_VALIDATION_REASON_HEADER)
             .iter()
             .cloned()
             .collect::<Vec<_>>();
@@ -433,11 +454,17 @@ impl ReviewClient {
             && document.code.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
             });
-        let expected_type = format!("{PROBLEM_TYPE_BASE}{}", document.code.replace('.', "/"));
+        // Problem URIs are opaque provider identifiers and are never fetched.
+        let valid_type = document.type_uri.len() <= 2048
+            && !document
+                .type_uri
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace())
+            && Url::parse(&document.type_uri).is_ok();
         if document.status != status.as_u16()
             || trace_id.as_deref() != Some(document.trace_id.as_str())
             || !valid_code
-            || document.type_uri != expected_type
+            || !valid_type
         {
             return protocol(status, ReviewProtocolFailure::Problem, trace_id);
         }
@@ -475,7 +502,7 @@ impl ReviewClient {
 
 fn check_accepted(
     value: &ReviewRequestAccepted,
-    expected_kind: &str,
+    expected_policy: &registry_review_protocol::PolicySelection,
     expected_subject: &registry_review_protocol::SubjectBinding,
     expected_submission_digest: &SubmissionDigest,
     trace_id: &str,
@@ -498,7 +525,7 @@ fn check_accepted(
     // A nil request identifier cannot anchor the later result polls,
     // cancellations, and completion correlations the binding is kept for.
     if value.request_id.is_nil()
-        || value.policy.id != expected_kind
+        || !expected_policy.matches(&value.policy)
         || value.subject != *expected_subject
         || value.submission_digest != *expected_submission_digest
     {

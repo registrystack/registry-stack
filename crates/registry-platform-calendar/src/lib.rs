@@ -4,9 +4,15 @@
 //!
 //! The crate deliberately contains no I/O and no product semantics: a
 //! calendar id, a named IANA timezone, pinned holiday content, and bounded
-//! arithmetic in, exact instants or intervals out. Daylight-saving gaps and
-//! ambiguous local times are explicit errors, never silent shifts, so a
-//! caller can never derive an invisible duplicate or shifted commitment.
+//! arithmetic in, exact instants or intervals out.
+//!
+//! Daylight-saving gaps and folds follow one documented rule per evaluator,
+//! with no configuration knob. A single calculated instant, such as a
+//! working-day deadline, resolves deterministically: a local time inside a
+//! gap moves to the first instant after the gap, and a local time inside a
+//! fold takes the earlier of its two instants. An interval endpoint inside a
+//! gap or fold is an explicit error, never a silent shift, so a caller can
+//! never derive an invisible duplicate or shifted commitment.
 //!
 //! Two evaluators live here:
 //!
@@ -41,14 +47,20 @@ pub enum CalendarEvaluationError {
     InvalidTimezone,
     #[error("holiday date at index {index} is not a valid YYYY-MM-DD date")]
     InvalidHolidayDate { index: usize },
-    #[error("dueTime is not a valid HH:MM local time")]
-    InvalidDueTime,
-    #[error("after.workingDays must be between 1 and 3650")]
-    InvalidWorkingDayOffset,
-    #[error("atRisk.workingDaysBefore must be between 1 and 3650")]
-    InvalidWarningOffset,
-    #[error("reminders[].workingDaysBefore must be between 1 and 3650")]
-    InvalidReminderOffset,
+    #[error(
+        "the due time {value:?} is not a valid HH:MM local time; write two-digit hours and minutes, such as 17:00"
+    )]
+    InvalidDueTime { value: String },
+    #[error("the working-day offset {value} is out of range; use 1 to {limit} working days")]
+    InvalidWorkingDayOffset { value: u32, limit: u32 },
+    #[error(
+        "the warning offset {value} is out of range; use 1 to {limit} working days before the due date"
+    )]
+    InvalidWarningOffset { value: u32, limit: u32 },
+    #[error(
+        "the reminder offset {value} is out of range; use 1 to {limit} working days before the due date"
+    )]
+    InvalidReminderOffset { value: u32, limit: u32 },
     #[error("the calculated local time does not exist in the calendar timezone")]
     NonexistentLocalTime,
     #[error("the calculated local time is ambiguous in the calendar timezone")]
@@ -122,6 +134,7 @@ fn parse_hh_mm(value: &str) -> Option<NaiveTime> {
     NaiveTime::parse_from_str(value, "%H:%M").ok()
 }
 
+/// Convert one interval endpoint, refusing a local time inside a gap or fold.
 fn local_instant(
     date: NaiveDate,
     time: NaiveTime,
@@ -132,6 +145,58 @@ fn local_instant(
         LocalResult::None => Err(CalendarEvaluationError::NonexistentLocalTime),
         LocalResult::Ambiguous(_, _) => Err(CalendarEvaluationError::AmbiguousLocalTime),
     }
+}
+
+/// Convert one calculated instant under the crate's single daylight-saving
+/// rule: a local time inside a gap moves to the first instant after the gap,
+/// and a local time inside a fold takes the earlier of its two instants.
+fn resolved_local_instant(
+    date: NaiveDate,
+    time: NaiveTime,
+    timezone: Tz,
+) -> Result<DateTime<Utc>, CalendarEvaluationError> {
+    let local = NaiveDateTime::new(date, time);
+    match timezone.from_local_datetime(&local) {
+        LocalResult::Single(value) | LocalResult::Ambiguous(value, _) => {
+            Ok(value.with_timezone(&Utc))
+        }
+        LocalResult::None => first_instant_at_or_after(local, timezone),
+    }
+}
+
+/// The earliest whole-second instant whose wall time in `timezone` is at or
+/// after `local`. For a local time inside a gap, that is the instant the gap
+/// ends. No UTC offset reaches a day, so the instant lies within a day of
+/// `local` read as UTC, and a bisection over that day finds it exactly.
+fn first_instant_at_or_after(
+    local: NaiveDateTime,
+    timezone: Tz,
+) -> Result<DateTime<Utc>, CalendarEvaluationError> {
+    const DAY_SECONDS: i64 = 86_400;
+    let wall = |seconds: i64| {
+        DateTime::from_timestamp(seconds, 0)
+            .map(|instant| instant.with_timezone(&timezone).naive_local())
+            .ok_or(CalendarEvaluationError::Overflow)
+    };
+    let centre = local.and_utc().timestamp();
+    let mut before = centre
+        .checked_sub(DAY_SECONDS)
+        .ok_or(CalendarEvaluationError::Overflow)?;
+    let mut after = centre
+        .checked_add(DAY_SECONDS)
+        .ok_or(CalendarEvaluationError::Overflow)?;
+    if wall(before)? >= local || wall(after)? < local {
+        return Err(CalendarEvaluationError::NonexistentLocalTime);
+    }
+    while after - before > 1 {
+        let middle = before + (after - before) / 2;
+        if wall(middle)? >= local {
+            after = middle;
+        } else {
+            before = middle;
+        }
+    }
+    DateTime::from_timestamp(after, 0).ok_or(CalendarEvaluationError::Overflow)
 }
 
 /// Convert one local wall-clock interval on a date into its half-open UTC

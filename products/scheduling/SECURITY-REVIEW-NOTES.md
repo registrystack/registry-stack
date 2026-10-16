@@ -1129,3 +1129,72 @@ authenticated caller that repeats it costs one bounded indexed lookup and its
 audit records per request. This is accepted rather than given a read budget:
 an operator bounds an authenticated flood at the deployment's ingress, as for
 every other route.
+
+## Scope defaults follow the maintained examples
+
+Threat: an operator who omits `authentication.oidc.scopeClaim` or `readsScope`
+gets a deployment that refuses every read its issuer's tokens were meant to
+authorize, and nothing says why, so the fix that gets reached for is the
+widest one at hand.
+
+`scopeClaim` defaults to `scope` and `readsScope` to `scheduling:read`, the
+values every maintained example, template, and native exchange already set
+explicitly. `explainScope` defaults to `scheduling:explain`, the same colon
+form, and the rule that the explain scope differs from the read scope is
+unchanged. A deployment that relied on the earlier defaults
+(`registry_scopes`, `scheduling-read`, `scheduling-explain`) now fails closed:
+its readers receive `403 profile.not-authorized` until the file names the
+claim and scope its issuer emits. The change still selects one claim and
+one scope and never widens the match, but it can allow a token the earlier
+defaults refused: one whose `scope` claim carries `scheduling:read` or
+`scheduling:explain` while its `registry_scopes` claim did not carry the
+earlier spelling. Such a token must still pass the issuer, audience, and
+lifetime checks for this runtime, so only tokens minted for it qualify; an
+issuer that puts different scopes in the two claims should name
+`scopeClaim` explicitly.
+
+A read or explain refusal for a missing scope logs one `info` line naming the
+claim read, the scope expected, and the keys that select them. The line
+carries configuration values only, never the caller's scopes, subject, or
+token; the HTTP answer is unchanged and value-free. Tests:
+`a_development_configuration_loads_and_exposes_its_defaults` pins the
+defaults, `a_scope_refusal_names_the_expected_claim_scope_and_keys` pins the
+sentence, and the existing profile-refusal tests in `auth.rs` still hold.
+
+## Reminder events use the shared hook envelope
+
+A reminder intent is delivered as the shared hook envelope observers receive,
+with `content-type: application/json`. The envelope adds the appointment
+record reference and revision as `subject` and a per-purpose `dataschema`; the
+appointment identifier was already in `data`, so nothing new is disclosed.
+`data` is the payload the runtime committed, unchanged. Authentication is
+unchanged too: the optional bearer credential
+`destinations.reminders.bearerTokenRef` names, and no delivery signature. A
+receiver that needs to authenticate the sender relies on that bearer and on
+TLS. `a_due_intent_renders_as_the_shared_hook_envelope` and the PostgreSQL
+dispatch test pin the shape on the wire.
+
+## The task-grant status resource is named for what it binds
+
+A `taskGrantStatus` entry names the audience its status credential is
+requested for `statusResource` (was `caseworkResource`), because Coordinator
+or an external task authority can answer grant status as well as Casework.
+This is authorization configuration: the key selects the resource the
+runtime's own status credential is issued for. The rename changes no
+behavior. The value is read, validated as an absolute resource URI, and sent
+exactly as before, and the old key is refused with `config.removed-key`
+naming `statusResource` rather than read as an alias, so a file cannot carry
+both spellings with different values. Tests:
+`a_task_status_casework_resource_is_refused_naming_status_resource`, plus the
+existing structural refusal tests that now use `statusResource`.
+
+## One name and bound for the idempotency receipt window
+
+`retention.attemptReceiptRetentionDays` is renamed
+`retention.receiptRetentionDays`, the name BReg and Messaging use for the same
+window, and its maximum narrows from 65535 to 365 days, BReg's bound. The old
+key is refused naming the new one. The sweep, the default of 7 days, and what
+a receipt holds are unchanged; a deployment that had set more than 365 days is
+refused at startup and keeps raw caller identifiers for less time once it
+lowers the value. `a_removed_runtime_key_names_the_key_that_replaced_it` and
+the out-of-range cases in `config.rs` pin the name and the bound.

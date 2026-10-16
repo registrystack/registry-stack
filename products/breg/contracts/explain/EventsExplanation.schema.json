@@ -1,22 +1,81 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha6.schema.json",
   "title": "EventsExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain events`. `deliveries` is a raw passthrough of the compiled event delivery inventory (`CompiledEventDeliveryInventory`, a `deny_unknown_fields` type shared with package inventories); it is declared opaque in full, because bregctl serializes it directly and its shape can change without any corresponding line changing in bregctl.",
+  "description": "Author inspection of deliveries enriched from each owning hook with its phase, handler type and Proposal transition selection. Proposal envelope fields come from the canonical Proposal event schema and include no Record values. Empty condition tests are omitted. Program bytes are absent.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "deliveries"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "deliveries"
+  ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/events-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/events-explanation/v1alpha6"
     },
     "kind": {
       "const": "BRegEventsExplanation"
     },
     "deliveries": {
       "type": "array",
-      "description": "Passthrough of the compiled event delivery inventory. Shape follows CompiledEventDelivery and is outside this contract version.",
-      "items": { "type": "object", "x-registry-passthrough": "bregctl writes each compiled event delivery as the engine holds it; its shape follows CompiledEventDelivery and is outside this contract version." }
+      "description": "Normalized deliveries with owner-derived lifecycle selection.",
+      "items": {
+        "type": "object",
+        "x-registry-passthrough": "Compiler-owned delivery metadata enriched with phase and Proposal transitions from the owning definition.",
+        "required": [
+          "phase",
+          "handlerType"
+        ],
+        "properties": {
+          "phase": {
+            "const": "after"
+          },
+          "handlerType": {
+            "enum": ["url", "rhai", "wasm"]
+          },
+          "envelopeFields": {
+            "description": "All data envelope field names from the canonical Proposal event schema, not projected Record fields.",
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string"}
+          },
+          "includesRecordValues": {
+            "const": false
+          },
+          "transitions": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "started",
+                "edited",
+                "submitted",
+                "revised",
+                "rebased",
+                "retried",
+                "cancelled",
+                "applied",
+                "rejected",
+                "review-returned"
+              ]
+            }
+          }
+        },
+        "allOf": [{
+          "if": {
+            "required": ["owner"],
+            "properties": {
+              "owner": {
+                "required": ["type"],
+                "properties": {"type": {"const": "proposal-action"}}
+              }
+            }
+          },
+          "then": {"required": ["envelopeFields", "includesRecordValues"]}
+        }]
+      }
     }
   }
 }

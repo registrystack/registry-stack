@@ -25,11 +25,16 @@ type Observations = Arc<Mutex<Vec<(Method, String, HeaderMap)>>>;
 
 fn create_request() -> ReviewCreateRequest {
     ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: registry_review_client::PolicyBinding {
+            id: "registry-correction".to_owned(),
+            version: "1".to_owned(),
+            digest: ContentDigest::parse(DIGEST).expect("policy digest fixture"),
+        }
+        .into(),
         subject: subject(),
         requester_reference: "proposal-7".to_owned(),
         initiator: None,
-        context: ReviewContext::Source {
+        context: ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: "proposal-7".to_owned(),
             },
@@ -85,6 +90,7 @@ fn result_json(request_id: Uuid) -> serde_json::Value {
         "policy": {"id": "registry-correction", "version": "1", "digest": DIGEST},
         "submissionDigest": DIGEST,
         "status": "approved",
+        "outcome": "approved",
         "completedAt": "2026-09-19T00:00:00Z",
         "availableUntil": "2026-10-19T00:00:00Z"
     })
@@ -148,7 +154,8 @@ async fn create_posts_once_with_caller_auth_and_stable_idempotency_key() {
     assert_eq!(method, Method::POST);
     assert_eq!(path, "/v1/review-requests");
     assert_eq!(headers["authorization"], "Bearer one-call-secret");
-    assert_eq!(headers["registry-casework-profile"], "producer");
+    assert_eq!(headers["registry-review-profile"], "producer");
+    assert!(headers.get("registry-casework-profile").is_none());
     assert_eq!(headers["idempotency-key"], "submission-7");
     assert_eq!(headers["accept"], "application/json");
     assert_eq!(headers["content-type"], "application/json");
@@ -164,7 +171,93 @@ async fn capture_create(
         request.uri().to_string(),
         request.headers().clone(),
     ));
+    let bytes = axum::body::to_bytes(request.into_body(), 128 * 1024)
+        .await
+        .expect("bounded create body");
+    let sent: serde_json::Value = serde_json::from_slice(&bytes).expect("create body JSON");
+    assert_eq!(
+        sent,
+        json!(create_request()),
+        "send the complete original request"
+    );
+    assert_eq!(sent["policy"], json!(create_request().policy));
+    assert!(sent.get("kind").is_none());
     json_response(StatusCode::OK, accepted_json(Uuid::from_u128(7)))
+}
+
+#[tokio::test]
+async fn current_policy_create_accepts_a_concrete_binding_and_refuses_partial_pins_before_io() {
+    let app = Router::new().route(
+        "/v1/review-requests",
+        post(|| async { json_response(StatusCode::CREATED, accepted_json(Uuid::from_u128(7))) }),
+    );
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").unwrap();
+    let mut request = create_request();
+    request.policy = registry_review_client::PolicySelection::current("registry-correction");
+    let accepted = client
+        .create_or_recover_request(
+            ReviewAuth::new(&token, "producer"),
+            "current-policy",
+            &request,
+            &expected_submission_digest(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.value.policy.version, "1");
+    assert_eq!(request.policy.version, None);
+    request.policy.version = Some("1".into());
+    assert!(matches!(
+        client
+            .create_or_recover_request(
+                ReviewAuth::new(&token, "producer"),
+                "partial-pin",
+                &request,
+                &expected_submission_digest()
+            )
+            .await,
+        Err(ReviewClientError::InvalidRequest { .. })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn create_refuses_each_mismatched_policy_binding() {
+    for (field, changed) in [
+        ("id", json!("another-policy")),
+        ("version", json!("2")),
+        ("digest", json!(OTHER_DIGEST)),
+    ] {
+        let mut accepted = accepted_json(Uuid::from_u128(7));
+        accepted["policy"][field] = changed;
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || async move { json_response(StatusCode::CREATED, accepted) }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("one-call-secret").expect("fixture token");
+        let error = client
+            .create_or_recover_request(
+                ReviewAuth::new(&token, "producer"),
+                "submission-7",
+                &create_request(),
+                &expected_submission_digest(),
+            )
+            .await
+            .expect_err("the accepted policy must match every submitted policy field");
+        assert!(
+            matches!(
+                error,
+                ReviewClientError::Protocol {
+                    status: 201,
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "mismatched policy {field}"
+        );
+        server.abort();
+    }
 }
 
 #[tokio::test]
@@ -312,7 +405,7 @@ async fn request_feed_and_cancel_use_the_product_neutral_routes() {
     let observations = observations.lock().expect("observations");
     assert_eq!(observations.len(), 3);
     for (_, _, headers) in observations.iter() {
-        assert_eq!(headers["registry-casework-profile"], "producer");
+        assert_eq!(headers["registry-review-profile"], "producer");
     }
     assert_eq!(observations[0].0, Method::GET);
     assert_eq!(
@@ -356,6 +449,140 @@ async fn result_feed_rejects_an_invalid_page_size_before_http() {
     assert!(matches!(error, ReviewClientError::InvalidRequest { .. }));
     assert!(observations.lock().expect("observations").is_empty());
     server.abort();
+}
+
+#[tokio::test]
+async fn result_feed_refuses_nil_correlation_identifiers_anywhere_in_a_page() {
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let mut accepted = Vec::new();
+    for field in ["requestId", "resultId"] {
+        for position in 0..2 {
+            for continued in [false, true] {
+                let mut entries = vec![feed_entry_json(8), feed_entry_json(9)];
+                entries[position][field] = json!(Uuid::nil());
+                let body = json!({
+                    "items": entries,
+                    "nextCursor": continued.then_some(Uuid::from_u128(9))
+                });
+                let observations = Arc::new(Mutex::new(Vec::new()));
+                let app = Router::new().route(
+                    "/v1/review-results",
+                    get({
+                        let observations = observations.clone();
+                        move |request: Request<Body>| {
+                            capture(&observations, &request);
+                            let body = body.clone();
+                            async move { json_response(StatusCode::OK, body) }
+                        }
+                    }),
+                );
+                let (client, server) = serve(app).await;
+
+                let result = client
+                    .requester_results(
+                        ReviewAuth::new(&token, "producer"),
+                        &ReviewResultsQuery {
+                            cursor: Some(Uuid::from_u128(6)),
+                            limit: Some(2),
+                        },
+                    )
+                    .await;
+                if !matches!(
+                    result,
+                    Err(ReviewClientError::Protocol {
+                        status: 200,
+                        failure: ReviewProtocolFailure::Body,
+                        trace_id: Some(ref trace_id),
+                    }) if trace_id == "0123456789abcdef0123456789abcdef"
+                ) {
+                    accepted.push(format!(
+                        "nil {field} at position {position}, continued={continued}"
+                    ));
+                }
+                assert_eq!(observations.lock().expect("observations").len(), 1);
+                server.abort();
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "unusable pages accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn result_feed_preserves_independent_identifiers_and_caller_controlled_pagination() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let responses = Arc::new(Mutex::new(VecDeque::from([
+        json!({"items": [feed_entry_json(8)], "nextCursor": Uuid::from_u128(8)}),
+        json!({"items": [feed_entry_json(9)]}),
+        json!({"items": []}),
+    ])));
+    let app = Router::new().route(
+        "/v1/review-results",
+        get({
+            let observations = observations.clone();
+            let responses = responses.clone();
+            move |request: Request<Body>| {
+                capture(&observations, &request);
+                let body = responses
+                    .lock()
+                    .expect("responses")
+                    .pop_front()
+                    .expect("page");
+                async move { json_response(StatusCode::OK, body) }
+            }
+        }),
+    );
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let mut query = ReviewResultsQuery {
+        cursor: None,
+        limit: Some(1),
+    };
+
+    for (index, event_id) in [8, 9].into_iter().enumerate() {
+        let page = client
+            .requester_results(ReviewAuth::new(&token, "producer"), &query)
+            .await
+            .expect("usable feed page")
+            .value;
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].event_id, Uuid::from_u128(event_id));
+        assert_eq!(page.items[0].request_id, Uuid::from_u128(7));
+        assert_eq!(page.items[0].result_id, Uuid::from_u128(99));
+        assert_eq!(page.next_cursor, (index == 0).then_some(Uuid::from_u128(8)));
+        assert_eq!(observations.lock().expect("observations").len(), index + 1);
+        query.cursor = page
+            .next_cursor
+            .or_else(|| page.items.last().map(|entry| entry.event_id));
+    }
+    let empty = client
+        .requester_results(ReviewAuth::new(&token, "producer"), &query)
+        .await
+        .expect("empty terminal page")
+        .value;
+    assert!(empty.items.is_empty());
+    assert!(empty.next_cursor.is_none());
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 3);
+    assert_eq!(observations[0].1, "/v1/review-results?limit=1");
+    assert_eq!(
+        observations[1].1,
+        "/v1/review-results?cursor=00000000-0000-0000-0000-000000000008&limit=1"
+    );
+    assert_eq!(
+        observations[2].1,
+        "/v1/review-results?cursor=00000000-0000-0000-0000-000000000009&limit=1"
+    );
+    assert!(responses.lock().expect("responses").is_empty());
+    server.abort();
+}
+
+fn feed_entry_json(event_id: u128) -> serde_json::Value {
+    json!({
+        "eventId": Uuid::from_u128(event_id),
+        "requestId": Uuid::from_u128(7),
+        "resultId": Uuid::from_u128(99),
+        "completedAt": "2026-09-19T00:00:00Z"
+    })
 }
 
 async fn capture_request(
@@ -658,7 +885,15 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         .route("/media/v1/review-requests/{id}", get(wrong_media))
         .route("/problem/v1/review-requests/{id}", get(malformed_problem))
         .route("/unpaired/v1/review-requests/{id}", get(unpaired_problem))
+        .route(
+            "/provider-namespace/v1/review-requests/{id}",
+            get(provider_specific_problem),
+        )
         .route("/valid-problem/v1/review-requests/{id}", get(valid_problem))
+        .route(
+            "/invalid-uri/v1/review-requests/{id}",
+            get(invalid_problem_uri),
+        )
         .route(
             "/server-problem/v1/review-requests/{id}",
             get(server_problem),
@@ -680,6 +915,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ("media", ReviewProtocolFailure::MediaType),
         ("problem", ReviewProtocolFailure::Problem),
         ("unpaired", ReviewProtocolFailure::Problem),
+        ("invalid-uri", ReviewProtocolFailure::Problem),
     ] {
         let client = ReviewClient::new(ReviewClientConfig::new(
             Url::parse(&format!("http://{address}/{prefix}/")).expect("fixture URL"),
@@ -694,6 +930,23 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
             ReviewClientError::Protocol { failure: actual, .. } if actual == failure
         ));
     }
+
+    let provider_client = ReviewClient::new(ReviewClientConfig::new(
+        Url::parse(&format!("http://{address}/provider-namespace/")).unwrap(),
+    ))
+    .unwrap();
+    let provider_error = provider_client
+        .request(ReviewAuth::new(&token, "producer"), Uuid::nil())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        provider_error,
+        ReviewClientError::Problem { status: 400, .. }
+    ));
+    assert_eq!(
+        provider_error.mutation_class(),
+        ReviewMutationErrorClass::Deterministic
+    );
 
     let client = ReviewClient::new(ReviewClientConfig::new(
         Url::parse(&format!("http://{address}/valid-problem/")).expect("fixture URL"),
@@ -793,10 +1046,36 @@ async fn malformed_problem() -> Response<Body> {
     problem_response(true)
 }
 
+async fn invalid_problem_uri() -> Response<Body> {
+    let value = json!({"type":"provider problem without a URI scheme", "title":"Refused",
+        "status":400, "detail":"Refused", "code":"provider.refused",
+        "traceId":"0123456789abcdef0123456789abcdef"});
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header("content-type", "application/problem+json")
+        .header("traceparent", TRACEPARENT)
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+
+async fn provider_specific_problem() -> Response<Body> {
+    let value = json!({
+        "type":"https://review-provider.example.test/problems/provider/refused",
+        "title":"Invalid request", "status":400, "detail":"The request is invalid.",
+        "code":"provider.refused", "traceId":"0123456789abcdef0123456789abcdef"
+    });
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header("content-type", "application/problem+json")
+        .header("traceparent", TRACEPARENT)
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+
 async fn unpaired_problem() -> Response<Body> {
     let mut response = problem_response(false);
     response.headers_mut().insert(
-        "registry-casework-validation-path",
+        "registry-review-validation-path",
         HeaderValue::from_static("$.context.snapshot"),
     );
     response
@@ -805,11 +1084,11 @@ async fn unpaired_problem() -> Response<Body> {
 async fn valid_problem() -> Response<Body> {
     let mut response = problem_response(false);
     response.headers_mut().insert(
-        "registry-casework-validation-path",
+        "registry-review-validation-path",
         HeaderValue::from_static("$.context.snapshot"),
     );
     response.headers_mut().insert(
-        "registry-casework-validation-reason",
+        "registry-review-validation-reason",
         HeaderValue::from_static("schema-mismatch"),
     );
     response
@@ -866,4 +1145,42 @@ async fn excess_headers() -> Response<Body> {
             .insert(name, HeaderValue::from_static("value"));
     }
     response
+}
+
+#[tokio::test]
+async fn create_refuses_each_changed_expected_policy_binding_component() {
+    for field in ["id", "version", "digest"] {
+        let mut body = accepted_json(Uuid::from_u128(7));
+        body["policy"][field] = if field == "digest" {
+            json!(OTHER_DIGEST)
+        } else {
+            json!("different")
+        };
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || {
+                let body = body.clone();
+                async move { json_response(StatusCode::CREATED, body) }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("one-call-secret").unwrap();
+        let error = client
+            .create_or_recover_request(
+                ReviewAuth::new(&token, "producer"),
+                "request-key",
+                &create_request(),
+                &expected_submission_digest(),
+            )
+            .await
+            .expect_err("acceptance must bind every expected policy component");
+        assert!(matches!(
+            error,
+            ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::Body,
+                ..
+            }
+        ));
+        server.abort();
+    }
 }

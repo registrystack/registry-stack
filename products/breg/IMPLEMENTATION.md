@@ -1,58 +1,25 @@
-# Implementation schedule
+# Implementation ownership
 
-The product is delivered through small vertical slices. The canonical schedule
-is `contracts/implementation-schedule.yaml`.
+Base Registry Engine compiles an authored registry project into a verified
+PostgreSQL package and serves its governed operations. Production code carries
+no fixture-specific domain types. Record types, Actions, and Proposals are the
+public model; canonical projects live under `examples/`, `acceptance/`,
+and `fixtures/`.
 
-1. **W0:** publish validated contracts, a non-person authored fixture, the two
-   crate boundaries, and one CI ownership path.
-2. **W1:** compile a strict, deterministic effective model and all Slice 0
-   inventories from one source of truth.
-3. **W2:** prove the PostgreSQL role, RLS, advisory-lock, and connection-pool
-   design against a real PostgreSQL instance.
-4. **W3:** add the real REST router, request authorization, revisions,
-   idempotency, audit ordering, and transactional outbox as one path.
-5. **W4:** add verified packages, migrations, activation, and recovery.
-6. **W5:** complete the pilot tooling, bounded data operations, webhooks,
-   generated baselines, selector/read-path samples, and five coequal adopter
-   journeys.
+| Surface | Owning source and guide |
+| --- | --- |
+| Authoring, normalized model, diagnostics | `crates/registry-breg/src/contract.rs`, `compiler.rs`, and `schema.rs` |
+| Generated CRUD, record reads and mutations | `api/`, `postgres/`, `mutation/`, and [history](HISTORY.md) |
+| Immediate atomic plans | `immediate_actions.rs`, `action_handler.rs`, and [Actions](immediate-actions.md) |
+| Durable plans and application | `proposal_prepare.rs`, `proposal_store.rs`, `proposal_workflow.rs`, `api/proposals.rs`, and [Proposals](proposals.md) |
+| Review integration and deployment trust | `review_store.rs`, `review_integration.rs`, and `runtime_config.rs` |
+| Restricted automatic application | Compiled system apply grants and the native Proposal worker, without an executor OAuth client or self-HTTP route |
+| Record and Proposal events | `event_destination.rs`, `proposal_hooks.rs`, and [events and webhooks](EVENTS-AND-WEBHOOKS.md) |
+| Application contracts and clients | [metadata](metadata.md), `registry-breg-client`, and generated project types |
+| Local authoring and operator lifecycle | `registry-bregctl` and [development lifecycle](DEV.md) |
 
-No wave creates a generic storage framework, package framework, plugin runtime,
-workflow engine, or second database client abstraction merely in anticipation
-of future needs.
-
-## Capability state within W5
-
-W5 is the current wave in `contracts/implementation-schedule.yaml`. Each
-capability below is authored configuration over the same binaries, and each is
-bound to executable proof in `contracts/definition-of-done.yaml`. Enforced
-means the surface and its refusals are proven on that revision. Trial means the
-surface is implemented and tested but its authoring contract is not frozen for
-Version 1.
-
-| Capability | State | Proof |
-| --- | --- | --- |
-| Governed Rhai action handlers under `registry.action-handler/v1`, with declared write slots, declared refusals, and input-only evaluation | Enforced | `immediate_action_handler.rs` and `postgres_action_handlers.rs`, over `acceptance/person-registration-rhai` |
-| Acceptance-time target requirements that check a stored field of an existing reference target | Enforced | `postgres_immediate_action_requirements.rs` and `postgres_registry_extensibility.rs`, over `fixtures/facility-registry-actions` |
-| Native persisted field patterns compiled to one validated PostgreSQL CHECK per field | Enforced | `native_patterns.rs`, `postgres_migration.rs`, and `schema_fingerprint_rehearsal.rs` |
-| Current membership read boundaries on read permissions, enforced by generated `SECURITY INVOKER` functions and forced row-level security | Enforced | `membership_access.rs` and `postgres_membership_access.rs`, over `fixtures/organization-membership-access` |
-| Change-request `submitterTargets`, rechecking current same-profile target authority under a transaction-scoped lock at create, draft patch, submit, revise, and replay | Enforced | `compiler_submitter_targets.rs` and `support/submitter_targets.rs`, over `starters/professional-licences/core` |
-| Conditional Evidence in Rhai: an action's `evidence` declaration and its handler calling `evidence::resolve` inside the governed action | Trial | `action_evidence_compiler.rs` and `postgres_action_evidence.rs`, over `acceptance/farmer-landholding-evidence` |
-| Protected evidence-use retention and the operator command `bregctl evidence-retention erase-expired` | Trial | `postgres_action_evidence_retention.rs` and `crates/registry-bregctl/tests/evidence_retention.rs` |
-| WASM action and hook handlers (`type: wasm`) under `registry.action-handler/v1` and `registry.hook-handler/v1`, admitted by builds with the `wasm` feature, which default builds carry | Trial | `wasm_handler_admission.rs`, `postgres_wasm_action_handlers.rs`, `hook_declaration.rs`, and `postgres_hook_proposals.rs` |
-| `bregctl init --from publicschema`, deriving a project from the pinned offline snapshot by `--starter`, `--selection`, or terminal selection | Enforced | `crates/registry-bregctl/src/init_from_model/` unit tests and `crates/registry-bregctl/tests/cli.rs` |
-| Four published starters under `starters/*/core`, with `bregctl init --template <ID>` creating a project from one and `bregctl examples list` and `bregctl examples run` describing and running its scenarios | Enforced | `starter_projects.rs`, `support/starter_policy.rs`, `crates/registry-bregctl/src/starters.rs`, and `crates/registry-bregctl/src/dev/examples.rs` |
-| `bregctl dev [project]`, reading the project's `dev-clients.yaml` without a flag | Enforced | `crates/registry-bregctl/src/dev/tests.rs` and `crates/registry-bregctl/tests/dev_lifecycle.rs` |
-
-The two Evidence trial rows are the action `evidence` declaration and helper
-that `immediate-actions.md` and `EVIDENCE.md` describe as a trial. Both run
-under the one handler ABI, `registry.action-handler/v1`, which stays Enforced:
-an action that declares no `evidence` keeps the input-only path, and the
-retained evidence-use scope the operator command erases exists only for
-actions that declare it. The contract grammar has no trial state, so
-`contracts/definition-of-done.yaml` records each of them as `partial` and names
-the trial in its `gap`.
-
-The WASM handler row is Trial in the same sense: the handler kind, its closed
-byte ABI in `wasm-action-handlers.md`, and the handler SDK are implemented and
-tested, but `contracts/definition-of-done.yaml` binds no Version 1 proof to
-them, so their authoring contract is not frozen.
+The machine-readable contracts under `contracts/` own delivery requirements and
+security traceability. Read the exact row and resolving tests before making an
+enforcement claim. A schedule or an offline compiler result does not establish
+runtime behavior. [Acceptance journeys](ACCEPTANCE-JOURNEYS.md) maps canonical
+projects to their purpose; [agent guidance](AGENTS.md) owns focused check commands.

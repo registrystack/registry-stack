@@ -32,6 +32,7 @@ const required = {
   'casework-api': ['id', 'title', 'columns', 'rows'],
   'scheduling-api': ['id', 'title', 'columns', 'rows'],
   'messaging-api': ['id', 'title', 'columns', 'rows'],
+  'coordinator-api': ['id', 'title', 'columns', 'rows'],
 };
 
 const generated = [];

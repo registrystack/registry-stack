@@ -1,6 +1,6 @@
 ---
 title: Test with journeys
-description: Prove a registry project behaves before it reaches a database, with check and its findings, explain, generate, and the journeys in tests/journeys.yaml that bregctl test replays over HTTP.
+description: Compile and inspect the native Base Registry Engine contract, then prove permitted and refused journeys against isolated PostgreSQL.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,243 +13,106 @@ standards_referenced:
   - json-schema
 ---
 
-You have a model and its profiles, and you want proof that the project behaves before it reaches a database.
-This page covers the offline checks first: `check` compiles the project and reports findings, `explain` prints what the compiler derived, and `generate` writes the artifacts a client will see.
-It then covers journeys, the scenarios in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database, because a row boundary, a query bound, or a review workflow is only proven by a request that runs.
-At the end you know what each command proves, what only a journey can prove, and what a failure of each looks like.
+If you are verifying a Base Registry Engine (BReg) project, compile it offline,
+inspect the derived contract, and run its journeys against an isolated database
+with real credentials before packaging it.
 
 ## Check the project
 
 ```sh
 bregctl check ./my-registry
-```
-
-`check` compiles the project without a database and prints the compiled revision, a content digest of everything the compiler read:
-
-```text
-Authoring check passed; registry revision sha256:<digest>.
-warning[breg.access.profile-unrestricted-collection] ./my-registry/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
-  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] ./my-registry/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
-  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 4 files
-```
-
-Two people holding the same revision hold the same project.
-An error is a declaration the compiler cannot compile, printed as an `error[code]` line with the file, line, column, and JSON Pointer path of the member, then its message and the fix, and the command exits with status 1.
-A finding is an advisory attached to a member, printed as a `warning`: the project compiles, but a reviewer must read it.
-With `--format json`, `check` prints the same diagnostics in the shared shape, each with `severity`, `code`, `artifact`, `path`, `message`, `suggestedAction`, and a `source` naming the file, line, and column.
-A project `check` cannot read, such as a missing directory, exits with status 3.
-The four files are the ones `check` read: `registry.yaml`, the module's `module.yaml`, `tests/journeys.yaml`, and `dev-clients.yaml`.
-Beside the sources it compiles, `check` reads `dev-clients.yaml` and every `.yaml` and `.yml` file directly under `tests/`, each as `bregctl check --file` reads it, and holds the journeys to the project, so a journey that names a profile the project no longer declares is an error here.
-A YAML file under `tests/` whose `kind` is not a Base Registry Engine tool file's is refused, and a directory under `tests/` gets the warning `breg.check.unread-directory`, because `check` does not read into it.
-The project `init` wrote reports both findings on purpose: `breg.access.profile-unrestricted-collection`, because its `operator` profile lists every record, and `breg.access.profile-unrestricted-rows`, because its `evidence-source` profile looks up any record by code.
-
-Two flags change what counts as a failure, and a review gate wants both:
-
-```sh
-bregctl check ./my-registry --deny-warnings
 bregctl check ./my-registry --production
 ```
 
-`--deny-warnings` makes every warning fail the command, so the first one prints `bregctl check refused the project: --deny-warnings refuses a warning.` above the same two warnings and exits with status 1 until they are resolved or the profiles are changed.
-`--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a declared handler for every event must all be present, and a project missing one fails with `breg.package.identity-required`, `breg.module.lock-missing`, `breg.module.lock-digest-required`, `breg.module.source-required`, or `breg.event.delivery-required`.
-The project `init` wrote already carries all of them, so `check --production` succeeds on it.
-`explain` and `generate` accept `--production` as well; `--deny-warnings` belongs to `check` alone.
+Check reports diagnostics at the document and member that needs repair. An error
+refuses the candidate. An advisory describes a decision to review. Use
+`--deny-warnings` when your reviewed warning policy requires it; do not assume
+that an example always emits a fixed number of warnings.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, check(); crates/registry-bregctl/src/check.rs, check_tool_files(); crates/registry-breg/src/compiler.rs. */}
+The command also validates declared local clients and journey files against the
+project. Fix renamed Record type IDs, profile IDs, and operation bindings there
+when changing the model. Unknown or retired keys fail rather than becoming grants.
 
 ## Explain what the compiler derived
 
 ```sh
-bregctl explain model ./my-registry
-bregctl explain routes ./my-registry
-bregctl explain queries ./my-registry
+bregctl --format json explain model ./my-registry
+bregctl --format json explain routes ./my-registry
+bregctl --format json explain access ./my-registry
+bregctl --format json explain actions ./my-registry
+bregctl --format json explain proposals ./my-registry
 ```
 
-`explain` takes one subject, prints the revision and findings the way `init` does, then the report: JSON for every subject except `access`, whose report is written for reading.
-`model` prints every entity, field, and profile as compiled.
-`routes` prints every HTTP route with its method, path, operation, and the profiles that may select it, including the default.
-`queries` prints, per entity and operation, the fields a response may carry, the filterable fields with example `$filter` expressions, and the query bounds a request stays within.
-`access` prints the compiled permissions per profile in a human-readable form and, with `--scenario`, previews admission; [control access per profile](../breg-access/) covers it.
-`change-requests` and `actions` are covered on [declare change requests and actions](../breg-change-control/), and `events` on [author a registry project](../breg/).
+Inspect exact fields, routes, grants, Action mode, plans, guards, and Proposal
+review/application requirements. These commands read no target records and make
+no review decision. They establish the compiled contract, not runtime success.
 
-Read `explain queries` before you write a client or a journey: a request that filters on a field the profile cannot filter is refused, not empty.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, ExplainArgs and explain(). */}
-
-## Generate artifacts
+## Generate application artifacts
 
 ```sh
-mkdir -p ./generated
-bregctl generate openapi ./my-registry --output ./generated/openapi
-bregctl generate schemas ./my-registry --output ./generated/schemas
+bregctl generate --help
 ```
 
-`generate` writes one artifact family into a new directory: `openapi`, `schemas`, `actions`, `manifest`, `metadata`, or `sql`.
-The output directory's parent must exist, and the directory itself must not: a missing parent fails with `output.parent.invalid`, and an existing directory, or a path containing `..`, fails with `output.destination.invalid`, so a run can never overwrite artifacts you already reviewed.
-The command creates the directory and writes under a `generated/` subdirectory inside it, so the two commands produce `./generated/openapi/generated/openapi.json` and `./generated/schemas/generated/schemas/<entity>.schema.json`.
+Choose the needed artifact family and a fresh output directory. Generated JSON
+Schema, OpenAPI, metadata, and project types derive from the same model. Review
+the authored source when a generated contract is wrong; do not hand-edit a copy.
+Every Action input includes its compiler-emitted schema, which the clients and
+MCP gateway use exactly.
 
-Output is deterministic: the same project produces the same bytes, so commit the generated documents and, in review, generate into a fresh directory and diff it against the committed copy.
-The running server derives `/openapi.json` and the schemas under `/v1/schemas/` from the same
-compiled registry, then filters each document for the caller's selected access profile.
+## Declare a journey
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, generate() and write_files_with_before_publish();
-    crates/registry-breg/src/api/mod.rs, openapi(), entity_schema(), and filtered_schema(). */}
+Start from the generated `tests/journeys.yaml`. It declares
+`apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`.
+Each step identifies the Record type or Action, selected access profile, synthetic
+expected claims, request, expected outcome, and optional capture for later steps.
+Use `recordType` for a record step.
 
-## Findings
+The default directory journey creates a contact, reads it with the editor's
+jurisdiction, then expects a concealed `404 resource.not_found` when a caller
+from another jurisdiction reads that same record. Keep both the success and the
+refusal. Add a regression that represents the user-visible invariant your edit
+changes, rather than a second copy of every configuration member.
 
-These are all the findings the compiler can report, each attached to the document path it applies to:
+Function planning has a separate bounded offline loop:
 
-| Finding | Meaning | What to do |
-|---|---|---|
-| `breg.access.profile-data-export` | Bulk export is enabled, and disabling it later cannot recall downloaded data. | Review the readable fields and row boundaries first. |
-| `breg.access.profile-higher-classification` | A readable field is more sensitive than its entity's classification. | Verify the profile's scope and purpose before disclosing it. |
-| `breg.access.profile-no-writable-fields` | The profile grants `create` or `patch` and names no writable field. | List the writable fields, or remove the write operations. |
-| `breg.access.profile-related-disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
-| `breg.access.profile-revision-history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
-| `breg.access.profile-row-boundary-not-writable` | The profile grants `create` and a row boundary whose field it cannot write, so the row policy refuses every create. | Add the boundary field to the writable fields, or remove `create` from the permission. |
-| `breg.access.profile-snapshot-history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
-| `breg.access.profile-subsumes-narrower` | A profile written with `requiredScopes: unrestricted` admits every token that another profile admits, so a caller admitted there also reaches what the unrestricted profile grants. | Review what the unrestricted profile grants, or require a scope on it. |
-| `breg.access.profile-unrestricted-collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
-| `breg.access.profile-unrestricted-rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
-| `breg.access.profile-writable-row-boundary` | The profile can write a field a row boundary depends on. | With `create`, keep it writable: the row policy pins it to the caller's claim on insert. With `patch` alone, remove it from the writable fields unless moving records is intended. |
-| `breg.access.wildcard-spelled-item` | A list of scopes, purposes, or clients holds an item spelled `*` or `unrestricted`, which names one entry and matches nothing else. | Write `unrestricted` in place of the list where the member takes it, or name the real entries. |
-| `breg.entity.list-unindexed-filter` | No index leads with a filterable list field, so a filtered list scans every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
-| `breg.entity.list-unindexed-sort` | No index leads with a sortable list field, so a sorted list orders every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
-| `breg.manifest-projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
-| `breg.module.lock-digest-missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
-| `breg.module.lock-missing` | A module source has no lock entry. | Run `project lock`. |
-| `breg.module.source-missing` | A lock entry names a module whose source is not loaded. | Restore the module file or remove the lock entry. |
-| `breg.package.identity-missing` | No package identity is declared. | Declare one before a production package. |
-
-Under `--production`, the `breg.module.*` and `breg.package.*` findings become errors; `breg.manifest-projection.missing` and the `breg.entity.list-*` findings are reported only in authoring mode, so resolve them before you leave this page.
-
-{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-breg/src/compiler.rs. */}
-
-## Write journeys
-
-A journey is a list of steps; each step names an entity, a profile, the claims the synthetic token carries, one request, and the outcome it expects.
-`bregctl test` replays them over real HTTP against an empty PostgreSQL database, binding one credential per step from its own credentials file, so the journey file never holds a credential.
-Every entity, profile, field, and claim in a journey is resolved against the compiled project first, so a journey can never reach past what a profile already allows.
-
-The journey `init` wrote proves the `record-reader` row boundary by moving a record out of the reader's rows and counting; these steps add a refusal:
-
-```yaml
-apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: record-lifecycle
-    steps:
-      - id: create-record-group
-        entity: record-group
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: create
-          data:
-            code: group-a
-            label: Example group
-        expect:
-          outcome: success
-          status: 201
-          fields:
-            code: group-a
-        capture: example-group
-      - id: create-record
-        entity: record
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: create
-          data:
-            code: example
-            label: Example record
-            group:
-              recordCapture: example-group
-            status: active
-        expect:
-          outcome: success
-          status: 201
-        capture: example-record
-      - id: retire-record
-        entity: record
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: patch
-          recordCapture: example-record
-          etagCapture: example-record
-          changes:
-            - field: status
-              value: retired
-        expect:
-          outcome: success
-          status: 200
-          fields:
-            status: retired
-      - id: reader-outside-the-claim-sees-nothing
-        entity: record
-        accessProfile: record-reader
-        claims:
-          principal: generic-registry-reader
-          scopes: [registry:generic:read]
-          purpose: registry-reporting
-          directClaims:
-            registry_record_status: active
-        request:
-          type: get
-          recordCapture: example-record
-        expect:
-          outcome: refusal
-          status: 404
-          problemCode: resource.not_found
+```sh
+bregctl project action-test ./my-registry --action <action-id> \
+  --input /path/to/input.json --expect /path/to/expected.json
 ```
 
-| Step member | Meaning |
-|---|---|
-| `claims` | `principal`, `scopes`, `purpose`, and the `directClaims` row boundaries and claim lookups read. Values are synthetic. |
-| `request.type` | `import`, `create`, `get`, `list`, `query`, `lookup`, `read-path`, `patch`, `batch`, `target-conditions`, `invoke`, or a source-owned change-request action: `submit-request`, `revise-request`, `cancel-request`, or `apply-request`. External review decisions are tested in Casework, not as BReg fixture operations. |
-| `recordCapture`, `etagCapture` | A record and ETag captured by an earlier step. `etagCapture` sends the ETag as `If-Match`, so a patch fails rather than overwrite a concurrent change. Inside a request body, `{recordCapture: <capture>}` stands for the captured record's identifier. |
-| `data`, `changes`, `items`, `selector` and `values`, `path`, `select`, `top`, `count`, `bbox`, `input`, `preconditions` | The request body or query for the operation. |
-| `expect` | `outcome` is `success` or `refusal`; `status` is the HTTP status; `fields` asserts returned values; `count` asserts the item count; `problemCode` asserts the problem code of a refusal. |
-| `capture`, `captureResults` | Store the returned record and ETag, or an action's named results, under a name for later steps. |
+This uses logical input IDs without an HTTP envelope. It can check effects or a
+declared refusal; it cannot prove target authority, current guards, or a database
+transaction.
 
-A read outside the caller's boundary returns 404 with `resource.not_found`, because the server conceals what the caller may not know exists.
-Write a refusal step for every boundary you rely on: the compiler cannot prove a row boundary works, only a journey can.
+## Run with real credentials
 
-Running the journeys needs more than the project: an empty PostgreSQL database, a runtime configuration, a credentials file binding one credential per step, and a path for the receipt `bregctl test` writes.
-[Build a production candidate](../../tutorials/build-a-breg-production-candidate/) runs them step by step, and [deploy a registry](../../operate/breg/) covers the runtime configuration they read.
+Prepare a separate TLS schema-test database and runtime file with migration and
+runtime roles. Bind protected steps to real short-lived credentials whose verified
+claims match the fixture. The fixture's synthetic claims do not authenticate a
+running server. Keep credentials outside the project and version control.
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml; products/breg/acceptance/person-name-change-rhai/tests/journeys.yaml; crates/registry-breg/src/fixtures.rs; crates/registry-bregctl/src/lib.rs, TestArgs. */}
+```sh
+bregctl test ./my-registry --runtime-config /path/to/runtime-test.yaml \
+  --credentials /path/to/credentials.yaml --output /path/to/test-receipt.json
+```
 
-## Troubleshooting
+A successful result writes a receipt for the exact candidate and measured catalog.
+A refused step identifies the failure; repair the cause and rerun into a fresh
+receipt path. Package accepts that exact successful receipt and refuses changed
+inputs. [Build a production candidate](../../tutorials/build-a-breg-production-candidate/)
+connects the test and package steps.
 
-| Symptom | Cause and next move |
-|---|---|
-| `check` passes but `check --deny-warnings` fails. | A warning is present. Read it and either change the project or accept the finding knowingly. |
-| `generate` fails with `output.parent.invalid`. | The output directory's parent does not exist. Create it, or give a destination inside a directory that exists. |
-| `generate` fails with `output.destination.invalid`. | The output directory already exists, or the path contains `..`. Give a new path; remove the old directory first if you meant to regenerate. |
-| A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the permission, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |
-| A journey filters or sorts on a field and is refused. | The profile's `filterableFields` or `sortableFields` do not list it. Check `explain queries` for the forms the profile may use. |
-| `bregctl dev` refuses the start with `test.step.failed` at `journeys[0].steps[2]`. | The rehearsal ran your journeys and that step failed. The refusal carries the step's own message; correct the step and start again. The full report stays in the project's private `.breg/dev/logs`. |
-| `bregctl test` refuses the fixture journeys with `config.removed-key` or `config.retired-api-version`. | The file uses a spelling journeys version 1 no longer reads: the old `registry.registrystack.org/breg-journeys/v1` header, `operation` in place of `type`, a snake_case request type, or a `*Ref` capture. The `next:` line names the replacement at the position shown. The reader also refuses YAML anchors and aliases, so repeat shared claims in each step. |
-| A step is refused because a logical reference was refused. | The refusal names the class: a field the entity does not declare, a field the permission does not make writable, a request body with no field, a step identifier that is not stable, a step naming both an entity and an action or neither, or a capture no earlier step declares. It never repeats the value you wrote. |
+For local evaluation, `bregctl dev start` prepares the isolated rehearsal and
+binds the authored local clients. `bregctl examples run` serves resumable example
+scenarios against the retained session. A scenario is an adopter exercise;
+compiler checks and database journeys remain separate proof levels.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs; crates/registry-bregctl/src/check.rs;
+    crates/registry-breg/src/fixtures.rs; crates/registry-bregctl/src/dev/examples.rs;
+    products/breg/examples/minimal/tests/journeys.yaml. */}
 
 ## Next
 
-- [Build a production candidate](../../tutorials/build-a-breg-production-candidate/): run `check --production` and `bregctl test` against a PostgreSQL you start, then package and verify it.
-- [Deploy a registry](../../operate/breg/): the runtime configuration, database, and token requirements the journeys depend on.
-- [Base Registry Engine API reference](../../reference/breg-api/): the routes, query options, and problem documents the journeys exercise.
-- [Base Registry Engine configuration reference](../../reference/breg-configuration/): every journey and project key.
+- [Build a production candidate](../../tutorials/build-a-breg-production-candidate/)
+- [Deploy a registry](../../operate/breg/)
+- [Declare Actions and Proposals](../breg-change-control/)

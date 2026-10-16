@@ -1,247 +1,26 @@
-# Source-backed development
+# Current-source development
 
-`caseworkctl dev` can run a source-backed project using one stock ThunderID
-1.0.1 issuer. The operator explicitly connects a running BREG source; Casework
-does not start that source or change its trust policy. Ordinary standalone
-projects need no `integrations` block and have no task authority.
+A standalone review needs only a Casework project and its local teaching clients. Run `caseworkctl init ./casework`, `caseworkctl check ./casework`, `caseworkctl test ./casework`, and `caseworkctl dev start ./casework` for the first submitted-context journey. The session starts Casework, its database, and a local issuer. `caseworkctl dev token staff ./casework` writes a fresh owner-only header for an admitted teaching client.
 
-First author the source description, queues, access profiles, and governed
-`taskTemplates` in `casework.yaml`. Include each template subject field in the
-source request's explicit `projection`, and grant the reader and approving human
-profile disclosure of that field. The source reader must also disclose
-`review-state` so Casework can observe the source-owned review stage. Import the source description for the current
-compiled registry revision. For a standalone Casework issuer, discover each task
-client's stable native subject before authoring its `agent.subject`:
+A current-source review adds one read-only context provider. The [canonical review example](examples/canonical-review/README.md) contains a submitted-context policy and a BReg Proposal policy. Its vendored schema and `context.contract` pin the exact native `correct-address` review-context export. The compiled policy checks the schema offline; an open review never silently adopts a later producer contract.
 
-```sh
-caseworkctl dev identity task-agent
-```
+1. Build and check the matching BReg package using the BReg runbook. Pair its native export with the authored Casework provider:
 
-`source add` owns the generated BReg hook ID
-`casework-lifecycle-v1-<entity>` for each paired request entity and the generated
-`casework-reader` profile permission. These IDs are reserved for the exact
-generated content. Add operator-authored hooks under distinct IDs beside the
-generated hook; do not edit or reuse a generated ID. When refreshing a pairing,
-remove a stale generated hook or permission as directed by the refusal, then let
-`source add --apply` recreate its current exact form.
+   ```sh
+   caseworkctl provider pair products/casework/examples/canonical-review \
+     --provider-id facility-proposal-context \
+     --breg-package /absolute/path/to/breg-package \
+     --action-id correct-address --apply
+   caseworkctl check products/casework/examples/canonical-review \
+     --against-breg-package /absolute/path/to/breg-package
+   ```
 
-With `--issuer-project`, use the task client's native agent ID from the BREG
-issuer owner instead. That ID derives from the owner's `instanceId` and the
-same client ID. The standalone `caseworkctl dev identity` result does not
-describe a borrowed issuer's subject.
+   Pairing writes the provider export under `context-providers/` and records its path in `casework.yaml`. It changes no BReg package, runtime permissions, or lifecycle hooks. The agreement check verifies the native package and compares its exact source, action, context contract, and schema bytes with the imported export. Unrelated registry package changes do not invalidate that agreement. Regenerate and re-pair if the producer contract changes.
 
-Set `agent.issuer` to the exact local issuer URL, such as
-`http://127.0.0.1:8093`. The subject remains stable across local sessions; the
-issuer URL qualifies it. Local human teaching clients remain explicit fixtures
-in `dev-clients.yaml` and seed the directory through the normal API.
+2. Bind the provider's `deploymentRef` in `runtime.yaml`. The [canonical runtime example](examples/canonical-review/runtime.example.yaml) shows `contextProviders.facility-registry`: BReg URL, token endpoint, `statusProfile`, and secret references for a purpose-specific status reader. The status profile must equal `serviceProfiles.service-status` in `casework.yaml`, and BReg must grant that service client `get-review-status` for the action. It need not grant generic Proposal `get`. Configure the exact issuer audience, resource, and scope that BReg accepts. Use `caseworkctl check PROJECT --runtime-config FILE` before packaging and applying.
 
-Add an explicit `integrations` block beside `clients` and `directory` in that
-file. This example shows the operator-owned connection
-shape; replace its resource, ports, source profile, event source and paths with
-the source's actual configuration:
+3. For a local session with the same issuer as BReg, add an explicit `integrations` block to Casework's `dev-clients.yaml`. Declare `integrations.resource`, `integrations.contextProviders` keyed by `deploymentRef`, and a `serviceClients` entry for the status reader. Each provider binding has the same fields as the runtime example. A generated local service client's references are `secret:file/service-CLIENT-id` and `secret:file/service-CLIENT-key`; imported owner-only files go through `integrations.secretFiles`. Start the already configured BReg dev session separately. Use `caseworkctl dev start ./casework --issuer-project ./breg-project` only when that ready BReg owner has pre-registered the Casework clients, their exact scopes, claims and resource. Casework does not start BReg or modify its access profiles.
 
-```yaml
-integrations:
-  resource: urn:example:local-review
-  sources:
-    professional-register:
-      baseUrl: http://127.0.0.1:8080
-      readerProfile: casework-reader
-      tokenEndpoint: http://127.0.0.1:8093/oauth2/token
-      clientAssertionAudience: http://127.0.0.1:8093
-      resource: urn:example:local-review
-      scopes: [records:get]
-      clientIdRef: secret:file/service-source-reader-id
-      clientAssertionKeyRef: secret:file/service-source-reader-key
-      webhookSecretRef: secret:file/source-webhook
-      eventSource: urn:registrystack:registry:professional-register:instance:local
-  secretFiles:
-    source-webhook: /absolute/owner-only/source-webhook-key
-  serviceClients:
-    - id: source-reader
-      scopes: [records:get]
-    - id: task-agent
-      scopes: [casework:grants:assert]
-      taskExchange: true
-    - id: breg-status
-      scopes: [casework:grants:status]
-  browserClients: [staff-portal]
-  taskAuthority:
-    issuer: https://casework.local.example
-    jwksPort: 8094
-    statusClients:
-      breg-status: urn:example:local-review
-```
+The reviewer sends the current human bearer and selects an authorized BReg source profile with `Registry-Source-Profile` on Casework task reads and decisions. BReg must trust that issuer and audience, authorize the selected profile and subject, and grant `get-review-context` with the intended field disclosure. Casework never substitutes its service credential for a human display read. It selects the action and purpose from current caller-visible metadata, then checks the observed Proposal binding and exact context contract at visibility and decision boundaries. Context meaning, field semantics, and schema bytes stay pinned while profile and row disclosure remain current. A concealed, changed, or non-reviewable Proposal is refused or omitted from the visible task list. The service credential reads status only.
 
-`integrations.resource` is an explicit shared resource group. Casework forwards
-the officer's current bearer for source disclosure and source actions. Configure
-BREG to accept this exact issuer and resource, with independent human client
-admission, actor category, required scopes and source profiles. Add those source
-scopes to the corresponding human teaching client's `scopes`. A shared audience
-alone grants no source access. In particular, BREG human profiles must exclude
-the task agent and status clients. BREG task profiles still require their
-configured source issuer, client, purpose, operations and identity
-bounds. The template's BREG bounds must match the selected task profile's full
-effective permissions. A bootstrap token has no grant fields.
-
-Each `sources` entry must match a declared source. It takes the members of the
-runtime configuration's `sources.<id>` binding except the timeouts and the
-reconciliation interval, which the session leaves at the runtime's defaults.
-Its token endpoint, client
-assertion audience and resource must match this session. These mismatches fail
-before containers start. Both reader credential references must name the same
-generated service client, whose effective resource and scopes exactly match the
-source binding. Multiple sources may share that exact reader client. Service clients use `integrations.resource` unless
-an explicit `resource` is supplied. Their exact scopes determine their ordinary
-permissions. A task-exchange client receives only `casework:grants:assert` for
-Casework; destination scopes and immutable bounds come from a real approved
-governed template. Static grant attributes and caller-selected actor markers
-are refused. Task clients cannot act as local humans.
-
-Only an explicit `taskAuthority` enables signing. Its `issuer` is a logical HTTPS
-issuer, distinct from the loopback Casework API URL. Configure
-BREG task profiles and status validation with this exact source issuer;
-the local issuer maps it to the explicit public JWKS listener. Its private key stays in the
-owner-only retained session. The supervisor owns a public-key-only listener on
-`0.0.0.0:<jwksPort>` so the issuer container can verify actual Casework
-assertions. It serves only `GET /oauth2/jwks`; other paths and methods fail, and
-it stops with the session. The Casework API remains on loopback. Choose a
-separate free port. The listener exposes public keys, never signing material.
-
-The session generates service credentials under
-`.casework/dev/credentials/<client>/assertion-key.jwk` and corresponding runtime
-secret references `secret:file/service-<client>-id` and
-`secret:file/service-<client>-key`. Imported secret files must be absolute,
-owner-only, ordinary files with `source-` prefixed destination names. Credentials
-are copied at first initialization and retained across restart. Source
-descriptions, the project and clients file are pinned together; changed
-authoring cannot silently change a populated session.
-
-Start the session with `caseworkctl dev`. Its report names the issuer, exact
-resource and operator configuration. Configure the source's own issuer trust
-and generated source-reader credential, then ensure the source is running.
-For a composed local issuer, start the BREG issuer owner first and use
-`caseworkctl dev start ./casework --issuer-project ./issuer-owner`. This option
-requires explicit `integrations.resource`; it is separate from the older
-`--source-project` compatibility bridge. The owner must pre-register each
-Casework teaching and service client with the same scopes, claims and resource,
-plus the task authority connection and the `taskExchange` bootstrap clients.
-That connection's `clients` list must name exactly those bootstrap clients: the
-owner reads the pairing to record the one assertion authority each of them may
-present, and its resource servers refuse a token exchanged from any other.
-Casework copies those exact client pairs into its private state, keeps its own
-task signing key, and neither starts nor stops the owner's issuer. An owner
-session change or unavailable issuer is refused before restart.
-Borrowed sessions require a stable `principalClaim`, such as
-`registry_principal`, in every Casework access profile. Explicitly register that
-claim for each client in both projects. `sub` identifies the BREG owner's
-subject and cannot stand in for Casework's local directory principal.
-
-Known integration and shared-registration mismatches report a fixed diagnostic
-category and the clients-file section to correct, even before private session
-logs exist. Compare the owner's explicit actor claims as well as the client ID,
-resource, scopes and exchange registration. These configuration refusals exit 1;
-filesystem and network failures retain their operational failure category.
-Reports omit the private cause and rejected values. A borrowed `sub` profile
-reports `caseworkctl.dev.borrowed-principal-invalid` at
-`casework.yaml:/accessProfiles/principalClaim`; an invalid source adapter reports
-`caseworkctl.dev.source-binding-invalid` at
-`dev-clients.yaml:/integrations/sources`. Each includes a fixed correction action.
-`browserClients` is an optional explicit list of auth-code application IDs
-admitted to Casework's local runtime. Each must be registered by the shared
-owner for this exact resource; a browser app mapped to another resource is
-refused. The resulting token still needs a governed human profile, marker,
-principal, and scopes for any Casework API call.
-Casework reconciles active source requests on startup and every minute. Use
-`caseworkctl dev token staff` to write a fresh owner-only human fixture header.
-Approve a displayed governed template through the Casework UI or API. The
-approval request contains only its template ID and version, with current item
-`If-Match` and an idempotency key.
-
-To acquire the approved UUID, create a task connection file that only you may
-write. It names the agent's key by reference; the key file itself stays
-owner-only:
-
-```yaml
-apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
-kind: PlatformTaskConnection
-caseworkUrl: http://127.0.0.1:8092
-tokenEndpoint: http://127.0.0.1:8093/oauth2/token
-clientAssertionAudience: http://127.0.0.1:8093
-bootstrapResource: urn:example:local-review
-secretProviders:
-  file:
-    root: /absolute/project/.casework/dev/credentials/task-agent
-clients:
-  task-agent:
-    assertionKeyRef: secret:file/assertion-key.jwk
-    resource: urn:example:local-review
-    scopes: [records:get]
-```
-
-```sh
-caseworkctl dev grant task-agent --grant APPROVED_UUID --connection /absolute/connection.yaml ./casework
-```
-
-The command writes a grant-specific header with mode `0600` and reports its
-path and immutable deadline. It obtains a fresh Casework assertion and performs
-standard token exchange; it cannot approve a task or select subjects, purposes
-or bounds. Unknown, expired or revoked approvals fail. Restart retains the
-issuer keys, directory, database and grant deadline. `dev stop` stops owned
-services; `dev stop --remove` explicitly removes that session's database and
-private state according to the normal dev lifecycle.
-
-The destination is not limited to BREG. A shared issuer that registers a
-Scheduling resource and scope can exchange an approved `type: scheduling`
-template through the same `taskExchange` client and `dev grant` command. Set
-that client's `resource` and `scopes` in the connection file to the Scheduling
-audience and registered exchange scope. Scheduling then verifies its own exact
-service, location, action, client, resource, deadline, and assertion-issuer
-bounds; see [`../scheduling/TASK_GRANTS.md`](../scheduling/TASK_GRANTS.md) for
-the booking request.
-
-## Automatic source application
-
-An automatically applied BReg request keeps two source grants separate. Give
-staff and supervisor clients a human `get` profile on the request so Casework
-can display source context. Give the named executor its own service
-`apply-request` profile. `caseworkctl source add` does not add executor scopes
-or client admission to the human profiles. For manual application, the apply
-profile must still admit the human reviewers.
-
-For local development, `source add --apply` reuses an exact existing
-`reviewExecutors` entry. When the entry is absent and one authored default
-service client is already bound to the automatic apply profile, it adds the
-executor binding without changing that client or its grants. Clients with
-nonempty `testBindings` are excluded from inference; an explicit
-`reviewExecutors` entry may still name one. With no default service client it
-reports the authoring still needed; it does not invent a credential. More than
-one default client, or more than one human source-context profile, is refused
-as ambiguous.
-
-BReg local clients may bind one default client to an access profile and add
-claim variants selected by exact `testBindings` journey and step pairs.
-`source add --apply` preserves those variants when it adds a generated default
-client. Two defaults for one profile and duplicate exact journey-step bindings
-remain ambiguous and are refused before any file is written.
-
-The local `reviewAuthorities` entry `source add --apply` writes into the BReg
-`dev-clients.yaml` calls Casework at `http://127.0.0.1:8092`, the default
-`caseworkctl dev` port. When the Casework session runs on another port, for
-example beside other registries on per-registry port ranges, pass the session's
-URL with `--casework-endpoint http://127.0.0.1:PORT`. The option accepts only
-an exact loopback HTTP URL with an explicit nonzero port, the shape
-`bregctl dev` admits, and refuses anything else without repeating the value.
-Equivalent trailing-slash spellings that join to the same Casework review API
-destination are accepted while preserving the endpoint spelling already in the
-file. A different host, port, or path prefix is substantive and is refused with
-a message naming the option, so repeat the pairing with the endpoint that entry
-names.
-
-`caseworkctl check --format json` reports each request's `applicationMode`
-from its imported BReg description, and `caseworkctl test` checks the fixture against that mode.
-Before the description is imported, the mode is `null`; a local fixture never
-establishes that automatic application succeeded against a running source.
-The starter fixture checks its authored queue and target without assuming a
-source mode. Add `expect.applicationMode` to a fixture to check the imported
-mode explicitly.
+The trusted BReg producer creates or recovers the ReviewRequest and later fetches the immutable ReviewResult. An apply principal authorized by BReg independently rechecks and applies the Proposal. Casework neither synchronizes source records nor executes a source action. Use submitted context when the producer is authorized to give Casework a stable minimized snapshot and source availability or revocable disclosure is unnecessary.

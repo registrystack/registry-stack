@@ -1344,6 +1344,7 @@ fn request(requirement: &str, subjects: Vec<RequestedSubject>) -> EvidenceReques
     EvidenceRequest {
         request_nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
         requirement: requirement.to_owned(),
+        expected_configuration_revision: None,
         purpose: PURPOSE.to_owned(),
         subjects,
         holder_keys: Vec::new(),

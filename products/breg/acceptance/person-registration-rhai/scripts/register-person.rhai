@@ -1,4 +1,4 @@
-fn handle(ctx) {
+fn plan(ctx) {
     let given = if "given-name" in ctx.inputs && ctx.inputs["given-name"] != () {
         ctx.inputs["given-name"]
     } else { "" };

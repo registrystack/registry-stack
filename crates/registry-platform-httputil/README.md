@@ -28,6 +28,9 @@ Outbound HTTP utilities for registry services.
   `RedeemedAuthorizationCode`: the access token, a monotonic expiry when the
   issuer stated one, and the unverified ID token, which the caller verifies
   before reading any claim.
+  Token refusals preserve the six RFC 6749 section 5.2 codes and RFC 8707
+  section 2's `invalid_target` code. Unrecognized spellings, `error_description`,
+  and `error_uri` are discarded at the exchange boundary.
   `PrivateKeyJwtConfig::check_identity` exposes the constructor's nonsecret
   client, assertion-audience and token-endpoint checks for offline configuration
   validation. Key import, certificate and provider readiness remain construction

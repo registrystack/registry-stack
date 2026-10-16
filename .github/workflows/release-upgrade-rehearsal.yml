@@ -1,6 +1,8 @@
 name: RegistryStack Release Upgrade Rehearsal
 
-# A release promises a forward state path from its immediate predecessor.
+# Retained product contracts promise a forward path from their predecessor.
+# Evidence starts at the normalized v0.42.0 baseline; older split contracts
+# are explicitly omitted. Messaging keeps its predecessor upgrade rehearsal.
 # This rehearsal downloads the previous release's authenticated binaries,
 # writes real state with them, upgrades that state with the binaries built
 # from this source, and fails when state is no longer served or a row is lost.
@@ -68,8 +70,6 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked --profile ci \
-            -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl -p registry-casework -p registry-caseworkctl \
             -p registry-evidence -p registry-evidencectl \
             -p registry-messaging -p registry-messagingctl --bins
 

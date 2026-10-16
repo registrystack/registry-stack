@@ -12,8 +12,7 @@ product of its own, in the same way `registry-evidence-oid4vci` sits beside
 Evidence. It adds no registry semantics: every decision about what the citizen
 may see or change is the registry's, made under the registry's agent access
 profile. No product crate depends on it, and it depends on the engine only
-through `registry-breg-client`. `registry-breg` is a dev-dependency, used to run
-the gateway against a real engine on PostgreSQL.
+through `registry-breg-client`. The gateway has no runtime dependency on the engine.
 
 ## Two halves that share nothing
 
@@ -53,26 +52,24 @@ The halves share no code path and no configuration section:
 |---|---|---|
 | `describe_service` | The operator-authored service name, description, and disclosure | none |
 | `get_my_details` | The citizen's own record as labelled fields | metadata, linked list lookup |
-| `start_application` | Creates a draft application for the citizen's own record | metadata, linked list lookup, create |
-| `update_application` | Edits a draft the citizen owns, under its revision | metadata, linked list lookup, read, patch |
-| `prepare_review` | Returns `<reviewBaseUrl>/requests/<id>` for the citizen to review and submit | metadata, linked list lookup, read |
-| `get_application_status` | `prepared`, `submitted`, `under_review`, `approved`, `rejected`, `applied`, or `cancelled`, as the registry reports it | metadata, linked list lookup, read |
+| `start_application` | Starts the configured proposal-mode Action with the citizen's own target | metadata, linked list lookup, Action start, Proposal read |
+| `update_application` | Edits a caller-visible draft under its current revision and promoted edit link | metadata, linked list lookup, Proposal read, edit |
+| `prepare_review` | Returns `<reviewBaseUrl>/proposals/<id>` for the citizen to review and submit | metadata, linked list lookup, Proposal read |
+| `get_application_status` | Reports `draft`, `submitted`, `applied`, `cancelled`, or `rejected`, plus a disclosed title and blocked reason | metadata, linked list lookup, Proposal read |
+| `list_applications` | Resumes one page of the citizen's own applications for the configured Action and target | metadata, linked list lookup, Proposal list |
 
-`cancelled` is the request's own state. A review that was cancelled, answered,
-or superseded, or that asked for changes, leaves the request submitted and open,
-so its status is `under_review`. Only `rejected`, `applied`, and `cancelled` are
-closed, and an identical `start_application` returns an identical application
-that is still open instead of creating another.
+Proposal listing needs its own explicit grant. The gateway fixes owner, Action,
+target and page size; the caller can supply only an opaque continuation cursor.
 
 Tool input schemas come from the registry's caller-filtered metadata for the
-configured agent access profile, so a field the profile cannot write is never
-offered.
+configured agent access profile, and the configured proposal-mode Action inputs. The target input is controlled by the gateway. Proposal ownership comes from
+the verified principal and TaskGrant, never an Action input.
 
 The citizen is only ever the token subject. No tool accepts an identifier for
 the citizen, and none accepts the record an application targets or the field
 that records its owner: the gateway resolves the citizen's own record through
-the agent profile's linked lookup, under the delegated token, and writes both
-fields itself. A lookup that finds no record, or more than one, refuses the call
+the agent profile's linked lookup, under the delegated token, and writes the target input itself. The engine binds Proposal ownership to the
+verified principal. A lookup that finds no record, or more than one, refuses the call
 and creates nothing. An argument or patch path naming either field is refused
 before the gateway reads or writes any record. An application that no longer
 names the citizen's own record is reported exactly as one that does not exist.
@@ -81,27 +78,40 @@ Registry text is returned as labelled structured data with a notice that it is
 data, never instructions.
 
 Writes carry an idempotency key derived with a keyed hash over the citizen's
-pseudonym, the tool, and the canonical arguments, so a retried call replays
-rather than duplicates. The registry keeps every key it has answered spent,
-and replays its answer within the receipt horizon
-(`idempotency.receiptRetentionDays`, 7 days by default), so a start walks a
-chain of keys derived from the same values and stops at the first application
-that is still open: a retried start returns the draft its first attempt made,
-while a citizen whose last identical application was cancelled, rejected, or
-applied gets a new draft. The registry binds each key to the package revision
-active when it first answered it, and refuses a key bound under an earlier
-revision, one whose closed application request retention erased, or one past
-its receipt horizon, without creating anything; the start steps past such a key
-the same way. A start after a package activation, or an identical start past
-the receipt horizon, therefore gets a new draft, even while the earlier
-identical draft is still open. A start that would walk past more than 32 closed
-or refused identical keys is refused with `not-permitted`. An identical
-`update_application` repeated past the receipt horizon answers
-`stale-application`. Registry problems map to a fixed set of tool error
-codes, each with fixed text: `invalid-arguments`, `record-not-resolved`,
-`not-found`, `application-not-editable`, `stale-application`,
-`idempotency-conflict`, `not-permitted`, `authorization-failed`,
-`registry-unavailable`, `service-unavailable`, and `unexpected-response`.
+pseudonym, the tool and its operation identity. For `start_application`, the
+chat host generates a non-nil `startAttemptId` UUID once for each intended new
+application and reuses it on retries. The gateway excludes it from Action input.
+The same attempt ID selects the same registry key even if other arguments
+change, so the registry refuses a changed request. A fresh attempt ID permits
+a new application with identical inputs after an earlier one closes. A retry
+reads the current Proposal when the caller has Get authority for that instance;
+otherwise it returns the initial Start summary. An expired receipt or conflicting
+binding refuses without opening another Proposal under that attempt ID. A stale
+edit refuses rather than silently rebasing inputs.
+Retrying a Start also requires the original immutable task grant context; a
+new or expanded grant cannot replay the earlier authorized request merely by
+reusing its attempt ID.
+The registry enforces current TaskGrant, owner and target scope on every call.
+The gateway offers only start and edit; submit and other lifecycle operations
+remain outside its tools, even if the delegated token carries more authority.
+
+Registry problems map to fixed tool codes and neutral text. Registry problem
+details, credentials, target and owner inputs never appear in tool results.
+
+Read, edit and resume require the issuer to supply an explicit, current TaskGrant.
+The registry's agent Record-read profile declares the trusted grant source and
+its own static read bounds. Proposal grants separately name exact
+`proposal:<uuid>` locators and permitted operations. One verified token may
+carry both sets; each source endpoint checks its own configured authority.
+A first Start-only call can return an initial Proposal summary without Get
+rights. The source may issue instance authority for later calls after the
+Proposal locator is known. The gateway receives these grants through token
+exchange and accepts no grant, target or transition arguments from the chat host.
+
+The runtime example selects the profile; deployment must configure that profile
+and an issuer that supports this grant issuance. The maintained protocol tests
+use a conforming synthetic issuer. Real issuer pairing is a separate deployment
+integration.
 
 ## Run it
 
@@ -165,11 +175,10 @@ service:
   description: Correct the postal address the registry holds for you.
   disclosure: The assistant you use will see your current address and the correction you request.
   details:
-    entity: person-address
+    recordType: person-address
   application:
-    entity: address-correction-request
-    targetField: address
-    ownerField: owner
+    action: correct-address
+    targetInput: address
   reviewBaseUrl: https://review.example.test
 audit:
   hashKeyRef: secret:file/audit-key
@@ -261,11 +270,8 @@ cargo clippy --locked -p registry-breg-mcp --all-targets --all-features -- -D wa
 products/breg/scripts/check-mcp-gateway-boundary.sh
 ```
 
-The end-to-end suite runs the gateway against a real engine serving the
-`citizen-address-correction` acceptance project and needs a disposable
-PostgreSQL database:
-
-```bash
-BREG_TEST_DATABASE_URL=<disposable database> cargo test --locked \
-  -p registry-breg-mcp --features postgres-test --test postgres_gateway
-```
+The protocol suite runs the complete gateway router with the platform test
+authorization server and a native Action/Proposal stand-in. It checks token
+exchange, caller confinement, tool schemas, stale edits, explicit listing and
+audit failure behavior. Database TaskGrant and Proposal guarantees are tested
+in the engine's native PostgreSQL suite.

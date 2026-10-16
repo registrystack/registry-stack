@@ -63,17 +63,10 @@ CONTRACTS = {
         reference=DEPLOYMENT_REFERENCE,
         marker="evidence-runtime-key-paths",
     ),
-    "authoring-question": Contract(
-        schema="crates/registry-evidencectl/schemas/authoring/question.schema.json",
+    "authoring-project": Contract(
+        schema="crates/registry-evidencectl/schemas/authoring/project.schema.json",
         reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-question-key-paths",
-    ),
-    "authoring-project-marker": Contract(
-        schema=(
-            "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json"
-        ),
-        reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-project-marker-key-paths",
+        marker="evidence-authoring-project-key-paths",
     ),
     "authoring-access-client": Contract(
         schema=(
@@ -82,33 +75,12 @@ CONTRACTS = {
         reference=AUTHORING_REFERENCE,
         marker="evidence-authoring-access-client-key-paths",
     ),
-    "authoring-access-policy": Contract(
-        schema=(
-            "crates/registry-evidencectl/schemas/authoring/access-policy.schema.json"
-        ),
-        reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-access-policy-key-paths",
-    ),
     "authoring-mock-plan": Contract(
         schema=(
             "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json"
         ),
         reference=AUTHORING_REFERENCE,
         marker="evidence-authoring-mock-plan-key-paths",
-    ),
-    "authoring-selector": Contract(
-        schema=(
-            "crates/registry-evidencectl/schemas/authoring/selector.schema.json"
-        ),
-        reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-selector-key-paths",
-    ),
-    "authoring-source": Contract(
-        schema=(
-            "crates/registry-evidencectl/schemas/authoring/source.schema.json"
-        ),
-        reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-source-key-paths",
     ),
     "authoring-source-resolution": Contract(
         schema=(
@@ -117,19 +89,17 @@ CONTRACTS = {
         reference=AUTHORING_REFERENCE,
         marker="evidence-authoring-source-resolution-key-paths",
     ),
-    "authoring-target-governance": Contract(
-        schema=(
-            "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json"
-        ),
+    "authoring-target": Contract(
+        schema="crates/registry-evidencectl/schemas/authoring/target.schema.json",
         reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-target-governance-key-paths",
+        marker="evidence-authoring-target-key-paths",
     ),
-    "authoring-target-settings": Contract(
+    "authoring-target-authority": Contract(
         schema=(
-            "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json"
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json"
         ),
         reference=AUTHORING_REFERENCE,
-        marker="evidence-authoring-target-settings-key-paths",
+        marker="evidence-authoring-target-authority-key-paths",
     ),
 }
 

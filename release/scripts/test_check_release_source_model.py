@@ -54,6 +54,18 @@ external: {}
 
 
 class MonorepoSourceModelTest(unittest.TestCase):
+    def test_requires_coordinator_release_sources(self) -> None:
+        for relative in ("crates/registry-coordinator", "products/coordinator/DEPLOYMENT.md", "crates/registry-coordinator/src/main.rs", "crates/registry-coordinator/src/ctl.rs", "products/coordinator/generated/runtime/runtime.schema.json", "products/coordinator/generated/openapi/coordinator.openapi.json"):
+            with self.subTest(relative=relative), MonorepoFixture() as stack_root:
+                path = stack_root / relative
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                result = run_validator(stack_root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("coordinator", result.stderr)
+
     def test_passes_without_lab_directory(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_validator(stack_root)
@@ -160,6 +172,27 @@ class MonorepoSourceModelTest(unittest.TestCase):
             (
                 "registry-scheduling-client-py",
                 "registry-scheduling Python client binding",
+            ),
+        ):
+            with self.subTest(crate=crate):
+                with MonorepoFixture() as stack_root:
+                    shutil.rmtree(stack_root / "crates" / crate)
+
+                    result = run_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
+    def test_requires_every_coordinator_client_crate(self) -> None:
+        for crate, name in (
+            ("registry-coordinator-client", "registry-coordinator client crate"),
+            (
+                "registry-coordinator-client-node",
+                "registry-coordinator Node client binding",
+            ),
+            (
+                "registry-coordinator-client-py",
+                "registry-coordinator Python client binding",
             ),
         ):
             with self.subTest(crate=crate):
@@ -306,12 +339,23 @@ class MonorepoFixture:
             "crates/registry-scheduling-client",
             "crates/registry-scheduling-client-node",
             "crates/registry-scheduling-client-py",
+            "crates/registry-coordinator-client",
+            "crates/registry-coordinator-client-node",
+            "crates/registry-coordinator-client-py",
             "crates/registry-stack-client-node",
             "crates/registry-stack-client-py",
+            "crates/registry-coordinator",
         ):
             (stack_root / crate_dir).mkdir(parents=True)
             (stack_root / crate_dir / ".keep").write_text("", encoding="utf-8")
         release_scripts = stack_root / "release" / "scripts"
+        coordinator = stack_root / "products" / "coordinator"
+        coordinator.mkdir(parents=True)
+        (coordinator / "DEPLOYMENT.md").write_text("Coordinator deployment runbook\n", encoding="utf-8")
+        for source in ("crates/registry-coordinator/src/main.rs", "crates/registry-coordinator/src/ctl.rs", "products/coordinator/generated/runtime/runtime.schema.json", "products/coordinator/generated/openapi/coordinator.openapi.json"):
+            target = stack_root / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("test source\n", encoding="utf-8")
         release_scripts.mkdir(parents=True)
         shutil.copy2(VALIDATOR_PATH, release_scripts / VALIDATOR_PATH.name)
         manifests = stack_root / "release" / "manifests"

@@ -24,7 +24,7 @@ impl<'a> ReviewAuth<'a> {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
             })
         {
-            return Err("the Casework profile is invalid");
+            return Err("the review profile is invalid");
         }
         Ok(())
     }
@@ -45,6 +45,22 @@ impl std::fmt::Debug for ReviewAuth<'_> {
 pub struct ReviewComplete<T> {
     pub value: T,
     pub trace_id: String,
+}
+
+/// One bounded result read and the scheduling hint returned with that exchange.
+/// The client does not retry; callers retain their own original deadline.
+pub struct ReviewResultObservation {
+    pub outcome: Result<ReviewResultResponse, crate::ReviewClientError>,
+    pub retry_after: registry_platform_httputil::client::RetryAfter,
+}
+
+impl std::fmt::Debug for ReviewResultObservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviewResultObservation")
+            .field("received", &self.outcome.is_ok())
+            .field("retry_after", &self.retry_after)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,8 +121,12 @@ pub(crate) fn check_result_page(page: &ReviewResultFeedPage) -> Result<(), &'sta
     // A nil event identifier cannot anchor a resumable position or correlate
     // a completion; a nil final entry would be checkpointed as a cursor no
     // conforming authority can resolve, replaying the same page forever.
-    if page.items.iter().any(|entry| entry.event_id.is_nil()) {
-        return Err("the result page contains a nil event identifier");
+    // Request and result identifiers must also be usable before a caller
+    // checkpoints the event and loses its opportunity to correlate it.
+    if page.items.iter().any(|entry| {
+        entry.event_id.is_nil() || entry.request_id.is_nil() || entry.result_id.is_nil()
+    }) {
+        return Err("the result page contains a nil correlation identifier");
     }
     // A continuation names the position of the final returned entry, so a
     // page whose cursor points anywhere else would let a consumer durably

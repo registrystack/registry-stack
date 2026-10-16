@@ -1,6 +1,6 @@
 ---
 title: Create and query your first registry
-description: Start a local registry from a generated project, create and update a record over HTTP, and see which requests the server refuses and why.
+description: Create a native contact directory, run its governed create/read scenario, and retain or remove the local session.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,534 +17,108 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are a data publisher evaluating
-[Base Registry Engine](../../reference/glossary/#base-registry-engine) (BReg), start with a small
-business directory.
-You will generate a registry project, run it on your machine, create and update a business record,
-and try requests the server refuses.
-Everything you keep goes into one directory, `tutorial-work`.
+If you are evaluating Base Registry Engine (BReg), create a small contact directory,
+start it locally, and run a scenario that creates and reads one synthetic contact.
+Your project includes explicit clients and jurisdiction boundaries.
 
 <QuickstartMeta
-  outcome="A record created and updated over HTTP, with refused requests showing authentication, field permissions, version checks, and required fields at work."
-  time="About 15 minutes, plus the image download"
+  outcome="A running local directory and a synthetic contact created and read through its governed API."
+  time="About 15 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={[
-    'Linux amd64 or arm64, or macOS on Apple Silicon',
-    'A Bash or zsh shell',
-    { label: 'Running Docker', href: 'https://docs.docker.com/get-started/get-docker/' },
-    { label: 'curl 7.76 or later', href: 'https://curl.se/download.html' },
-    { label: 'Python 3, to format JSON responses', href: 'https://www.python.org/downloads/' },
-    'An editor',
-  ]}
+  prerequisites={['Matching breg and bregctl binaries', 'Running Docker', 'A shell and an editor']}
 />
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
-    crates/registry-bregctl/src/dev/mod.rs, start(). */}
 
 ## Install Base Registry Engine
 
-Install `breg` and `bregctl`. The local development command starts the maintained stock identity
-provider and registers the tutorial clients:
+Install matching `breg` and `bregctl` binaries. The release installer verifies the
+release checksums before installing both binaries into `~/.local/bin`:
 
-```sh test-skip="installs a release from the network; the runner serves the binaries under test"
+```sh test-skip="downloads a release; use matching candidate binaries for a reader run"
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
 ```
 
-The installer checks both binaries against the release `SHA256SUMS` before anything reaches
-`~/.local/bin`, and installs them together or not at all.
-Keep that directory on your `PATH`.
+Keep that directory on `PATH`. Review the installer before running it on an
+operated host, and pin a reviewed release for deployment.
 
-:::note[Before these binaries serve anyone else]
-The URL takes the latest release, and a deployment pins a version instead.
-The command pipes a script from GitHub into `bash`; `| less` in place of `| bash` reads it first.
-Verify the release as described in [OpenSSF and release trust](../../security/openssf-evidence/),
-then rerun the installer with `BREG_ASSET_DIR` pointing at the verified directory.
-:::
-
-{/* Evidence: crates/registry-breg/install.sh, binaries. */}
-
-## Create a project
-
-Open a terminal in a directory of your choice and generate a project.
-Keep this terminal in the same directory for the rest of the tutorial; every path starts with
-`tutorial-work/`.
+## Create and inspect your project
 
 ```sh
 mkdir -p tutorial-work
 bregctl init tutorial-work/project
+bregctl check tutorial-work/project
+bregctl examples list tutorial-work/project
 ```
 
-```text test-expect
-Initialized a registry project. 6 artifacts written.
-  revision  sha256:<digest>
+Open the generated README and `registry.yaml`. The default `minimal-directory`
+project declares the `contact` Record type, its `name`, `email`, and `jurisdiction`
+fields, and the `directory-editor` profile. `dev-clients.yaml` declares `editor`
+and `foreign-editor` with different jurisdiction claims. The project also includes
+journeys, the `contact` scenario and its synthetic input, and a runtime example.
+An existing destination is refused; choose a fresh directory to preserve your work.
 
-  README.md
-  dev-clients.yaml
-  modules/record-notes/module.yaml
-  registry.yaml
-  runtime.example.yaml
-  tests/journeys.yaml
-
-  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-0 errors, 2 findings.
-
-Next:
-  1. read tutorial-work/project/README.md, then run 'bregctl check
-     tutorial-work/project'
-  2. leave the findings above as they are; the example operator profile lists a whole
-     collection and the example evidence-source profile looks up any record, both on
-     purpose, and tutorial-work/project/README.md says where to narrow them
-  3. replace canonicalBaseIri in tutorial-work/project/registry.yaml before you build a
-     production package; the example value is a reserved .invalid name that never
-     resolves
-```
-
-### What init wrote
-
-A registry project declares one registry in YAML, and `init` compiled this one before printing its
-`revision`, the digest of the compiled model.
-The six files are:
-
-- `registry.yaml`: entities, fields, and access profiles
-- `modules/record-notes/module.yaml`: a reusable module, one optional field
-- `tests/journeys.yaml`: the requests a test run replays
-- `dev-clients.yaml`: the local callers and their tokens
-- `runtime.example.yaml`: an operator's runtime configuration
-- `README.md`: what each file holds and what to change
-
-`tutorial-work/project/README.md` describes each one at length; open it.
-The `record` entity in `registry.yaml` carries the required `code` and `label` fields you will write,
-plus an optional group and status: the business directory is the example you supply, not a built-in
-type.
-
-A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a
-finding does not.
-`init` prints each one as a `finding`; `bregctl check` and the commands after it print the same two
-as `warning[...]` lines and count them as warnings.
-Both are expected, as the second step under `Next:` says, and every later command repeats them.
-
-The comment in `registry.yaml` says you can close the operator finding by giving the operator's
-`record` grant a `rowBoundaries` entry. If you try that later, `bregctl check` replaces it with
-`breg.access.profile-writable-row-boundary`: the row boundary pins a field to the caller's claim on
-insert, so `create` needs that field in `writableFields`. Keep it writable, expect a `create` naming
-any other value to be refused, and review separately that `patch` can move a record within the
-values the caller may hold. This tutorial leaves both findings as they are.
-
-### The local callers
-
-The `operator` and `reader` callers in `dev-clients.yaml` are ready to use with no edits, and
-this tutorial acts as `operator`.
-The updated candidate also includes a dedicated `source` client for later Evidence integration.
-[Local clients and their tokens](../../explanation/configuration-defined-registry/#local-clients-and-their-tokens)
-explains what a client entry declares and why naming a profile there grants nothing on its own.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and INIT_DEV_CLIENTS. */}
+{/* Evidence: crates/registry-bregctl/src/starters.rs; products/breg/examples/minimal/registry.yaml;
+    products/breg/examples/minimal/dev-clients.yaml;
+    products/breg/examples/minimal/examples/scenarios.json. */}
 
 ## Start the registry
 
-:::caution[Use synthetic data only]
-The registry stores its records in a Docker volume on your machine, and the private keys it
-generates live in `tutorial-work/project/.breg/dev/`, an owner-only directory that stays out of
-version control.
-Nothing here is configured for anyone else's data.
+:::caution[Keep local data synthetic]
+The session retains records in a Docker volume and keys in the owner-only
+`.breg/dev/` directory. Keep these values out of version control and support messages.
 :::
 
-Start the project as a registry:
+```sh
+bregctl dev start tutorial-work/project
+```
+
+The command starts PostgreSQL and the local issuer, tests and packages the project,
+activates it, and waits for BReg readiness. Its report identifies service addresses
+and private credential paths. A first image download can take longer than a restart.
+A failed start retains private diagnostics under `.breg/dev/`; read those before
+changing your model. A binary-version mismatch requires matching installations.
+
+## Create and read a contact
 
 ```sh
-bregctl dev tutorial-work/project
+bregctl examples run contact tutorial-work/project
 ```
 
-The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
-The command returns once the registry answers. Its report names the service URLs,
-package digest, and private credential file paths for each client.
-
-`dev` started PostgreSQL and the maintained stock identity provider in containers, registered the
-clients from `dev-clients.yaml` under a fresh key each, built a package, replayed
-`tests/journeys.yaml` against a
-throwaway database, activated the package, and started BReg at the address the report shows.
-
-The services keep running after the command returns, so this one terminal is enough.
-Run the same command again at any time to print the report again.
-
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start() and bind_journey_profiles();
-    crates/registry-bregctl/src/dev/config.rs; products/breg/DEV.md. */}
-
-## Get a token
-
-Save the registry address, then ask the local issuer for a token as the `operator` client. The
-command writes a header file that `curl` can send:
-
-```sh
-registry_url=http://127.0.0.1:8090
-bregctl dev token operator tutorial-work/project
-authorization_header=tutorial-work/project/.breg/dev/secrets/operator.header
-```
-
-`bregctl dev token` requests a fresh token through the registered client and reports the private
-header-file path. The token carries the `operator` scopes and claims and lasts five minutes.
-
-The header file is readable only by your user; keep it out of version control and support messages.
-If a request returns `401` after a pause, [renew the token](#renew-an-expired-token) and retry.
-
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, fresh_token();
-    crates/registry-bregctl/src/dev/config.rs. */}
-
-## Read the registry
-
-Read the records as the `operator` profile; `accessProfile` names the permissions the request wants,
-and BReg checks the token against them:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --header @"$authorization_header" \
-  "$registry_url/v1/records/records?accessProfile=operator" | python3 -m json.tool
-```
-
-```json test-expect
-{
-    "items": [],
-    "meta": {
-        "datasetIdentifier": "generic-registry",
-        "entityTypeIdentifier": "record",
-        "registryIdentifier": "generic-registry"
-    },
-    "pageInfo": {
-        "nextCursor": null
-    }
-}
-```
-
-The registry is empty, and the empty list is a successful read.
-The response is the Registry Record envelope every route on this API returns: records in `items`,
-the registry, dataset, and entity type in `meta`, and paging in `pageInfo`.
-
-Try the same request without the header:
-
-```sh
-curl --silent --show-error \
-  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
-  "$registry_url/v1/records/records?accessProfile=operator"
-```
-
-```text test-expect
-HTTP 401
-```
-
-Open `tutorial-work/problem.json`: its code is `authentication.refused`.
-BReg serves authenticated callers only: a request without a verified bearer token is refused
-before any access profile is selected, so naming a profile in the query granted nothing.
-
-{/* Evidence: crates/registry-breg/src/auth.rs, authenticate_request();
-    crates/registry-breg/tests/startup_http.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
-
-## Create a record
-
-Create the business record and save the response:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --header @"$authorization_header" \
-  --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: tutorial-create-1' \
-  --data '{"data":{"code":"DEMO-002","label":"North Quay Engineering"}}' \
-  --output tutorial-work/created.json --write-out 'HTTP %{http_code}\n' \
-  "$registry_url/v1/records/records?accessProfile=operator"
-```
-
-```text test-expect
-HTTP 201
-```
-
-Read the response:
-
-```sh
-python3 -m json.tool tutorial-work/created.json
-```
-
-The server generates the identifier, shown as `<record-id>`:
-
-```json test-expect
-{
-  "data": {
-    "domainData": {
-      "code": "DEMO-002",
-      "group": null,
-      "label": "North Quay Engineering",
-      "status": null
-    },
-    "recordIdentifier": "<record-id>",
-    "revisionIdentifier": "1",
-    "snapshot": "<snapshot-token>"
-  },
-  "meta": {
-    "datasetIdentifier": "generic-registry",
-    "entityTypeIdentifier": "record",
-    "registryIdentifier": "generic-registry"
-  }
-}
-```
-
-A single record sits under `data`; a list carries the same fields in each item.
-`group` and `status` are optional and read as `null` until a record supplies them.
-`data.snapshot` is an opaque token for a later `:snapshot` read, described in the
-[Base Registry Engine API reference](../../reference/breg-api/).
-
-Run the create command again unchanged: you get `201` with the same identifier and revision, not a
-second record, because `Idempotency-Key` names one write.
-Use a different key for a different write.
-
-{/* Evidence: crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/mutation.rs, held_response();
-    crates/registry-breg/src/record_profile.rs, record_member();
-    crates/registry-breg/tests/postgres_mutation.rs. */}
-
-## Choose which fields to read
-
-Ask for labels only:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --header @"$authorization_header" --get \
-  --data-urlencode 'accessProfile=operator' \
-  --data-urlencode '$select=label' \
-  --data-urlencode '$top=10' \
-  "$registry_url/v1/records/records" | python3 -m json.tool
-```
-
-Each item's `domainData` now contains only `label`.
-The identifiers stay in the envelope: `$select` names configured fields only and refuses `recordIdentifier`.
-
-Reading a field does not permit filtering by it.
-Try a filter on `label`:
-
-```sh
-curl --silent --show-error \
-  --header @"$authorization_header" --get \
-  --data-urlencode 'accessProfile=operator' \
-  --data-urlencode "\$filter=label eq 'North Quay Engineering'" \
-  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
-  "$registry_url/v1/records/records"
-```
-
-```text test-expect
-HTTP 400
-```
-
-The problem code is `query.invalid`.
-The `operator` grant for `record` in `tutorial-work/project/registry.yaml` carries three separate
-permission lists:
-
-```yaml test-excerpt="tutorial-work/project/registry.yaml"
-readableFields: [code, label, group, status]
-writableFields: [code, label, group, status]
-filterableFields: [code, status]
-```
-
-Repeat the request on `code`, which is filterable, and match the code you created, `DEMO-002`:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --header @"$authorization_header" --get \
-  --data-urlencode 'accessProfile=operator' \
-  --data-urlencode "\$filter=code eq 'DEMO-002'" \
-  "$registry_url/v1/records/records" | python3 -m json.tool
-```
-
-The request succeeds and `items` holds the one record you created: `label` is readable and writable
-but not filterable, so `$select` may name it and `$filter` may not.
-Filtering on `code eq 'North Quay Engineering'` would also succeed, with an empty `items`, because a
-filter that matches nothing is a successful read, not a refusal.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
-    crates/registry-breg/src/query.rs; crates/registry-breg/src/api/mod.rs;
-    crates/registry-breg/tests/http_read_only.rs. */}
-
-## Update the record
-
-Read the created record and save its HTTP headers:
-
-```sh
-record_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/created.json"))["data"]["recordIdentifier"])')
-curl --silent --show-error --fail-with-body \
-  --header @"$authorization_header" \
-  --dump-header tutorial-work/record.headers \
-  "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
-```
-
-The response still shows `"revisionIdentifier": "1"`, and its `ETag` header identifies that version.
-Save the exact value, including its quotes:
-
-```sh
-record_etag=$(awk 'tolower($1) == "etag:" {print $2}' tutorial-work/record.headers | tr -d '\r')
-```
-
-Change the label with JSON Patch; `If-Match` makes the server compare that ETag with the record's
-own before writing:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --header @"$authorization_header" \
-  --header 'Content-Type: application/json-patch+json' \
-  --header 'Idempotency-Key: tutorial-patch-1' \
-  --header "If-Match: $record_etag" \
-  --request PATCH \
-  --data '[{"op":"replace","path":"/data/label","value":"North Quay Engineering Ltd"}]' \
-  "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
-```
-
-```json test-expect
-{
-    "data": {
-        "domainData": {
-            "code": "DEMO-002",
-            "group": null,
-            "label": "North Quay Engineering Ltd",
-            "status": null
-        },
-        "recordIdentifier": "<record-id>",
-        "revisionIdentifier": "2",
-        "snapshot": "<snapshot-token>"
-    },
-    "meta": {
-        "datasetIdentifier": "generic-registry",
-        "entityTypeIdentifier": "record",
-        "registryIdentifier": "generic-registry"
-    }
-}
-```
-
-The response has the same identifier, `"revisionIdentifier": "2"`, and label `North Quay Engineering Ltd`.
-Patch paths address the object you sent at creation, so `/data/label` names the label;
-`domainData` in responses is not a patch target.
-Try a different update while still using the old ETag:
-
-```sh
-curl --silent --show-error \
-  --header @"$authorization_header" \
-  --header 'Content-Type: application/json-patch+json' \
-  --header 'Idempotency-Key: tutorial-patch-2' \
-  --header "If-Match: $record_etag" \
-  --request PATCH \
-  --data '[{"op":"replace","path":"/data/label","value":"North Quay Engineering Group Ltd"}]' \
-  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
-  "$registry_url/v1/records/records/$record_id?accessProfile=operator"
-```
-
-```text test-expect
-HTTP 412
-```
-
-The problem code is `precondition.failed`, the label remains `North Quay Engineering Ltd`, and a new
-idempotency key does not bypass that check.
-
-{/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch();
-    crates/registry-breg/src/mutation.rs;
-    crates/registry-breg/tests/postgres_mutation.rs. */}
-
-## Try an invalid record
-
-Omit the required `code` field:
-
-```sh
-curl --silent --show-error \
-  --header @"$authorization_header" \
-  --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: tutorial-missing-code' \
-  --data '{"data":{"label":"South Harbour Logistics"}}' \
-  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
-  "$registry_url/v1/records/records?accessProfile=operator"
-```
-
-```text test-expect
-HTTP 400
-```
-
-The problem code is `request.invalid`, and no record was created.
-The `code` field carries `required: true` in `tutorial-work/project/registry.yaml`, and that one
-setting both validated this request and shaped the project's generated request schema.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
-    crates/registry-breg/src/mutation.rs; crates/registry-breg/src/artifacts.rs. */}
-
-## Stop the registry
-
-Stop the services:
+The scenario uses the authored `editor` client to create its contact and read that
+same record. A repeated run resumes from retained scenario state rather than
+blindly creating another contact. The journey fixtures also exercise concealment
+from the foreign jurisdiction. Inspect `tests/journeys.yaml` to see the permitted
+and refused operations your project tests before activation.
+
+For application integration, obtain caller-filtered metadata and use a matching
+[Registry Stack client](../../tutorials/query-breg-client/). The API's stable record
+identifiers and revision conditions are separate from the contact's domain fields.
+
+{/* Evidence: crates/registry-bregctl/src/dev/examples.rs;
+    products/breg/examples/minimal/tests/journeys.yaml;
+    crates/registry-bregctl/src/dev/mod.rs. */}
+
+## Stop or remove your local session
 
 ```sh
 bregctl dev stop tutorial-work/project
 ```
 
-The report's `status` reads `stopped`.
-The container and its volume stay, with your records and audit history, and the start command from
-[Start the registry](#start-the-registry) brings the same registry back.
-To discard the records as well, stop with `--remove`:
+Stopping retains records, credentials, package, and scenario checkpoints. Restart
+with `dev start` to resume. If you edit a retained project incompatibly, the start
+refuses rather than silently replacing its data.
+
+:::danger[Remove only disposable data]
+Adding `--remove` discards the owned database volume, records, receipts, and
+scenario checkpoints. Keep any data you need before running it. Audit files remain.
+:::
 
 ```sh
 bregctl dev stop tutorial-work/project --remove
 ```
 
-Either way, keep `tutorial-work/`: the next tutorial edits the project inside it.
-After a plain stop, the next start refuses an edited project while the records exist. An edit that
-changes only comments, blank lines, or key order in a YAML file is not counted as a change.
-After `--remove`, the next start builds the project as it stands, edits included, and generates new
-keys if the project changed.
-
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop() and capture(); crates/registry-bregctl/src/dev/tests.rs, a_byte_only_edit_keeps_the_session_that_holds_records; products/breg/DEV.md. */}
-
-## What you built
-
-You generated a project, started it as a registry, created and updated a record, and saw
-authentication, query permissions, version checks, and required fields affect real requests.
-All of that came from the YAML in `tutorial-work/project`.
-
-## Troubleshooting
-
-### Renew an expired token
-
-The local token lasts five minutes.
-Run the command from [Get a token](#get-a-token) again; it replaces the header file.
-If it fails, the registry is stopped: start it again with the command from
-[Start the registry](#start-the-registry), then renew.
-
-### Other problems
-
-| Symptom | Next move |
-| --- | --- |
-| `bregctl` or `breg` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
-| `bregctl dev` refuses over a reported version | The `breg` it resolved comes from another release than `bregctl`. Install both from the same release, or put the matching build first on `PATH`. |
-| `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 15432. Pass `--breg-port`, `--issuer-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
-| `bregctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed, such as `test.step.failed` with the journey step's own message. Otherwise check that Docker is running. The private logs are under `tutorial-work/project/.breg/dev/logs/`; do not share the credential or secret files beside them. |
-| A create returns `409` with code `idempotency.conflict` | The key is already spent: on a different body, on another write such as a patch, or on the same body under a different package or access profile. Resend the exact first request only to repeat that write; choose a new key for any other write. |
-| A retried write returns `410` with code `idempotency.expired` | The write committed, but its held response passed the receipt horizon, 7 days by default, and the key stays spent. Read the record instead of retrying, and choose a new key for a new write. |
-| A create returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
-| You opened a fresh terminal | Run the `registry_url` and `authorization_header` assignments from [Get a token](#get-a-token) again. The header file and `tutorial-work` directory are still there. |
-
-{/* Evidence: crates/registry-breg/src/idempotency.rs, resolve_binding(), lock_and_load(), and
-    IdempotencyPolicy; crates/registry-breg/src/problem.rs, IdempotencyExpired. */}
-
 ## Next
 
-- [Extend a registry with a module](../extend-a-registry-with-a-module/) to change a field in the project you generated.
-- [Review changes before updating a registry](../review-registry-changes/) to test a configurable approval workflow.
-- [How a configured registry works](../../explanation/configuration-defined-registry/) for the compile model behind what you saw.
-- [Query a registry from Python and Node](../query-breg-client/) to make the same requests from an application.
-- [What you need to run Base Registry Engine](../../operate/breg-requirements/) before you plan a deployment.
-
-With the updated candidate, the dedicated source client is ready for the existing lookup profile.
-To add Evidence
-while keeping records you have edited, stop normally and use
-`bregctl dev export-client --help` for the explicit credential handoff.
-With matching candidate Evidence tools, custom models can add a dedicated lookup
-after use through `evidencectl source add`; it prepares an explicit policy successor
-without resetting the retained records.
-
-{/* Evidence: crates/registry-bregctl/src/dev/prepare_source.rs; crates/registry-evidencectl/src/source_add.rs. */}
+- [Author a registry project](../../configure/breg/)
+- [Declare Actions and Proposals](../../configure/breg-change-control/)
+- [Build a production candidate](../build-a-breg-production-candidate/)

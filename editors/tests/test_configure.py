@@ -45,6 +45,23 @@ class ConfigureTests(unittest.TestCase):
                 self.assertIsNotNone(version)
                 self.assertEqual(version.group(1), expected)
 
+    def test_coordinator_maps_registered_formats_and_offline_check(self):
+        project = self.project(
+            "coordinator", "workflow.yaml",
+            "products/coordinator/examples/delayed-follow-up/workflow.yaml",
+        )
+        configure.configure("coordinator", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(schemas[(managed / "project.schema.json").as_uri()], [str(project / "workflow.yaml")])
+        self.assertEqual(schemas[(managed / "runtime.schema.json").as_uri()], [
+            str(project / "runtime.yaml"), str(project / "runtime.example.yaml"), str(project / "*-runtime.yaml"),
+        ])
+        self.assertEqual(schemas[(managed / "scenarios.schema.json").as_uri()], [str(project / "scenarios.yaml")])
+        tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
+        self.assertEqual(tasks[0]["command"], "coordinatorctl")
+        self.assertEqual(tasks[0]["args"], ["check", "--project", str(project)])
+
     def test_breg_schema_snapshots_tasks_and_idempotent_merge(self):
         project = self.project(
             "breg",
@@ -129,6 +146,44 @@ class ConfigureTests(unittest.TestCase):
         snapshot = (self.workspace / ".vscode/settings.json").read_bytes()
         configure.configure("breg", project, self.workspace, None)
         self.assertEqual((self.workspace / ".vscode/settings.json").read_bytes(), snapshot)
+
+    def test_every_shared_mapping_names_a_maintained_schema(self):
+        for product, mappings in configure.SCHEMAS.items():
+            for source, _ in mappings:
+                with self.subTest(product=product, source=source):
+                    self.assertTrue((ROOT / source).is_file(), source)
+
+    def test_casework_maps_only_current_authored_files(self):
+        project = self.project(
+            "casework",
+            "casework.yaml",
+            "products/casework/examples/multi-stage-routing-clocks/casework.yaml",
+        )
+        configure.configure("casework", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "project.schema.json").as_uri(): [str(project / "casework.yaml")],
+                (managed / "runtime.schema.json").as_uri(): [
+                    str(project / "runtime.yaml"),
+                    str(project / "runtime.example.yaml"),
+                ],
+                (managed / "fixture.schema.json").as_uri(): [
+                    str(project / "fixtures/*.yaml"),
+                    str(project / "fixtures/*.yml"),
+                ],
+                (managed / "holiday-set.schema.json").as_uri(): [
+                    str(project / "holiday-sets/*.yaml"),
+                    str(project / "holiday-sets/*.yml"),
+                ],
+                (managed / "dev-clients.schema.json").as_uri(): [
+                    str(project / "dev-clients.yaml")
+                ],
+            },
+        )
+        self.assertNotIn("simulation.schema.json", {path.name for path in managed.iterdir()})
 
     def test_refuses_jsonc_before_writing_anything(self):
         project = self.project("casework", "casework.yaml")
@@ -260,7 +315,7 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 14)
+        self.assertEqual(len(settings["yaml.schemas"]), 13)
         breg_dev_clients = (breg / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
         self.assertEqual(settings["yaml.schemas"][breg_dev_clients], [str(breg / "dev-clients.yaml")])
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
@@ -374,46 +429,35 @@ class ConfigureTests(unittest.TestCase):
                 self.assertEqual(zed["args"], args)
                 self.assertEqual(zed["cwd"], str(project))
 
-    def test_hosting_cli_must_match_current_source_version(self):
-        version = configure.workspace_version()
-        with patch.object(configure.shutil, "which", return_value="/bin/evidencectl"):
-            with patch.object(
-                configure.subprocess,
-                "run",
-                return_value=subprocess.CompletedProcess([], 0, f"evidencectl {version}-dev\n", ""),
-            ):
-                self.assertEqual(configure.matching_cli("evidencectl"), "/bin/evidencectl")
-            with patch.object(
-                configure.subprocess,
-                "run",
-                return_value=subprocess.CompletedProcess([], 0, "evidencectl 0.2.0\n", ""),
-            ):
-                with self.assertRaisesRegex(configure.SetupError, "must report Registry Stack"):
-                    configure.matching_cli("evidencectl")
+    def test_evidence_schema_setup_uses_the_checkout_without_invoking_a_cli(self):
+        evidence = self.project("evidence", "evidence.yaml")
+        with patch.object(subprocess, "run", side_effect=AssertionError("unexpected CLI invocation")):
+            configure.configure("evidence", evidence, self.workspace, None)
+        state = json.loads((evidence / ".registry-stack-editor/state.json").read_text())
+        self.assertEqual(state["source_version"], configure.workspace_version())
+        for destination, source in state["source_schemas"].items():
+            self.assertEqual(Path(destination).read_bytes(), (ROOT / source).read_bytes())
 
-    def test_evidence_forwards_workspace(self):
+    def test_evidence_configures_its_paths_in_the_shared_workspace(self):
+        evidence = self.project("evidence", "evidence.yaml")
+        configure.configure("evidence", evidence, self.workspace, None)
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        schema = (evidence / ".registry-stack-editor/schemas/project.schema.json").as_uri()
+        self.assertEqual(settings["yaml.schemas"][schema], [str(evidence / "evidence.yaml")])
+        self.assertFalse((evidence / ".vscode").exists())
+        self.assertFalse((evidence / ".evidence-editor").exists())
+
+    def test_evidence_requires_the_normalized_project_marker(self):
         evidence = self.project("evidence", "evidence-project.yaml")
-        with patch.object(configure, "matching_cli", return_value="/bin/evidencectl"):
-            with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
-                configure.configure("evidence", evidence, self.workspace, None)
-        run.assert_called_once_with(
-            [
-                "/bin/evidencectl",
-                "tooling",
-                "editor",
-                str(evidence),
-                "--workspace",
-                str(self.workspace),
-            ],
-            check=False,
-        )
+        (evidence / "source.openapi.yaml").write_text("openapi: 3.1.0\n")
+        (evidence / "questions").mkdir()
+        with self.assertRaisesRegex(configure.SetupError, "evidence project needs evidence.yaml"):
+            configure.configure("evidence", evidence, self.workspace, None)
 
     def test_evidence_maps_its_json_files_through_the_json_language_server(self):
-        evidence = self.project("evidence", "evidence-project.yaml")
-        with patch.object(configure, "matching_cli", return_value="/bin/evidencectl"):
-            with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
-                configure.configure("evidence", evidence, self.workspace, None)
-                configure.configure("evidence", evidence, self.workspace, None)
+        evidence = self.project("evidence", "evidence.yaml")
+        configure.configure("evidence", evidence, self.workspace, None)
+        configure.configure("evidence", evidence, self.workspace, None)
         schemas = evidence / ".registry-stack-editor/schemas"
         schema = schemas / "source-resolution.schema.json"
         profile = schemas / "client-profile.schema.json"
@@ -437,9 +481,18 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             yaml_schemas,
             {
-                (schemas / "selector.schema.json").as_uri(): [str(evidence / "selectors/*.yaml")],
-                (schemas / "source.schema.json").as_uri(): [str(evidence / "sources/*.yaml")],
-                (schemas / "target-settings.schema.json").as_uri(): [str(evidence / "targets/*/settings.yaml")],
+                (schemas / "project.schema.json").as_uri(): [str(evidence / "evidence.yaml")],
+                (schemas / "target.schema.json").as_uri(): [
+                    str(evidence / "*-target.yaml"), str(evidence / "target.yaml"),
+                    str(evidence / "targets/*/target.yaml"),
+                ],
+                (schemas / "target-authority.schema.json").as_uri(): [
+                    str(evidence / "*-authority.yaml"), str(evidence / "authority.yaml"),
+                    str(evidence / "targets/*/authority.yaml"),
+                ],
+                (schemas / "access-client.schema.json").as_uri(): [str(evidence / "access/clients/*.yaml")],
+                (schemas / "fixture.schema.json").as_uri(): [str(evidence / "fixtures/*.yaml")],
+                (schemas / "mock-plan.schema.json").as_uri(): [str(evidence / "mocks/source.yaml")],
             },
         )
         for matches in yaml_schemas.values():
@@ -447,6 +500,52 @@ class ConfigureTests(unittest.TestCase):
                 self.assertFalse(match.endswith(".json"), match)
         self.assertTrue(schema.is_file())
         self.assertTrue(profile.is_file())
+
+    def test_evidence_preserves_independent_cli_settings_and_repeats(self):
+        evidence = self.project("evidence", "evidence.yaml")
+        independent = evidence / ".evidence-editor/manifest.json"
+        independent.parent.mkdir()
+        independent.write_text('{"owner": "evidencectl"}\n')
+        patterns = {
+            "target.schema.json": ["*-target.yaml", "target.yaml", "targets/*/target.yaml"],
+            "target-authority.schema.json": [
+                "*-authority.yaml", "authority.yaml", "targets/*/authority.yaml",
+            ],
+        }
+        cli_mappings = {
+            f"./.evidence-editor/schemas/{name}": matches for name, matches in patterns.items()
+        }
+        for editor, settings in (
+            ("vscode", {"yaml.schemas": cli_mappings, "editor.tabSize": 4}),
+            ("zed", {"lsp": {"yaml-language-server": {"settings": {
+                "yaml": {"schemas": cli_mappings},
+            }}}, "tab_size": 4}),
+        ):
+            path = self.workspace / f".{editor}/settings.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(settings))
+        original_manifest = independent.read_bytes()
+        configure.configure("evidence", evidence, self.workspace, None)
+        snapshot = {
+            path: path.read_bytes() for path in self.workspace.rglob("*") if path.is_file()
+        }
+        configure.configure("evidence", evidence, self.workspace, None)
+        self.assertEqual(snapshot, {path: path.read_bytes() for path in snapshot})
+        self.assertEqual(independent.read_bytes(), original_manifest)
+
+        vscode = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        zed = json.loads((self.workspace / ".zed/settings.json").read_text())
+        self.assertEqual(vscode["editor.tabSize"], 4)
+        self.assertEqual(zed["tab_size"], 4)
+        for mappings in (
+            vscode["yaml.schemas"],
+            zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"],
+        ):
+            for schema, matches in cli_mappings.items():
+                self.assertEqual(mappings[schema], matches)
+            for name, matches in patterns.items():
+                schema = (evidence / ".registry-stack-editor/schemas" / name).as_uri()
+                self.assertEqual(mappings[schema], [str(evidence / pattern) for pattern in matches])
 
     def test_the_readme_names_every_file_evidence_deployment_maps(self):
         readme = (ROOT / "editors/README.md").read_text()
@@ -464,7 +563,6 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             settings["yaml.schemas"],
             {
-                (schemas / "target-governance.schema.json").as_uri(): [str(project / "governance.yaml")],
                 (schemas / "runtime.schema.yaml").as_uri(): [str(project / "runtime.yaml")],
                 (schemas / "bundle.schema.yaml").as_uri(): [str(project / "bundle/evidence.yaml")],
                 (schemas / "codelist.schema.json").as_uri(): [str(project / "bundle/codelists/*.yaml")],

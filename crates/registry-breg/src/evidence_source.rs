@@ -158,30 +158,63 @@ fn field<'a>(entity: &'a CompiledEntity, id: &str) -> Result<&'a CompiledLogical
 
 fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
     match kind {
-        FieldTypeSource::String {max_length,..} | FieldTypeSource::Text {max_length}
-            if *max_length == 0 || *max_length > 65_536 => return Err(refusal("fields","the scalar string bound exceeds Evidence's schema ceiling of 65536 characters; use a smaller fact or a custom adapter")),
-        FieldTypeSource::VocabularyCode {values,..}
-            if values.len() > 256 || values.iter().any(|value| value.chars().count() > 65_536) => return Err(refusal("fields","the vocabulary exceeds Evidence's bounded schema subset; use a reviewed custom adapter")),
-        _ => {},
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length }
+            if *max_length == 0 || *max_length > 65_536 =>
+        {
+            return Err(refusal(
+                "fields",
+                "the scalar string bound exceeds Evidence's schema ceiling of 65536 characters; use a smaller fact or a custom adapter",
+            ));
+        }
+        FieldTypeSource::VocabularyCode { values, .. }
+            if values.len() > 256 || values.iter().any(|value| value.chars().count() > 65_536) =>
+        {
+            return Err(refusal(
+                "fields",
+                "the vocabulary exceeds Evidence's bounded schema subset; use a reviewed custom adapter",
+            ));
+        }
+        _ => {}
     }
     Ok(match kind {
         FieldTypeSource::Boolean => json!({"type":"boolean"}),
-        FieldTypeSource::String { min_length, max_length } => json!({"type":"string","minLength":min_length,"maxLength":max_length}),
+        FieldTypeSource::String {
+            min_length,
+            max_length,
+        } => json!({"type":"string","minLength":min_length,"maxLength":max_length}),
         FieldTypeSource::Text { max_length } => json!({"type":"string","maxLength":max_length}),
         FieldTypeSource::Int64 => json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX}),
-        FieldTypeSource::Decimal { precision, scale, .. } => json!({"type":"string","minLength":1,"maxLength":u32::from(*precision) + u32::from(*scale > 0) + 2}),
-        FieldTypeSource::Date => json!({"type":"string","format":"date","minLength":10,"maxLength":10}),
+        FieldTypeSource::Decimal {
+            precision, scale, ..
+        } => {
+            json!({"type":"string","minLength":1,"maxLength":u32::from(*precision) + u32::from(*scale > 0) + 2})
+        }
+        FieldTypeSource::Date => {
+            json!({"type":"string","format":"date","minLength":10,"maxLength":10})
+        }
         FieldTypeSource::Timestamp => json!({"type":"string","format":"date-time","maxLength":64}),
-        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => json!({"type":"string","minLength":36,"maxLength":36}),
-        FieldTypeSource::VocabularyCode { values, .. } if !values.is_empty() => json!({"type":"string","enum":values,"maxLength":values.iter().map(|value|value.chars().count()).max().unwrap_or(1)}),
-        _ => return Err(refusal("fields", "this field type needs a reviewed custom Evidence adapter; the exporter supports bounded scalar facts")),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
+            json!({"type":"string","minLength":36,"maxLength":36})
+        }
+        FieldTypeSource::VocabularyCode { values, .. } if !values.is_empty() => {
+            json!({"type":"string","enum":values,"maxLength":values.iter().map(|value|value.chars().count()).max().unwrap_or(1)})
+        }
+        _ => {
+            return Err(refusal(
+                "fields",
+                "this field type needs a reviewed custom Evidence adapter; the exporter supports bounded scalar facts",
+            ));
+        }
     })
 }
 
 fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
     let string = |maximum: u64| -> Result<(Value, u64), Diagnostic> {
         if maximum == 0 || maximum > 8192 {
-            return Err(refusal("selectors", "selector exceeds Evidence's 8192-byte bound; use a smaller bounded registry selector or a custom adapter"));
+            return Err(refusal(
+                "selectors",
+                "selector exceeds Evidence's 8192-byte bound; use a smaller bounded registry selector or a custom adapter",
+            ));
         }
         Ok((
             json!({"type":"string","minimumBytes":1,"maximumBytes":maximum}),
@@ -189,14 +222,29 @@ fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
         ))
     };
     match kind {
-        FieldTypeSource::String { min_length: 0, .. } => Err(refusal("selectors", "the selector field accepts an empty value that Evidence's selector profile cannot express; declare minimumLength of at least 1 on the field or use a custom adapter")),
+        FieldTypeSource::String { min_length: 0, .. } => Err(refusal(
+            "selectors",
+            "the selector field accepts an empty value that Evidence's selector profile cannot express; declare minimumLength of at least 1 on the field or use a custom adapter",
+        )),
         FieldTypeSource::String { max_length, .. } => string(u64::from(*max_length) * 4),
-        FieldTypeSource::Date => Ok((json!({"type":"date"}),10)),
-        FieldTypeSource::Boolean => Ok((json!({"type":"boolean"}),5)),
+        FieldTypeSource::Date => Ok((json!({"type":"date"}), 10)),
+        FieldTypeSource::Boolean => Ok((json!({"type":"boolean"}), 5)),
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => string(36),
-        FieldTypeSource::VocabularyCode { values, .. } if !values.is_empty() => string(values.iter().map(|value|value.len() as u64).max().unwrap_or(1)),
-        FieldTypeSource::Int64 => Err(refusal("selectors", "BReg int64 spans values outside Evidence's exact safe-integer selector range; use a bounded string selector or a reviewed custom adapter")),
-        _ => Err(refusal("selectors", "selector cannot be represented losslessly by an Evidence selector profile; use a supported exact scalar selector or a custom adapter")),
+        FieldTypeSource::VocabularyCode { values, .. } if !values.is_empty() => string(
+            values
+                .iter()
+                .map(|value| value.len() as u64)
+                .max()
+                .unwrap_or(1),
+        ),
+        FieldTypeSource::Int64 => Err(refusal(
+            "selectors",
+            "BReg int64 spans values outside Evidence's exact safe-integer selector range; use a bounded string selector or a reviewed custom adapter",
+        )),
+        _ => Err(refusal(
+            "selectors",
+            "selector cannot be represented losslessly by an Evidence selector profile; use a supported exact scalar selector or a custom adapter",
+        )),
     }
 }
 
@@ -237,12 +285,6 @@ pub fn export_evidence_source(
         .entities()
         .get(&options.entity)
         .ok_or_else(|| refusal("entity", "select an entity in the compiled registry"))?;
-    if entity.change_request.is_some() {
-        return Err(refusal(
-            "entity",
-            "change-request lifecycle records require a reviewed custom Evidence adapter",
-        ));
-    }
     let access = entity
         .access_profiles
         .get(&options.access_profile)
@@ -253,7 +295,10 @@ pub fn export_evidence_source(
             )
         })?;
     if !access.operations.contains(&Operation::Lookup) {
-        return Err(refusal("access-profile","the selected profile does not grant lookup; declare and review that authority in BReg first"));
+        return Err(refusal(
+            "access-profile",
+            "the selected profile does not grant lookup; declare and review that authority in BReg first",
+        ));
     }
     // An Evidence runtime is one client answering for many relying parties,
     // so a subject's consent to one recipient cannot follow its assertions.
@@ -292,7 +337,10 @@ pub fn export_evidence_source(
     let mut fact_properties = Map::new();
     for id in &fields {
         if !local_name(id) || !access.readable_fields.contains(id) {
-            return Err(refusal("fields","every exported fact must already be readable under the selected profile and have an Evidence-compatible field name"));
+            return Err(refusal(
+                "fields",
+                "every exported fact must already be readable under the selected profile and have an Evidence-compatible field name",
+            ));
         }
         fact_properties.insert(id.clone(), scalar_schema(&field(entity, id)?.field_type)?);
     }
@@ -300,8 +348,12 @@ pub fn export_evidence_source(
     let mut selector_profiles = BTreeMap::new();
     let mut identity_fields = BTreeMap::new();
     let mut alternatives = Vec::new();
-    let mut prepare = String::from("// Generated from the compiled registry. Review before changing.\nfn prepare(selectors, context) {\n    let subject = selectors[\"subject\"];\n");
-    let mut extract = String::from("// Identity is checked once, before facts can feed any question.\nfn extract(response, selectors, context) {\n    let subject = selectors[\"subject\"];\n    let record = response[\"data\"][\"domainData\"];\n");
+    let mut prepare = String::from(
+        "// Generated from the compiled registry. Review before changing.\nfn prepare(selectors, context) {\n    let subject = selectors[\"subject\"];\n",
+    );
+    let mut extract = String::from(
+        "// Identity is checked once, before facts can feed any question.\nfn extract(response, selectors, context) {\n    let subject = selectors[\"subject\"];\n    let record = response[\"data\"][\"domainData\"];\n",
+    );
     let mut profile_dependencies = Vec::new();
     for selector_id in selectors {
         let selector = entity
@@ -319,14 +371,20 @@ pub fn export_evidence_source(
                 )
             })?;
         if grant.value_origin != LookupValueOrigin::Request {
-            return Err(refusal("selectors","verified-claim lookup values describe the source workload identity, not the Evidence caller; export a request-origin lookup"));
+            return Err(refusal(
+                "selectors",
+                "verified-claim lookup values describe the source workload identity, not the Evidence caller; export a request-origin lookup",
+            ));
         }
         if !selector
             .fields
             .iter()
             .all(|id| access.readable_fields.contains(id))
         {
-            return Err(refusal("selectors","exact identity verification requires the selector fields to be readable under the existing profile; review its explicit read grant first"));
+            return Err(refusal(
+                "selectors",
+                "exact identity verification requires the selector fields to be readable under the existing profile; review its explicit read grant first",
+            ));
         }
         let profile = format!(
             "breg-{}-{}-{}-{}-{}-{}",
@@ -414,7 +472,10 @@ pub fn export_evidence_source(
     }
     prepare.push_str("    throw \"unsupported source selector profile\";\n}\n");
     if all_fields.len() > 64 {
-        return Err(refusal("selectors", "the union of selected identity and fact fields exceeds Evidence's 64 projected properties; split the alternatives into separate sources"));
+        return Err(refusal(
+            "selectors",
+            "the union of selected identity and fact fields exceeds Evidence's 64 projected properties; split the alternatives into separate sources",
+        ));
     }
     extract.push_str(" else { throw \"unsupported source selector profile\"; }\n");
     for id in &fields {
@@ -582,7 +643,7 @@ fn selected_behavior(
                     .find(|entity| entity.source_relation.sql_name == range.relname)
                     .ok_or_else(|| refusal("derived", "compiled SQL source relation is absent"))?;
                 let source_access = source.access_profiles.get(&options.access_profile);
-                let mut behavior = json!({"relation":source.source_relation,"canonicalId":source.canonical_id,"fields":source.stored_fields,"tombstone":source.tombstone,"accessRequirements":source.access_requirements,"rowBoundaries":source_access.map(|access|&access.row_boundaries),"requestVisibility":source_access.and_then(|access|access.request_visibility.as_ref()),"selectPolicies":select_policies(registry,source,&options.access_profile)});
+                let mut behavior = json!({"relation":source.source_relation,"canonicalId":source.canonical_id,"fields":source.stored_fields,"tombstone":source.tombstone,"accessRequirements":source.access_requirements,"rowBoundaries":source_access.map(|access|&access.row_boundaries),"selectPolicies":select_policies(registry,source,&options.access_profile)});
                 let membership = membership_behavior(registry, source, &options.access_profile)?;
                 if !membership.is_empty() {
                     behavior["membershipBoundaries"] = json!(membership);
@@ -598,7 +659,7 @@ fn selected_behavior(
         .map(|boundary| &boundary.field)
         .map(|id| field(entity, id).map(|field| json!(field)))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
+    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
     let membership = membership_behavior(registry, entity, &options.access_profile)?;
     if !membership.is_empty() {
         behavior["access"]["membershipBoundaries"] = json!(membership);

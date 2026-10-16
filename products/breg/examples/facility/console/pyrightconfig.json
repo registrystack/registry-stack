@@ -1,0 +1,6 @@
+{
+  "include": ["console.py", "../../../generated/facility/generated/sdk/project.py"],
+  "extraPaths": ["../../../generated/facility/generated/sdk"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "standard"
+}

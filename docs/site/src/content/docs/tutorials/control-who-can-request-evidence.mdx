@@ -1,6 +1,6 @@
 ---
 title: Control who can request Evidence Gateway
-description: Define access policies, add a client without restarting Evidence Gateway, and observe allowed and refused access.
+description: Assign applications complete target grants and observe an unauthorized request fail closed.
 status: current
 owner: registry-docs
 source_repos:
@@ -18,253 +18,140 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
-You will give two applications different access to that Evidence Gateway service, add one while the service
-is running, and prove that a valid access token does not let its client ask every configured
-question.
+Complete [Return a governed value](../return-a-governed-value/) before starting. You will add two
+task-specific profiles, assign one to each application, and prove that a valid token does not
+authorize every definition in the project.
 
 <QuickstartMeta
-  outcome="Two applications receive different policies, with generation-bound onboarding, refusal, and revocation."
+  outcome="Two applications receive distinct complete grants and a cross-grant request is refused."
   time="About 15 minutes"
   level="Local development with synthetic data"
   prerequisites={[
     'The completed governed-value tutorial',
-    'Its adult-status project and materialized source mock',
-    'Python 3',
-    'A shell with curl',
+    'Its normalized standalone project',
+    'Python 3 and curl',
   ]}
 />
 
-## Understand what you are controlling
+## Define complete access profiles
 
-This tutorial manages access for machine applications, not accounts for people.
-
-The pinned local issuer authenticates each application from its own key and issues a short-lived access
-token. Evidence Gateway then checks whether the application's access policy includes the configured
-question. These are separate decisions:
-
-| Decision | Example | Owner |
-| --- | --- | --- |
-| Which application is calling? | `age-checker` | Local issuer client registration |
-| What may it ask? | The `age-checks` policy includes `adult-status` | Evidence Gateway access policy |
-| May Evidence Gateway read its source? | `GET /people/{person_id}` | Evidence Gateway source configuration |
-| May a consumer trust the result? | Expected issuer, audience, and signing key | Consumer verification policy |
-
-The first two rows are the access-management boundary you will configure. Source credentials and
-consumer trust remain independent.
-
-Access policies are part of Evidence Gateway's immutable governed configuration. Client membership is
-part of the local issuer generation:
-
-| Change | Runtime effect |
-| --- | --- |
-| Add or revoke a client | Stop the local session, change the reviewed registry, and start a new generation |
-| Add a question or change an access policy | Start a new Evidence Gateway generation |
-
-A client change affects the next local generation. Stopping that generation also stops its issuer.
-
-## Restart the source mock
-
-In one terminal, return to the working directory from the first tutorial and serve the checked
-synthetic cases:
-
-```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
-evidencectl source mock serve --config adult-status/mocks/source.yaml
-```
-
-Leave the source mock running. In another terminal, enter the project containing both questions:
+Enter the copied project:
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-The project has these two governed questions:
+The existing `standalone-service` profile keeps the earlier tutorials composable. Add two narrow
+profiles for these applications to the end of `dev-authority.yaml`, at the same indentation as
+`standalone-service`:
 
-| Question | Declared purpose | Answer |
-| --- | --- | --- |
-| `adult-status` | `age-check` | Boolean adult status |
-| `age-bracket` | `service-path-selection` | One reviewed age bracket |
-
-An access policy names one or more questions. Each question already fixes its purpose, subject
-shape, source, and possible answers, so you do not repeat those fields in the policy.
-
-## Define two access policies
-
-Define a policy for each service task:
-
-```sh
-evidencectl access policy add age-checks --question adult-status
-evidencectl access policy add service-routing --question age-bracket
+```yaml title="dev-authority.yaml" test-append
+  age-checker-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - age-checker-service
+    grants:
+    - definition: adult-status
+      purpose: age-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: record-by-id
+        valueOrigin: request
+  region-router-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - region-router-service
+    grants:
+    - definition: residence-region
+      purpose: residence-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: record-by-id
+        valueOrigin: request
 ```
 
-```text test-expect
-Added access policy age-checks for adult-status.
-Added access policy service-routing for age-bracket.
-```
+Each grant repeats the complete authorized request shape. The target compiler checks it against the
+project's grant ceiling. A profile cannot widen the definition's allowed authority, actor kind,
+value origin, audience, subject binding, or representation.
 
-Review the governed policies before starting Evidence Gateway:
-
-```sh
-evidencectl access policy list
-```
-
-The command prints a tab-separated `POLICY` and `QUESTIONS` table, one row per policy: `age-checks`
-holding `adult-status`, and `service-routing` holding `age-bracket`.
-
-The commands write the reviewable policy documents to `access/policies/age-checks.yaml` and
-`access/policies/service-routing.yaml`.
-Many clients can share one policy. A client can also belong to several policies when their question
-sets do not overlap. `evidencectl` rejects overlapping policy assignments because they would make
-the access decision ambiguous. Adding a question to either policy later changes the governed
-authorization boundary and requires a new Evidence Gateway generation.
-
-## Register the first local application
-
-Register `age-checker` under the `age-checks` policy:
+Check the edited target, then register each application under one profile:
 
 ```sh
+evidencectl check . --target local-target.yaml
 evidencectl access client add age-checker \
-  --policy age-checks \
+  --access-profile age-checker-service \
   --generate-local-key
-```
-
-```text test-expect
-Added client age-checker with policy age-checks.
-```
-
-`--generate-local-key` keeps this tutorial self-contained. The private key represents the
-application's identity and remains owner-only at
-`.evidence/clients/age-checker/private.jwk`. The reviewable registration at
-`access/clients/age-checker.yaml` contains the policy membership and public key, never the private
-key.
-
-## Start the protected service
-
-Compile the questions and both access policies, then start Evidence Gateway and its local issuer:
-
-```sh
-evidencectl dev start .
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
-```
-
-The local issuer recognizes `age-checker`. Evidence Gateway has both access policies available, even though
-no client belongs to `service-routing` yet.
-
-## Make an allowed request
-
-Prepare an adult-status request as `age-checker`:
-
-```sh
-evidencectl request prepare adult-status \
-  --purpose age-check \
-  --subject person_id=person-123 \
-  --client age-checker \
-  --name age-checker-allowed
-```
-
-The Evidence client prepares the request and closes its pinned verification expectations locally.
-`evidencectl` separately signs a one-time client assertion with the local application key and
-exchanges it with the local issuer for a short-lived access token. Preparation sends no HTTP request
-to Evidence Gateway and performs no source access.
-
-Send the request across the Evidence Gateway HTTP boundary:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/age-checker-allowed/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/age-checker-allowed/request.json \
-  --output age-checker-allowed.jws.json \
-  --write-out 'HTTP %{http_code}\n'
-```
-
-```text test-expect
-HTTP 200
-```
-
-Verify the response before reading it:
-
-```sh
-evidencectl verify age-checker-allowed.jws.json \
-  --context .evidence/requests/age-checker-allowed/verification.json \
-  --output age-checker-allowed.verified.json
-```
-
-```text test-expect
-VERIFIED
-```
-
-The application was authenticated, its `age-checks` policy matched the request, and Evidence Gateway
-called the registry only after both checks passed.
-
-## Add an application for the next generation
-
-Stop the current session, then register `service-router` under the existing `service-routing`
-policy:
-
-```sh
-evidencectl dev stop
-evidencectl access client add service-router \
-  --policy service-routing \
+evidencectl access client add region-router \
+  --access-profile region-router-service \
   --generate-local-key
-```
-
-```text test-excerpt
-Added client service-router with policy service-routing.
-```
-
-The command writes the public registration to `access/clients/service-router.yaml`, keeps the
-private key under `.evidence/clients/`, and leaves the stopped generated session unchanged. Start a
-fresh generation so Evidence Gateway and the issuer consume one validated snapshot:
-
-```sh
-evidencectl dev start .
-```
-
-Review the active client assignments:
-
-```sh
 evidencectl access client list
 ```
 
-The command prints a tab-separated `CLIENT`, `STATUS`, and `POLICIES` table. Both `age-checker` and
-`service-router` are `active`, each under the single policy it was registered with.
+Client registration binds an identity to reviewed target authority. It does not copy grant fields
+into a separate policy document.
 
-## Use the application assigned the policy
+## Start the protected service
 
-Prepare an age-bracket request as `service-router`:
+In another terminal, start the synthetic source:
 
-```sh
-evidencectl request prepare age-bracket \
-  --purpose service-path-selection \
-  --subject person_id=person-456 \
-  --client service-router \
-  --name service-router-allowed
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
 ```
 
-Send and verify the response:
+Back in the project terminal, start one generation containing the project, target, authority, and
+client registry:
+
+```sh
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
+```
+
+```text test-excerpt
+Evidence ready at http://127.0.0.1:18080
+```
+
+## Prove the age checker's grant
+
+Prepare the request that `age-checker-service` grants:
+
+```sh
+evidencectl request prepare adult-status \
+  --client age-checker \
+  --purpose age-check \
+  --subject subject:record-id=adult \
+  --name age-allowed
+```
+
+Send and verify it:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/service-router-allowed/authorization.curl \
+  --config .evidence/requests/age-allowed/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/service-router-allowed/request.json \
-  --output service-router-allowed.jws.json \
+  --data-binary @.evidence/requests/age-allowed/request.json \
+  --output age-allowed.jws.json \
   --write-out 'HTTP %{http_code}\n'
 
-evidencectl verify service-router-allowed.jws.json \
-  --context .evidence/requests/service-router-allowed/verification.json \
-  --output service-router-allowed.verified.json
+evidencectl verify age-allowed.jws.json \
+  --context .evidence/requests/age-allowed/verification.json \
+  --output age-allowed.verified.json
 ```
 
 ```text test-expect
@@ -272,40 +159,30 @@ HTTP 200
 VERIFIED
 ```
 
-The successful token exchange proves that the new issuer generation accepted the client registry.
-`service-router` belongs to the policy required for this question. Preparation made zero Evidence
-Gateway HTTP requests, `curl` made the single `POST /v1/evidence` assertion request, and
-`evidencectl verify` checked the response offline.
+## Cross the authorization boundary
 
-## Try a question the application was not granted
-
-Prepare the same age-bracket request using the `age-checker` identity:
+Prepare a valid region request as `region-router`. Preparation sends nothing to Evidence Gateway:
 
 ```sh
-evidencectl request prepare age-bracket \
-  --purpose service-path-selection \
-  --subject person_id=person-456 \
-  --client age-checker \
-  --name age-checker-refused
+evidencectl request prepare residence-region \
+  --client region-router \
+  --purpose residence-check \
+  --subject subject:record-id=adult \
+  --name region-prepared
 ```
 
-The command can prepare the request because `age-bracket` is a valid project question and
-`age-checker` is a registered client. The client preparation path closes the request and its
-verification expectations without calling Evidence Gateway or deciding whether this application
-may ask the question. The local issuer only issues the token. Evidence Gateway makes the authorization
-decision when you send the request.
-
-Send the request:
+Now send that region body with `age-checker`'s valid authorization. The token is authentic, but its
+profile grants only `adult-status`:
 
 ```sh
 curl --silent --show-error \
-  --config .evidence/requests/age-checker-refused/authorization.curl \
+  --config .evidence/requests/age-allowed/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/age-checker-refused/request.json \
-  --output age-checker-refused.json \
+  --data-binary @.evidence/requests/region-prepared/request.json \
+  --output region-denied.json \
   --write-out 'HTTP %{http_code}\n'
 ```
 
@@ -313,123 +190,22 @@ curl --silent --show-error \
 HTTP 403
 ```
 
-Inspect the safe problem response:
-
-```sh
-python3 -m json.tool age-checker-refused.json
-```
-
-```json test-expect
-{
-  "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
-  "title": "Evidence request is not permitted",
-  "status": 403,
-  "detail": "the Evidence request is not permitted",
-  "code": "evidence.denied",
-  "traceId": "<trace-id>"
-}
-```
-
-The access token is valid, but the client's `age-checks` policy does not authorize the
-`age-bracket` question. Changing only the authenticated application changes the access decision.
-The registry terminal shows no new `GET /people/person-456`, because Evidence Gateway refuses the
-request before source access. The response does not reveal which application, question, or policy
-caused the refusal.
-
-## Revoke an application
-
-Stop the generation after the refusal and inspect its completed audit log before replacing it:
-
-```sh
-evidencectl dev stop
-evidencectl audit show --last-operation
-```
-
-```text test-expect
-Local Evidence stopped
-ACCESS REFUSED requester=<pseudonym> reason=not-authorized
-```
-
-The privacy-safe refusal event contains a requester pseudonym and the closed `not-authorized`
-reason. It does not contain the rejected requirement, purpose, selector, authority, response format,
-client identifier, or access token.
-
-Revoke `age-checker` while the session is stopped, then start the next generation:
-
-```sh
-evidencectl access client revoke age-checker
-evidencectl dev start .
-```
-
-```text test-expect
-Revoked client age-checker (removed local private key .evidence/clients/age-checker).
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
-```
-
-The command updates `access/clients/age-checker.yaml`. The next issuer generation excludes the
-revoked client.
-
-Try to prepare a fresh request as the revoked client:
-
-```sh test-exit="1"
-evidencectl request prepare adult-status \
-  --purpose age-check \
-  --subject person_id=person-123 \
-  --client age-checker \
-  --name age-checker-revoked
-```
-
-```text test-expect
-evidencectl: unknown or revoked active client age-checker
-```
-
-`evidencectl` rejects an unknown or revoked named client locally, before contacting the issuer
-or publishing request artifacts. `service-router` remains registered and keeps its
-`service-routing` membership.
-
-## Stop the final generation
-
-Stop the local services:
-
-```sh
-evidencectl dev stop
-```
-
-```text test-expect
-Local Evidence stopped
-```
-
-The revoked-client preparation remains local and creates no Evidence Gateway audit event because no
-HTTP request was sent.
+The public problem is `evidence.denied`. It does not reveal the missing grant, source facts,
+selector, or credentials. Evidence Gateway refuses the request before source access.
 
 ## Clean up
 
-Remove the stopped generated runtime while preserving the editable questions, access policy, and
-request artifacts:
-
 ```sh
-evidencectl dev clean
+evidencectl dev stop .
+evidencectl audit show --last-operation
+evidencectl dev clean .
 ```
 
-Return to the registry terminal and press `Ctrl+C`.
-
-## What you proved
-
-- Authentication identifies the calling application but grants no question by itself.
-- Many applications can share a governed access policy without client-specific Evidence Gateway config.
-- A client registry change takes effect only through one newly validated local generation.
-- Each application receives only the questions included in its assigned policies.
-- Evidence Gateway refuses unauthorized questions before reading the source.
-- Evidence Gateway retains a privacy-safe audit event for an authenticated authorization refusal.
-- Revoking a local client excludes it from the next issuer generation and prevents local request
-  preparation.
-- Adding a question or changing an access policy requires a new Evidence Gateway generation.
-- Source authentication and consumer trust remain separate from caller access.
+The tutorial runner stops the synthetic source. If you started it by hand, press `Ctrl+C` in its
+terminal.
 
 ## Next
 
-- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
+- [Request Evidence from your application](../request-evidence-from-an-application/)
 - [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
 - [Configure Evidence Gateway](../../configure/evidence/)
-- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

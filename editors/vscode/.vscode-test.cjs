@@ -7,8 +7,20 @@ const path = require('node:path');
 const { defineConfig } = require('@vscode/test-cli');
 const extensionVersion = require('./package.json').version;
 
-const testRunDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-stack-vscode-'));
-const trustedUserData = path.join(testRunDirectory, 'trusted-user-data');
+// VS Code's macOS watcher does not deliver external edits for projects in OS tmp.
+// Keep disposable projects in the ignored test cache so the reload assertion uses
+// the same filesystem-watching path as an ordinary contributor project.
+const testCacheDirectory = path.join(__dirname, '.vscode-test');
+fs.mkdirSync(testCacheDirectory, { recursive: true });
+const testRunDirectory = fs.mkdtempSync(path.join(testCacheDirectory, 'workspace-'));
+// Electron's IPC socket path is bounded, so user data uses a short separate path.
+const trustedUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-code-'));
+process.on('exit', (code) => {
+  if (code === 0) {
+    fs.rmSync(testRunDirectory, { recursive: true, force: true });
+    fs.rmSync(trustedUserData, { recursive: true, force: true });
+  }
+});
 const projectAlpha = path.join(testRunDirectory, 'project-alpha');
 const projectBeta = path.join(testRunDirectory, 'project-beta');
 const projectEvidence = path.join(testRunDirectory, 'project-evidence');
@@ -24,7 +36,7 @@ const legacyEvidencectlWrapper = path.join(testRunDirectory, 'legacy-bin', 'evid
 const installerMetadata = path.join(__dirname, 'dist', 'registry-stack-cli-path');
 fs.mkdirSync(projectAlpha, { recursive: true });
 fs.mkdirSync(projectBeta, { recursive: true });
-fs.mkdirSync(path.join(projectEvidence, 'selectors'), { recursive: true });
+fs.mkdirSync(projectEvidence, { recursive: true });
 fs.mkdirSync(pathBinDirectory, { recursive: true });
 fs.mkdirSync(path.dirname(legacyEvidencectlWrapper), { recursive: true });
 writeToolingLanguageServerWrapper(evidencectlWrapper);
@@ -41,14 +53,9 @@ fs.writeFileSync(
   'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: beta-registry }\n',
 );
 fs.writeFileSync(
-  path.join(projectEvidence, 'evidence-project.yaml'),
-  'apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\n',
+  path.join(projectEvidence, 'evidence.yaml'),
+  normalizedEvidenceProject('smoke-project', 'smoke'),
 );
-fs.writeFileSync(
-  path.join(projectEvidence, 'source.openapi.yaml'),
-  'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
-);
-fs.writeFileSync(path.join(projectEvidence, 'selectors', 'smoke.yaml'), 'fields: {}\n');
 fs.writeFileSync(
   workspaceFolder,
   JSON.stringify({
@@ -60,6 +67,26 @@ fs.writeFileSync(
   }),
 );
 process.env.PATH = `${path.dirname(legacyEvidencectlWrapper)}${path.delimiter}${pathBinDirectory}${path.delimiter}${process.env.PATH ?? ''}`;
+
+function normalizedEvidenceProject(id, selector) {
+  return [
+    'apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1',
+    'kind: EvidenceProject',
+    `id: ${id}`,
+    'selectorProfiles:',
+    `  ${selector}:`,
+    '    maximumAggregateBytes: 64',
+    '    fields:',
+    '      record-id:',
+    '        type: string',
+    '        minimumBytes: 1',
+    '        maximumBytes: 64',
+    'functions: []',
+    'sources: {}',
+    'assertionDefinitions: {}',
+    '',
+  ].join('\n');
+}
 
 function writeToolingLanguageServerWrapper(wrapperPath) {
   fs.writeFileSync(

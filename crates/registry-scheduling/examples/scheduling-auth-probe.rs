@@ -96,8 +96,8 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
             assertion_issuers: assertion_issuers.clone(),
         },
         scope_claim: "scope".to_owned(),
-        reads_scope: "scheduling-read".to_owned(),
-        explain_scope: "scheduling-explain".to_owned(),
+        reads_scope: "scheduling:read".to_owned(),
+        explain_scope: "scheduling:explain".to_owned(),
     };
     let verifier = TokenVerifierConfig::access_token_profile(
         input.issuer,

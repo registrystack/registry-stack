@@ -512,8 +512,9 @@ provision_database "$production_database" production
 
 checkpoint "authoring the project both environments promote"
 project_1="$temporary_root/project-1"
-run_json "$temporary_root/init.json" init "$project_1"
-assert_json_ok "$temporary_root/init.json" init
+cp -R "$repository_root/products/breg/fixtures/generic-operator-workflows" "$project_1"
+run_json "$temporary_root/lock.json" project lock "$project_1"
+assert_json_ok "$temporary_root/lock.json" "project lock"
 python3 - "$project_1/registry.yaml" <<'PY'
 import sys
 from pathlib import Path
@@ -601,7 +602,7 @@ checkpoint "exporting the Evidence source from each environment's checkout"
 for environment in staging production; do
   cp -R "$project_1" "$temporary_root/checkout-$environment"
   run_json "$temporary_root/evidence-source-$environment.json" generate evidence-source \
-    "$temporary_root/checkout-$environment" --access-profile evidence-source --entity record \
+    "$temporary_root/checkout-$environment" --access-profile evidence-source --record-type record \
     --selector by-code --fields code,status --source-id registry-record --connection registry \
     --output "$temporary_root/evidence-source-$environment"
   assert_json_ok "$temporary_root/evidence-source-$environment.json" generate
@@ -657,8 +658,8 @@ covers = [{"code": item["change"]["code"], "target": item["change"]["target"]}
 if [cover["code"] for cover in covers] != ["field-removed"]:
     raise SystemExit(f"the successor did not remove exactly one field: {covers}")
 model = json.loads((package / "effective-model.json").read_text())
-entity = model["entities"]["record"]
-table, column = entity["physicalTable"], entity["fields"]["legacy-note"]["physicalName"]
+record_type = model["recordTypes"]["record"]
+table, column = record_type["physicalTable"], record_type["fields"]["legacy-note"]["physicalName"]
 
 def canonical(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
@@ -677,7 +678,7 @@ descriptor = {
     "recovery": "exact-target-resume", "lockTimeoutMilliseconds": 1000,
     "statementTimeoutMilliseconds": 60000,
     "steps": [{"type": "transactional-sql", "id": "drop", "sqlPath": f"{base}/steps/drop.sql",
-               "objects": [{"schema": "registry_data", "table": table, "entity": "record",
+               "objects": [{"schema": "registry_data", "table": table, "recordType": "record",
                             "kind": "field", "member": "legacy-note", "physicalName": column}]}],
     "preAssertions": [{"id": "pre", "sqlPath": f"{base}/assertions/pre.sql"}],
     "postAssertions": [{"id": "post", "sqlPath": f"{base}/assertions/post.sql"}],

@@ -46,8 +46,8 @@ eventDestinations:
     deliveryCeilings:
       attemptTimeoutMilliseconds: 1000
       maximumAttempts: 3
-eventDelivery:
-  payloadRetentionDays: 7
+retention:
+  hookPayloadRetentionDays: 7
 ```
 
 The destination's `classificationCeiling` must cover the event's derived classification; a binding
@@ -59,13 +59,13 @@ The `production-https` profile refuses `localhost` and every `*.localhost` name 
 configuration validation, including absolute names with a trailing dot. Use the loopback profile
 for a receiver on the same development host.
 
-Lifecycle events whose transition and state filters permit application have an `internal`
-classification floor: their system request envelope may contain the applier's explanation.
-Filters excluding application retain the event's ordinary derived classification.
-The destination must permit that classification even when the record projection contains only
-public fields. Reader grants that hide reason text do not change webhook delivery authority.
+Native Proposal events use their dedicated value-free lifecycle schema and
+compiled destination binding. Record events derive classification from all
+projected and condition fields. Check the selected event contract independently
+of a human reader's display-field grant.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs request_event_may_include_reason and compile_event_delivery_inventory; crates/registry-breg/src/request_events.rs. */}
+{/* Evidence: crates/registry-breg/src/proposal_hooks.rs;
+    crates/registry-breg/src/proposal_events.rs; crates/registry-breg/src/compiler.rs. */}
 
 A binding may tighten the compiled ceilings and never widen them; the example tightens both.
 `bregctl explain events <project>` reports the compiled values per delivery: five attempts with a
@@ -165,7 +165,7 @@ its payload is retained. Older deliveries, and deployments awaiting a schema upd
 that reason. `bindingActive` reports whether the exact captured binding is deployed;
 `replayEligible` is true only while that binding and the retained payload are available.
 Successful delivery erases the payload once no sibling delivery needs it, and retained payloads
-expire after `payloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not
+expire after `retention.hookPayloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not
 proof of success: completed
 deliveries are excluded, so confirm effects from the receiver's own record. Replay keeps the event
 id and issues a new generation and idempotency key; if the receiver's earlier effect is uncertain,
@@ -234,4 +234,4 @@ authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
 - [Base Registry Engine API reference](../../reference/breg-api/) for the delivery request shape,
   the signing input, and the CloudEvents headers.
 - [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
-  `eventDestinations` and `eventDelivery` key.
+  `eventDestinations` and `retention` key.

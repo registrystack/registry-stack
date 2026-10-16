@@ -322,6 +322,7 @@ pub struct TemplateMessageRequest {
 
 /// Content a caller supplies instead of naming a template.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DirectContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]

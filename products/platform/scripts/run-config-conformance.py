@@ -127,6 +127,11 @@ fails the run too, as does an unlisted unreached format or inapplicable case.
 is the only writer, and it records no cell that leaks, crashes, times out, or
 that the harness could not run; it exits 1 when it leaves one out.
 
+`--only-format` checks format-specific harness and expected-failure references
+for the selected formats. It still validates the shared case corpus and
+inapplicable-case references. An unfiltered run validates every format
+reference in the registry and corpus metadata.
+
 Run through products/platform/scripts/run-config-conformance.sh, which
 provides PyYAML.
 """
@@ -1608,9 +1613,12 @@ def load_harness(path: Path) -> dict[str, dict[str, Any]]:
             raise HarnessError(f"{path.name}: {format_id}: `prepare` is not a list of commands")
         init = harness.get("init")
         if init is not None and not (
-            isinstance(init, dict) and set(init) == {"command", "file"} and all(isinstance(v, str) for v in init.values())
+            isinstance(init, dict)
+            and {"command", "file"} <= set(init) <= {"command", "file", "association"}
+            and all(isinstance(v, str) for v in init.values())
+            and ("association" not in init or (format_id == "breg/project" and init["association"] == "native-kind"))
         ):
-            raise HarnessError(f"{path.name}: {format_id}: `init` needs exactly `command` and `file`, both text")
+            raise HarnessError(f"{path.name}: {format_id}: `init` needs command and file; only breg/project may select association: native-kind")
     return formats
 
 
@@ -1857,6 +1865,33 @@ def modeline_problems(path: Path, name: str, schema_id: str | None) -> list[str]
     return [f"the modeline in {name} names neither the format's schema `$id` nor a local copy of that schema"]
 
 
+def native_kind_schema_problems(path: Path, name: str, kind: str | None, schema_path: str | None, schema_id: str | None) -> list[str]:
+    """Bind BReg init's native envelope to the schema selected by its editor kind catalog.
+
+    The native LSP catalog recognizes BRegProject and its exact project version;
+    no modeline or generated runtime scaffold is needed for that association.
+    Other products retain their existing modeline proof.
+    """
+    if not path.is_file():
+        return [f"init wrote no {name}"]
+    if schema_path is None or schema_id is None:
+        return ["the native kind association needs a registered schema"]
+    document = load_yaml(path)
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    if not isinstance(schema, dict) or schema.get("$id") != schema_id:
+        return ["the registered schema does not declare its registered identifier"]
+    properties = schema.get("properties", {})
+    if kind != "BRegProject" or properties.get("kind", {}).get("const") != kind:
+        return ["the native editor kind is not bound to the registered schema"]
+    if not isinstance(document, dict):
+        return ["init did not write a native project mapping"]
+    for member in ("apiVersion", "kind"):
+        expected = properties.get(member, {}).get("const")
+        if expected is None or document.get(member) != expected:
+            return [f"init's {member} does not select the registered native schema"]
+    return []
+
+
 def run_init_cell(fmt: Format, bin_dir: Path) -> list[str]:
     """Run the format's init command in a fresh directory and check the modeline of the file it writes."""
     init = fmt.harness["init"]
@@ -1869,7 +1904,10 @@ def run_init_cell(fmt: Format, bin_dir: Path) -> list[str]:
         code, stdout, stderr = run_command(argv, work, check_environment(bin_dir))
         problems = exit_problem(code, 0, stderr, "init: ") + marker_problems(stdout, stderr)
         if code == 0:
-            problems += modeline_problems(work / "init" / init["file"], init["file"], fmt.schema_id)
+            if init.get("association") == "native-kind":
+                problems += native_kind_schema_problems(work / "init" / init["file"], init["file"], fmt.kind, fmt.schema, fmt.schema_id)
+            else:
+                problems += modeline_problems(work / "init" / init["file"], init["file"], fmt.schema_id)
         return list(dict.fromkeys(sanitize(problem, str(work)) for problem in problems))
     finally:
         remove_tree(work)
@@ -2000,18 +2038,35 @@ def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str
     return Plan(reached, skipped, listed, cells, inapplicable, init_only)
 
 
-def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[Case], harness: dict[str, Any]) -> None:
+def validate_ids(
+    expected: ExpectedFailures,
+    formats: list[Format],
+    cases: list[Case],
+    harness: dict[str, Any],
+    only_formats: set[str] | None = None,
+) -> None:
+    """Validate the whole registry, or references applicable to selected formats.
+
+    Corpus-wide inapplicable case references remain shared in either mode.
+    Unknown selectors are refused separately before a scoped validation.
+    """
     format_ids = {fmt.id for fmt in formats}
     case_ids = {case.id for case in cases}
     for format_id in harness:
+        if only_formats is not None and format_id not in only_formats:
+            continue
         if format_id not in format_ids:
             raise HarnessError(f"formats.yaml names {format_id}, which the registry does not")
     for format_id, case_id in expected.failures:
+        if only_formats is not None and format_id not in only_formats:
+            continue
         if format_id not in format_ids:
             raise HarnessError(f"expected-failures.yaml names format {format_id}, which the registry does not")
         if not names_case(case_id, cases):
             raise HarnessError(f"expected-failures.yaml names case {case_id}, which the corpus does not")
     for format_id in expected.unreached:
+        if only_formats is not None and format_id not in only_formats:
+            continue
         if format_id not in format_ids:
             raise HarnessError(f"expected-failures.yaml names format {format_id}, which the registry does not")
     for case_id in expected.inapplicable:
@@ -2052,8 +2107,8 @@ def main(argv: list[str] | None = None) -> int:
         cases = load_cases(corpus / "cases")
         harness = load_harness(corpus / "formats.yaml")
         expected = load_expected_failures(expected_path)
-        validate_ids(expected, formats, cases, harness)
         validate_selectors(args, formats, cases)
+        validate_ids(expected, formats, cases, harness, set(args.only_format) if args.only_format else None)
         if not any(case.id == BASELINE for case in cases):
             raise HarnessError(f"the corpus has no `{BASELINE}` case")
         selected = [f for f in formats if not args.only_format or f.id in args.only_format]

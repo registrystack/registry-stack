@@ -79,6 +79,18 @@ pub const MIGRATION_DESCRIPTOR_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey {
+            pointer: "/steps/*/entity",
+            replacement: "Rename `entity` to `recordType`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/entityId",
+            replacement: "Rename `entityId` to `recordType`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/objects/*/entity",
+            replacement: "Rename `entity` to `recordType`.",
+        },
+        RemovedKey {
             pointer: "/lockTimeoutMs",
             replacement: "Rename `lockTimeoutMs` to `lockTimeoutMilliseconds`.",
         },
@@ -96,7 +108,7 @@ pub const MIGRATION_DESCRIPTOR_FORMAT: FormatSpec<'static> = FormatSpec {
         },
         RemovedKey {
             pointer: "/steps/*/entity_id",
-            replacement: "Rename `entity_id` to `entity`.",
+            replacement: "Rename `entity_id` to `recordType`.",
         },
         RemovedKey {
             pointer: "/steps/*/affected_rows",
@@ -132,7 +144,7 @@ pub const MIGRATION_DESCRIPTOR_FORMAT: FormatSpec<'static> = FormatSpec {
         },
         RemovedKey {
             pointer: "/steps/*/objects/*/entityId",
-            replacement: "Rename `entityId` to `entity`.",
+            replacement: "Rename `entityId` to `recordType`.",
         },
         RemovedKey {
             pointer: "/steps/*/objects/*/memberId",
@@ -549,8 +561,8 @@ pub enum ReviewedMigrationStepDescriptor {
         #[serde(deserialize_with = "members::local_id")]
         #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
-        /// The document member `entity`.
-        #[serde(rename = "entity")]
+        /// The document member `recordType`.
+        #[serde(rename = "recordType")]
         entity_id: String,
         sql_path: String,
         objects: Vec<ReviewedMigrationObject>,
@@ -600,8 +612,8 @@ pub enum ReviewedMigrationStepDescriptor {
         #[serde(deserialize_with = "members::local_id")]
         #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
-        /// The document member `entity`.
-        #[serde(rename = "entity")]
+        /// The document member `recordType`.
+        #[serde(rename = "recordType")]
         entity_id: String,
         objects: Vec<ReviewedMigrationObject>,
         cursor: ChunkCursorProtocol,
@@ -705,8 +717,8 @@ impl ReviewedMigrationStepDescriptor {
 pub struct ReviewedMigrationObject {
     pub schema: String,
     pub table: String,
-    /// The document member `entity`.
-    #[serde(rename = "entity")]
+    /// The document member `recordType`.
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub kind: ReviewedMigrationObjectKind,
     /// The document member `member`.
@@ -2884,8 +2896,6 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::ActionAdded
                 | CompiledRegistryChangeCode::ActionRemoved
                 | CompiledRegistryChangeCode::ActionChanged
-                | CompiledRegistryChangeCode::ActionVocabularyCodesAdded
-                | CompiledRegistryChangeCode::ActionTargetFieldsWidened
                 | CompiledRegistryChangeCode::RecipientOrganizationAdded
                 | CompiledRegistryChangeCode::RecipientOrganizationRemoved
                 | CompiledRegistryChangeCode::RecipientOrganizationChanged

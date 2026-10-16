@@ -36,13 +36,13 @@ class ConstructionTests(unittest.TestCase):
         with self.assertRaises(CaseworkClientError) as raised:
             client.create_or_recover_review_request(
                 "valid-token", "requester", "create-key", {
-                    "kind": "decision",
+                    "policy": {"id":"decision", "version":"1", "digest": f"sha256:{'a' * 64}"},
                     "subject": {
                         "source": "source", "type": "case", "id": "one", "version": "1",
                         "digest": f"sha256:{'a' * 64}",
                     },
                     "requesterReference": "reference",
-                    "context": {"strategy": "submitted", "snapshot": display},
+                    "context": {"mode": "submitted", "snapshot": display},
                 },
                 f"sha256:{'b' * 64}",
             )

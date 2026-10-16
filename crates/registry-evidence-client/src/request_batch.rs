@@ -55,6 +55,7 @@ pub struct EvidenceRequestBatchItemSpec {
 /// one network use of every nonce in the batch, even when that attempt fails.
 pub struct PreparedEvidenceRequestBatch {
     requirement: String,
+    configuration_revision: String,
     purpose: String,
     items: Vec<PreparedEvidenceRequest>,
     sent: AtomicBool,
@@ -118,6 +119,7 @@ impl PreparedEvidenceRequestBatch {
 
         Ok(Self {
             requirement,
+            configuration_revision,
             purpose,
             items,
             sent: AtomicBool::new(false),
@@ -170,6 +172,7 @@ impl PreparedEvidenceRequestBatch {
     pub fn request_json(&self) -> Result<Vec<u8>, EvidenceClientError> {
         let body = EvidenceRequestBatchBody {
             requirement: &self.requirement,
+            expected_configuration_revision: &self.configuration_revision,
             purpose: &self.purpose,
             items: self
                 .items
@@ -221,6 +224,7 @@ impl std::fmt::Debug for PreparedEvidenceRequestBatch {
 #[serde(rename_all = "camelCase")]
 struct EvidenceRequestBatchBody<'a> {
     requirement: &'a str,
+    expected_configuration_revision: &'a str,
     purpose: &'a str,
     items: Vec<EvidenceRequestBatchItemBody<'a>>,
 }
@@ -389,6 +393,7 @@ mod tests {
             request,
             serde_json::json!({
                 "requirement": REQUIREMENT,
+                "expectedConfigurationRevision": CONFIGURATION_REVISION,
                 "purpose": PURPOSE,
                 "items": [
                     {

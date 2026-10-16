@@ -57,7 +57,9 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://webhook-sample.example.test
-entities:
+datasets:
+  - id: test-dataset
+recordTypes:
   - id: record
     primaryDataset: test-dataset
     route: records

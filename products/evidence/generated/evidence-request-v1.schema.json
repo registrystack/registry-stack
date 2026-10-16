@@ -108,6 +108,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "expectedConfigurationRevision": {
+      "description": "Optional independent pin on the active definition revision. A mismatch refuses before authority resolution, credentials, or source I/O. Omission resolves the active revision carried by the assertion.",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    },
     "holderKeys": {
       "items": {
         "$ref": "#/$defs/holder-key"

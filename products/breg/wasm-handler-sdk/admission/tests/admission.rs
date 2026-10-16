@@ -37,7 +37,7 @@ use breg_wasm_admission_proof as proof;
 use registry_breg::action_handler::{
     ActionHandlerError, ActionHandlerOutcome, ActionHandlerRefusal, evaluate_action_detailed,
 };
-use registry_breg::model::{CompiledAction, CompiledActionMutation, CompiledActionValue};
+use registry_breg::model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue};
 use registry_platform_script::wasm::Backend;
 use serde_json::Value;
 
@@ -80,7 +80,7 @@ fn the_built_modules_pass_authoring_admission() {
             .expect("the action declares a handler");
         assert_eq!(
             handler.kind,
-            registry_breg::model::CompiledActionHandlerKind::Wasm,
+            registry_breg::model::CompiledPlanFunctionKind::Wasm,
             "{name}: the handler compiled as wasm"
         );
         assert_eq!(handler.module_path, "wasm/handler.wasm");
@@ -249,15 +249,15 @@ fn catalogue_label(code: &str) -> String {
 
 /// The set literals of an accepted effects outcome, as a JSON object keyed by
 /// field, so an expected document compares field by field.
-fn set_literals(effects: &[registry_breg::model::CompiledActionEffect]) -> Value {
+fn set_literals(effects: &[registry_breg::model::CompiledPlanEffect]) -> Value {
     assert_eq!(effects.len(), 1, "one effect against the phone slot");
     assert_eq!(effects[0].id, "phone");
     let mut set = serde_json::Map::new();
     for mutation in &effects[0].mutations {
-        let CompiledActionMutation::Set { field, value } = mutation else {
+        let CompiledPlanMutation::Set { field, value } = mutation else {
             panic!("the phone create sets fields, it never clears");
         };
-        let CompiledActionValue::Literal { value } = value else {
+        let CompiledPlanValue::Literal { value } = value else {
             panic!("the reference-free phone slot takes literals only");
         };
         set.insert(field.clone(), value.clone());

@@ -256,7 +256,7 @@ fn missing_runtime_diagnostic(project: &Path, runtime_path: &Path) -> DoctorDiag
 fn project_is_editable(runtime_path: &Path) -> bool {
     runtime_path.parent().is_some_and(|project| {
         project
-            .join(registry_evidence_authoring::PROJECT_MARKER_FILE)
+            .join(registry_evidence_authoring::project::PROJECT_FILE)
             .is_file()
     })
 }

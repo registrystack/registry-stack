@@ -17,23 +17,7 @@ use registry_casework::{
     CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
     ReviewTaskDecisionRequest, RuntimeError, StoreError,
 };
-use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, ActivityClockAnchor, ActorContext, AssignmentRequest,
-    AuthoritativeObservation, CalendarPolicy, CallerSubjectView, CaseworkProject, CaseworkRole,
-    ClockPolicy, ClockReassignment, ClockReminder, ClockStep, ClockStepAction, ClockStepInstant,
-    ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration, EphemeralCredential,
-    EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity, InboxPolicy,
-    IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest, PreparedSourceAttempt,
-    ProjectIdentity, QueuePolicy, ReviewCancelRequest, ReviewCancelResponse, ReviewClockState,
-    ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
-    ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest,
-    ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle,
-    ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput,
-    ReviewTransition, ReviewValidationReason, ReviewerDecisionKind, ReviewerTaskState,
-    SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt,
-    SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
-    TransitionHint, WorkingDaysAfter, WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
-};
+use registry_casework_core::*;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -53,7 +37,7 @@ struct Fixture {
     reviewer_b: ActorContext,
     supervisor: ActorContext,
     source_revoked: Arc<AtomicBool>,
-    source_state: Arc<Mutex<OccurrenceState>>,
+    source_state: Arc<Mutex<bool>>,
     source_read_blocked: Arc<AtomicBool>,
     source_read_started: Arc<Notify>,
     source_read_continue: Arc<Notify>,
@@ -64,7 +48,7 @@ struct Fixture {
 #[derive(Clone)]
 struct ReviewSource {
     revoked: Arc<AtomicBool>,
-    state: Arc<Mutex<OccurrenceState>>,
+    state: Arc<Mutex<bool>>,
     read_blocked: Arc<AtomicBool>,
     read_started: Arc<Notify>,
     read_continue: Arc<Notify>,
@@ -72,126 +56,129 @@ struct ReviewSource {
 }
 
 #[async_trait]
-impl SourceAdapter for ReviewSource {
-    fn source_id(&self) -> &str {
+impl ReviewContextProvider for ReviewSource {
+    fn provider_id(&self) -> &str {
         "registry"
     }
-
-    fn binding_generation(&self) -> &str {
-        "review-source-generation"
+    fn capabilities(&self) -> &[ReviewContextCapability] {
+        &[
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+            ReviewContextCapability::RoutingContext,
+            ReviewContextCapability::TaskGrantContext,
+        ]
     }
-
-    async fn verify_transition(
+    async fn human_display(
         &self,
-        _request: EventRequest,
-    ) -> Result<TransitionHint, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
-    }
-
-    async fn read_authoritative(
-        &self,
-        subject: &SubjectRef,
-    ) -> Result<AuthoritativeObservation, SourceAdapterError> {
-        if self.revoked.load(Ordering::SeqCst) {
-            return Err(SourceAdapterError::Concealed);
-        }
-        // The advanced mode models a source that moved to a new occurrence
-        // after the caller-scoped read: the authoritative observation reports
-        // the newer representation while read_for_caller still serves the
-        // pinned one.
-        let advanced = self.advanced.load(Ordering::SeqCst);
-        Ok(AuthoritativeObservation {
-            subject: subject.clone(),
-            occurrence_key: format!("review:{}", subject.id),
-            ordered_revision: i64::from(advanced) + 1,
-            representation_etag: if advanced {
-                "\"advanced\"".to_owned()
-            } else {
-                format!("\"{}\"", subject.id)
-            },
-            binding: if advanced {
-                SourceBinding {
-                    source_revision: "source-revision-2".to_owned(),
-                    version: "2".to_owned(),
-                    integrity: Some(
-                        ContentDigest::for_bytes(format!("{}-advanced", subject.id).as_bytes())
-                            .to_string(),
-                    ),
-                    generation: self.binding_generation().to_owned(),
-                }
-            } else {
-                SourceBinding {
-                    source_revision: "source-revision-1".to_owned(),
-                    version: "1".to_owned(),
-                    integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
-                    generation: self.binding_generation().to_owned(),
-                }
-            },
-            display_reference: None,
-            occurrence_kind: OccurrenceKind::Review,
-            stage: Some("review".to_owned()),
-            submitted_at: None,
-            stage_entered_at: None,
-            review_timing: None,
-            routing_context: None,
-            state: *self.state.lock().expect("source state lock"),
-            remaining_actions: Vec::new(),
-        })
-    }
-
-    async fn discover_active(
-        &self,
-        _cursor: Option<&DiscoveryCursor>,
-        _limit: usize,
-    ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
-        Ok(ActiveSubjectsPage {
-            subjects: Vec::new(),
-            next_cursor: None,
-        })
-    }
-
-    async fn read_for_caller(
-        &self,
-        subject: &SubjectRef,
-        source_profile_id: &str,
-        _credential: EphemeralCredential<'_>,
-    ) -> Result<CallerSubjectView, SourceAdapterError> {
+        request: HumanDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
         if self.read_blocked.swap(false, Ordering::SeqCst) {
             self.read_started.notify_one();
             self.read_continue.notified().await;
         }
-        if self.revoked.load(Ordering::SeqCst) || source_profile_id != "staff" {
-            return Err(SourceAdapterError::Concealed);
+        if self.revoked.load(Ordering::SeqCst) || request.source_profile_id != "staff" {
+            return Err(ReviewContextError::Concealed);
         }
-        Ok(CallerSubjectView {
-            subject: subject.clone(),
-            binding: SourceBinding {
-                source_revision: "source-revision-1".to_owned(),
-                version: "1".to_owned(),
-                integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
-                generation: self.binding_generation().to_owned(),
-            },
+        if request.identity.subject.version != "1" {
+            return Err(ReviewContextError::BindingMoved);
+        }
+        Ok(HumanDisplayObservation {
+            identity: request.identity.clone(),
+            reviewable: *self.state.lock().unwrap(),
             display_reference: None,
-            disclosed: BTreeMap::from([(
-                "summary".to_owned(),
-                json!(format!("Review {}", subject.id)),
+            fields: BTreeMap::from([(
+                "summary".into(),
+                json!(format!("Review {}", request.identity.subject.id)),
             )]),
-            permitted_operations: Vec::new(),
         })
     }
-
-    async fn prepare_action(
+    async fn service_status(
         &self,
-        _request: PrepareActionRequest<'_>,
-    ) -> Result<PreparedSourceAttempt, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
+        identity: &ReviewContextIdentity,
+    ) -> Result<ServiceStatusObservation, ReviewContextError> {
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(ReviewContextError::Concealed);
+        }
+        if identity.subject.version != "1" {
+            return Err(ReviewContextError::BindingMoved);
+        }
+        let mut identity = identity.clone();
+        if self.advanced.load(Ordering::SeqCst) {
+            identity.subject.version = "2".into();
+            identity.subject.digest =
+                ContentDigest::for_bytes(format!("{}-advanced", identity.subject.id).as_bytes());
+        }
+        Ok(ServiceStatusObservation {
+            identity,
+            reviewable: *self.state.lock().unwrap(),
+        })
     }
-
-    async fn execute_prepared(
+    async fn routing_context(
         &self,
-        _request: ExecutePreparedRequest<'_>,
-    ) -> Result<SourceReceipt, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
+        request: &ServiceContextRequest,
+    ) -> Result<ServiceContextObservation, ReviewContextError> {
+        Ok(ServiceContextObservation {
+            request: request.clone(),
+            reviewable: *self.state.lock().unwrap(),
+            fields: request
+                .fields
+                .iter()
+                .map(|field| {
+                    (
+                        field.clone(),
+                        json!(format!("Review {}", request.identity.subject.id)),
+                    )
+                })
+                .collect(),
+        })
+    }
+    async fn task_grant_context(
+        &self,
+        request: &ServiceContextRequest,
+    ) -> Result<ServiceContextObservation, ReviewContextError> {
+        self.routing_context(request).await
+    }
+}
+
+fn current_source(project: &mut CaseworkProject) {
+    project.context_providers = vec![ReviewContextProviderPolicy {
+        id: "registry".into(),
+        description: None,
+        capabilities: vec![
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+            ReviewContextCapability::RoutingContext,
+            ReviewContextCapability::TaskGrantContext,
+        ],
+        source_namespace: "registry".into(),
+        deployment_ref: "registry".into(),
+        service_profiles: BTreeMap::from([
+            (
+                ReviewContextCapability::ServiceStatus,
+                "status-reader".into(),
+            ),
+            (
+                ReviewContextCapability::RoutingContext,
+                "routing-reader".into(),
+            ),
+            (
+                ReviewContextCapability::TaskGrantContext,
+                "grant-reader".into(),
+            ),
+        ]),
+    }];
+    for policy in &mut project.review_policies {
+        policy.context = ReviewContextPolicy::CurrentSource {
+            provider: "registry".into(),
+            contract: ReviewContextContract {
+                id: "registry-review-context".into(),
+                revision: ContentDigest::for_bytes(b"registry-review-context-v1"),
+                schema_digest: ContentDigest::for_bytes(
+                    &registry_platform_canonical_json::canonicalize_json(&policy.display_schema)
+                        .unwrap(),
+                ),
+            },
+        };
     }
 }
 
@@ -289,12 +276,20 @@ fn project(version: &str) -> CaseworkProject {
             id: "review".to_owned(),
             label: "Review".to_owned(),
         }],
-        sources: Vec::new(),
-        review_kinds: vec![ReviewKindPolicy {
+        context_providers: Vec::new(),
+        teams: vec![TeamPolicy {
+            id: "review-team".into(),
+            label: "Review team".into(),
+            serves: vec!["review".into()],
+            member_profiles: vec!["staff".into()],
+            supervisor_profiles: vec!["supervisor".into()],
+        }],
+        review_policies: vec![ReviewPolicy {
             id: "registry-correction".to_owned(),
             version: version.to_owned(),
-            purpose: ReviewKindPurpose::Approval,
-            context_strategy: ReviewContextStrategy::Submitted,
+            purpose: ReviewPurpose::Approval,
+            context: ReviewContextPolicy::Submitted,
+            routing: vec![],
             stages: vec![
                 ReviewStagePolicy {
                     id: "primary".to_owned(),
@@ -315,8 +310,8 @@ fn project(version: &str) -> CaseworkProject {
             ],
             clocks: vec!["review-deadline".to_owned()],
             retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+                terminal_retention_days: 90,
+                accountability_retention_days: 365,
             },
             display_schema: json!({
                 "type": "object",
@@ -332,10 +327,19 @@ fn project(version: &str) -> CaseworkProject {
             })),
             outcomes: vec![
                 ReviewOutcomePolicy {
+                    id: "approved".to_owned(),
+                    label: "Approved".to_owned(),
+                    settlement: ReviewOutcomeSettlement::Approved,
+                    reason_required: false,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+                    result_required: false,
+                },
+                ReviewOutcomePolicy {
                     id: "incorrect".to_owned(),
                     label: "Incorrect".to_owned(),
                     settlement: ReviewOutcomeSettlement::Rejected,
                     reason_required: true,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Required,
                     result_required: true,
                 },
                 ReviewOutcomePolicy {
@@ -343,11 +347,12 @@ fn project(version: &str) -> CaseworkProject {
                     label: "Needs correction".to_owned(),
                     settlement: ReviewOutcomeSettlement::ChangesRequested,
                     reason_required: true,
+                    public_reason: registry_casework_core::ReviewPublicReasonRule::Required,
                     result_required: true,
                 },
             ],
         }],
-        review_producers: vec![ReviewProducerPolicy {
+        trusted_producers: vec![ReviewProducerPolicy {
             id: "registry".to_owned(),
             profile: "producer".to_owned(),
             issuer: "https://issuer.test".to_owned(),
@@ -355,8 +360,10 @@ fn project(version: &str) -> CaseworkProject {
             trusted_initiator_issuer: Some("https://issuer.test".to_owned()),
             initiator_profile: None,
             source_namespaces: vec!["registry".to_owned()],
-            kinds: vec!["registry-correction".to_owned()],
-            recovery_days: 30,
+            review_policies: vec!["registry-correction".to_owned()],
+            retention: registry_casework_core::ProducerRetention {
+                receipt_retention_days: 30,
+            },
             completion: Some(ReviewCompletionDestinationPolicy {
                 destination_id: "registry-completion".to_owned(),
                 recipient_binding: "registry-service".to_owned(),
@@ -365,12 +372,10 @@ fn project(version: &str) -> CaseworkProject {
         calendars: Vec::new(),
         clocks: vec![ClockPolicy::Subject {
             id: "review-deadline".to_owned(),
-            anchor: SubjectClockAnchor::FirstSubmittedAt,
-            complete_on: SubjectClockCompletion::ReviewCompleted,
-            after: ElapsedDuration {
-                elapsed: "PT1H".to_owned(),
+            anchor: registry_casework_core::SubjectClockAnchor {
+                kind: registry_casework_core::SubjectClockAnchorType::RequestAccepted,
             },
-            pause_while: vec![SubjectClockPause::AwaitingApplicant],
+            after: registry_casework_core::ElapsedDuration::Hours(1),
         }],
         inbox: InboxPolicy::default(),
         task_templates: Vec::new(),
@@ -379,20 +384,21 @@ fn project(version: &str) -> CaseworkProject {
 
 fn answer_project(completion: bool) -> CaseworkProject {
     let mut project = project("answer-1");
-    let kind = &mut project.review_kinds[0];
+    let kind = &mut project.review_policies[0];
     kind.id = "registry-answer".to_owned();
-    kind.purpose = ReviewKindPurpose::Answer;
+    kind.purpose = ReviewPurpose::Answer;
     kind.stages.truncate(1);
     kind.outcomes = vec![ReviewOutcomePolicy {
         id: "found".to_owned(),
         label: "Found".to_owned(),
         settlement: ReviewOutcomeSettlement::Answered,
         reason_required: false,
+        public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
         result_required: true,
     }];
-    project.review_producers[0].kinds = vec!["registry-answer".to_owned()];
+    project.trusted_producers[0].review_policies = vec!["registry-answer".to_owned()];
     if !completion {
-        project.review_producers[0].completion = None;
+        project.trusted_producers[0].completion = None;
     }
     project
 }
@@ -403,8 +409,8 @@ fn activity_clock_project() -> CaseworkProject {
         id: "overdue-review".to_owned(),
         label: "Overdue review".to_owned(),
     });
-    project.review_kinds[0].stages.truncate(1);
-    project.review_kinds[0].clocks = vec!["review-deadline".to_owned()];
+    project.review_policies[0].stages.truncate(1);
+    project.review_policies[0].clocks = vec!["review-deadline".to_owned()];
     project.calendars = vec![CalendarPolicy {
         id: "office".to_owned(),
         timezone: "UTC".to_owned(),
@@ -419,16 +425,18 @@ fn activity_clock_project() -> CaseworkProject {
         ],
         holiday_set: "office-holidays".to_owned(),
     }];
-    project.clocks = vec![ClockPolicy::Activity {
+    project.clocks = vec![ClockPolicy::Stage {
         id: "review-deadline".to_owned(),
-        anchor: ActivityClockAnchor::StageEnteredAt,
+        anchor: registry_casework_core::StageClockAnchor {
+            kind: registry_casework_core::StageClockAnchorType::StageEntered,
+        },
         calendar: "office".to_owned(),
-        after: WorkingDaysAfter { working_days: 1 },
+        after: WorkingDays { working_days: 1 },
         due_time: "17:00".to_owned(),
         at_risk: None,
         reminders: vec![ClockReminder {
             id: "due-soon".to_owned(),
-            working_days_before: 1,
+            before: registry_casework_core::WorkingDays { working_days: 1 },
         }],
         steps: vec![ClockStep {
             id: "overdue".to_owned(),
@@ -446,7 +454,11 @@ fn activity_clock_project() -> CaseworkProject {
 
 fn request(subject_id: &str, requester_reference: &str) -> ReviewCreateRequest {
     ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: project("1")
+            .compile_policy("registry-correction")
+            .unwrap()
+            .binding()
+            .into(),
         subject: SubjectBinding {
             source: "registry".to_owned(),
             subject_type: "record".to_owned(),
@@ -464,6 +476,21 @@ fn request(subject_id: &str, requester_reference: &str) -> ReviewCreateRequest {
         },
         result_constraints: None,
     }
+}
+
+fn bind_request(
+    service: &CaseworkService,
+    mut request: ReviewCreateRequest,
+) -> ReviewCreateRequest {
+    // Construct expected admission identity from this test's exact compiled policy.
+    // Retried requests keep the original request value and are never rebound.
+    let producer = actor("registry-service", CaseworkRole::Requester, "producer");
+    request.policy = service
+        .review_policy_description(&producer, &request.policy.id)
+        .unwrap()
+        .binding()
+        .into();
+    request
 }
 
 async fn fixture() -> Fixture {
@@ -517,11 +544,11 @@ async fn fixture() -> Fixture {
         .expect("seed review directory");
     let project_v1 = project("1");
     let mut project_v2 = project("2");
-    project_v2.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    current_source(&mut project_v2);
     project_v1.check().expect("version one project");
     project_v2.check().expect("version two project");
     let source_revoked = Arc::new(AtomicBool::new(false));
-    let source_state = Arc::new(Mutex::new(OccurrenceState::Open));
+    let source_state = Arc::new(Mutex::new(true));
     let source_read_blocked = Arc::new(AtomicBool::new(false));
     let source_read_started = Arc::new(Notify::new());
     let source_read_continue = Arc::new(Notify::new());
@@ -530,7 +557,7 @@ async fn fixture() -> Fixture {
         service_v1: CaseworkService::new(
             store.clone(),
             project_v1,
-            Vec::<Arc<dyn registry_casework_core::SourceAdapter>>::new(),
+            Vec::<Arc<dyn registry_casework_core::ReviewContextProvider>>::new(),
         )
         .expect("version one service"),
         service_v2: CaseworkService::new(
@@ -543,7 +570,7 @@ async fn fixture() -> Fixture {
                 read_started: Arc::clone(&source_read_started),
                 read_continue: Arc::clone(&source_read_continue),
                 advanced: Arc::clone(&source_advanced),
-            }) as Arc<dyn SourceAdapter>],
+            }) as Arc<dyn ReviewContextProvider>],
         )
         .expect("version two service"),
         store,
@@ -747,7 +774,10 @@ async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid 
             &fixture.reviewer_a,
             primary,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -775,7 +805,10 @@ async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid 
             &fixture.reviewer_b,
             secondary,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -1064,7 +1097,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
                 &fixture.reviewer_a,
                 primary,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -1086,7 +1122,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
                 &fixture.reviewer_a,
                 primary,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -1110,7 +1149,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         receipt.decision,
         registry_casework_core::ReviewDecisionType::Approve
     );
-    assert!(receipt.outcome.is_none());
+    assert_eq!(receipt.outcome, "approved");
     assert_eq!(readback.decided_by_caller, Some(true));
 
     let secondary = task_id(&fixture, first.accepted.request_id, 1).await;
@@ -1133,7 +1172,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
                 &fixture.reviewer_b,
                 secondary,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -1333,7 +1375,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .execute(
             "UPDATE casework_review_requests
              SET terminal_at=$2,result_available_until=$3,
-                 context_strategy='source',
+                 context_strategy='current-source',
                  context=jsonb_build_object('reference','breg:registry:record:expired:1')
              WHERE request_id=$1",
             &[
@@ -1592,48 +1634,46 @@ async fn activation_preflight_counts_in_flight_reviews_a_package_would_strand() 
 
     let mut moved_queue = project("2");
     moved_queue.queues[0].id = "triage".to_owned();
-    for stage in &mut moved_queue.review_kinds[0].stages {
+    moved_queue.teams[0].serves = vec!["triage".into()];
+    for stage in &mut moved_queue.review_policies[0].stages {
         stage.queue = "triage".to_owned();
     }
     assert_eq!(
         stranded(moved_queue).await,
-        vec![registry_casework::StrandedWork::QueueRemoved {
-            queue: "review".to_owned(),
+        vec![registry_casework::StrandedWork {
+            policy: "registry-correction".into(),
+            version: "1".into(),
             reviews: 3,
-            work_items: 0,
+            reason: "queue review is removed".into()
         }]
     );
 
     let mut renamed_profile = project("2");
     renamed_profile.access_profiles[0].id = "clerk".to_owned();
-    for stage in &mut renamed_profile.review_kinds[0].stages {
+    renamed_profile.teams[0].member_profiles = vec!["clerk".into()];
+    for stage in &mut renamed_profile.review_policies[0].stages {
         stage.deciding_profiles = vec!["clerk".to_owned()];
     }
     assert_eq!(
         stranded(renamed_profile).await,
-        vec![registry_casework::StrandedWork::ProfileRemoved {
-            profile: "staff".to_owned(),
+        vec![registry_casework::StrandedWork {
+            policy: "registry-correction".into(),
+            version: "1".into(),
             reviews: 3,
+            reason: "a required reviewer profile is removed".into()
         }]
     );
 
     let mut edited_in_place = project("1");
-    edited_in_place.review_kinds[0].stages[1].deciding_profiles = vec!["supervisor".to_owned()];
-    assert_eq!(
-        stranded(edited_in_place).await,
-        vec![registry_casework::StrandedWork::ReviewKindChanged {
-            review_kind: "registry-correction".to_owned(),
-            version: "1".to_owned(),
-            reviews: 3,
-        }]
+    edited_in_place.review_policies[0].stages[1].deciding_profiles = vec!["supervisor".to_owned()];
+    assert!(
+        stranded(edited_in_place).await.is_empty(),
+        "accepted reviews keep their pinned stage rules when a policy changes"
     );
 }
 
-/// A review request stores the id of the producer that submitted it, and a
-/// producer reads its requests only under that id. The previous release
-/// admitted `Registry_Service` as a producer id; a package that renames it
-/// is refused while a review that producer submitted is still in flight,
-/// and plans clean once the review settles.
+/// Removing a bound producer must not orphan its open review. The candidate
+/// becomes safe only once the producer has settled or cancelled that review.
 #[tokio::test]
 async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flight_review() {
     let fixture = fixture().await;
@@ -1676,25 +1716,15 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
         )
         .await
         .expect("cancel the second review");
-    fixture
-        .database
-        .execute(
-            "UPDATE casework_review_requests SET producer_id='Registry_Service' WHERE request_id=$1",
-            &[&in_flight],
-        )
-        .await
-        .expect("store the producer id the previous release admitted");
-
     let mut renamed = project("1");
-    renamed.review_producers[0].id = "registry-service".to_owned();
+    renamed.trusted_producers[0].id = "registry-service".to_owned();
     renamed.check().expect("candidate project");
     let digest = format!("sha256:{}", "c".repeat(64));
     let candidate = registry_casework::ActivationCandidate {
         database_id: "casework-review-test",
         package_digest: &digest,
-        acknowledged_stranded_work: None,
         project: &renamed,
-        adapters: &[],
+        providers: &[],
     };
 
     let plan = fixture
@@ -1708,15 +1738,11 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
         .filter(|refusal| refusal.code == "casework.activation.stranded-work")
         .collect();
     assert_eq!(stranded.len(), 1, "{:?}", plan.refusals);
-    assert_eq!(
-        stranded[0].path,
-        "runtime.yaml:/package/acknowledgeStrandedWork"
-    );
+    assert_eq!(stranded[0].path, "casework.yaml:/reviewPolicies");
     assert!(
-        stranded[0].message.contains(
-            "1 in-flight review came from review producer Registry_Service, \
-             which the package no longer declares"
-        ),
+        stranded[0]
+            .message
+            .contains("the bound producer can no longer recover or cancel this review"),
         "{}",
         stranded[0].message
     );
@@ -1731,9 +1757,11 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
     // lacks for it is not a conflict.
     assert_eq!(
         pinned.stranded,
-        vec![registry_casework::StrandedWork::ProducerRemoved {
-            producer: "Registry_Service".to_owned(),
+        vec![registry_casework::StrandedWork {
+            policy: "registry-correction".into(),
+            version: "1".into(),
             reviews: 1,
+            reason: "the bound producer can no longer recover or cancel this review".into()
         }]
     );
 
@@ -1757,7 +1785,10 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
                 reviewer,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None,
+                    },
                 },
                 None,
                 "",
@@ -1806,11 +1837,11 @@ async fn retained_reviews_remain_bound_to_the_admitted_producer_identity() {
         .expect("create retained review");
 
     let mut rebound_project = project("1");
-    rebound_project.review_producers[0].subject = "replacement-service".to_owned();
+    rebound_project.trusted_producers[0].subject = "replacement-service".to_owned();
     let rebound = CaseworkService::new(
         fixture.store.clone(),
         rebound_project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("replacement producer service");
     let replacement = actor("replacement-service", CaseworkRole::Requester, "producer");
@@ -1908,7 +1939,10 @@ async fn active_review_keeps_early_accountability_readable_past_provisional_expi
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -2050,7 +2084,10 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             &fixture.reviewer_b,
             primary,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -2078,8 +2115,9 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             &fixture.reviewer_a,
             secondary,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Reject {
+                decision: DecisionKind::Reject {
                     outcome: "incorrect".to_owned(),
+                    public_reason: Some("The record could not be matched.".to_owned()),
                     reason: Some("private retained reason".to_owned()),
                     result: Some(json!({"correction": "bounded correction"})),
                 },
@@ -2498,28 +2536,26 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
 
 fn subject_clock_retention_service(fixture: &Fixture) -> CaseworkService {
     let mut project = activity_clock_project();
-    project.review_kinds[0].clocks =
+    project.review_policies[0].clocks =
         vec!["review-deadline".to_owned(), "subject-deadline".to_owned()];
     project.clocks.push(ClockPolicy::Subject {
         id: "subject-deadline".to_owned(),
-        anchor: SubjectClockAnchor::FirstSubmittedAt,
-        complete_on: SubjectClockCompletion::ReviewCompleted,
-        after: ElapsedDuration {
-            elapsed: "PT1H".to_owned(),
+        anchor: registry_casework_core::SubjectClockAnchor {
+            kind: registry_casework_core::SubjectClockAnchorType::RequestAccepted,
         },
-        pause_while: vec![SubjectClockPause::AwaitingApplicant],
+        after: registry_casework_core::ElapsedDuration::Hours(1),
     });
-    project.review_producers[0].completion = None;
-    let retention = &project.review_kinds[0].retention;
+    project.trusted_producers[0].completion = None;
+    let retention = &project.review_policies[0].retention;
     assert!(
-        retention.terminal_days < retention.accountability_days,
+        retention.terminal_retention_days < retention.accountability_retention_days,
         "the clock rows must be erased at terminalDays, before accountabilityDays"
     );
     project.check().expect("clock retention project");
     CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("clock retention service")
 }
@@ -2541,7 +2577,7 @@ async fn settle_clock_retention_round(
     let created = service
         .create_review_request(
             &fixture.producer,
-            clock_retention_request(subject, version),
+            bind_request(service, clock_retention_request(subject, version)),
             &format!("create-{subject}-{version}"),
         )
         .await
@@ -2560,14 +2596,16 @@ async fn settle_clock_retention_round(
         .await
         .expect("claim clock retention task");
     let decision = if outcome == "needs-correction" {
-        ReviewerDecisionKind::ChangesRequested {
+        DecisionKind::ChangesRequested {
             outcome: outcome.to_owned(),
+            public_reason: Some("Correct the submitted record.".to_owned()),
             reason: Some("private clock retention reason".to_owned()),
             result: Some(json!({"correction": "bounded correction"})),
         }
     } else {
-        ReviewerDecisionKind::Reject {
+        DecisionKind::Reject {
             outcome: outcome.to_owned(),
+            public_reason: Some("The record could not be matched.".to_owned()),
             reason: Some("private clock retention reason".to_owned()),
             result: Some(json!({"correction": "bounded correction"})),
         }
@@ -2655,7 +2693,7 @@ async fn terminal_retention_erases_every_clock_occurrence_bound_to_an_expired_ro
     let service = subject_clock_retention_service(&fixture);
 
     // A rejected round completes both clocks; a changes-requested round
-    // completes its activity clock and pauses the subject clock, and no later
+    // completes both request-owned clocks, and no later
     // round continues it. The third round is left in the state an earlier
     // retention pass produced: result erased and tasks gone, clocks kept.
     let rejected = settle_clock_retention_round(
@@ -2693,7 +2731,7 @@ async fn terminal_retention_erases_every_clock_occurrence_bound_to_an_expired_ro
         clock_occurrences_for_request(&fixture, changes).await,
         vec![
             ("activity".to_owned(), "completed".to_owned()),
-            ("subject".to_owned(), "paused".to_owned()),
+            ("subject".to_owned(), "completed".to_owned()),
         ]
     );
 
@@ -2731,7 +2769,7 @@ async fn terminal_retention_erases_every_clock_occurrence_bound_to_an_expired_ro
     assert_eq!(
         subject_clocks_for_subject(&fixture, "clock-retention-changes").await,
         Vec::new(),
-        "a paused subject clock no round continued expires with its round"
+        "each completed clock expires with its own request"
     );
     let orphaned_effects: i64 = fixture
         .database
@@ -2760,36 +2798,35 @@ async fn terminal_retention_erases_every_clock_occurrence_bound_to_an_expired_ro
 }
 
 #[tokio::test]
-async fn a_subject_clock_continues_inside_the_result_window_and_restarts_after_it() {
+async fn request_clock_retention_is_independent_for_successive_requests() {
     let fixture = fixture().await;
     let service = subject_clock_retention_service(&fixture);
     let subject = "clock-retention-window";
 
     let first =
         settle_clock_retention_round(&fixture, &service, subject, 1, "needs-correction").await;
-    let paused = subject_clocks_for_subject(&fixture, subject).await;
-    assert_eq!(paused.len(), 1);
-    let (paused_clock, bound_to, state) = paused[0].clone();
-    assert_eq!((bound_to, state.as_str()), (first, "paused"));
+    let prior_clocks = subject_clocks_for_subject(&fixture, subject).await;
+    assert_eq!(prior_clocks.len(), 1);
+    let (prior_clock, bound_to, state) = prior_clocks[0].clone();
+    assert_eq!((bound_to, state.as_str()), (first, "completed"));
 
-    // A resubmission inside the first round's result window continues the
-    // paused clock and moves its binding to the new round.
+    // A successor owns a distinct clock even while the prior result is retained.
     let second =
         settle_clock_retention_round(&fixture, &service, subject, 2, "needs-correction").await;
-    assert_eq!(
-        subject_clocks_for_subject(&fixture, subject).await,
-        vec![(paused_clock, second, "paused".to_owned())]
-    );
+    let retained = subject_clocks_for_subject(&fixture, subject).await;
+    assert_eq!(retained.len(), 2);
+    let second_clock = retained
+        .iter()
+        .find(|(_, request, _)| *request == second)
+        .unwrap()
+        .0;
+    assert_ne!(prior_clock, second_clock);
+    assert!(retained.iter().all(|(_, _, state)| state == "completed"));
     expire_review_results(&fixture, &[first]).await;
-    fixture
-        .service_v1
-        .erase_expired_reviews()
-        .await
-        .expect("expire the first round");
+    fixture.service_v1.erase_expired_reviews().await.unwrap();
     assert_eq!(
         subject_clocks_for_subject(&fixture, subject).await,
-        vec![(paused_clock, second, "paused".to_owned())],
-        "a subject clock a later round continued is kept with that round"
+        vec![(second_clock, second, "completed".into())]
     );
 
     // No resubmission arrives inside the second round's window.
@@ -2808,7 +2845,7 @@ async fn a_subject_clock_continues_inside_the_result_window_and_restarts_after_i
     let third = service
         .create_review_request(
             &fixture.producer,
-            clock_retention_request(subject, 3),
+            bind_request(&service, clock_retention_request(subject, 3)),
             &format!("create-{subject}-3"),
         )
         .await
@@ -2826,7 +2863,7 @@ async fn a_subject_clock_continues_inside_the_result_window_and_restarts_after_i
         .iter()
         .find(|clock| clock.clock_id == "subject-deadline")
         .expect("the fresh round has a subject clock");
-    assert_ne!(subject_clock.clock_occurrence_id, paused_clock);
+    assert_ne!(subject_clock.clock_occurrence_id, prior_clock);
     assert_eq!(subject_clock.state, ReviewClockState::Running);
     assert!(subject_clock.anchor_at >= resubmitted_at);
     assert_eq!(
@@ -2836,25 +2873,20 @@ async fn a_subject_clock_continues_inside_the_result_window_and_restarts_after_i
     );
 }
 
-/// CASEWORK-SEC-20: a subject clock occurrence bound to a round is erased at
-/// that round's result_available_until. The retention pass usually does
-/// this, but it runs asynchronously and may skip a locked request, so this
-/// covers the other side: the next round's own creation must make the same
-/// check and erase a paused (or otherwise still-bound) occurrence itself
-/// when the round it is bound to already expired, rather than rebinding it
-/// and letting the old paused budget and pinned policy outlive terminalDays.
+/// Even if retention cleanup lags, a successor receives a distinct clock budget.
+/// The expired request's clock remains independently erasable without changing it.
 #[tokio::test]
-async fn a_subject_clock_restarts_when_the_next_round_arrives_after_its_bound_round_expired() {
+async fn a_new_request_clock_never_reuses_an_expired_requests_budget() {
     let fixture = fixture().await;
     let service = subject_clock_retention_service(&fixture);
     let subject = "clock-retention-late-round";
 
     let first =
         settle_clock_retention_round(&fixture, &service, subject, 1, "needs-correction").await;
-    let paused = subject_clocks_for_subject(&fixture, subject).await;
-    assert_eq!(paused.len(), 1);
-    let (paused_clock, bound_to, state) = paused[0].clone();
-    assert_eq!((bound_to, state.as_str()), (first, "paused"));
+    let prior_clocks = subject_clocks_for_subject(&fixture, subject).await;
+    assert_eq!(prior_clocks.len(), 1);
+    let (prior_clock, bound_to, state) = prior_clocks[0].clone();
+    assert_eq!((bound_to, state.as_str()), (first, "completed"));
 
     // Push the first round's result window into the past without running
     // retention, reproducing a retention pass that has not caught up yet (or
@@ -2865,7 +2897,7 @@ async fn a_subject_clock_restarts_when_the_next_round_arrives_after_its_bound_ro
     let second = service
         .create_review_request(
             &fixture.producer,
-            clock_retention_request(subject, 2),
+            bind_request(&service, clock_retention_request(subject, 2)),
             &format!("create-{subject}-2"),
         )
         .await
@@ -2885,7 +2917,7 @@ async fn a_subject_clock_restarts_when_the_next_round_arrives_after_its_bound_ro
         .expect("the fresh round has a subject clock");
 
     assert_ne!(
-        subject_clock.clock_occurrence_id, paused_clock,
+        subject_clock.clock_occurrence_id, prior_clock,
         "an occurrence bound to an expired round is erased, not rebound"
     );
     assert_eq!(subject_clock.request_id, second.accepted.request_id);
@@ -2894,30 +2926,20 @@ async fn a_subject_clock_restarts_when_the_next_round_arrives_after_its_bound_ro
     assert_eq!(
         subject_clock.due_at,
         Some(subject_clock.anchor_at + TimeDelta::hours(1)),
-        "the fresh subject clock computes a full deadline from the new round, not the old paused budget"
+        "the fresh subject clock computes a full deadline from the new round"
     );
 
-    let paused_seconds: i64 = fixture
-        .database
-        .query_one(
-            "SELECT paused_seconds FROM casework_review_clock_occurrences
-             WHERE clock_occurrence_id=$1",
-            &[&subject_clock.clock_occurrence_id],
-        )
+    fixture
+        .service_v1
+        .erase_expired_reviews()
         .await
-        .expect("read the fresh occurrence's paused budget")
-        .get(0);
-    assert_eq!(
-        paused_seconds, 0,
-        "a fresh subject clock starts with no paused budget"
-    );
-
+        .expect("erase the expired request clock independently");
     let old_still_exists: i64 = fixture
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_clock_occurrences
              WHERE clock_occurrence_id=$1",
-            &[&paused_clock],
+            &[&prior_clock],
         )
         .await
         .expect("check the expired occurrence")
@@ -2933,7 +2955,7 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
     let fixture = fixture().await;
     let mut project = project("canonical-storage");
     let schema_examples = vec![1e100_f64; 8_000];
-    project.review_kinds[0].display_schema = json!({
+    project.review_policies[0].display_schema = json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["summary", "numbers"],
@@ -2947,7 +2969,7 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
         },
         "examples": schema_examples
     });
-    project.review_kinds[0]
+    project.review_policies[0]
         .result_schema
         .as_mut()
         .expect("result schema")
@@ -2956,8 +2978,8 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
         .insert("examples".to_owned(), json!(vec![1e100_f64; 8_000]));
     project.check().expect("canonical storage project");
     for schema in [
-        &project.review_kinds[0].display_schema,
-        project.review_kinds[0]
+        &project.review_policies[0].display_schema,
+        project.review_policies[0]
             .result_schema
             .as_ref()
             .expect("result schema"),
@@ -2967,8 +2989,8 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
         assert!(bytes.len() > 48 * 1024);
         assert!(bytes.len() <= 64 * 1024);
     }
-    let policy_snapshot = project.review_kinds[0]
-        .snapshot()
+    let policy_snapshot = project.review_policies[0]
+        .compile(&project)
         .expect("bounded policy snapshot");
     assert!(
         registry_platform_canonical_json::canonicalize_json(
@@ -2976,12 +2998,12 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
         )
         .expect("canonical policy snapshot")
         .len()
-            <= MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES
+            <= MAXIMUM_REVIEW_POLICY_CLOSURE_BYTES
     );
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("canonical storage service");
     let numbers = vec![1e100_f64; 1_000];
@@ -2997,7 +3019,11 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
         snapshot: expanded.clone(),
     };
     let created = service
-        .create_review_request(&fixture.producer, create, "create-canonical-storage")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, create),
+            "create-canonical-storage",
+        )
         .await
         .expect("store admitted submitted context");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
@@ -3057,7 +3083,7 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
                 "draft-canonical-storage-too-large",
             )
             .await,
-        Err(ReviewRuntimeError::Invalid)
+        Err(ReviewRuntimeError::Validation(error)) if error.reason==ReviewValidationReason::MaximumBytesExceeded
     ));
 }
 
@@ -3144,7 +3170,7 @@ fn service_with_audit(
     let service = CaseworkService::new(
         fixture.store.clone().with_audit(audit),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("audited review service");
     (service, capture)
@@ -3220,7 +3246,11 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
     let fixture = fixture().await;
     let (service, audit) = service_with_audit(&fixture, answer_project(false));
     let mut answer_request = request("accountability-record", "accountability-ref");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, answer_request, "create-accountability")
         .await
@@ -3242,8 +3272,9 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Answer {
+                decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: Some("private accountability reason".to_owned()),
                     result: Some(json!({"correction": "accountable answer"})),
                 },
@@ -3348,21 +3379,27 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
 async fn accountability_receipts_pin_selected_outcomes_through_independent_retention() {
     let fixture = fixture().await;
     let mut policy = answer_project(false);
-    policy.review_kinds[0].outcomes = [("confirm", "Confirm"), ("return", "Return for correction")]
-        .into_iter()
-        .map(|(id, label)| ReviewOutcomePolicy {
-            id: id.to_owned(),
-            label: label.to_owned(),
-            settlement: ReviewOutcomeSettlement::Answered,
-            reason_required: true,
-            result_required: false,
-        })
-        .collect();
+    policy.review_policies[0].outcomes =
+        [("confirm", "Confirm"), ("return", "Return for correction")]
+            .into_iter()
+            .map(|(id, label)| ReviewOutcomePolicy {
+                id: id.to_owned(),
+                label: label.to_owned(),
+                settlement: ReviewOutcomeSettlement::Answered,
+                reason_required: true,
+                public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+                result_required: false,
+            })
+            .collect();
     let (service, audit) = service_with_audit(&fixture, policy.clone());
     let mut records = Vec::new();
     for (code, label) in [("confirm", "Confirm"), ("return", "Return for correction")] {
         let mut input = request(&format!("selected-{code}"), &format!("BATCH-{code}"));
-        input.kind = "registry-answer".to_owned();
+        input.policy = service
+            .review_policy_description(&fixture.producer, "registry-answer")
+            .unwrap()
+            .binding()
+            .into();
         let accepted = service
             .create_review_request(&fixture.producer, input, &format!("create-{code}"))
             .await
@@ -3385,8 +3422,9 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
                 &fixture.reviewer_a,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Answer {
+                    decision: DecisionKind::Answer {
                         outcome: code.to_owned(),
+                        public_reason: None,
                         reason: Some("PRIVATE_REASON_CANARY".to_owned()),
                         result: None,
                     },
@@ -3409,8 +3447,8 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
             .get(0);
         records.push((accepted, task, event, code, label));
     }
-    policy.review_kinds[0].version = "later".to_owned();
-    for outcome in &mut policy.review_kinds[0].outcomes {
+    policy.review_policies[0].version = "later".to_owned();
+    for outcome in &mut policy.review_policies[0].outcomes {
         outcome.label = "Changed current label".to_owned();
     }
     let (changed, _) = service_with_audit(&fixture, policy);
@@ -3421,7 +3459,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
             .unwrap();
         let receipt = accountability.decision_receipt.unwrap();
         assert_eq!(receipt.policy, accepted.policy);
-        assert_eq!(receipt.outcome.as_deref(), Some(*code));
+        assert_eq!(receipt.outcome, *code);
         assert_eq!(receipt.outcome_label.as_deref(), Some(*label));
         assert_eq!(receipt.decided_at, accountability.occurred_at);
         assert_eq!(accountability.decision, "answer");
@@ -3516,7 +3554,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
 async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_candidates() {
     let fixture = fixture().await;
     let mut policy = project("own-history");
-    policy.review_kinds[0].stages.truncate(1);
+    policy.review_policies[0].stages.truncate(1);
     policy.inbox = InboxPolicy {
         default_page_size: 1,
         maximum_candidate_scan: 2,
@@ -3535,12 +3573,12 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
                 read_started: Arc::clone(&fixture.source_read_started),
                 read_continue: Arc::clone(&fixture.source_read_continue),
                 advanced: Arc::clone(&fixture.source_advanced),
-            }) as Arc<dyn SourceAdapter>],
+            }) as Arc<dyn ReviewContextProvider>],
         )
         .unwrap()
     };
     let submitted = build(policy.clone());
-    policy.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    current_source(&mut policy);
     let source = build(policy.clone());
     let mut own = Vec::new();
     let mut requests = Vec::new();
@@ -3552,14 +3590,18 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
         };
         let mut input = request(&format!("own-history-{index}"), &format!("BATCH-{index}"));
         if (1..4).contains(&index) {
-            input.context = ReviewContext::Source {
+            input.context = ReviewContext::CurrentSource {
                 binding: SourceContextBinding {
                     reference: format!("registry:record:own-history-{index}"),
                 },
             };
         }
         let accepted = service
-            .create_review_request(&fixture.producer, input, &format!("create-own-{index}"))
+            .create_review_request(
+                &fixture.producer,
+                bind_request(service, input),
+                &format!("create-own-{index}"),
+            )
             .await
             .unwrap()
             .accepted;
@@ -3600,7 +3642,10 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
                 author,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None,
+                    },
                 },
                 profile,
                 "human-bearer",
@@ -3659,7 +3704,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
     );
     assert!(matches!(
         context.context,
-        registry_casework_core::ReviewTaskContextData::Source {
+        registry_casework_core::ReviewTaskContextData::CurrentSource {
             binding_status: registry_casework_core::ReviewSourceBindingStatus::Current,
             projection: Some(_),
             ..
@@ -4027,7 +4072,11 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     let fixture = fixture().await;
     let (service, audit) = service_with_audit(&fixture, answer_project(false));
     let mut answer_request = request("decision-audit", "decision-audit-ref");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, answer_request, "create-decision-audit")
         .await
@@ -4049,8 +4098,9 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Answer {
+                decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: Some("public decision reason".to_owned()),
                     reason: Some("private decision reason".to_owned()),
                     result: Some(json!({"correction": "accountable answer"})),
                 },
@@ -4102,10 +4152,18 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     let audit_text = serde_json::to_string(&audit.entries()).expect("audit entries");
     assert!(!audit_text.contains("private decision reason"));
     assert!(!audit_text.contains("accountable answer"));
+    // The public reason is released with the ReviewResult only; the journal
+    // records that one was given.
+    assert_eq!(decision_audit["publicReasonGiven"], true);
+    assert!(!audit_text.contains("public decision reason"));
     assert!(!audit_text.contains(&task.to_string()));
 
     let mut second_request = request("decision-audit-2", "decision-audit-2-ref");
-    second_request.kind = "registry-answer".to_owned();
+    second_request.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let second_created = service
         .create_review_request(&fixture.producer, second_request, "create-decision-audit-2")
         .await
@@ -4123,8 +4181,9 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
         .await
         .expect("claim second decision audit review");
     let second_decision = || ReviewTaskDecisionRequest {
-        decision: ReviewerDecisionKind::Answer {
+        decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: None,
             result: Some(json!({"correction": "second answer"})),
         },
@@ -4234,7 +4293,11 @@ async fn review_cancellation_is_audited_after_the_cancel_commits() {
     let fixture = fixture().await;
     let (service, audit) = service_with_audit(&fixture, answer_project(false));
     let mut create = request("cancel-audit", "cancel-audit-ref");
-    create.kind = "registry-answer".to_owned();
+    create.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, create.clone(), "create-cancel-audit")
         .await
@@ -4460,11 +4523,15 @@ async fn review_reads_check_access_before_disclosing_retention_expiry() {
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("retention ordering test service");
     let mut answer_request = request("retention-ordering", "retention-ordering-ref");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(
             &fixture.producer,
@@ -4491,8 +4558,9 @@ async fn review_reads_check_access_before_disclosing_retention_expiry() {
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Answer {
+                decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: Some("private settled reason".to_owned()),
                     result: Some(json!({"correction": "settled answer"})),
                 },
@@ -4571,12 +4639,12 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
     project
         .access_profiles
         .push(profile("initiator", CaseworkRole::Requester));
-    project.review_producers[0].initiator_profile = Some("initiator".to_owned());
+    project.trusted_producers[0].initiator_profile = Some("initiator".to_owned());
     project.check().expect("initiator retention test project");
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("initiator retention test service");
     let initiator = actor("initiator", CaseworkRole::Requester, "initiator");
@@ -4584,7 +4652,11 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
     let mut same_subject_elsewhere = actor("initiator", CaseworkRole::Requester, "initiator");
     same_subject_elsewhere.principal.issuer = "https://other-issuer.test".to_owned();
     let mut answer_request = request("initiator-retention", "initiator-retention-ref");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(
             &fixture.producer,
@@ -4623,8 +4695,9 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Answer {
+                decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: None,
                     result: Some(json!({"correction": "settled answer"})),
                 },
@@ -4724,11 +4797,15 @@ async fn standalone_structured_answers_support_polling_and_completion_modes() {
         let service = CaseworkService::new(
             fixture.store.clone(),
             project,
-            Vec::<Arc<dyn SourceAdapter>>::new(),
+            Vec::<Arc<dyn ReviewContextProvider>>::new(),
         )
         .expect("answer service");
         let mut answer_request = request(subject, &format!("producer-ref-{subject}"));
-        answer_request.kind = "registry-answer".to_owned();
+        answer_request.policy = service
+            .review_policy_description(&fixture.producer, "registry-answer")
+            .unwrap()
+            .binding()
+            .into();
         let created = service
             .create_review_request(
                 &fixture.producer,
@@ -4754,8 +4831,9 @@ async fn standalone_structured_answers_support_polling_and_completion_modes() {
                 &fixture.reviewer_a,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Answer {
+                    decision: DecisionKind::Answer {
                         outcome: "found".to_owned(),
+                        public_reason: None,
                         reason: None,
                         result: Some(json!({"correction":format!("answer for {subject}")})),
                     },
@@ -4807,18 +4885,39 @@ async fn rejected_cancelled_and_superseded_results_commit_atomically() {
         )
         .await
         .expect("claim rejected review");
+    let reject = |public_reason: Option<&str>| ReviewTaskDecisionRequest {
+        decision: DecisionKind::Reject {
+            outcome: "incorrect".to_owned(),
+            public_reason: public_reason.map(str::to_owned),
+            reason: Some("Incorrect record".to_owned()),
+            result: Some(json!({"correction":"Replace the record"})),
+        },
+    };
+    // The policy requires a public reason on this outcome, so a rejection
+    // that tells the applicant nothing is refused before anything settles.
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_a,
+                rejected_task,
+                reject(None),
+                None,
+                "",
+                2,
+                "reject-terminal-without-public-reason",
+            )
+            .await,
+        Err(ReviewRuntimeError::Validation(error))
+            if error.path == "$.publicReason"
+                && error.reason == ReviewValidationReason::PublicReasonRequired
+    ));
     fixture
         .service_v1
         .decide_review_task(
             &fixture.reviewer_a,
             rejected_task,
-            ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Reject {
-                    outcome: "incorrect".to_owned(),
-                    reason: Some("Incorrect record".to_owned()),
-                    result: Some(json!({"correction":"Replace the record"})),
-                },
-            },
+            reject(Some("The record could not be matched.")),
             None,
             "",
             2,
@@ -4827,6 +4926,21 @@ async fn rejected_cancelled_and_superseded_results_commit_atomically() {
         .await
         .expect("settle rejected review");
     assert_terminal_atomic(&fixture, rejected.accepted.request_id, 1).await;
+    let ReviewResultRead::Available(rejected_result) = fixture
+        .service_v1
+        .review_result(&fixture.producer, rejected.accepted.request_id)
+        .await
+        .expect("read rejected result")
+    else {
+        panic!("rejected result is available");
+    };
+    assert_eq!(rejected_result.outcome.as_deref(), Some("incorrect"));
+    assert_eq!(
+        rejected_result.public_reason.as_deref(),
+        Some("The record could not be matched.")
+    );
+    let released = serde_json::to_string(&rejected_result).expect("rejected result");
+    assert!(!released.contains("Incorrect record"));
 
     let cancelled_request = request("terminal-cancelled", "terminal-cancelled");
     let cancelled = fixture
@@ -4935,11 +5049,15 @@ async fn concurrent_round_creation_and_duplicate_vote_leave_one_current_state() 
     let answer_service = CaseworkService::new(
         fixture.store.clone(),
         answer_project(false),
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("answer service");
     let mut answer_request = request("duplicate-vote", "duplicate-vote");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = answer_service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(&fixture.producer, answer_request, "create-duplicate-vote")
         .await
@@ -4961,8 +5079,9 @@ async fn concurrent_round_creation_and_duplicate_vote_leave_one_current_state() 
     let reviewer_a = fixture.reviewer_a.clone();
     let reviewer_b = fixture.reviewer_a.clone();
     let decision = || ReviewTaskDecisionRequest {
-        decision: ReviewerDecisionKind::Answer {
+        decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: None,
             result: Some(json!({"correction":"single terminal answer"})),
         },
@@ -5019,11 +5138,15 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
     let service = CaseworkService::new(
         fixture.store.clone(),
         answer_project(false),
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("answer service");
     let mut create = request("cancel-decision-race", "cancel-decision-race");
-    create.kind = "registry-answer".to_owned();
+    create.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(
             &fixture.producer,
@@ -5064,8 +5187,9 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
             &reviewer,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Answer {
+                decision: DecisionKind::Answer {
                     outcome: "found".to_owned(),
+                    public_reason: None,
                     reason: None,
                     result: Some(json!({"correction":"atomic winner"})),
                 },
@@ -5143,7 +5267,10 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
             &fixture.reviewer_a,
             primary,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -5206,8 +5333,9 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
                 &fixture.reviewer_b,
                 correction_task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Reject {
+                    decision: DecisionKind::Reject {
                         outcome: "incorrect".to_owned(),
+                        public_reason: Some("The record needs a correction.".to_owned()),
                         reason: Some("The record needs a correction".to_owned()),
                         result: None,
                     },
@@ -5266,7 +5394,7 @@ async fn reclaiming_a_held_task_advances_the_revision_like_the_client_contract_r
         .await
         .expect("re-claim by the holder stays a successful transition");
     assert_eq!(reclaimed.revision, claimed.revision + 1);
-    assert!(matches!(reclaimed.state, ReviewerTaskState::Held { .. }));
+    assert!(matches!(reclaimed.state, ReviewTaskState::Held { .. }));
     let claim_history: i64 = fixture
         .database
         .query_one(
@@ -5335,7 +5463,7 @@ async fn claiming_a_blocked_nomination_clears_the_failed_assigner() {
         )
         .await
         .expect("nominate through the uncovered absence");
-    assert!(matches!(assigned.state, ReviewerTaskState::Open));
+    assert!(matches!(assigned.state, ReviewTaskState::Open));
     let blocked = fixture
         .database
         .query_one(
@@ -5450,7 +5578,10 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
                 &fixture.reviewer_b,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -5531,7 +5662,7 @@ async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() 
     assert_eq!(unchanged.revision, claimed.revision);
     assert!(matches!(
         unchanged.state,
-        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+        ReviewTaskState::Held { holder } if holder == fixture.reviewer_a.principal
     ));
     let delegation_events: i64 = fixture
         .database
@@ -5563,7 +5694,7 @@ async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() 
         .expect("delegate through eligible selected profile");
     assert!(matches!(
         delegated.state,
-        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
+        ReviewTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
     ));
 }
 
@@ -5583,22 +5714,25 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
         .await
         .expect("give the holder a second directory role");
     let mut mixed_project = project("mixed-delegation-membership");
-    mixed_project.review_kinds[0].stages[0]
+    mixed_project.review_policies[0].stages[0]
         .deciding_profiles
         .push("supervisor".to_owned());
     mixed_project.check().expect("mixed-profile review project");
     let service = CaseworkService::new(
         fixture.store.clone(),
         mixed_project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("mixed-profile review service");
     let created = service
         .create_review_request(
             &fixture.producer,
-            request(
-                "record-delegation-membership",
-                "producer-ref-delegation-membership",
+            bind_request(
+                &service,
+                request(
+                    "record-delegation-membership",
+                    "producer-ref-delegation-membership",
+                ),
             ),
             "create-delegation-membership",
         )
@@ -5707,7 +5841,7 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
         .expect("delegate with exact selected-role membership");
     assert!(matches!(
         delegated.state,
-        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
+        ReviewTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
     ));
 
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
@@ -5795,7 +5929,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
         .await
         .expect("read unchanged open task");
     assert_eq!(unchanged.revision, 1);
-    assert_eq!(unchanged.state, ReviewerTaskState::Open);
+    assert_eq!(unchanged.state, ReviewTaskState::Open);
     let assignment_events: i64 = fixture
         .database
         .query_one(
@@ -5826,7 +5960,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
         .expect("assign through selected supervisor profile");
     assert!(matches!(
         assigned.state,
-        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_a.principal
+        ReviewTaskState::Held { ref holder } if holder == &fixture.reviewer_a.principal
     ));
 
     set_review_membership(&fixture, &fixture.supervisor, "supervisor", false).await;
@@ -6079,11 +6213,15 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
     let answer_service = CaseworkService::new(
         fixture.store.clone(),
         answer_project(false),
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("answer replay service");
     let mut answer_request = request("record-decision-replay", "producer-ref-decision-replay");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = answer_service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(&fixture.producer, answer_request, "create-decision-replay")
         .await
@@ -6101,8 +6239,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         .await
         .expect("claim decision replay task");
     let decision = || ReviewTaskDecisionRequest {
-        decision: ReviewerDecisionKind::Answer {
+        decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: Some("private replay reason".to_owned()),
             result: Some(json!({"correction": "protected replay result"})),
         },
@@ -6160,14 +6299,18 @@ async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_acce
     let answer_service = CaseworkService::new(
         fixture.store.clone(),
         answer_project(false),
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("answer replay service");
     let mut answer_request = request(
         "record-withheld-decision-replay",
         "producer-ref-withheld-decision-replay",
     );
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = answer_service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(
             &fixture.producer,
@@ -6189,8 +6332,9 @@ async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_acce
         .await
         .expect("claim withheld decision replay task");
     let decision = || ReviewTaskDecisionRequest {
-        decision: ReviewerDecisionKind::Answer {
+        decision: DecisionKind::Answer {
             outcome: "found".to_owned(),
+            public_reason: None,
             reason: Some("private withheld replay reason".to_owned()),
             result: Some(json!({"correction": "protected withheld replay result"})),
         },
@@ -6247,22 +6391,26 @@ async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_acce
 async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
     let fixture = fixture().await;
     let mut stage_shift_project = project("assignment-replay-stage-shift");
-    stage_shift_project.review_kinds[0].stages[1].deciding_profiles = vec!["supervisor".to_owned()];
+    stage_shift_project.review_policies[0].stages[1].deciding_profiles =
+        vec!["supervisor".to_owned()];
     stage_shift_project
         .check()
         .expect("stage-shift replay project");
     let stage_shift_service = CaseworkService::new(
         fixture.store.clone(),
         stage_shift_project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("stage-shift replay service");
     let staged = stage_shift_service
         .create_review_request(
             &fixture.producer,
-            request(
-                "record-assignment-stage-replay",
-                "producer-ref-assignment-stage-replay",
+            bind_request(
+                &stage_shift_service,
+                request(
+                    "record-assignment-stage-replay",
+                    "producer-ref-assignment-stage-replay",
+                ),
             ),
             "create-assignment-stage-replay",
         )
@@ -6290,7 +6438,10 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
                 &fixture.reviewer_a,
                 first_stage_task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -6322,14 +6473,18 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
     let answer_service = CaseworkService::new(
         fixture.store.clone(),
         answer_project(false),
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("terminal delegation replay service");
     let mut answer_request = request(
         "record-terminal-delegation-replay",
         "producer-ref-terminal-delegation-replay",
     );
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = answer_service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(
             &fixture.producer,
@@ -6371,8 +6526,9 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
                 &fixture.reviewer_b,
                 answer_task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Answer {
+                    decision: DecisionKind::Answer {
                         outcome: "found".to_owned(),
+                        public_reason: None,
                         reason: None,
                         result: Some(json!({"correction": "terminal delegated answer"})),
                     },
@@ -6409,7 +6565,7 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
 async fn source_context_task_disclosure_requires_a_current_caller_source_read() {
     let fixture = fixture().await;
     let mut source_request = request("record-source-visible", "producer-ref-source-visible");
-    source_request.context = ReviewContext::Source {
+    source_request.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "registry:record:record-source-visible".to_owned(),
         },
@@ -6418,7 +6574,7 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         .service_v2
         .create_review_request(
             &fixture.producer,
-            source_request.clone(),
+            bind_request(&fixture.service_v2, source_request.clone()),
             "create-source-visible",
         )
         .await
@@ -6544,14 +6700,18 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
 async fn claiming_refuses_a_source_advanced_past_the_pinned_occurrence() {
     let fixture = fixture().await;
     let mut source_request = request("record-source-advanced", "producer-ref-source-advanced");
-    source_request.context = ReviewContext::Source {
+    source_request.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "registry:record:record-source-advanced".to_owned(),
         },
     };
     let created = fixture
         .service_v2
-        .create_review_request(&fixture.producer, source_request, "create-source-advanced")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&fixture.service_v2, source_request),
+            "create-source-advanced",
+        )
         .await
         .expect("create source-context review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
@@ -6572,7 +6732,7 @@ async fn claiming_refuses_a_source_advanced_past_the_pinned_occurrence() {
                 "claim-source-advanced",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::NotFound)
     ));
 
     fixture.source_advanced.store(false, Ordering::SeqCst);
@@ -6595,7 +6755,7 @@ async fn claiming_refuses_a_source_advanced_past_the_pinned_occurrence() {
 async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
     let fixture = fixture().await;
     let mut bounded_project = project("2");
-    bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    current_source(&mut bounded_project);
     bounded_project.inbox = InboxPolicy {
         default_page_size: 1,
         maximum_candidate_scan: 2,
@@ -6614,7 +6774,7 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
             read_started: Arc::clone(&fixture.source_read_started),
             read_continue: Arc::clone(&fixture.source_read_continue),
             advanced: Arc::clone(&fixture.source_advanced),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("bounded review service");
 
@@ -6622,7 +6782,7 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
     for index in 0..2 {
         let subject = format!("record-source-budget-{index}");
         let mut source_request = request(&subject, &format!("producer-ref-budget-{index}"));
-        source_request.context = ReviewContext::Source {
+        source_request.context = ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: format!("registry:record:{subject}"),
             },
@@ -6631,7 +6791,7 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
             .service_v2
             .create_review_request(
                 &fixture.producer,
-                source_request,
+                bind_request(&fixture.service_v2, source_request),
                 &format!("create-source-budget-{index}"),
             )
             .await
@@ -6672,12 +6832,11 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
 }
 
 #[tokio::test]
-async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator_and_hidden_from_the_reviewer(
-) {
+async fn malformed_provider_display_is_a_bad_gateway_and_moved_binding_is_concealed() {
     let fixture = fixture().await;
     let mut mismatched_project = project("2");
-    mismatched_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
-    mismatched_project.review_kinds[0].display_schema = json!({
+    current_source(&mut mismatched_project);
+    mismatched_project.review_policies[0].display_schema = json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["title"],
@@ -6696,18 +6855,22 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
             read_started: Arc::clone(&fixture.source_read_started),
             read_continue: Arc::clone(&fixture.source_read_continue),
             advanced: Arc::clone(&fixture.source_advanced),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("mismatched review service");
     let subject = "record-display-mismatch";
     let mut source_request = request(subject, "producer-ref-display-mismatch");
-    source_request.context = ReviewContext::Source {
+    source_request.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: format!("registry:record:{subject}"),
         },
     };
     let created = mismatched_service
-        .create_review_request(&fixture.producer, source_request, "create-display-mismatch")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&mismatched_service, source_request),
+            "create-display-mismatch",
+        )
         .await
         .expect("admission does not read the source");
 
@@ -6718,7 +6881,7 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
         .with_ansi(false)
         .with_writer(logs.clone())
         .finish();
-    let page = mismatched_service
+    let refusal = mismatched_service
         .review_tasks(
             &fixture.reviewer_a,
             Some("staff"),
@@ -6729,34 +6892,25 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
         )
         .with_subscriber(subscriber)
         .await
-        .expect("the inbox still answers");
-    assert!(page.items.is_empty());
-    assert_eq!(page.next_cursor, None);
+        .expect_err("invalid upstream display must not masquerade as an empty page");
+    assert!(matches!(refusal, ReviewRuntimeError::SourceInvalid));
 
     let entries = logs.entries();
     let diagnostics = entries
         .iter()
-        .filter(|entry| entry.pointer("/fields/reason").is_some())
+        .filter(|entry| entry.pointer("/fields/validation_reason").is_some())
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 1, "one operator diagnostic: {entries:?}");
     assert_eq!(diagnostics[0]["level"], "WARN");
     let fields = diagnostics[0]["fields"].as_object().expect("log fields");
-    assert_eq!(fields["review_kind"], "registry-correction");
-    assert_eq!(fields["reason"], "display_schema_rejected");
+    assert_eq!(fields["review_policy"], "registry-correction");
     assert_eq!(fields["validation_reason"], "schema-mismatch");
-    assert_eq!(fields["path"], "$.display");
     assert_eq!(
         fields
             .keys()
             .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from([
-            "message",
-            "review_kind",
-            "reason",
-            "validation_reason",
-            "path"
-        ])
+        std::collections::BTreeSet::from(["message", "review_policy", "validation_reason"])
     );
     let rendered = serde_json::to_string(&entries).expect("render captured logs");
     assert!(!rendered.contains(subject), "no subject data: {rendered}");
@@ -6793,11 +6947,9 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
     assert!(page.items.is_empty());
     assert_eq!(page.next_cursor, None);
     let entries = logs.entries();
-    let reasons = entries
-        .iter()
-        .filter_map(|entry| entry.pointer("/fields/reason"))
-        .collect::<Vec<_>>();
-    assert_eq!(reasons, [&json!("binding_mismatch")], "{entries:?}");
+    let rendered = serde_json::to_string(&entries).unwrap();
+    assert!(!rendered.contains(subject));
+    assert!(!rendered.contains("human-bearer"));
 }
 
 #[tokio::test]
@@ -6805,8 +6957,8 @@ async fn supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_
 {
     let fixture = fixture().await;
     let mut policy = project("2");
-    policy.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
-    policy.review_kinds[0].stages[0].required_approvals = 3;
+    current_source(&mut policy);
+    policy.review_policies[0].stages[0].required_approvals = 3;
     policy.inbox = InboxPolicy {
         default_page_size: 1,
         maximum_candidate_scan: 2,
@@ -6825,14 +6977,14 @@ async fn supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_
             read_started: Arc::clone(&fixture.source_read_started),
             read_continue: Arc::clone(&fixture.source_read_continue),
             advanced: Arc::clone(&fixture.source_advanced),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("bounded exact lookup service");
     let mut requests = Vec::new();
     for index in 0..2 {
         let subject = format!("record-exact-checkpoint-{index}");
         let mut input = request(&subject, &format!("exact-checkpoint-{index}"));
-        input.context = ReviewContext::Source {
+        input.context = ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: format!("registry:record:{subject}"),
             },
@@ -6840,7 +6992,7 @@ async fn supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_
         let created = service
             .create_review_request(
                 &fixture.producer,
-                input,
+                bind_request(&service, input),
                 &format!("create-exact-checkpoint-{index}"),
             )
             .await
@@ -6882,7 +7034,7 @@ async fn supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_
     let context: String = fixture
         .database
         .query_one(
-            "SELECT context FROM casework_cursors WHERE cursor_id=$1",
+            "SELECT context FROM casework_review_cursors WHERE cursor_id=$1",
             &[&checkpoint],
         )
         .await
@@ -6984,7 +7136,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
         for source_profile in [None, Some("staff")] {
             let fixture = fixture().await;
             let mut bounded_project = project("2");
-            bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+            current_source(&mut bounded_project);
             bounded_project.inbox = InboxPolicy {
                 default_page_size: 1,
                 maximum_candidate_scan: 2,
@@ -7003,14 +7155,14 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
                     read_started: Arc::clone(&fixture.source_read_started),
                     read_continue: Arc::clone(&fixture.source_read_continue),
                     advanced: Arc::clone(&fixture.source_advanced),
-                }) as Arc<dyn SourceAdapter>],
+                }) as Arc<dyn ReviewContextProvider>],
             )
             .expect("bounded checkpoint service");
             let mut hidden = Vec::new();
             for index in 0..3 {
                 let subject = format!("record-checkpoint-{index}");
                 let mut source_request = request(&subject, &format!("checkpoint-ref-{index}"));
-                source_request.context = ReviewContext::Source {
+                source_request.context = ReviewContext::CurrentSource {
                     binding: SourceContextBinding {
                         reference: format!("registry:record:{subject}"),
                     },
@@ -7018,7 +7170,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
                 let created = service
                     .create_review_request(
                         &fixture.producer,
-                        source_request.clone(),
+                        bind_request(&service, source_request.clone()),
                         &format!("create-checkpoint-{index}"),
                     )
                     .await
@@ -7119,7 +7271,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
                 .database
                 .query_one(
                     "SELECT expires_at>now() AND expires_at<=now()+interval '15 minutes'
-                     FROM casework_cursors WHERE cursor_id=$1 AND last_item_id=$2",
+                     FROM casework_review_cursors WHERE cursor_id=$1 AND last_task_id=$2",
                     &[&checkpoint, &hidden[0].1],
                 )
                 .await
@@ -7233,7 +7385,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
             ));
             set_review_membership(&fixture, &actor, membership, true).await;
             fixture.database.execute(
-                "UPDATE casework_cursors SET expires_at=now()-interval '1 second' WHERE cursor_id=$1",
+                "UPDATE casework_review_cursors SET expires_at=now()-interval '1 second' WHERE cursor_id=$1",
                 &[&checkpoint],
             ).await.expect("expire the checkpoint");
             assert!(matches!(
@@ -7250,8 +7402,8 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
             ));
             assert!(
                 fixture
-                    .store
-                    .erase_expired_cursors()
+                    .service_v1
+                    .erase_expired_review_staffing()
                     .await
                     .expect("existing cursor cleanup")
                     > 0
@@ -7259,7 +7411,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
             assert!(fixture
                 .database
                 .query_opt(
-                    "SELECT cursor_id FROM casework_cursors WHERE cursor_id=$1",
+                    "SELECT cursor_id FROM casework_review_cursors WHERE cursor_id=$1",
                     &[&checkpoint],
                 )
                 .await
@@ -7335,7 +7487,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
             assert!(fixture
                 .database
                 .query_opt(
-                    "SELECT cursor_id FROM casework_cursors WHERE cursor_id=$1",
+                    "SELECT cursor_id FROM casework_review_cursors WHERE cursor_id=$1",
                     &[&checkpoint],
                 )
                 .await
@@ -7349,7 +7501,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
 async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_the_task() {
     let fixture = fixture().await;
     let mut bounded_project = project("2");
-    bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    current_source(&mut bounded_project);
     bounded_project.inbox.page_deadline_milliseconds = 100;
     bounded_project
         .check()
@@ -7364,18 +7516,22 @@ async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_
             read_started: Arc::clone(&fixture.source_read_started),
             read_continue: Arc::clone(&fixture.source_read_continue),
             advanced: Arc::clone(&fixture.source_advanced),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("deadline-bounded review service");
     let mut source_request = request("record-source-deadline", "producer-ref-source-deadline");
-    source_request.context = ReviewContext::Source {
+    source_request.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "registry:record:record-source-deadline".to_owned(),
         },
     };
     let created = fixture
         .service_v2
-        .create_review_request(&fixture.producer, source_request, "create-source-deadline")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&fixture.service_v2, source_request),
+            "create-source-deadline",
+        )
         .await
         .expect("create deadline-bounded source review");
     let anchor = task_id(&fixture, created.accepted.request_id, 0).await;
@@ -7417,14 +7573,18 @@ async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_
 async fn review_task_lists_recheck_queue_after_source_io() {
     let fixture = fixture().await;
     let mut source_request = request("record-queue-race", "producer-ref-queue-race");
-    source_request.context = ReviewContext::Source {
+    source_request.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "registry:record:record-queue-race".to_owned(),
         },
     };
     let created = fixture
         .service_v2
-        .create_review_request(&fixture.producer, source_request, "create-queue-race")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&fixture.service_v2, source_request),
+            "create-queue-race",
+        )
         .await
         .expect("create source-context review");
     fixture
@@ -7514,8 +7674,8 @@ async fn review_task_lists_recheck_queue_after_source_io() {
     assert_eq!(destination.items[0].queue, "intake");
 
     let mut policy = project("2");
-    policy.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
-    policy.review_kinds[0].stages[0].required_approvals = 3;
+    current_source(&mut policy);
+    policy.review_policies[0].stages[0].required_approvals = 3;
     policy.inbox = InboxPolicy {
         default_page_size: 1,
         maximum_candidate_scan: 2,
@@ -7534,17 +7694,21 @@ async fn review_task_lists_recheck_queue_after_source_io() {
             read_started: Arc::clone(&fixture.source_read_started),
             read_continue: Arc::clone(&fixture.source_read_continue),
             advanced: Arc::clone(&fixture.source_advanced),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("bounded queue race service");
     let mut input = request("record-bounded-queue-race", "bounded-queue-race");
-    input.context = ReviewContext::Source {
+    input.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "registry:record:record-bounded-queue-race".to_owned(),
         },
     };
     let request_id = service
-        .create_review_request(&fixture.producer, input, "create-bounded-queue-race")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, input),
+            "create-bounded-queue-race",
+        )
         .await
         .unwrap()
         .accepted
@@ -7654,7 +7818,7 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                 read_started: Arc::clone(&fixture.source_read_started),
                 read_continue: Arc::clone(&fixture.source_read_continue),
                 advanced: Arc::clone(&fixture.source_advanced),
-            }) as Arc<dyn SourceAdapter>],
+            }) as Arc<dyn ReviewContextProvider>],
         )
         .expect("bounded partial queue race service");
         let moved = tasks[source_read_budget - 1];
@@ -7786,7 +7950,7 @@ async fn review_task_cursor_rechecks_scope_after_source_io() {
         for change in ["membership", "queue", "retention"] {
             let fixture = fixture().await;
             let mut source_request = request("record-cursor-race", "producer-ref-cursor-race");
-            source_request.context = ReviewContext::Source {
+            source_request.context = ReviewContext::CurrentSource {
                 binding: SourceContextBinding {
                     reference: "registry:record:record-cursor-race".to_owned(),
                 },
@@ -7795,21 +7959,25 @@ async fn review_task_cursor_rechecks_scope_after_source_io() {
                 .service_v2
                 .create_review_request(
                     &fixture.producer,
-                    source_request.clone(),
+                    bind_request(&fixture.service_v2, source_request.clone()),
                     "create-cursor-race",
                 )
                 .await
                 .expect("create source-context cursor anchor");
             let anchor = task_id(&fixture, created.accepted.request_id, 0).await;
             let mut following = request("record-cursor-following", "producer-ref-cursor-following");
-            following.context = ReviewContext::Source {
+            following.context = ReviewContext::CurrentSource {
                 binding: SourceContextBinding {
                     reference: "registry:record:record-cursor-following".to_owned(),
                 },
             };
             fixture
                 .service_v2
-                .create_review_request(&fixture.producer, following, "create-cursor-following")
+                .create_review_request(
+                    &fixture.producer,
+                    bind_request(&fixture.service_v2, following),
+                    "create-cursor-following",
+                )
                 .await
                 .expect("create a task after the anchor");
             fixture
@@ -7921,14 +8089,18 @@ async fn review_task_cursor_rechecks_scope_after_source_io() {
 async fn source_history_and_clocks_recheck_membership_after_source_io() {
     let fixture = fixture().await;
     let mut source_request = request("record-source-race", "producer-ref-source-race");
-    source_request.context = ReviewContext::Source {
+    source_request.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "registry:record:record-source-race".to_owned(),
         },
     };
     let created = fixture
         .service_v2
-        .create_review_request(&fixture.producer, source_request, "create-source-race")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&fixture.service_v2, source_request),
+            "create-source-race",
+        )
         .await
         .expect("create source-context review");
 
@@ -8118,7 +8290,7 @@ async fn review_history_rejects_an_unknown_cursor_instead_of_truncating_the_page
 }
 
 #[tokio::test]
-async fn subject_clock_pauses_and_continues_across_review_rounds() {
+async fn request_clock_completes_for_changes_requested_and_later_request_gets_fresh_budget() {
     let fixture = fixture().await;
     let first = fixture
         .service_v1
@@ -8157,8 +8329,9 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::ChangesRequested {
+                decision: DecisionKind::ChangesRequested {
                     outcome: "needs-correction".to_owned(),
+                    public_reason: Some("Correct the submitted record.".to_owned()),
                     reason: Some("Please correct the record".to_owned()),
                     result: Some(json!({"correction":"Update the legal name"})),
                 },
@@ -8186,7 +8359,7 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
         serde_json::to_value(&receipt).unwrap()["decision"],
         json!("changes-requested")
     );
-    let paused = fixture
+    let prior_clocks = fixture
         .service_v1
         .review_clocks(
             &fixture.producer,
@@ -8195,9 +8368,9 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
             "producer-token",
         )
         .await
-        .expect("read paused subject clock");
-    assert_eq!(paused[0].state, ReviewClockState::Paused);
-    assert_eq!(paused[0].clock_occurrence_id, occurrence_id);
+        .expect("read completed request clock");
+    assert_eq!(prior_clocks[0].state, ReviewClockState::Completed);
+    assert_eq!(prior_clocks[0].clock_occurrence_id, occurrence_id);
     assert_terminal_atomic(&fixture, first.accepted.request_id, 1).await;
 
     let mut next_request = request("record-clock", "producer-ref-clock-2");
@@ -8208,7 +8381,7 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
         .create_review_request(&fixture.producer, next_request, "create-clock-2")
         .await
         .expect("create corrected clock round");
-    let resumed = fixture
+    let successor = fixture
         .service_v1
         .review_clocks(
             &fixture.producer,
@@ -8217,13 +8390,13 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
             "producer-token",
         )
         .await
-        .expect("read resumed subject clock");
-    assert_eq!(resumed.len(), 1);
-    assert_eq!(resumed[0].request_id, second.accepted.request_id);
-    assert_eq!(resumed[0].state, ReviewClockState::Running);
-    assert_eq!(resumed[0].clock_occurrence_id, occurrence_id);
-    assert_eq!(resumed[0].anchor_at, anchor);
-    assert!(resumed[0].due_at >= initial[0].due_at);
+        .expect("read successor request clock");
+    assert_eq!(successor.len(), 1);
+    assert_eq!(successor[0].request_id, second.accepted.request_id);
+    assert_eq!(successor[0].state, ReviewClockState::Running);
+    assert_ne!(successor[0].clock_occurrence_id, occurrence_id);
+    assert!(successor[0].anchor_at > anchor);
+    assert!(successor[0].due_at >= initial[0].due_at);
 }
 
 #[tokio::test]
@@ -8231,13 +8404,13 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
     let fixture = fixture().await;
     let mut revised = project("2");
     if let ClockPolicy::Subject { after, .. } = &mut revised.clocks[0] {
-        after.elapsed = "PT2H".to_owned();
+        *after = registry_casework_core::ElapsedDuration::Hours(2);
     }
     revised.check().expect("revised clock project");
     let revised_service = CaseworkService::new(
         fixture.store.clone(),
         revised,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("revised clock service");
 
@@ -8275,7 +8448,10 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8303,7 +8479,10 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
             &fixture.reviewer_b,
             follow_on,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8328,7 +8507,11 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
     next_request.subject.version = "2".to_owned();
     next_request.subject.digest = ContentDigest::for_bytes(b"record-clock-pin-v2");
     let second = revised_service
-        .create_review_request(&fixture.producer, next_request, "create-clock-pin-2")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&revised_service, next_request),
+            "create-clock-pin-2",
+        )
         .await
         .expect("create second clock round");
     let restarted = revised_service
@@ -8350,7 +8533,10 @@ async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() 
     let fresh = revised_service
         .create_review_request(
             &fixture.producer,
-            request("record-clock-pin-fresh", "producer-ref-clock-pin-fresh"),
+            bind_request(
+                &revised_service,
+                request("record-clock-pin-fresh", "producer-ref-clock-pin-fresh"),
+            ),
             "create-clock-pin-fresh",
         )
         .await
@@ -8416,7 +8602,10 @@ async fn subject_clock_restarts_for_a_new_round_after_a_terminal_settlement() {
             &fixture.reviewer_a,
             task,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8444,7 +8633,10 @@ async fn subject_clock_restarts_for_a_new_round_after_a_terminal_settlement() {
             &fixture.reviewer_b,
             follow_on,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
             None,
             "",
@@ -8486,16 +8678,16 @@ async fn subject_clock_restarts_for_a_new_round_after_a_terminal_settlement() {
     assert_eq!(restarted.len(), 1);
     assert_eq!(restarted[0].request_id, second.accepted.request_id);
     assert_eq!(restarted[0].state, ReviewClockState::Running);
-    assert_eq!(restarted[0].clock_occurrence_id, occurrence_id);
+    assert_ne!(restarted[0].clock_occurrence_id, occurrence_id);
 }
 
 #[tokio::test]
-async fn subject_clocks_are_independent_across_concurrent_review_kinds() {
+async fn subject_clocks_are_independent_across_concurrent_review_policies() {
     let fixture = fixture().await;
     let answer_service = CaseworkService::new(
         fixture.store.clone(),
         answer_project(false),
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("answer service");
     let correction = fixture
@@ -8508,7 +8700,11 @@ async fn subject_clocks_are_independent_across_concurrent_review_kinds() {
         .await
         .expect("create correction review");
     let mut answer_request = request("shared-clock-subject", "shared-clock-answer");
-    answer_request.kind = "registry-answer".to_owned();
+    answer_request.policy = answer_service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(
             &fixture.producer,
@@ -8541,7 +8737,7 @@ async fn subject_clocks_are_independent_across_concurrent_review_kinds() {
     assert_eq!(answer_clocks.len(), 1);
     assert_ne!(
         correction_clocks[0].clock_occurrence_id, answer_clocks[0].clock_occurrence_id,
-        "different review kinds must not rebind one subject occurrence"
+        "different review policies must not rebind one subject occurrence"
     );
     assert_eq!(
         correction_clocks[0].request_id,
@@ -8565,8 +8761,14 @@ async fn subject_clocks_are_independent_across_concurrent_review_kinds() {
     assert_eq!(
         keys,
         vec![
-            "review-kind:registry-answer".to_owned(),
-            "review-kind:registry-correction".to_owned(),
+            format!(
+                "review-policy:registry-answer:{}",
+                answer.accepted.request_id
+            ),
+            format!(
+                "review-policy:registry-correction:{}",
+                correction.accepted.request_id
+            ),
         ]
     );
 }
@@ -8588,13 +8790,16 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("activity clock service");
     let created = service
         .create_review_request(
             &fixture.producer,
-            request("record-activity-clock", "producer-ref-activity-clock"),
+            bind_request(
+                &service,
+                request("record-activity-clock", "producer-ref-activity-clock"),
+            ),
             "create-activity-clock",
         )
         .await
@@ -8756,13 +8961,16 @@ async fn review_clock_reassignment_to_an_unserved_queue_defers_until_the_queue_i
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("activity clock service");
     let created = service
         .create_review_request(
             &fixture.producer,
-            request("record-unserved-queue", "producer-ref-unserved-queue"),
+            bind_request(
+                &service,
+                request("record-unserved-queue", "producer-ref-unserved-queue"),
+            ),
             "create-unserved-queue",
         )
         .await
@@ -8965,7 +9173,7 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
         .await
         .expect("serve overdue review queue");
     let mut project = activity_clock_project();
-    project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    current_source(&mut project);
     project.check().expect("source activity clock project");
     let service = CaseworkService::new(
         fixture.store.clone(),
@@ -8977,17 +9185,21 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
             read_started: Arc::new(Notify::new()),
             read_continue: Arc::new(Notify::new()),
             advanced: Arc::new(AtomicBool::new(false)),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("source activity clock service");
     let mut create = request("record-source-activity-clock", "source-clock-reference");
-    create.context = ReviewContext::Source {
+    create.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "breg:registry:record:record-source-activity-clock:1".to_owned(),
         },
     };
     let created = service
-        .create_review_request(&fixture.producer, create, "create-source-activity-clock")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, create),
+            "create-source-activity-clock",
+        )
         .await
         .expect("create source activity-clock review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
@@ -9047,32 +9259,27 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
     assert_eq!(deferred_effects, 0);
 
     fixture.source_revoked.store(false, Ordering::SeqCst);
-    for state in [
-        OccurrenceState::Cancelled,
-        OccurrenceState::Superseded,
-        OccurrenceState::Synchronizing,
-    ] {
-        *fixture.source_state.lock().expect("source state lock") = state;
-        fixture
-            .database
-            .execute(
-                "UPDATE casework_review_clock_occurrences
-                 SET next_action_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
-                 WHERE task_id=$1",
-                &[&task],
-            )
-            .await
-            .expect("make deferred source activity clock due");
-        assert_eq!(
-            service
-                .process_due_review_clocks(100)
-                .await
-                .expect("defer inactive source review clock"),
-            0
-        );
-    }
 
-    *fixture.source_state.lock().expect("source state lock") = OccurrenceState::WaitingApplication;
+    *fixture.source_state.lock().expect("source state lock") = false;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("make deferred source activity clock due");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("defer inactive source review clock"),
+        0
+    );
+
+    *fixture.source_state.lock().expect("source state lock") = true;
     fixture
         .database
         .execute(
@@ -9093,7 +9300,7 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
 }
 
 #[tokio::test]
-async fn completed_source_occurrence_keeps_the_review_clock_current() {
+async fn reviewable_source_context_keeps_the_review_clock_current() {
     let fixture = fixture().await;
     fixture
         .database
@@ -9105,7 +9312,7 @@ async fn completed_source_occurrence_keeps_the_review_clock_current() {
         .await
         .expect("serve overdue review queue");
     let mut project = activity_clock_project();
-    project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    current_source(&mut project);
     project.check().expect("source activity clock project");
     let service = CaseworkService::new(
         fixture.store.clone(),
@@ -9117,20 +9324,24 @@ async fn completed_source_occurrence_keeps_the_review_clock_current() {
             read_started: Arc::new(Notify::new()),
             read_continue: Arc::new(Notify::new()),
             advanced: Arc::new(AtomicBool::new(false)),
-        }) as Arc<dyn SourceAdapter>],
+        }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("source activity clock service");
     let mut create = request(
         "record-source-completed-clock",
         "source-completed-clock-reference",
     );
-    create.context = ReviewContext::Source {
+    create.context = ReviewContext::CurrentSource {
         binding: SourceContextBinding {
             reference: "breg:registry:record:record-source-completed-clock:1".to_owned(),
         },
     };
     let created = service
-        .create_review_request(&fixture.producer, create, "create-source-completed-clock")
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, create),
+            "create-source-completed-clock",
+        )
         .await
         .expect("create source completed-clock review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
@@ -9167,7 +9378,7 @@ async fn completed_source_occurrence_keeps_the_review_clock_current() {
         )
         .await
         .expect("place source activity clock in the past");
-    *fixture.source_state.lock().expect("source state lock") = OccurrenceState::Completed;
+    *fixture.source_state.lock().expect("source state lock") = true;
 
     assert_eq!(
         service
@@ -9216,20 +9427,23 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
         .await
         .expect("serve overdue review queue");
     let mut stage_project = project("clock-stages");
-    let stages = stage_project.review_kinds.remove(0).stages;
+    let stages = stage_project.review_policies.remove(0).stages;
     let mut old_project = activity_clock_project();
-    old_project.review_kinds[0].stages.clone_from(&stages);
+    old_project.review_policies[0].stages.clone_from(&stages);
     old_project.check().expect("old activity clock project");
     let old_service = CaseworkService::new(
         fixture.store.clone(),
         old_project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("old activity clock service");
     old_service
         .create_review_request(
             &fixture.producer,
-            request("record-clock-definition", "old-clock-definition"),
+            bind_request(
+                &old_service,
+                request("record-clock-definition", "old-clock-definition"),
+            ),
             "create-old-clock-definition",
         )
         .await
@@ -9237,9 +9451,9 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
 
     let mut current_project = activity_clock_project();
     current_project.project.version = "activity-clock-2".to_owned();
-    current_project.review_kinds[0].version = "activity-clock-2".to_owned();
-    current_project.review_kinds[0].stages = stages;
-    let ClockPolicy::Activity { due_time, .. } = &mut current_project.clocks[0] else {
+    current_project.review_policies[0].version = "activity-clock-2".to_owned();
+    current_project.review_policies[0].stages = stages;
+    let ClockPolicy::Stage { due_time, .. } = &mut current_project.clocks[0] else {
         panic!("activity clock fixture changed shape");
     };
     *due_time = "18:00".to_owned();
@@ -9249,7 +9463,7 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
     let current_service = CaseworkService::new(
         fixture.store.clone(),
         current_project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("current activity clock service");
     let mut current_request = request("record-clock-definition", "current-clock-definition");
@@ -9258,7 +9472,7 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
     let current = current_service
         .create_review_request(
             &fixture.producer,
-            current_request,
+            bind_request(&current_service, current_request),
             "create-current-clock-definition",
         )
         .await
@@ -9281,7 +9495,10 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
                 &fixture.reviewer_a,
                 first_task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -9397,7 +9614,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .expect("assign review task");
     assert!(matches!(
         assigned.state,
-        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+        ReviewTaskState::Held { holder } if holder == fixture.reviewer_a.principal
     ));
     assert!(matches!(
         fixture
@@ -9438,7 +9655,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .expect("delegate review task");
     assert!(matches!(
         delegated.state,
-        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_b.principal
+        ReviewTaskState::Held { holder } if holder == fixture.reviewer_b.principal
     ));
 
     let draft = fixture
@@ -9574,7 +9791,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .expect("assign through active absence");
     assert!(matches!(
         assigned_cover.state,
-        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+        ReviewTaskState::Held { holder } if holder == fixture.reviewer_a.principal
     ));
     let assignment_kind: String = fixture
         .database
@@ -9692,7 +9909,10 @@ async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_iss
                 &fixture.reviewer_a,
                 task,
                 ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Approve,
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".into(),
+                        public_reason: None
+                    },
                 },
                 None,
                 "",
@@ -9718,17 +9938,21 @@ async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_iss
     // exclude nobody. An initiator it names is not evidence of anyone, so it
     // is admitted without being recorded.
     let mut project = answer_project(false);
-    project.review_kinds[0].stages[0].exclude_initiator = false;
-    project.review_producers[0].trusted_initiator_issuer = None;
+    project.review_policies[0].stages[0].exclude_initiator = false;
+    project.trusted_producers[0].trusted_initiator_issuer = None;
     project.check().expect("untrusted initiator test project");
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("untrusted initiator test service");
     let mut named = request("record-untrusted-initiator", "producer-ref-untrusted");
-    named.kind = "registry-answer".to_owned();
+    named.policy = service
+        .review_policy_description(&fixture.producer, "registry-answer")
+        .unwrap()
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, named, "create-untrusted-initiator")
         .await
@@ -9743,4 +9967,397 @@ async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_iss
         .await
         .expect("inspect the untrusted initiator");
     assert!(stored.get::<_, bool>(0));
+}
+
+#[tokio::test]
+async fn staffing_diagnostic_is_disclosed_and_clears_when_responsibility_resumes() {
+    let fixture = fixture().await;
+    let service = &fixture.service_v2;
+    let mut input = request("record-no-cover", "REF-no-cover");
+    input.context = ReviewContext::CurrentSource {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-no-cover".into(),
+        },
+    };
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            bind_request(service, input.clone()),
+            "create-no-cover",
+        )
+        .await
+        .expect("create current-source staffing review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let absence_id = Uuid::new_v4();
+    // The absent assignee is eligible, but their selected cover is the excluded
+    // initiator. This exercises the real no-cover assignment and recompute paths.
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,
+            starts_at,ends_at,cover_issuer,cover_subject,revision)
+         VALUES($1,$2,$3,$4,$5,$2,'initiator',1)",
+            &[
+                &absence_id,
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+                &(Utc::now() - TimeDelta::hours(1)),
+                &(Utc::now() + TimeDelta::hours(1)),
+            ],
+        )
+        .await
+        .expect("seed active absence with task-ineligible cover");
+    let blocked = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: None,
+            },
+            "assign-no-cover",
+        )
+        .await
+        .expect("assignment remains open without eligible cover");
+    assert_eq!(blocked.state, ReviewTaskState::Open);
+    assert_eq!(
+        blocked.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    assert_eq!(
+        serde_json::to_value(&blocked).unwrap()["staffingDiagnostic"],
+        "no-cover-available"
+    );
+    let read = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("eligible reviewer reads staffing notice");
+    assert_eq!(read.staffing_diagnostic, blocked.staffing_diagnostic);
+    let list = service
+        .review_tasks(
+            &fixture.reviewer_b,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            None,
+            100,
+        )
+        .await
+        .expect("review inbox carries notice");
+    assert_eq!(
+        list.items
+            .iter()
+            .find(|item| item.task_id == task)
+            .unwrap()
+            .staffing_diagnostic,
+        blocked.staffing_diagnostic
+    );
+    let supervision = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .expect("current supervisor reads bounded staffing notice");
+    let row = supervision
+        .items
+        .iter()
+        .find(|item| item.task_id == task)
+        .unwrap();
+    assert_eq!(row.staffing_diagnostic, blocked.staffing_diagnostic);
+    let wire = serde_json::to_value(row).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 6);
+    for private in [
+        "holder",
+        "subject",
+        "owner",
+        "absenceIds",
+        "assignedBy",
+        "requesterReference",
+    ] {
+        assert!(wire.get(private).is_none());
+    }
+    assert!(matches!(
+        service
+            .supervisory_review_tasks(
+                &fixture.reviewer_b,
+                Some("staff"),
+                "human-bearer",
+                Some("review"),
+                None,
+                None,
+                100
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+
+    // A diagnostic adds no authority. Concealed work matches unknown work for
+    // supervision and remains not found on an individual reviewer read.
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let concealed = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    let unknown = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(Uuid::new_v4()),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(concealed, unknown);
+    assert!(concealed.items.is_empty());
+    assert!(matches!(
+        service
+            .claim_review_task(
+                &fixture.reviewer_b,
+                task,
+                Some("staff"),
+                "human-bearer",
+                blocked.revision,
+                "hidden-no-cover-claim"
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    fixture.source_revoked.store(false, Ordering::SeqCst);
+
+    let claimed = service
+        .claim_review_task(
+            &fixture.reviewer_b,
+            task,
+            Some("staff"),
+            "human-bearer",
+            blocked.revision,
+            "claim-no-cover",
+        )
+        .await
+        .expect("eligible reviewer claims open task");
+    assert_eq!(claimed.staffing_diagnostic, None);
+    assert!(serde_json::to_value(&claimed)
+        .unwrap()
+        .get("staffingDiagnostic")
+        .is_none());
+    let released = service
+        .release_review_task(
+            &fixture.reviewer_b,
+            task,
+            claimed.revision,
+            "release-no-cover",
+        )
+        .await
+        .expect("release claimed responsibility");
+    assert_eq!(released.staffing_diagnostic, None);
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence_id],
+        )
+        .await
+        .expect("end absence");
+    let assigned = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            released.revision,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: None,
+            },
+            "assign-available",
+        )
+        .await
+        .expect("assign eligible available reviewer");
+    assert_eq!(assigned.staffing_diagnostic, None);
+
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,
+            starts_at,ends_at,cover_issuer,cover_subject,revision)
+         VALUES($1,$2,$3,$4,$5,$2,'initiator',1)",
+            &[
+                &absence_id,
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+                &(Utc::now() - TimeDelta::hours(1)),
+                &(Utc::now() + TimeDelta::hours(1)),
+            ],
+        )
+        .await
+        .expect("record a later absence");
+    assert_eq!(service.reconcile_review_absences(100).await.unwrap(), 1);
+    let recomputed = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("read absence recompute diagnostic");
+    assert_eq!(
+        recomputed.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    let reassigned = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            recomputed.revision,
+            AssignmentRequest {
+                assignee: fixture.reviewer_b.principal.clone(),
+                reason: None,
+            },
+            "replace-unavailable-assignee",
+        )
+        .await
+        .expect("successful reassignment clears diagnostic");
+    assert_eq!(reassigned.staffing_diagnostic, None);
+    let blocked_again = service
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            reassigned.revision,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: None,
+            },
+            "assign-unavailable-again",
+        )
+        .await
+        .expect("restore blocked assignment");
+    assert_eq!(
+        blocked_again.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence_id],
+        )
+        .await
+        .expect("end later absence");
+    assert_eq!(service.reconcile_review_absences(100).await.unwrap(), 1);
+    let restored = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("successful absence recompute restores holder");
+    assert!(matches!(restored.state, ReviewTaskState::Held { .. }));
+    assert_eq!(restored.staffing_diagnostic, None);
+    let supervision = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supervision
+            .items
+            .iter()
+            .find(|item| item.task_id == task)
+            .unwrap()
+            .staffing_diagnostic,
+        None
+    );
+    // Losing current membership also leaves no eligible assignment. Once the
+    // producer settles the review, that staffing notice is no longer current.
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert_eq!(service.reconcile_review_absences(100).await.unwrap(), 1);
+    let blocked = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked.staffing_diagnostic,
+        Some(StaffingDiagnostic::NoCoverAvailable)
+    );
+    service
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            ReviewCancelRequest {
+                subject: input.subject,
+                reason: "review withdrawn".into(),
+            },
+            "cancel-no-cover",
+        )
+        .await
+        .expect("settle blocked review");
+    let closed = service
+        .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+        .await
+        .expect("read retained closed task");
+    assert_eq!(closed.state, ReviewTaskState::Decided);
+    assert_eq!(closed.staffing_diagnostic, None);
+    fixture.database.execute(
+        "UPDATE casework_review_tasks SET staffing_diagnostic='no-cover-available' WHERE task_id=$1",
+        &[&task]
+    ).await.expect("represent a terminal notice retained by an older runtime");
+    assert_eq!(
+        service
+            .review_task(&fixture.reviewer_b, task, Some("staff"), "human-bearer")
+            .await
+            .unwrap()
+            .staffing_diagnostic,
+        None
+    );
+    let supervision = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            Some(created.accepted.request_id),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supervision
+            .items
+            .iter()
+            .find(|item| item.task_id == task)
+            .unwrap()
+            .staffing_diagnostic,
+        None
+    );
 }

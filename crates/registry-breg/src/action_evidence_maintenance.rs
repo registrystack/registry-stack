@@ -202,7 +202,7 @@ impl ActionEvidenceRetentionOperatorService {
             .query_one(
                 "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_action_evidence_uses
                                  WHERE expires_at <= $1)
-                     OR EXISTS (SELECT 1 FROM registry_internal.registry_request_evidence_uses
+                     OR EXISTS (SELECT 1 FROM registry_internal.registry_proposal_evidence_uses
                                  WHERE expires_at <= $1)",
                 &[&cutoff],
             )

@@ -255,11 +255,7 @@ mod tests {
     fn runtime_members_are_judged_alike_by_schema_and_reader() {
         let validator = validator();
         for (from, to, accepted) in [
-            (
-                "scopes: [address-correction:self]",
-                "scopes: []",
-                false,
-            ),
+            ("scopes: [address-correction:self]", "scopes: []", false),
             (
                 "scopes: [address-correction:self]",
                 "scopes: [address-correction:self, address-correction:self]",
@@ -275,12 +271,8 @@ mod tests {
                 "scopes: [address-correction:self, openid]",
                 false,
             ),
-            (
-                "clientId: citizen-review-page",
-                "clientId: ''",
-                false,
-            ),
-            ("targetField: address", "targetField: Address", false),
+            ("clientId: citizen-review-page", "clientId: ''", false),
+            ("targetInput: address", "targetInput: Address", false),
             (
                 "resource: https://registry.example/base",
                 "resource: 'urn:a b'",

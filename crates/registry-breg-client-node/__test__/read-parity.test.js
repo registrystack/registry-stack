@@ -48,8 +48,8 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     await client.listRecords('companies', { bbox: ['100.1', '13.1', '100.2', '13.2'] });
     await client.listRecordsJson('companies', { bbox: ['100.1', '13.1', '100.2', '13.2'] });
-    await client.getRecord('companies', id, { requestHistoryAfterProposalVersion: 3 });
-    await client.getRecordJson('companies', id, { requestHistoryAfterProposalVersion: 4 });
+    await client.getRecord('companies', id, { select: ['name'] });
+    await client.getRecordJson('companies', id, { select: ['name'] });
     assert(Buffer.isBuffer((await client.getRecordRevision('companies', id, 1)).body));
 
     assert.equal((await client.getGeoJsonRecord('companies', id)).value.type, 'Feature');
@@ -84,7 +84,10 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     await client.continueRelationshipListJson(relatedJson.continuation);
 
     assert(requests.some(item => item.url.includes('bbox=100.1%2C13.1%2C100.2%2C13.2')));
-    assert(requests.some(item => item.url.includes('requestHistoryAfterProposalVersion=3')));
+    assert(requests.some(item => item.url.includes('$select=name')));
+    const beforeRetiredOption = requests.length;
+    await assert.rejects(client.getRecord('companies', id, {requestHistoryAfterProposalVersion: 3}), error => error.kind === 'invalid-request');
+    assert.equal(requests.length, beforeRetiredOption);
     assert(requests.some(item => item.accept === 'application/geo+json' && item.url.includes('$skiptoken=geo-next')));
     assert(requests.some(item => item.url.includes('/companies:as-of?asOf=2026-09-10T00%3A00%3A00Z')));
     assert(requests.some(item => item.url.includes(`/companies/${id}/related?$skiptoken=next`)));

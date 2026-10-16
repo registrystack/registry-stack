@@ -1215,7 +1215,7 @@ async fn assert_immediate_action_success_bodies(
         );
         for result in results.values() {
             assert!(result.get("recordId").and_then(Value::as_str).is_some());
-            assert!(result.get("entity").and_then(Value::as_str).is_some());
+            assert!(result.get("recordType").and_then(Value::as_str).is_some());
             assert!(result.get("revision").and_then(Value::as_u64).is_some());
             assert_eq!(result.as_object().expect("result is object").len(), 3);
         }

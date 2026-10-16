@@ -32,11 +32,11 @@ use serde_json::{json, Value};
 
 use crate::safe_path::{SafeDir, SafePathError};
 use crate::{
-    artifact_report, capture_project_source, compile_captured_project, compiler_findings,
-    diagnostic, first_diagnostic, render_project_module_locks, tool_diagnostic,
-    validate_project_directory, write_project_registry, yaml_string, CapturedModuleSource,
-    CapturedProjectSource, DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport,
-    SuggestedAction,
+    artifact_report, canonicalize_project_path, capture_resolved_project_source,
+    compile_captured_project, compiler_findings, diagnostic, first_diagnostic,
+    render_project_module_locks, tool_diagnostic, validate_project_directory,
+    write_project_registry, yaml_string, CapturedModuleSource, CapturedProjectSource,
+    DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction,
 };
 
 pub(crate) const COMMAND: &str = "module add consent";
@@ -94,13 +94,16 @@ pub(crate) fn add_consent_module(
     project_path: &Path,
     subject: &str,
 ) -> Result<SuccessReport, FailureReport> {
-    let source = capture_project_source(project_path).map_err(|diagnostic| {
+    let source_failure = |diagnostic| {
         failure(
             diagnostic,
             DiagnosticArtifact::RegistryProject,
             SuggestedAction::CorrectAuthoringSource,
         )
-    })?;
+    };
+    let selected_project = canonicalize_project_path(project_path).map_err(&source_failure)?;
+    let project_path = selected_project.as_path();
+    let source = capture_resolved_project_source(project_path).map_err(source_failure)?;
     let plan = plan(&source, subject)?;
     let rendered = render_registry(&source, &plan)?;
     let project = parse_project_yaml(&rendered).map_err(|failure| {
@@ -142,7 +145,7 @@ pub(crate) fn add_consent_module(
                         return Err(match plan.dataset_conflict_index {
                             Some(index) => dataset_conflict(index, failure),
                             None => failure,
-                        })
+                        });
                     }
                 }
             }
@@ -180,6 +183,7 @@ struct Plan {
     reused_vocabularies: Vec<&'static str>,
     vocabulary_items: String,
     profile_items: String,
+    native_dataset_items: String,
     /// The `manifestProjection.datasets` block-list item this run appends for
     /// the shared `consent` dataset, when the project has a Registry Manifest
     /// projection and does not declare that dataset yet.
@@ -198,7 +202,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         argument_failure(
             "module.consent.subject-unknown",
             "subject",
-            "the subject must name an entity the project or one of its modules declares",
+            "the subject must name a record type the project or one of its modules declares",
         )
     })?;
     let module_id = format!("consent-{subject}");
@@ -288,6 +292,15 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         reused_vocabularies,
         vocabulary_items,
         profile_items,
+        native_dataset_items: if project
+            .datasets
+            .iter()
+            .any(|dataset| dataset.id == CONSENT_DATASET_ID)
+        {
+            String::new()
+        } else {
+            format!("- id: {CONSENT_DATASET_ID}\n  display: {{label: Consent records}}\n")
+        },
         dataset_addition,
         dataset_conflict_index,
         requirements: requirements(source, subject),
@@ -441,6 +454,7 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
         .map_err(|_| render_failure("registry.yaml is not UTF-8"))?;
     let mut edited = original.to_owned();
     for (key, items) in [
+        ("datasets", &plan.native_dataset_items),
         ("vocabularies", &plan.vocabulary_items),
         ("accessProfiles", &plan.profile_items),
     ] {
@@ -501,6 +515,7 @@ fn renders_exactly(
         return false;
     };
     for (key, items) in [
+        ("datasets", &plan.native_dataset_items),
         ("vocabularies", &plan.vocabulary_items),
         ("accessProfiles", &plan.profile_items),
     ] {
@@ -544,7 +559,7 @@ fn renders_exactly(
         Value::Array(
             locks
                 .iter()
-                .map(|lock| json!({"id": lock.id, "version": lock.version, "digest": lock.digest}))
+                .map(|lock| serde_json::to_value(lock).expect("module locks serialize"))
                 .collect(),
         ),
     );
@@ -854,7 +869,7 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
     json!({
         "subject": subject,
         "module": plan.module_id,
-        "entities": plan.module.entities.iter().map(|entity| &entity.id).collect::<Vec<_>>(),
+        "recordTypes": plan.module.entities.iter().map(|entity| &entity.id).collect::<Vec<_>>(),
         "actions": plan.module.actions.iter().map(|action| &action.id).collect::<Vec<_>>(),
         "accessProfiles": ids(
             &["", "", "", "", ""],
@@ -873,7 +888,7 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
         "requireConsent": plan
             .requirements
             .iter()
-            .map(|(entity, line)| json!({"entity": entity, "line": line}))
+            .map(|(entity, line)| json!({"recordType": entity, "line": line}))
             .collect::<Vec<_>>(),
         "compiles": compiles,
     })
@@ -882,7 +897,7 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
 fn next_steps(project_path: &Path, plan: &Plan, subject: &str, compiles: bool) -> Vec<String> {
     let (_, own) = &plan.requirements[0];
     let require = format!(
-        "under a profile's '- entity: {subject}' permission, add 'requireConsent: [{own}]', and do the same on each permission that reads {subject} rows only with consent; a permission on an entity that references {subject} uses the field it references by, as listed under requireConsent in this report"
+        "under a profile's '- recordType: {subject}' permission, add 'requireConsent: [{own}]', and do the same on each permission that reads {subject} rows only with consent; a permission on a record type that references {subject} uses the field it references by, as listed under requireConsent in this report"
     );
     // Until a profile requires consent, the decision's scope field binds
     // registry-consent-scopes, which is empty, so this step comes first.

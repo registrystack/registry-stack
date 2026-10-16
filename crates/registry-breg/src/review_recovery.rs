@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Operator recovery for a lost review or an application denied to its executor.
+//! Operator recovery for a lost review or a transient application failure.
 //!
 //! A review environment that was restored from an older backup, or replaced
 //! by a fresh one, no longer holds the reviews BReg submitted to it. The
 //! result poller names such a review `result-unknown-to-authority`, and the
 //! poll budget eventually fails it. These operations give the operator two
 //! supported answers: resubmit the exact retained review request, or close a
-//! review that will never be answered. An approved automatic application that
-//! was denied to its executor can also be retried after its credentials or
-//! grants are corrected, while preserving its proposal and idempotency key.
+//! review that will never be answered. An existing acceptance is immutable; a
+//! provider that lost it requires a new Proposal submission. A built-in automatic application may
+//! retry a transient dependency failure within its original attempt budget,
+//! preserving its frozen submission and idempotency key.
 //! Each runs in one verified migration transaction under the Registry lock,
 //! with an audit `request` entry accepted before the transaction opens and its
 //! `response` written after the commit.
@@ -21,7 +22,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::request_retention::{RequestRetentionError, RequestRetentionOperatorService};
+use crate::proposal_retention::{ProposalRetentionError, ProposalRetentionOperatorService};
 
 /// Codes a failed review may carry and still be resubmitted: each one means
 /// BReg gave up waiting, never that the authority refused or decided.
@@ -37,7 +38,7 @@ const OPERATOR_CLOSED: &str = "operator-closed";
 pub enum ReviewRecoveryError {
     /// Configuration, package, database identity, or lock verification failed.
     Unavailable,
-    /// No review or application exists for this exact request proposal version.
+    /// No review or application exists for this exact Proposal version.
     NotFound,
     /// The retained review or application does not qualify for this operation.
     Ineligible {
@@ -58,12 +59,12 @@ pub enum ReviewRecoveryRefusal {
     /// A review result is already recorded for the proposal.
     ResultRecorded,
     /// Retention erased the review request, so there is nothing to resubmit.
-    RequestErased,
+    DetailErased,
     /// The request no longer awaits review for this proposal version.
     ProposalNotSubmitted,
     /// The submission's state and code do not call for this operation.
     SubmissionState,
-    /// The application job is not blocked by executor authorization.
+    /// The application job has no transient failure with remaining attempts.
     ApplicationState,
     /// The exact proposal no longer has an unexpired approval.
     ApprovalUnavailable,
@@ -74,7 +75,7 @@ impl ReviewRecoveryRefusal {
         match self {
             Self::Withdrawn => "withdrawn",
             Self::ResultRecorded => "result-recorded",
-            Self::RequestErased => "request-erased",
+            Self::DetailErased => "detail-erased",
             Self::ProposalNotSubmitted => "proposal-not-submitted",
             Self::SubmissionState => "submission-state",
             Self::ApplicationState => "application-state",
@@ -87,18 +88,18 @@ pub type Result<T> = std::result::Result<T, ReviewRecoveryError>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewRecoveryScope<'a> {
-    pub request_entity_id: &'a str,
-    pub request_id: Uuid,
-    pub proposal_version: i64,
+    pub action_id: &'a str,
+    pub proposal_id: Uuid,
+    pub submission_version: i64,
 }
 
 /// The retained review or application before and after one operator recovery.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewRecovery {
-    pub request_entity_id: String,
-    pub request_id: String,
-    pub proposal_version: i64,
+    pub action_id: String,
+    pub proposal_id: String,
+    pub submission_version: i64,
     pub authority: String,
     pub previous_state: String,
     pub previous_code: Option<String>,
@@ -142,12 +143,12 @@ impl Operation {
 /// Construction verifies the same runtime configuration, package, database
 /// identity, managed catalog, and migration role as request retention.
 pub struct ReviewRecoveryOperatorService {
-    verified: RequestRetentionOperatorService,
+    verified: ProposalRetentionOperatorService,
 }
 
 impl ReviewRecoveryOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self> {
-        RequestRetentionOperatorService::from_runtime_config(path)
+        ProposalRetentionOperatorService::from_runtime_config(path)
             .await
             .map(|verified| Self { verified })
             .map_err(|_| ReviewRecoveryError::Unavailable)
@@ -155,7 +156,7 @@ impl ReviewRecoveryOperatorService {
 
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
-    pub fn over_retention_service_for_test(verified: RequestRetentionOperatorService) -> Self {
+    pub fn over_retention_service_for_test(verified: ProposalRetentionOperatorService) -> Self {
         Self { verified }
     }
 
@@ -165,7 +166,8 @@ impl ReviewRecoveryOperatorService {
     /// Accepted only for a review the authority answered as unknown, or one
     /// BReg failed for waiting too long, while its proposal still awaits
     /// review. The authority that still holds the request replays its
-    /// original acceptance; one that lost it accepts the request anew.
+    /// original acceptance. If a previously accepted request was lost, a new
+    /// acceptance is refused and the author must submit a new Proposal version.
     pub async fn resubmit(&self, scope: ReviewRecoveryScope<'_>) -> Result<ReviewRecovery> {
         self.recover(scope, Operation::Resubmit).await
     }
@@ -178,9 +180,9 @@ impl ReviewRecoveryOperatorService {
         self.recover(scope, Operation::Close).await
     }
 
-    /// Retry an automatic application blocked by executor authorization after
-    /// the operator corrects its credentials. The exact job, proposal and
-    /// idempotency key survive; current source authorization is checked again.
+    /// Retry a transient dependency failure within the frozen attempt budget.
+    /// The exact job, submission, key and consumed attempts survive. The
+    /// built-in coordinator checks current authority and fresh approval again.
     pub async fn retry_application(
         &self,
         scope: ReviewRecoveryScope<'_>,
@@ -193,11 +195,11 @@ impl ReviewRecoveryOperatorService {
         scope: ReviewRecoveryScope<'_>,
         operation: Operation,
     ) -> Result<ReviewRecovery> {
-        if scope.proposal_version <= 0 {
+        if scope.submission_version <= 0 {
             return Err(ReviewRecoveryError::NotFound);
         }
         self.verified
-            .request_plan(scope.request_entity_id)
+            .proposal_policy(scope.action_id)
             .map_err(|_| ReviewRecoveryError::NotFound)?;
         // The request entry is accepted before the recovery transaction
         // opens, so an audit outage changes no review; the response shares
@@ -211,7 +213,7 @@ impl ReviewRecoveryOperatorService {
             .audit_reference_hash(
                 "breg-record-v1",
                 package_revision,
-                &scope.request_id.to_string(),
+                &scope.proposal_id.to_string(),
             )
             .map_err(|_| ReviewRecoveryError::Unavailable)?;
         let correlation = Uuid::new_v4().to_string();
@@ -220,8 +222,8 @@ impl ReviewRecoveryOperatorService {
             "packageRevision":package_revision,
             "actor":"breg:review-recovery-operator",
             "correlation":correlation,
-            "entityId":scope.request_entity_id, "recordReference":record_reference,
-            "proposalVersion":scope.proposal_version,
+            "actionId":scope.action_id, "recordReference":record_reference,
+            "submissionVersion":scope.submission_version,
         });
         let mut attempt = audit
             .begin(
@@ -309,19 +311,19 @@ impl ReviewRecoveryOperatorService {
                 "SELECT s.state,s.last_error_code,s.withdrawn,s.authority,
                         s.create_request <> '{}'::jsonb,
                         EXISTS (
-                            SELECT 1 FROM registry_internal.registry_request_review_results r
-                             WHERE (r.request_entity_id,r.request_id,r.proposal_version)
-                                   =(s.request_entity_id,s.request_id,s.proposal_version)),
-                        w.state='submitted' AND w.proposal_version=s.proposal_version
-                   FROM registry_internal.registry_request_review_submissions s
-                   LEFT JOIN registry_internal.registry_request_state w
-                     ON (w.request_entity_id,w.request_id)=(s.request_entity_id,s.request_id)
-                  WHERE s.request_entity_id=$1 AND s.request_id=$2 AND s.proposal_version=$3
+                            SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                             WHERE (r.action_id,r.proposal_id,r.submission_version)
+                                   =(s.action_id,s.proposal_id,s.submission_version)),
+                        w.state='submitted' AND w.submission_version=s.submission_version
+                   FROM registry_internal.registry_proposal_review_submissions s
+                   LEFT JOIN registry_internal.registry_proposal_state w
+                     ON (w.action_id,w.proposal_id)=(s.action_id,s.proposal_id)
+                  WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3
                   FOR UPDATE OF s",
                 &[
-                    &scope.request_entity_id,
-                    &scope.request_id,
-                    &scope.proposal_version,
+                    &scope.action_id,
+                    &scope.proposal_id,
+                    &scope.submission_version,
                 ],
             )
             .await
@@ -354,24 +356,25 @@ impl ReviewRecoveryOperatorService {
         let (next_state, next_code) = match operation {
             Operation::RetryApplication => unreachable!("application recovery handled above"),
             Operation::Resubmit => {
-                // The binding and every budget return to a fresh submission;
-                // the idempotency key and request stay exactly as retained, and
-                // the recovery window restarts at its configured length.
+                // Retry the original request and key while preserving any concrete
+                // acceptance. A different acceptance cannot replace it even
+                // when the original selector delegated policy selection.
+                // Only the delivery budgets and recovery window restart.
                 transaction
                     .execute(
-                        "UPDATE registry_internal.registry_request_review_submissions
-                            SET state='pending',accepted_binding=NULL,attempt_count=0,
+                        "UPDATE registry_internal.registry_proposal_review_submissions
+                            SET state='pending',attempt_count=0,
                                 result_poll_attempts=0,lease_until=NULL,last_error_code=NULL,
                                 next_attempt_at=transaction_timestamp(),
                                 next_result_poll_at=transaction_timestamp(),
                                 recovery_deadline=transaction_timestamp()
                                     +(recovery_deadline-created_at),
                                 updated_at=transaction_timestamp()
-                          WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+                          WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
                         &[
-                            &scope.request_entity_id,
-                            &scope.request_id,
-                            &scope.proposal_version,
+                            &scope.action_id,
+                            &scope.proposal_id,
+                            &scope.submission_version,
                         ],
                     )
                     .await
@@ -381,14 +384,14 @@ impl ReviewRecoveryOperatorService {
             Operation::Close => {
                 transaction
                     .execute(
-                        "UPDATE registry_internal.registry_request_review_submissions
+                        "UPDATE registry_internal.registry_proposal_review_submissions
                             SET state='failed',lease_until=NULL,last_error_code=$4,
                                 updated_at=transaction_timestamp()
-                          WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+                          WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
                         &[
-                            &scope.request_entity_id,
-                            &scope.request_id,
-                            &scope.proposal_version,
+                            &scope.action_id,
+                            &scope.proposal_id,
+                            &scope.submission_version,
                             &OPERATOR_CLOSED,
                         ],
                     )
@@ -399,9 +402,9 @@ impl ReviewRecoveryOperatorService {
         };
         transaction.commit().await.map_err(|_| Stopped::AtCommit)?;
         Ok(ReviewRecovery {
-            request_entity_id: scope.request_entity_id.to_owned(),
-            request_id: scope.request_id.to_string(),
-            proposal_version: scope.proposal_version,
+            action_id: scope.action_id.to_owned(),
+            proposal_id: scope.proposal_id.to_string(),
+            submission_version: scope.submission_version,
             authority,
             previous_state: state,
             previous_code: code,
@@ -417,27 +420,24 @@ async fn retry_application_in_transaction(
 ) -> Result<ReviewRecovery> {
     let row = transaction
         .query_opt(
-            "SELECT j.state,j.last_error_code,s.authority,s.withdrawn,
-                w.state='submitted' AND w.proposal_version=j.proposal_version,
-                r.status='approved' AND r.available_until > transaction_timestamp()
-                    AND r.result_id=j.result_id AND s.proposal_digest=j.proposal_digest
-                    AND s.on_approved_mode='automatic' AND s.executor=j.executor
-                    AND p.effect_digest=j.proposal_digest AND p.snapshot IS NOT NULL
-           FROM registry_internal.registry_request_application_jobs j
-           JOIN registry_internal.registry_request_review_submissions s
-             USING (request_entity_id,request_id,proposal_version)
-           JOIN registry_internal.registry_request_review_results r
-             USING (request_entity_id,request_id,proposal_version)
-           JOIN registry_internal.registry_request_proposals p
-             USING (request_entity_id,request_id,proposal_version)
-           JOIN registry_internal.registry_request_state w
-             USING (request_entity_id,request_id)
-          WHERE j.request_entity_id=$1 AND j.request_id=$2 AND j.proposal_version=$3
-          FOR UPDATE OF j,s,r,p,w",
+            "SELECT j.state,j.last_error_code,COALESCE(s.authority,'builtin'),COALESCE(s.withdrawn,false),
+                w.state='submitted' AND w.submission_version=j.submission_version AND w.blocked_reason IS NULL,
+                p.effect_digest=j.proposal_digest AND p.snapshot IS NOT NULL
+                    AND p.snapshot->>'systemGrantRevision'=j.system_grant_revision,
+                j.attempt_count<j.maximum_attempts
+           FROM registry_internal.registry_proposal_application_jobs j
+           LEFT JOIN registry_internal.registry_proposal_review_submissions s
+             USING (action_id,proposal_id,submission_version)
+           JOIN registry_internal.registry_proposal_submissions p
+             USING (action_id,proposal_id,submission_version)
+           JOIN registry_internal.registry_proposal_state w
+             USING (action_id,proposal_id)
+          WHERE j.action_id=$1 AND j.proposal_id=$2 AND j.submission_version=$3
+          FOR UPDATE OF j,p,w",
             &[
-                &scope.request_entity_id,
-                &scope.request_id,
-                &scope.proposal_version,
+                &scope.action_id,
+                &scope.proposal_id,
+                &scope.submission_version,
             ],
         )
         .await
@@ -450,8 +450,14 @@ async fn retry_application_in_transaction(
     } else if !row.get::<_, bool>(4) {
         Some(ReviewRecoveryRefusal::ProposalNotSubmitted)
     } else if row.get::<_, Option<bool>>(5) != Some(true) {
-        Some(ReviewRecoveryRefusal::ApprovalUnavailable)
-    } else if state != "blocked" || code.as_deref() != Some("executor-denied") {
+        Some(ReviewRecoveryRefusal::DetailErased)
+    } else if state != "blocked"
+        || !row.get::<_, bool>(6)
+        || !matches!(
+            code.as_deref(),
+            Some("dependency-outage" | "source-unavailable" | "lease-expired")
+        )
+    {
         Some(ReviewRecoveryRefusal::ApplicationState)
     } else {
         None
@@ -465,29 +471,37 @@ async fn retry_application_in_transaction(
     }
     transaction
         .execute(
-            "UPDATE registry_internal.registry_request_application_jobs
-            SET state='queued',attempt_count=0,claim_token=NULL,last_error_code=NULL,
-                action_href=NULL,action_if_match=NULL,next_attempt_at=transaction_timestamp(),
+            "UPDATE registry_internal.registry_proposal_application_jobs
+            SET state='queued',claim_token=NULL,last_error_code=NULL,next_attempt_at=transaction_timestamp(),
                 updated_at=transaction_timestamp()
-          WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+          WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
             &[
-                &scope.request_entity_id,
-                &scope.request_id,
-                &scope.proposal_version,
+                &scope.action_id,
+                &scope.proposal_id,
+                &scope.submission_version,
             ],
         )
         .await
         .map_err(|_| ReviewRecoveryError::Unavailable)?;
     Ok(ReviewRecovery {
-        request_entity_id: scope.request_entity_id.to_owned(),
-        request_id: scope.request_id.to_string(),
-        proposal_version: scope.proposal_version,
+        action_id: scope.action_id.to_owned(),
+        proposal_id: scope.proposal_id.to_string(),
+        submission_version: scope.submission_version,
         authority: row.get(2),
         previous_state: state,
         previous_code: code,
         state: "queued",
         code: None,
     })
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn retry_application_for_test(
+    transaction: &tokio_postgres::Transaction<'_>,
+    scope: ReviewRecoveryScope<'_>,
+) -> Result<ReviewRecovery> {
+    retry_application_in_transaction(transaction, scope).await
 }
 
 /// One `response` record: the request's fields with `outcome` and, for a
@@ -530,7 +544,7 @@ fn eligibility(
             if !lost {
                 Some(ReviewRecoveryRefusal::SubmissionState)
             } else if !request_retained {
-                Some(ReviewRecoveryRefusal::RequestErased)
+                Some(ReviewRecoveryRefusal::DetailErased)
             } else if !proposal_submitted {
                 Some(ReviewRecoveryRefusal::ProposalNotSubmitted)
             } else {
@@ -540,7 +554,7 @@ fn eligibility(
     }
 }
 
-fn unavailable(_error: RequestRetentionError) -> ReviewRecoveryError {
+fn unavailable(_error: ProposalRetentionError) -> ReviewRecoveryError {
     ReviewRecoveryError::Unavailable
 }
 
@@ -589,7 +603,7 @@ mod tests {
                 false,
                 false,
                 true,
-                ReviewRecoveryRefusal::RequestErased,
+                ReviewRecoveryRefusal::DetailErased,
             ),
             (
                 false,

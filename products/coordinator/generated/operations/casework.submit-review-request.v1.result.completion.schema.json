@@ -1,0 +1,134 @@
+{
+  "$defs": {
+    "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "PolicyBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ReviewResultStatus": {
+      "enum": [
+        "approved",
+        "rejected",
+        "changes-requested",
+        "answered",
+        "cancelled",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "SubjectBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "type",
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "availableUntil": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "completedAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "outcome": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicyBinding"
+    },
+    "publicReason": {
+      "description": "Text the decision gives for release to the subject's owner. It is\ndistinct from the reviewer's private reason, which never leaves\nCasework.",
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-maximum-utf8-bytes": 2000
+    },
+    "requestId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "result": {
+      "additionalProperties": true,
+      "type": "object",
+      "x-maximum-canonical-bytes": 16384
+    },
+    "resultId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ReviewResultStatus"
+    },
+    "subject": {
+      "$ref": "#/$defs/SubjectBinding"
+    },
+    "submissionDigest": {
+      "$ref": "#/$defs/ContentDigest"
+    }
+  },
+  "required": [
+    "resultId",
+    "requestId",
+    "subject",
+    "policy",
+    "submissionDigest",
+    "status",
+    "completedAt",
+    "availableUntil"
+  ],
+  "title": "Casework result completion",
+  "type": "object"
+}

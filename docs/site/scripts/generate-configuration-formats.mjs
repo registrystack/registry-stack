@@ -99,6 +99,17 @@ export const PRODUCTS = [
     ],
   },
   {
+    id: 'coordinator',
+    title: 'Registry Coordinator',
+    docsetProduct: 'registry-coordinator',
+    checkPage: 'reference/coordinator-configuration',
+    references: [
+      { label: 'Author a Coordinator flow', page: 'configure/coordinator' },
+      { label: 'Deploy Registry Coordinator', page: 'operate/coordinator' },
+      { label: 'Registry Coordinator configuration reference', page: 'reference/coordinator-configuration' },
+    ],
+  },
+  {
     id: 'platform',
     title: 'Registry Platform',
     docsetProduct: null,

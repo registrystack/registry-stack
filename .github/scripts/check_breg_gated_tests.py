@@ -94,6 +94,7 @@ CRATE = "registry-breg"
 INVOCATION_SOURCES = (
     ".github/workflows/ci.yml",
     "products/breg/scripts/check-client-contract.sh",
+    "products/breg/scripts/check-contracts.sh",
     "products/breg/scripts/test-attachment-s3.sh",
     "products/breg/scripts/test-postgres-tls.sh",
     "products/breg/scripts/test-postgres.sh",
@@ -104,8 +105,6 @@ INVOCATION_SOURCES = (
 # gate fails on an entry that is selected or gone, so remove the entry in the
 # change that starts running the test; do not add one to get a test past the
 # gate.
-_WITHOUT_POSTGRES_TEST = "test-postgres.sh builds this target without postgres-test"
-_NO_LIBRARY_RUN = "no invocation runs the library tests with postgres-test"
 KNOWN_UNSELECTED: dict[str, str] = {
     "tests/postgres_action_handlers.rs::wasm_handler_declaration_fails_typed_and_statelessly_without_the_executor": (
         "runs only without wasm; the PostgreSQL lanes build this target with default features"
@@ -113,27 +112,6 @@ KNOWN_UNSELECTED: dict[str, str] = {
     "tests/postgres_statistics_load.rs": (
         "one ignored one-million-unit measurement, run by hand and named by no script"
     ),
-    "tests/runtime_config.rs::database_test_only_plaintext_connects_without_tls_in_test_builds": _WITHOUT_POSTGRES_TEST,
-    "tests/runtime_config.rs::pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_ceilings": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::serve_returns_after_graceful_shutdown_signal": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::shutdown_signal_failure_still_stops_and_joins_the_bound_server": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::listener_bind_failure_never_starts_or_detaches_the_webhook_worker": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::a_panicking_background_task_stops_serve_with_a_distinct_error": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::an_early_returning_background_task_stops_serve_with_a_distinct_error": _WITHOUT_POSTGRES_TEST,
-    "tests/startup_http.rs::a_requested_shutdown_reports_no_background_task_stop": _WITHOUT_POSTGRES_TEST,
-    "src/attachment_store.rs::mod test_support": (
-        "support code for the PostgreSQL integration targets; it holds no tests"
-    ),
-    "src/mutation.rs::mod tests": _NO_LIBRARY_RUN,
-    "src/postgres/config.rs::connection_debug_never_contains_database_secrets": _NO_LIBRARY_RUN,
-    "src/postgres/history_read.rs::mod tests": _NO_LIBRARY_RUN,
-    "src/postgres/interlock.rs::failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres": _NO_LIBRARY_RUN,
-    "src/postgres/mod.rs::mod stored_bytes_probe": _NO_LIBRARY_RUN,
-    "src/postgres/revision_read.rs::mod tests": _NO_LIBRARY_RUN,
-    "src/request_store.rs::mod tests": _NO_LIBRARY_RUN,
-    "src/review_store.rs::mod transaction_instant_tests": _NO_LIBRARY_RUN,
-    "src/task_grant/tests.rs::write_idempotency_separates_grants_without_changing_read_authority": _NO_LIBRARY_RUN,
 }
 
 # What the Linux target of every CI test build of the crate answers for the

@@ -48,12 +48,6 @@ const LOCAL_PROCEDURE_SCHEMA_V1: &str = "registry.evidence.local-relying-procedu
 pub enum RequestCommand {
     /// Prepare the request, authorization header, and verification context.
     Prepare(PrepareArgs),
-    /// Deprecated alias for `evidencectl verify`.
-    ///
-    /// `evidencectl verify` is the one verification command, and it takes the
-    /// same arguments. This spelling keeps working so a script that already
-    /// calls it is not broken by the rename.
-    Verify(crate::verify::VerifyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -63,22 +57,22 @@ pub enum RequestCommand {
 ), group(
     ArgGroup::new("request_source")
         .required(true)
-        .args(["question", "profile"])
+        .args(["definition", "profile"])
 ))]
 pub struct PrepareArgs {
-    /// Question defined by the active local project.
-    question: Option<String>,
+    /// AssertionDefinition ID declared by the active local project.
+    definition: Option<String>,
 
     /// Owner-only progressive client profile.
     #[arg(long)]
     profile: Option<PathBuf>,
 
-    /// Stable public requirement handle from the selected contract catalog.
+    /// Public Requirement URI from the selected contract catalog.
     #[arg(long, requires = "profile")]
     requirement: Option<String>,
 
-    /// Exact purpose declared by the question.
-    #[arg(long, requires = "question")]
+    /// Exact purpose declared by the definition.
+    #[arg(long, requires = "definition")]
     purpose: Option<String>,
 
     /// Subject selector. Repeat role:field=value; local alternatives require role@profile:field=value.
@@ -272,7 +266,6 @@ struct LocalRelyingProcedure {
 pub fn run(command: RequestCommand) -> Result<ExitCode> {
     match command {
         RequestCommand::Prepare(args) => prepare(args),
-        RequestCommand::Verify(args) => crate::verify::run(args),
     }
 }
 
@@ -297,11 +290,11 @@ fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
     let requirement = args
         .requirement
         .as_deref()
-        .ok_or_else(|| anyhow!("progressive preparation requires a requirement handle"))?;
+        .ok_or_else(|| anyhow!("progressive preparation requires a public Requirement URI"))?;
     let (selectors, subjects) = progressive_subject_inputs(&args)?;
     let client = EvidenceClient::from_profile_path(profile)
         .map_err(|_| anyhow!("progressive request preparation failed"))?;
-    let mut request = AudienceScopedRequest::new(requirement, selectors);
+    let mut request = AudienceScopedRequest::for_requirement_uri(requirement, selectors);
     if let Some(subjects) = subjects {
         request = request.with_subjects(subjects);
     }
@@ -520,7 +513,7 @@ fn progressive_curl_config(
 fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     let ready = dev::load_ready_state(&args.project)?;
-    let (question, subjects) = validate_closed_inputs(&ready, &args)?;
+    let (definition, subjects) = validate_closed_inputs(&ready, &args)?;
     let client = resolve_request_client(&ready, args.client.as_deref())?;
     let evidence = dev::resolve_tool_binary(
         "evidence",
@@ -533,8 +526,12 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
     require_absent(&destination)?;
     let mut staging = StagingDirectory::create(&requests_root)?;
 
-    let procedure_input =
-        local_procedure_input(question, &subjects, &client.evidence_audience, args.format);
+    let procedure_input = local_procedure_input(
+        definition,
+        &subjects,
+        &client.evidence_audience,
+        args.format,
+    );
     let procedure_input_path = staging.path().join("procedure-input.json");
     let procedure_input = canonicalize_json(&serde_json::to_value(procedure_input)?)
         .context("failed to serialize the local relying procedure input")?;
@@ -543,7 +540,12 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         prepare_local_relying_procedure(&evidence, &ready.runtime_path, &procedure_input_path)?;
     fs::remove_file(&procedure_input_path)
         .context("failed to remove the private relying procedure input")?;
-    validate_local_relying_procedure(&procedure, question, &client.evidence_audience, args.format)?;
+    validate_local_relying_procedure(
+        &procedure,
+        definition,
+        &client.evidence_audience,
+        args.format,
+    )?;
 
     let token = dev::obtain_issuer_token(&ready, &client.client_id, &client.private_key_path)?;
     let token_provider = Arc::new(
@@ -608,15 +610,15 @@ struct RequestClient {
 fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Result<RequestClient> {
     match client_id {
         Some(client_id) => {
-            if ready.access_policies.is_empty() {
-                bail!("--client requires an active generation with explicit access policies");
+            if ready.access_profiles.is_empty() {
+                bail!("--client requires an active generation with explicit access profiles");
             }
-            let policy_tags = ready
-                .access_policies
+            let profile_digests = ready
+                .access_profiles
                 .iter()
-                .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
+                .map(|policy| (policy.id.clone(), policy.digest.clone()))
                 .collect::<BTreeMap<_, _>>();
-            let client = access::resolve_ready_client(&ready.project, client_id, &policy_tags)?;
+            let client = access::resolve_ready_client(&ready.project, client_id, &profile_digests)?;
             Ok(RequestClient {
                 client_id: client.client_id,
                 private_key_path: client.private_key_path,
@@ -639,28 +641,28 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
 fn validate_closed_inputs<'a>(
     ready: &'a ReadyDevState,
     args: &PrepareArgs,
-) -> Result<(&'a dev::ReadyQuestionState, Vec<ValidatedSubject<'a>>)> {
-    let question = ready
-        .questions
+) -> Result<(&'a dev::ReadyDefinitionState, Vec<ValidatedSubject<'a>>)> {
+    let definition = ready
+        .definitions
         .iter()
-        .find(|question| args.question.as_deref() == Some(question.alias.as_str()))
-        .ok_or_else(|| anyhow!("question does not match the active local project"))?;
-    if args.purpose.as_deref() != Some(question.purpose.as_str()) {
-        bail!("purpose does not match the active local tutorial question");
+        .find(|definition| args.definition.as_deref() == Some(definition.alias.as_str()))
+        .ok_or_else(|| anyhow!("definition does not match the active local project"))?;
+    if args.purpose.as_deref() != Some(definition.purpose.as_str()) {
+        bail!("purpose does not match the active local tutorial definition");
     }
-    let inputs = load_subject_inputs(args, question)?;
+    let inputs = load_subject_inputs(args, definition)?;
     let mut grouped: BTreeMap<String, Vec<SubjectInput>> = BTreeMap::new();
     for input in inputs {
         grouped.entry(input.role.clone()).or_default().push(input);
     }
-    if grouped.len() != question.subjects.len() {
-        bail!("subject inputs must match the question's complete role set");
+    if grouped.len() != definition.subjects.len() {
+        bail!("subject inputs must match the definition's complete role set");
     }
-    let mut subjects = Vec::with_capacity(question.subjects.len());
-    for definition in &question.subjects {
-        let entries = grouped
-            .remove(&definition.role)
-            .ok_or_else(|| anyhow!("subject inputs must cover the question's complete role set"))?;
+    let mut subjects = Vec::with_capacity(definition.subjects.len());
+    for definition in &definition.subjects {
+        let entries = grouped.remove(&definition.role).ok_or_else(|| {
+            anyhow!("subject inputs must cover the definition's complete role set")
+        })?;
         let profile = entries[0].profile.as_deref();
         if entries
             .iter()
@@ -670,7 +672,7 @@ fn validate_closed_inputs<'a>(
         }
         let selector = match profile {
             Some(profile) => definition.selectors.iter().find(|selector| selector.profile == profile)
-                .ok_or_else(|| anyhow!("subject profile does not match the active local question"))?,
+                .ok_or_else(|| anyhow!("subject profile does not match the active local definition"))?,
             None if definition.selectors.len() == 1 => &definition.selectors[0],
             None => bail!("subject alternatives require an explicit profile in --subjects-file or role@profile:field=value"),
         };
@@ -694,32 +696,35 @@ fn validate_closed_inputs<'a>(
         subjects.push(subject);
     }
 
-    Ok((question, subjects))
+    Ok((definition, subjects))
 }
 
 fn load_subject_inputs(
     args: &PrepareArgs,
-    question: &dev::ReadyQuestionState,
+    definition: &dev::ReadyDefinitionState,
 ) -> Result<Vec<SubjectInput>> {
     match (&args.subjects_file, args.subject.is_empty()) {
         (Some(path), true) => read_subject_inputs(path),
         (None, false) => args
             .subject
             .iter()
-            .map(|input| parse_subject_argument(input, question))
+            .map(|input| parse_subject_argument(input, definition))
             .collect(),
         _ => bail!("provide exactly one of --subject or --subjects-file"),
     }
 }
 
-fn parse_subject_argument(input: &str, question: &dev::ReadyQuestionState) -> Result<SubjectInput> {
+fn parse_subject_argument(
+    input: &str,
+    definition: &dev::ReadyDefinitionState,
+) -> Result<SubjectInput> {
     let (binding, value) = input
         .split_once('=')
         .filter(|(_, value)| !value.contains('='))
         .ok_or_else(|| anyhow!("subject must be one field=value or role:field=value pair"))?;
     let (role, field) = match binding.split_once(':') {
         Some((role, field)) if !role.contains(':') && !field.contains(':') => (role, field),
-        None if question.subjects.len() == 1 => (question.subjects[0].role.as_str(), binding),
+        None if definition.subjects.len() == 1 => (definition.subjects[0].role.as_str(), binding),
         _ => bail!("multi-subject inputs must use role:field=value"),
     };
     let (role, profile) = match role.split_once('@') {
@@ -802,7 +807,7 @@ fn validate_request_name(name: &str) -> Result<()> {
 }
 
 fn local_procedure_input<'a>(
-    question: &'a dev::ReadyQuestionState,
+    definition: &'a dev::ReadyDefinitionState,
     subjects: &'a [ValidatedSubject<'a>],
     audience: &'a str,
     response_format: PreparedResponseFormat,
@@ -831,8 +836,8 @@ fn local_procedure_input<'a>(
     LocalProcedureInput {
         schema: LOCAL_PROCEDURE_INPUT_SCHEMA_V1,
         response_format,
-        requirement: &question.requirement_uri,
-        purpose: &question.purpose,
+        requirement: &definition.requirement_uri,
+        purpose: &definition.purpose,
         audience,
         subjects,
     }
@@ -877,15 +882,15 @@ fn prepare_local_relying_procedure(
 
 fn validate_local_relying_procedure(
     procedure: &LocalRelyingProcedure,
-    question: &dev::ReadyQuestionState,
+    definition: &dev::ReadyDefinitionState,
     audience: &str,
     response_format: PreparedResponseFormat,
 ) -> Result<()> {
     if procedure.schema != LOCAL_PROCEDURE_SCHEMA_V1
         || procedure.response_format != response_format
         || procedure.expected_assurance_profile != AssuranceProfile::Local
-        || procedure.requirement != question.requirement_uri
-        || procedure.purpose != question.purpose
+        || procedure.requirement != definition.requirement_uri
+        || procedure.purpose != definition.purpose
         || procedure.audience != audience
     {
         bail!("Evidence relying procedure preparation failed");
@@ -1163,7 +1168,7 @@ mod tests {
 
     fn progressive_args(subject: Vec<&str>, subjects_file: Option<PathBuf>) -> PrepareArgs {
         PrepareArgs {
-            question: None,
+            definition: None,
             profile: Some(PathBuf::from("client.json")),
             requirement: Some("relationship".to_owned()),
             purpose: None,
@@ -1186,8 +1191,8 @@ mod tests {
             token_url: "http://127.0.0.1:8081/oauth2/token".to_owned(),
             access_token_audience: "local".to_owned(),
             caller: None,
-            access_policies: vec![],
-            questions: vec![dev::ReadyQuestionState {
+            access_profiles: vec![],
+            definitions: vec![dev::ReadyDefinitionState {
                 alias: "marker".to_owned(),
                 requirement_uri: "urn:example:marker".to_owned(),
                 purpose: "check".to_owned(),
@@ -1215,7 +1220,7 @@ mod tests {
 
     fn local_selector_args(subjects: Vec<&str>) -> PrepareArgs {
         let mut args = progressive_args(subjects, None);
-        args.question = Some("marker".to_owned());
+        args.definition = Some("marker".to_owned());
         args.purpose = Some("check".to_owned());
         args.profile = None;
         args.requirement = None;
@@ -1229,9 +1234,9 @@ mod tests {
             "record@by-code-and-region:code=A",
             "record@by-code-and-region:region=7",
         ]);
-        let (question, subjects) = validate_closed_inputs(&ready, &args).unwrap();
+        let (definition, subjects) = validate_closed_inputs(&ready, &args).unwrap();
         let input = serde_json::to_value(local_procedure_input(
-            question,
+            definition,
             &subjects,
             "urn:example:audience",
             PreparedResponseFormat::SignedJws,
@@ -1265,11 +1270,11 @@ mod tests {
     #[test]
     fn local_request_shorthand_keeps_numeric_identifiers_as_strings() {
         let mut ready = selector_ready_state();
-        ready.questions[0].subjects[0].selectors.truncate(1);
+        ready.definitions[0].subjects[0].selectors.truncate(1);
         let args = local_selector_args(vec!["code=00123"]);
-        let (question, subjects) = validate_closed_inputs(&ready, &args).unwrap();
+        let (definition, subjects) = validate_closed_inputs(&ready, &args).unwrap();
         let input = serde_json::to_value(local_procedure_input(
-            question,
+            definition,
             &subjects,
             "urn:example:audience",
             PreparedResponseFormat::SignedJws,
@@ -1282,9 +1287,9 @@ mod tests {
     fn local_request_uses_the_explicit_profile_when_shapes_overlap() {
         let ready = selector_ready_state();
         let args = local_selector_args(vec!["record@by-secondary-code:code=A"]);
-        let (question, subjects) = validate_closed_inputs(&ready, &args).unwrap();
+        let (definition, subjects) = validate_closed_inputs(&ready, &args).unwrap();
         let input = serde_json::to_value(local_procedure_input(
-            question,
+            definition,
             &subjects,
             "urn:example:audience",
             PreparedResponseFormat::SignedJws,

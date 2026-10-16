@@ -464,24 +464,6 @@
       ],
       "type": "object"
     },
-    "LocalReviewExecutor": {
-      "additionalProperties": false,
-      "properties": {
-        "accessProfile": {
-          "description": "The one service-only apply-request profile selected by the worker.",
-          "type": "string"
-        },
-        "client": {
-          "description": "Logical client from this same closed file. Its retained issuer key is\ncopied into the private runtime secret tree.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "accessProfile",
-        "client"
-      ],
-      "type": "object"
-    },
     "LocalTaskGrantStatus": {
       "additionalProperties": false,
       "properties": {
@@ -558,21 +540,21 @@
           "type": "object",
           "x-registry-passthrough": "The record body is sent to the registry as given; the registry validates it."
         },
-        "entity": {
-          "type": "string"
-        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
         "operation": {
           "$ref": "#/$defs/SeedOperation",
           "default": "create"
+        },
+        "recordType": {
+          "type": "string"
         }
       },
       "required": [
         "id",
         "client",
-        "entity",
+        "recordType",
         "accessProfile",
         "data"
       ],
@@ -669,17 +651,6 @@
       },
       "default": {},
       "description": "Exact local Casework review-authority bindings for governed proposals.",
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
-    },
-    "reviewExecutors": {
-      "additionalProperties": {
-        "$ref": "#/$defs/LocalReviewExecutor"
-      },
-      "default": {},
-      "description": "Exact local service clients that apply approved change requests.",
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },

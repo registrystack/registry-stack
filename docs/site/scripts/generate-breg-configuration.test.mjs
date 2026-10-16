@@ -28,20 +28,24 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   const project = fields('project');
   const module = fields('module');
   const runtime = fields('runtime');
-  assert.ok(project.has('accessProfiles[].permissions.entities[].entity'));
-  assert.deepEqual(module.get('extendEntities[].hooks[].trigger').values, ['created', 'patched', 'request-lifecycle', 'tombstoned']);
-  assert.deepEqual(module.get('extendEntities[].hooks[].phase').values, ['after', 'before']);
+  assert.ok(project.has('accessProfiles[].permissions.records[].recordType'));
+  assert.deepEqual(module.get('recordTypes[].hooks[].trigger').values, ['created', 'patched', 'tombstoned']);
+  assert.deepEqual(module.get('recordTypes[].hooks[].phase').values, ['after', 'before']);
+  assert.ok(project.has('accessProfiles[].permissions.proposals[].targets[].recordType'));
+  assert.deepEqual(project.get('actions[].execution.proposal.hooks[].transitions[]').values,
+    ['applied', 'cancelled', 'edited', 'rebased', 'rejected', 'retried', 'review-returned', 'revised', 'started',
+      'submitted']);
   for (const path of ['changed[]', 'beforeEquals.*', 'afterEquals.*']) {
-    assert.ok(module.has(`extendEntities[].hooks[].when.${path}`), path);
+    assert.ok(module.has(`recordTypes[].hooks[].when.${path}`), path);
   }
-  assert.deepEqual(module.get('extendEntities[].hooks[].handler.type').values, ['rhai', 'url', 'wasm']);
-  assert.ok(module.has('extendEntities[].hooks[].handler.destinationId'));
-  assert.ok(!module.has('extendEntities[].hooks[].handler.origin'));
+  assert.deepEqual(module.get('recordTypes[].hooks[].handler.type').values, ['rhai', 'url', 'wasm']);
+  assert.ok(module.has('recordTypes[].hooks[].handler.destinationId'));
+  assert.ok(!module.has('recordTypes[].hooks[].handler.origin'));
   assert.ok(runtime.has('eventDestinations.*.hmacSha256KeyRef'));
   assert.ok(runtime.has('eventDestinations.*.tls.clientIdentityRef'));
   assert.ok(runtime.has('eventDestinations.*.deliveryCeilings.maximumAttempts'));
-  assert.deepEqual(runtime.get('eventDelivery.payloadRetentionDays').defaults, ['7']);
-  assert.ok(runtime.get('eventDelivery.payloadRetentionDays').constraints.flat().includes('maximum: 30'));
+  assert.deepEqual(runtime.get('retention.hookPayloadRetentionDays').defaults, ['7']);
+  assert.ok(runtime.get('retention.hookPayloadRetentionDays').constraints.flat().includes('maximum: 30'));
 });
 
 test('schema defaults preserve false, null, collections, and referenced defaults', () => {

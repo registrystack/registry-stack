@@ -1,0 +1,21 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: local
+project: example-evidence
+accessProfiles:
+  example-requester:
+    authority: statutory
+    requesterTags:
+    - example-requester
+    grants:
+    - definition: record-status
+      purpose: record-status-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      - sd-jwt-vc
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: record-reference-v1
+        valueOrigin: request

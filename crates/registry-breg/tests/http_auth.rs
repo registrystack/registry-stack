@@ -60,7 +60,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -72,14 +72,17 @@ entities:
       - {id: secret, type: string, required: true, maximumLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maximumLength: 100, classification: internal}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label]
           rowBoundaries: unrestricted
@@ -88,8 +91,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management-never-rendered]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label, secret]
           rowBoundaries:
@@ -105,7 +108,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -115,14 +118,17 @@ entities:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label]
           rowBoundaries:
@@ -133,7 +139,7 @@ const CONTEXTUAL_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -143,6 +149,9 @@ entities:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: standing-human
     principalClaim: sub
@@ -151,8 +160,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [record-review]
     permissions:
-      entities:
-        - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
+      records:
+        - {recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: standing-agent
     principalClaim: sub
     requiredScopes: unrestricted
@@ -160,8 +169,8 @@ accessProfiles:
     requesterClients: [agent-client]
     requiredPurposes: [citizen-self-service]
     permissions:
-      entities:
-        - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
+      records:
+        - {recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: delegated-agent
     default: true
     principalClaim: sub
@@ -171,8 +180,8 @@ accessProfiles:
     requiredPurposes: [record-review]
     taskGrant: {sourceIssuer: https://casework.example}
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label]
           rowBoundaries:
@@ -666,11 +675,26 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
     let refused = harness
         .send(
             &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
-            &[bearer(&harness.signed_token(wider, "JWT"))],
+            &[bearer(&harness.signed_token(wider.clone(), "JWT"))],
             None,
         )
         .await;
-    assert_ne!(refused.status(), StatusCode::OK);
+    assert_eq!(refused.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
+    let token = harness.signed_token(wider, "JWT");
+    let list = harness
+        .send(
+            "/v1/records/cases?accessProfile=delegated-agent",
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_ne!(list.status(), StatusCode::OK);
+    assert_eq!(
+        harness.records.calls.load(Ordering::SeqCst),
+        2,
+        "the profile's Get-only ceiling refuses List before Record IO"
+    );
 }
 
 #[test]
@@ -850,7 +874,7 @@ async fn trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries() {
 }
 
 #[test]
-fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
+fn task_profiles_refuse_direct_record_mutation() {
     let direct = CONTEXTUAL_PROJECT.replace(
         "operations: [get]\n          readableFields: [label]\n          rowBoundaries:",
         "operations: [create, get]\n          readableFields: [label]\n          writableFields: [label]\n          rowBoundaries:",
@@ -860,36 +884,6 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
         .expect_err("direct target mutation is refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.access-profile.task-grant-direct-mutation-forbidden"
-    }));
-
-    let task_grant_reviewer = include_str!("fixtures/authority-mapping.yaml").replace(
-        "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
-        "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
-    );
-
-    // A task-grant profile cannot hold apply-request, so applying the
-    // change request needs its own, non-delegated profile; otherwise the
-    // fixture's applyTargets completeness check has nothing to satisfy it.
-    let governed = task_grant_reviewer
-        .replace(
-            "operations: [get, submit-request, apply-request",
-            "operations: [create, get, patch, submit-request",
-        )
-        .replace(
-            "          applyTargets:\n            - entity: asset\n              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n",
-            "",
-        )
-        + "  - id: applier\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: correction\n          operations: [apply-request]\n          readableFields: [asset, label]\n          rowBoundaries: unrestricted\n          applyTargets:\n            - entity: asset\n              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
-    let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
-    compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("governed request draft create and patch remain available");
-
-    let project = parse_project_yaml(task_grant_reviewer.as_bytes())
-        .expect("task-grant apply-request project parses");
-    let failure = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect_err("a task-grant profile cannot apply a reviewed request");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.task-grant-operation-forbidden"
     }));
 }
 
@@ -1789,7 +1783,7 @@ async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
     let mut conflicting = source;
     conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
-        "permissions": {"entities": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]}
+        "permissions": {"records": [{"recordType": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]}
     }));
     let registry = compile_action_claim_source(&conflicting);
     assert_eq!(
@@ -2392,4 +2386,116 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
         )
         .await;
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+fn dataset_only_claim_source() -> Value {
+    json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"dataset-auth", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://statistics.example.test"},
+        "datasets":[{"id":"records"}],
+        "recordTypes":[{"id":"record", "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
+            "fields":[{"id":"active", "type":"boolean", "required":true, "classification":"internal"},
+                {"id":"occurred-on", "type":"date", "required":true, "classification":"internal"}]}],
+        "accessProfiles":[
+            {"id":"publisher", "principalClaim":"registry_principal", "requiredScopes":"unrestricted", "permissions":{
+                "records":[{"recordType":"record", "operations":["list"], "rowBoundaries":"unrestricted", "allowCount":true,
+                    "readableFields":["active","occurred-on"], "filterableFields":["active","occurred-on"]}],
+                "datasets":[{"dataset":"counts", "operations":["publish","read-releases"]}]}},
+            {"id":"reader", "principalClaim":"registry_principal", "requiredScopes":["statistics:read"], "requiredPurposes":[PURPOSE],
+                "permissions":{"datasets":[{"dataset":"counts", "operations":["read-releases"]}]}}
+        ],
+        "statisticalDatasets":[{"id":"counts", "unit":"record", "population":"active eq true",
+            "period":{"type":"flow", "field":"occurred-on", "granularity":"month", "firstPeriod":"2025-01"},
+            "dimensions":["active"], "disclosure":{"minimumCount":5,"roundingBase":5}}]
+    })
+}
+
+#[tokio::test]
+async fn dataset_only_principal_and_purpose_mapping_are_checked_at_construction() {
+    let idp = MockIdp::start().await;
+    let source = dataset_only_claim_source();
+    let registry = compile_action_claim_source(&source);
+    assert!(!registry.entities()["record"]
+        .access_profiles
+        .contains_key("reader"));
+    let inventory = registry_breg::authority::authority_inventory(&registry).unwrap();
+    assert!(inventory.purpose_required);
+    assert_eq!(
+        inventory.principal_claims,
+        BTreeSet::from(["registry_principal".to_owned()])
+    );
+    assert_eq!(
+        authenticator(
+            &registry,
+            &idp,
+            AuthorityClaimConfig::new("registry_principal", None)
+        )
+        .unwrap_err(),
+        AuthenticationConfigError::PurposeClaimMismatch
+    );
+    authenticator(&registry, &idp, authority_claims())
+        .expect("a purpose used only by the dataset reader is mapped");
+
+    let mut mismatched = source.clone();
+    mismatched["accessProfiles"][1]["principalClaim"] = json!("dataset_principal");
+    let mismatched = compile_action_claim_source(&mismatched);
+    assert_eq!(
+        authenticator(&mismatched, &idp, authority_claims()).unwrap_err(),
+        AuthenticationConfigError::PrincipalClaimMismatch
+    );
+
+    let mut without_purpose = source;
+    without_purpose["accessProfiles"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    let without_purpose = compile_action_claim_source(&without_purpose);
+    authenticator(
+        &without_purpose,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .expect("no purpose mapping is required when no grant requires one");
+    assert_eq!(
+        authenticator(&without_purpose, &idp, authority_claims()).unwrap_err(),
+        AuthenticationConfigError::PurposeClaimMismatch
+    );
+    assert!(
+        registry.statistical_datasets()["counts"].access_profiles["reader"]
+            .operations
+            .is_empty(),
+        "authority inventory creates no Record type operations for a dataset-only reader"
+    );
+}
+
+#[tokio::test]
+async fn dataset_only_client_and_standing_actor_mapping_are_checked_at_construction() {
+    let idp = MockIdp::start().await;
+    let mut source = dataset_only_claim_source();
+    source["accessProfiles"][1]["actorKind"] = json!("service");
+    source["accessProfiles"][1]["requesterClients"] = json!(["statistics-reader-client"]);
+    let registry = compile_action_claim_source(&source);
+    let mut verifier = verifier_config(&idp);
+    verifier.allowed_clients = vec!["another-client".into()];
+    assert_eq!(
+        authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
+            .unwrap_err(),
+        AuthenticationConfigError::NamedClientNotListed
+    );
+    verifier.allowed_clients = vec!["statistics-reader-client".into()];
+    authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
+        .expect("the dataset-only service client is explicitly admitted");
+
+    source["accessProfiles"][1]["actorKind"] = json!("agent");
+    let registry = compile_action_claim_source(&source);
+    assert_eq!(
+        authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
+            .unwrap_err(),
+        AuthenticationConfigError::InvalidClaimMapping
+    );
+    let claims = authority_claims().with_contextual_claims(
+        ClaimNames::default(),
+        BTreeMap::from([("statistics-reader-client".into(), ACTOR_ID.into())]),
+    );
+    authenticator_with_verifier(&registry, &idp, verifier, claims)
+        .expect("the dataset-only standing agent has an exact trusted actor mapping");
 }

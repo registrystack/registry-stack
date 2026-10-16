@@ -1,0 +1,239 @@
+{
+  "$defs": {
+    "AccessGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "audienceFrom": {
+          "$ref": "#/$defs/AudienceFrom"
+        },
+        "definition": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "representations": {
+          "items": {
+            "$ref": "#/$defs/Representation"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "subjectBinding": {
+          "$ref": "#/$defs/BindingMode"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/GrantedSubject"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "definition",
+        "purpose",
+        "audienceFrom",
+        "representations",
+        "subjectBinding",
+        "subjects"
+      ],
+      "type": "object"
+    },
+    "AccessProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authority": {
+          "$ref": "#/$defs/AuthorityKind"
+        },
+        "grantSourceIssuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/AccessGrant"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "requesterClients": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
+        },
+        "requesterTags": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "authority",
+        "requesterTags",
+        "grants"
+      ],
+      "type": "object"
+    },
+    "ActorKind": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "AudienceFrom": {
+      "enum": [
+        "authenticated-requester"
+      ],
+      "type": "string"
+    },
+    "AuthorityKind": {
+      "enum": [
+        "statutory",
+        "organizational",
+        "consent",
+        "delegated",
+        "explicit-request"
+      ],
+      "type": "string"
+    },
+    "BindingMode": {
+      "enum": [
+        "audience-scoped",
+        "holder-bound"
+      ],
+      "type": "string"
+    },
+    "GrantedSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "selectorProfile": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "valueClaims": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "valueOrigin": {
+          "$ref": "#/$defs/ValueOrigin"
+        }
+      },
+      "required": [
+        "role",
+        "selectorProfile",
+        "valueOrigin"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Representation": {
+      "enum": [
+        "signed-jws",
+        "sd-jwt-vc",
+        "unsigned-json",
+        "sd-jwt-vc-batch"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
+    "ValueOrigin": {
+      "enum": [
+        "request",
+        "authenticated-context",
+        "authenticated-grant"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/target-authority/target-authority.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accessProfiles": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AccessProfile"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/target-authority/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "EvidenceTargetAuthority",
+      "type": "string"
+    },
+    "project": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "target": {
+      "$ref": "#/$defs/LocalId"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "target",
+    "project",
+    "accessProfiles"
+  ],
+  "title": "Evidence target authority",
+  "type": "object"
+}

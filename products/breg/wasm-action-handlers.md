@@ -1,20 +1,21 @@
 # WASM action handlers
 
-A BREG action handler can be a WebAssembly module instead of a Rhai script.
+A BReg immediate Action can use a named WebAssembly Function instead of Rhai.
 This guide covers what ships today, the server-compatibility contract, operator
 configuration, and the upgrade and rollback paths. Authoring help lives in
 [`wasm-handler-sdk/`](wasm-handler-sdk/README.md).
 
 ## What ships
 
-- An authored handler kind (`type: wasm` with a project-local `module:` path
-  beside `script:`), a backend-tagged compiled representation, an optional
+- A named Function (`runtime: wasm` with a project-local `source` path,
+  `entrypoint: plan`, and `abi: registry.action-plan/v1`), a backend-tagged
+  compiled representation, an optional
   operator configuration section, and a cargo feature (`wasm`) gating
   admission and execution. Maintained `registry-breg` and `registry-bregctl`
   builds enable the feature by default. A custom `--no-default-features` build
   omits WASM support and the Wasmtime dependency.
-- A WASM handler is input-only and resolver-free. WASM change-request
-  planners are refused typed at admission, and so is an action that declares
+- A WASM handler is input-only and resolver-free. Proposal-mode WASM
+  plans are refused typed at admission, and so is an action that declares
   `evidence` with a WASM handler.
 - The execution backend is Pulley by default (no runtime code generation) with
   native as an operator opt-in; see the configuration table below.
@@ -24,28 +25,13 @@ configuration, and the upgrade and rollback paths. Authoring help lives in
   JSON document through the same shared outcome validator the Rhai path uses.
   The Rust SDK hides all of this behind a plain function.
 
-## Server compatibility
+## Build support
 
-| Package | Server before WASM support | Server, feature off | Server, feature on |
-|---|---|---|---|
-| Existing Rhai or declarative package | Loads and runs (the baseline) | Loads and runs | Loads and runs |
-| Newly authored Rhai or declarative package | Loads and runs | Loads and runs | Loads and runs |
-| Newly authored wasm-handler package | Refused typed at package load, no state change | Refused during package rederivation; package does not load | Supported end to end |
-
-Pre-change servers refuse a wasm-handler package at `load` because they do not
-recognize the handler kind. A current build without the `wasm` feature also
-refuses the whole package at load: integrity inspection rederives the package,
-the compiler reports `breg.action.handler-wasm-build-unsupported` for a WASM action
-handler or `breg.hook.handler-wasm-build-unsupported` for a WASM hook handler, and
-rederivation fails. Neither path activates the package, so no action can be invoked and no
-attempt audit entry is written. The no-feature compiler suite pins the diagnostic;
-the package integrity suite pins rederivation as a load prerequisite.
-
-`bregctl explain actions` surfaces this contract per handler: a WASM handler
-summary carries a `compatibility` member naming the minimum server, the
-load-time refusal on older and feature-off servers, and the module hash it
-describes. Check it before publishing a
-wasm-handler package to a fleet you do not fully control.
+Maintained binaries enable WASM support. A custom build without the `wasm`
+feature refuses a WASM-bearing package during compiler admission or package
+rederivation before activation. Check the Action's compiled explanation and
+operator execution budgets before deploying it. Hook handlers retain their
+separate `registry.hook-handler/v1` ABI.
 
 ## Enabling the feature
 
@@ -147,7 +133,7 @@ complementing admission-time enforcement.
 
 ## Operational notes
 
-- The wasmtime pin is an LTS line (`=48.0.5`, EOL 2028-08-20). Advisory
+- The wasmtime pin is an LTS line (`=48.0.6`, EOL 2028-08-20). Advisory
   detection runs in CI (cargo-deny's RustSec check), dependabot is constrained
   to LTS patch proposals against the pin, and each release cut checks the
   remaining support window, promoting the next-LTS migration to a release

@@ -45,7 +45,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -55,14 +55,17 @@ entities:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.public]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label]
@@ -73,8 +76,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get, list]
           readableFields: [label, jurisdiction]
           filterableFields: [label, jurisdiction]

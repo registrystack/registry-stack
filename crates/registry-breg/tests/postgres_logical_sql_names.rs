@@ -32,7 +32,8 @@ fn project_with_entities(entities: Value) -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://logical-sql-names.example.test"
         },
-        "entities": entities
+        "datasets": [{"id": "records"}, {"id": "records-a"}, {"id": "records-b"}],
+        "recordTypes": entities
     })
 }
 
@@ -81,7 +82,7 @@ fn entities_that_only_differ_after_postgres_identifier_limit_are_refused() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate"));
+        .any(|diagnostic| diagnostic.code == "breg.record-type.sql-name-duplicate"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -21,6 +21,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/contracts/breg/proposal-event/v1",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "breg",
+      "title": "Registry Stack JSON Schema: proposal-lifecycle.schema.json",
+      "description": "Base Registry Engine fixed Proposal lifecycle event schema, reproduced byte-for-byte from its packaged artifact.",
+      "source": {
+        "path": "crates/registry-breg/src/proposal_hooks.rs",
+        "sha256": "59466573a33f40791edb8a6afd37dcb8b39d2c6e7be27329aebba4c72815fb34"
+      },
+      "artifact": {
+        "path": "products/breg/generated/event-schemas/proposal-lifecycle.schema.json",
+        "sha256": "7d694df0140e03e1a4c1e6a564e52d69a7d334b9e0063d8aeded24d28b83d182",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/ns/registry-manifest/v1#",
       "kind": "namespace",
       "status": "active",
@@ -43,7 +61,7 @@
       "description": "The declared Evidence dependency could not be accepted.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "action.evidence_failed",
@@ -62,7 +80,7 @@
       "description": "The action handler could not produce an accepted result.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "action.handler_failed",
@@ -81,7 +99,7 @@
       "description": "The action was refused by a declared business rule.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "action.refused",
@@ -100,7 +118,7 @@
       "description": "The bearer credential is missing or refused.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "authentication.refused",
@@ -119,7 +137,7 @@
       "description": "The idempotency key is bound to another request.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "idempotency.conflict",
@@ -138,7 +156,7 @@
       "description": "The held response of the idempotency key expired; the key stays spent.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -157,7 +175,7 @@
       "description": "The chunk does not match the expected next chunk.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "ingestion.chunk_mismatch",
@@ -176,7 +194,7 @@
       "description": "The selected access profile does not match the run's bound profile.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "ingestion.profile_mismatch",
@@ -195,7 +213,7 @@
       "description": "The stored receipt of the chunk was erased.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "ingestion.receipt_erased",
@@ -214,7 +232,7 @@
       "description": "The ingestion run is blocked and refuses further chunks.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "ingestion.run_blocked",
@@ -233,7 +251,7 @@
       "description": "The ingestion run is not open for this transition.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "ingestion.run_not_open",
@@ -252,7 +270,7 @@
       "description": "The lookup did not resolve exactly one record.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "lookup.unresolved",
@@ -271,7 +289,7 @@
       "description": "The mutation conflicts with current state.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "mutation.conflict",
@@ -290,7 +308,7 @@
       "description": "The mutation precondition failed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "precondition.failed",
@@ -309,12 +327,50 @@
       "description": "The mutation precondition is required.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "precondition.required",
         "httpStatuses": [
           428
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/proposal/rejected",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Conflict",
+      "description": "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
+      },
+      "problem": {
+        "code": "proposal.rejected",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/proposal/submission_expired",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Gone",
+      "description": "The review result and application receipt of the submission are no longer retained.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
+      },
+      "problem": {
+        "code": "proposal.submission_expired",
+        "httpStatuses": [
+          410
         ]
       }
     },
@@ -328,7 +384,7 @@
       "description": "The query cursor is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "query.cursor_invalid",
@@ -347,7 +403,7 @@
       "description": "The query request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "query.invalid",
@@ -366,29 +422,10 @@
       "description": "The request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "request.invalid",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-breg/request/plan_refused",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "breg",
-      "title": "Bad Request",
-      "description": "The change-request planner refused the submission, naming the failure kind.",
-      "source": {
-        "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
-      },
-      "problem": {
-        "code": "request.plan_refused",
         "httpStatuses": [
           400
         ]
@@ -404,7 +441,7 @@
       "description": "The request timed out.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "request.timeout",
@@ -423,7 +460,7 @@
       "description": "The requested resource was not found.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "resource.not_found",
@@ -442,7 +479,7 @@
       "description": "The Registry field-encryption service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "runtime.field_encryption.unavailable",
@@ -461,7 +498,7 @@
       "description": "Registry runtime is not ready.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "runtime.not_ready",
@@ -480,7 +517,7 @@
       "description": "The Registry mutation service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "service.unavailable",
@@ -499,7 +536,7 @@
       "description": "The Registry data service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "source.unavailable",
@@ -518,7 +555,7 @@
       "description": "A statistical dataset contains a code outside its declared domain.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "statistical_dataset.domain_violation",
@@ -537,7 +574,7 @@
       "description": "The statistical dataset release operation is not eligible.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "statistical_dataset.release_refused",
@@ -556,7 +593,7 @@
       "description": "The statistical dataset computation was superseded or its package changed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "statistical_dataset.version_conflict",
@@ -575,7 +612,7 @@
       "description": "The statistical dataset version was withdrawn.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "statistical_dataset.version_withdrawn",
@@ -594,7 +631,7 @@
       "description": "The request media type is not supported.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "3a84ff66d0da16980512526675d323f1c732fb8fed4ded48f399656e8d850403"
+        "sha256": "5b4601ae79e32e93662ee1246050727b419ada15990280bc72519b356c973c77"
       },
       "problem": {
         "code": "unsupported.media_type",
@@ -613,7 +650,7 @@
       "description": "Choose cover assignments that do not return to an earlier person during a shared period.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "absence.cover-cycle",
@@ -632,7 +669,7 @@
       "description": "Set until later than from.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "absence.invalid-period",
@@ -651,7 +688,7 @@
       "description": "Adjust the period so this person has no overlapping absence.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "absence.overlap",
@@ -670,7 +707,7 @@
       "description": "Choose a different staff member as cover.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "absence.self-cover",
@@ -689,7 +726,7 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "authentication.refused",
@@ -708,7 +745,7 @@
       "description": "Create a new recompute preview and review it before applying.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "clock.recompute-preview-expired",
@@ -727,7 +764,7 @@
       "description": "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "cursor.expired",
@@ -746,7 +783,7 @@
       "description": "The cursor is invalid for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "cursor.invalid",
@@ -765,7 +802,7 @@
       "description": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -784,7 +821,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -803,7 +840,7 @@
       "description": "Your current Casework authority does not allow this operation.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -822,7 +859,7 @@
       "description": "The item or directory changed since you loaded it. Reload and try again.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "precondition.failed",
@@ -841,7 +878,7 @@
       "description": "This mutation requires the revision that you loaded.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "precondition.required",
@@ -860,7 +897,7 @@
       "description": "The selected Casework profile does not authorize this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "profile.not-authorized",
@@ -879,7 +916,7 @@
       "description": "This action is reserved for a human session.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "profile.not-human",
@@ -898,7 +935,7 @@
       "description": "The request body exceeds the one MiB limit.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -917,7 +954,7 @@
       "description": "The Casework request is invalid.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.invalid",
@@ -936,7 +973,7 @@
       "description": "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.limit-out-of-range",
@@ -955,7 +992,7 @@
       "description": "This route does not accept that HTTP method.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -974,50 +1011,12 @@
       "description": "The requested Casework route does not exist.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.not-found",
         "httpStatuses": [
           404
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/request/reason-unsupported",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Reason not supported",
-      "description": "The reason field is not supported for approve or apply on this source. Omit it and try again.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "request.reason-unsupported",
-        "httpStatuses": [
-          422
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/request/source-rejected",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Source rejected request",
-      "description": "The source refused the request body. Fix the request before trying again.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "request.source-rejected",
-        "httpStatuses": [
-          422
         ]
       }
     },
@@ -1031,7 +1030,7 @@
       "description": "The request body does not match the Casework contract.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -1050,7 +1049,7 @@
       "description": "Send a JSON request body with Content-Type application/json.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -1069,7 +1068,7 @@
       "description": "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "review.initiator-excluded",
@@ -1085,13 +1084,51 @@
       "compatibilityLine": "v1alpha1",
       "owner": "casework",
       "title": "Review initiator required",
-      "description": "This review kind excludes the person who submitted the request, so the request must name its initiator.",
+      "description": "This review policy excludes the person who submitted the request, so the request must name its initiator.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "review.initiator-required",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/policy-mismatch",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review policy mismatch",
+      "description": "The expected review policy binding does not match the active policy.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
+      },
+      "problem": {
+        "code": "review.policy-mismatch",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/query-too-broad",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review query too broad",
+      "description": "Narrow the queue or exact subject query to complete it within the configured read budget.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
+      },
+      "problem": {
+        "code": "review.query-too-broad",
         "httpStatuses": [
           422
         ]
@@ -1107,7 +1144,7 @@
       "description": "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "review.result-expired",
@@ -1126,7 +1163,7 @@
       "description": "The same producer, source subject, version, and policy were already submitted with different canonical content.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "review.submission-conflict",
@@ -1145,7 +1182,7 @@
       "description": "Claim the review task before deciding it, and decide only while the claim remains current.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "review.task-not-held",
@@ -1164,7 +1201,7 @@
       "description": "Casework could not complete the request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "runtime.failure",
@@ -1183,7 +1220,7 @@
       "description": "Casework storage is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "service.unavailable",
@@ -1202,7 +1239,7 @@
       "description": "Omit the Registry-Source-Profile header for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "source-profile.not-applicable",
@@ -1221,7 +1258,7 @@
       "description": "Send the Registry-Source-Profile header to select the source profile for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "source-profile.required",
@@ -1240,7 +1277,7 @@
       "description": "The source returned a response that does not match its registered contract.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "sha256": "25c74dfac588c080d82503a8141d72226fecdbc2f9498e69786cfeb8873b86a4"
       },
       "problem": {
         "code": "source.bad-gateway",
@@ -1250,228 +1287,836 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/problems/registry-casework/source/not-found",
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/admission/held",
       "kind": "problem",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Source not found",
-      "description": "The requested source is not registered.",
+      "owner": "coordinator",
+      "title": "Admissions held",
+      "description": "Starts stay held after a restore until an operator releases the admission hold.",
       "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
       },
       "problem": {
-        "code": "source.not-found",
-        "httpStatuses": [
-          404
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/source/record-missing",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Source record missing",
-      "description": "The bound source record is no longer at the registered location.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "source.record-missing",
-        "httpStatuses": [
-          404
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/source/reviewer-not-authorized",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Source reviewer not authorized",
-      "description": "The source refused the reviewer binding. Check the selected source profile and credential.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "source.reviewer-not-authorized",
-        "httpStatuses": [
-          403
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/source/signature-invalid",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Source signature invalid",
-      "description": "The event's signature did not verify.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "source.signature-invalid",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/already-claimed",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item already claimed",
-      "description": "Someone else claimed this item a moment ago.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "work-item.already-claimed",
+        "code": "admission.held",
         "httpStatuses": [
           409
         ]
       }
     },
     {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/not-holder",
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/admission/recovery-only",
       "kind": "problem",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item held by another person",
-      "description": "You do not hold this item. Claim it first, or ask a supervisor.",
+      "owner": "coordinator",
+      "title": "Service admits no runs",
+      "description": "This instance runs in recovery-only mode and admits no runs. Send starts to the ordinary service.",
       "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
       },
       "problem": {
-        "code": "work-item.not-holder",
+        "code": "admission.recovery-only",
         "httpStatuses": [
           409
         ]
       }
     },
     {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/not-offered",
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/audit/response-unavailable",
       "kind": "problem",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item action not offered",
-      "description": "The registry did not offer this action to you. Refresh to check again.",
+      "owner": "coordinator",
+      "title": "Audited result unavailable",
+      "description": "The operation may have completed, but its audited result could not be released. Inspect the run before repeating the operation.",
       "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
       },
       "problem": {
-        "code": "work-item.not-offered",
-        "httpStatuses": [
-          409
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/not-visible",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item not visible",
-      "description": "The registry did not show you this request, so Casework cannot show you the item.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "work-item.not-visible",
-        "httpStatuses": [
-          404
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/proposal-changed",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item proposal changed",
-      "description": "The proposal changed since you read it. Your private draft is retained.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "work-item.proposal-changed",
-        "httpStatuses": [
-          409
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/recovery-pending",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item recovery pending",
-      "description": "We could not confirm the result of your last action. Recover the original attempt; do not decide again.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "work-item.recovery-pending",
-        "httpStatuses": [
-          409
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/source-unavailable",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item source unavailable",
-      "description": "The registry is not answering. We cannot confirm the current item or its actions. Your private draft is retained.",
-      "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
-      },
-      "problem": {
-        "code": "work-item.source-unavailable",
+        "code": "audit.response-unavailable",
         "httpStatuses": [
           503
         ]
       }
     },
     {
-      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/superseded",
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused",
       "kind": "problem",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Work item superseded",
-      "description": "A revised proposal replaced this item. Open the current one.",
+      "owner": "coordinator",
+      "title": "Authentication refused",
+      "description": "The bearer credential is missing, invalid, or expired.",
       "source": {
-        "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "b2453bf5078db251fd9ffe1f4ced8b75390d067547bf9d08e86332a1eb041018"
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
       },
       "problem": {
-        "code": "work-item.superseded",
+        "code": "authentication.refused",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/binding/conflict",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Connection settings changed",
+      "description": "The run's original connection settings differ from this service's runtime configuration.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "binding.conflict",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/binding/live-conflict",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Live connection settings changed",
+      "description": "Connection settings that runs in progress use differ from this service's runtime configuration.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "binding.live-conflict",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/definition/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Workflow definition refused",
+      "description": "The workflow's workflow definition, one of its mappings or one of its functions refused the request.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "definition.refused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/deployment/activation-changed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Active packages changed",
+      "description": "An apply changed the active packages after this service started. Restart it with the runtime file that apply used.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "deployment.activation-changed",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/deployment/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Deployment not serving",
+      "description": "The deployment's activation, runtime configuration or state key custody check failed.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "deployment.refused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/evaluation/uncertain",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Evaluation outcome uncertain",
+      "description": "An evaluation may have completed at its provider, so the run is never evaluated again.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "evaluation.uncertain",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/event/invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Event contract refused",
+      "description": "The signed event must satisfy the accepted canonical envelope and typed event contract.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "event.invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/event/source-unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Event source unavailable",
+      "description": "Restore the configured event source signing key and its enabled secret provider before retrying delivery.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "event.source-unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/event/too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Event too large",
+      "description": "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array, 256 members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "event.too-large",
+        "httpStatuses": [
+          413
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/event/unauthenticated",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Event authentication refused",
+      "description": "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "event.unauthenticated",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/execution/held",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Execution held",
+      "description": "Execution is under restore hold until an operator releases it.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "execution.held",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/idempotency/key-invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Idempotency key invalid",
+      "description": "Supply an Idempotency-Key header of 1 to 256 bytes.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "idempotency.key-invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/idempotency/key-reused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Idempotency key reused",
+      "description": "This idempotency key already started a run with different input.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "idempotency.key-reused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/input/invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Start input invalid",
+      "description": "The start input does not satisfy the workflow's declared input schema and value bounds.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "input.invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/operation/not-authorized",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Operation not authorized",
+      "description": "The caller's policy does not allow this operation.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "operation.not-authorized",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/receipt/expired",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Original receipt expired",
+      "description": "The original command's receipt can no longer be recovered. This is not evidence that the command was not sent.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "receipt.expired",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/reconcile/raced",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Run changed during reconciliation",
+      "description": "The run's progress changed while it was being reconciled. Inspect it again.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "reconcile.raced",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/reconcile/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Reconciliation refused",
+      "description": "Reconcile applies only to a held mutation with a prepared command, its original binding and no active lease.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "reconcile.refused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/reconcile/unsupported",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Reconciliation unsupported",
+      "description": "The held operation has no original-result lookup.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "reconcile.unsupported",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/body-too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Payload too large",
+      "description": "The request body exceeds the accepted size: 65536 bytes for a JSON request, or 1048576 bytes for a signed event delivery.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.body-too-large",
+        "httpStatuses": [
+          413
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Request invalid",
+      "description": "The request could not be read as a Coordinator request.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/limit-out-of-range",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "List limit out of range",
+      "description": "The list limit must be between 1 and 100.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.limit-out-of-range",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/method-not-allowed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Method not allowed",
+      "description": "The route exists but not for this method.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.method-not-allowed",
+        "httpStatuses": [
+          405
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Route not found",
+      "description": "The requested route does not exist.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/reason-invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Reason invalid",
+      "description": "The reason or recovery reference must be a bounded reference without personal data or control characters.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.reason-invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/retention-invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Retention request invalid",
+      "description": "The retention cutoff must be in the past and the limit between 1 and 100.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.retention-invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/unprocessable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Request unprocessable",
+      "description": "The request body could not be processed.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.unprocessable",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/request/unsupported-media-type",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Unsupported media type",
+      "description": "The request body is not JSON.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "request.unsupported-media-type",
+        "httpStatuses": [
+          415
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/restore/hold-required",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Restore hold required",
+      "description": "This recovery action requires execution to be under restore hold.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "restore.hold-required",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/restore/lease-incompatible",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Held work incompatible",
+      "description": "Held work no longer matches its protected definition or prepared command.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "restore.lease-incompatible",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/restore/review-required",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Recovery review incomplete",
+      "description": "Execution history must be complete and the prior deployment fenced before recovery is reviewed.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "restore.review-required",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/restore/unresolved",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Held work unresolved",
+      "description": "Held work remains unresolved, so the restore hold cannot be released.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "restore.unresolved",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/retry/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Retry refused",
+      "description": "Retry-same applies only to held work before its original deadline.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "retry.refused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/run/definition-incompatible",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Run definition unsupported",
+      "description": "This service's Coordinator version cannot interpret the run's pinned definition.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "run.definition-incompatible",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/run/not-visible",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Run not visible",
+      "description": "No run with this identifier is visible to the caller.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "run.not-visible",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/run/payload-erased",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Run payloads erased",
+      "description": "Retention erased this run's payloads, so it can no longer be retried or reconciled.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "run.payload-erased",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/runtime/failure",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Coordinator runtime failure",
+      "description": "Coordinator could not complete the request.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "runtime.failure",
+        "httpStatuses": [
+          500
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/service/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Coordinator service unavailable",
+      "description": "A dependency of the Coordinator, such as its database, audit stream or token verifier, is unavailable. Try again after the service recovers.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "service.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/workflow/not-served",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Workflow not served",
+      "description": "This deployment does not serve the named workflow.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "workflow.not-served",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-coordinator/workflow/revision-mismatch",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "Workflow revision mismatch",
+      "description": "The expected workflow revision differs from the active revision or the original admission.",
+      "source": {
+        "path": "crates/registry-coordinator/src/problem.rs",
+        "sha256": "a472cccbff47f90183f2f6f9a2258f8f160e5b457db120d23092f4cc290628d1"
+      },
+      "problem": {
+        "code": "workflow.revision-mismatch",
         "httpStatuses": [
           409
         ]
@@ -2902,20 +3547,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha5.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1alpha5",
       "owner": "breg",
       "title": "AccessExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "dfbe2fc18977e03f8bda6dcb67bd84aeb60d8e51f8fa43f484e12ad0e39c4a88"
+        "sha256": "203b24f50e1c9309ff8450cff2b0f97ad99b521b1323ab281a3851302790e1bf"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "dfbe2fc18977e03f8bda6dcb67bd84aeb60d8e51f8fa43f484e12ad0e39c4a88",
+        "sha256": "203b24f50e1c9309ff8450cff2b0f97ad99b521b1323ab281a3851302790e1bf",
         "mediaType": "application/schema+json"
       }
     },
@@ -2938,20 +3583,38 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/action-contracts/action-contracts.v1.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1",
+      "owner": "breg",
+      "title": "BReg Action contracts",
+      "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
+      "source": {
+        "path": "crates/registry-breg/src/artifacts.rs",
+        "sha256": "ab72a5978d2e31f1336d385b7ba0058bfd5672366a7cfabb781ea057c759a089"
+      },
+      "artifact": {
+        "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
+        "sha256": "5e2e840d023549e7184ace57e19928c29c90e5601a84ed1bf86b1a03f0f08948",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha5.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
       "owner": "breg",
       "title": "ActionsExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "14a50dc138d8624083b6762ede7e51bf86a66f56071fd2b8af4c2ef2fde18468"
+        "sha256": "07a3711c755ee7475a7f00cce30e94bd1018edc95555dc456bdfd78f327dc558"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "14a50dc138d8624083b6762ede7e51bf86a66f56071fd2b8af4c2ef2fde18468",
+        "sha256": "07a3711c755ee7475a7f00cce30e94bd1018edc95555dc456bdfd78f327dc558",
         "mediaType": "application/schema+json"
       }
     },
@@ -2974,24 +3637,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha4.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha4",
-      "owner": "breg",
-      "title": "ChangeRequestsExplanation",
-      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
-      "source": {
-        "path": "products/breg/contracts/explain/ChangeRequestsExplanation.schema.json",
-        "sha256": "0406d1cd42940b628c4c1cee0f207a30a8bf93ae50de08924df9a2fc1bbc19f4"
-      },
-      "artifact": {
-        "path": "products/breg/contracts/explain/ChangeRequestsExplanation.schema.json",
-        "sha256": "0406d1cd42940b628c4c1cee0f207a30a8bf93ae50de08924df9a2fc1bbc19f4",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3005,25 +3650,25 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
-        "sha256": "822fb2aceae89790b9c688523ac731c8f6a4371d746a753d2589fff2161eea02",
+        "sha256": "58fd684bc91478e42ec0e8f92effeab533f5b89caf720b7ad1e139b8ce0c54ef",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha6.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1alpha6",
       "owner": "breg",
       "title": "EventsExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/EventsExplanation.schema.json",
-        "sha256": "2252671b19cb249c1ac2d2338820d3a326e8e77f7db04380331f85d3d3cacd72"
+        "sha256": "13bb8f2e95d3244f368dccb5ea2c9779ad14a7b3f4661f61487cf56f983b2d45"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/EventsExplanation.schema.json",
-        "sha256": "2252671b19cb249c1ac2d2338820d3a326e8e77f7db04380331f85d3d3cacd72",
+        "sha256": "13bb8f2e95d3244f368dccb5ea2c9779ad14a7b3f4661f61487cf56f983b2d45",
         "mediaType": "application/schema+json"
       }
     },
@@ -3041,7 +3686,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/example-scenarios.v1alpha1.schema.json",
-        "sha256": "b230a007063fd933d26283d7d3cd89923cdb644463c1681bb9c2ec058595dee5",
+        "sha256": "144e53709431136629a92b2f0c50b3352e9c90bdf73d704eec2e4e08cc7c3196",
         "mediaType": "application/schema+json"
       }
     },
@@ -3059,25 +3704,25 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/journeys.v1.schema.json",
-        "sha256": "50b0bb77e6d9995a8c7b4516676bb58b0116b52cf683bd43d605eb0a49af3753",
+        "sha256": "27f742e34d4660ca54c72217aa2abb01e8edfa1a341f2ef1f6d3df5a054c32e9",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha6.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1alpha6",
       "owner": "breg",
       "title": "LifecycleExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
-        "sha256": "85294c0629634c5c85a8d236320a74da0b580f27a186e7654280a442642849ef"
+        "sha256": "c7dbd61a710dd189637f783e9720b749f98e2d307af549849ab6e85b790a4ab9"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
-        "sha256": "85294c0629634c5c85a8d236320a74da0b580f27a186e7654280a442642849ef",
+        "sha256": "c7dbd61a710dd189637f783e9720b749f98e2d307af549849ab6e85b790a4ab9",
         "mediaType": "application/schema+json"
       }
     },
@@ -3095,7 +3740,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "b23a07f4b60c15ecd085e5fa10f924aef31cbfca07dc5f8cbc3097dceb183a52",
+        "sha256": "d676449577a937668bd56038a7e7d80ad2b17bb262593dcf5775635f82c67b89",
         "mediaType": "application/schema+json"
       }
     },
@@ -3113,25 +3758,25 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
-        "sha256": "dcf46154f0c67123960c68ea04323e14069a9ce439e330ff8f59fb334e6384ac",
+        "sha256": "2213fb509528694eb088691c68036b318d75e633e405018c72cd8d28ee77fdb7",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha5.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1alpha5",
       "owner": "breg",
       "title": "ModelExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "0e42ba0103eaa4ced632729a4946a55b121b16fd359405bb6f6055e512433558"
+        "sha256": "bbcd216d8d94ead31a52e290c87f8782c95f939057cc5e31e4c90a49a02d2dc1"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "0e42ba0103eaa4ced632729a4946a55b121b16fd359405bb6f6055e512433558",
+        "sha256": "bbcd216d8d94ead31a52e290c87f8782c95f939057cc5e31e4c90a49a02d2dc1",
         "mediaType": "application/schema+json"
       }
     },
@@ -3149,7 +3794,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
-        "sha256": "b022348727ac7a855a6d83d0eb533a1f3dbaa388060a4ecc790500f99a6f823c",
+        "sha256": "1f02f199bd6a722452f2e3abb15f1c74f03f62c5b52acdbea6a33d90b60b0ffd",
         "mediaType": "application/schema+json"
       }
     },
@@ -3163,11 +3808,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "9384320c58d6b8600ffdcadfdc288cde3d95e450ab433c5d28daf1fb692ed0ac"
+        "sha256": "3611b4c909a7dbd6a371c3590dfc086434fda9ff0a90193a17fa7035d20b1dd3"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "418c01044f59d6445e770292d1f68ce360c0820c17376c9e8bbf48742d0147e0",
+        "sha256": "9e303f8a0d24dad6b2b840f16b647278bc933cb66f1f38ae3cc55222719396cc",
         "mediaType": "application/schema+json"
       }
     },
@@ -3181,29 +3826,47 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "9384320c58d6b8600ffdcadfdc288cde3d95e450ab433c5d28daf1fb692ed0ac"
+        "sha256": "3611b4c909a7dbd6a371c3590dfc086434fda9ff0a90193a17fa7035d20b1dd3"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "cc160dbd2e323f1660286697ec2280312df074c4a135ecf2fd26e7193d241f8b",
+        "sha256": "ceb45002d47e8cd276593d673a5e55c4cb235b7b85195f2fd23a426ed98282c9",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "ProposalsExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/ProposalsExplanation.schema.json",
+        "sha256": "db0b87404208419ac251771f0d749cdd9f2910b05d6bc0bd6fff77a4457e8b3f"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/ProposalsExplanation.schema.json",
+        "sha256": "db0b87404208419ac251771f0d749cdd9f2910b05d6bc0bd6fff77a4457e8b3f",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha5.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
       "owner": "breg",
       "title": "QueriesExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/QueriesExplanation.schema.json",
-        "sha256": "aca48410478a50a240cc6af1feb051013442e0d851105ff6d9d8c2f189de4401"
+        "sha256": "c30a70ce60b1946e6eb3cd0ebf1267841c97be81115f61e0bbf713262bfd59a3"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/QueriesExplanation.schema.json",
-        "sha256": "aca48410478a50a240cc6af1feb051013442e0d851105ff6d9d8c2f189de4401",
+        "sha256": "c30a70ce60b1946e6eb3cd0ebf1267841c97be81115f61e0bbf713262bfd59a3",
         "mediaType": "application/schema+json"
       }
     },
@@ -3217,29 +3880,29 @@
       "description": "Base Registry Engine citizen review page runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg-review/src/schema.rs",
-        "sha256": "2c69c0a44d136648b6d7b851a9bb92967d9df6bbcec8c3c7befe04b941ed21af"
+        "sha256": "88a916f23e3a50eb7f392a708ce6b089ffbb51b98e5cf102eccfc2e753da8814"
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "ea6cb8f8967c6e495a449d56287796ca4acb65bda9dfdde66e3aaa3e4aea9368",
+        "sha256": "b1034d6529887c685450a2ed13c90355c4725da6c452194abd61c1905b49897e",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha5.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha4",
+      "compatibilityLine": "v1alpha5",
       "owner": "breg",
       "title": "RoutesExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/RoutesExplanation.schema.json",
-        "sha256": "bccdb7e8996ff410d6bf9d87e1abb76c84a9e7ae6d9da43a9e688bacbdfc45d0"
+        "sha256": "db2c9d516dbd7f11d2c3edad1232770f72e313f36dd0d75b26cf96a6a388fd78"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/RoutesExplanation.schema.json",
-        "sha256": "bccdb7e8996ff410d6bf9d87e1abb76c84a9e7ae6d9da43a9e688bacbdfc45d0",
+        "sha256": "db2c9d516dbd7f11d2c3edad1232770f72e313f36dd0d75b26cf96a6a388fd78",
         "mediaType": "application/schema+json"
       }
     },
@@ -3253,11 +3916,11 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "9384320c58d6b8600ffdcadfdc288cde3d95e450ab433c5d28daf1fb692ed0ac"
+        "sha256": "3611b4c909a7dbd6a371c3590dfc086434fda9ff0a90193a17fa7035d20b1dd3"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "31b561f5e17ad94b393b13157b10d9d6e5ca56b7bd6947b4faf0d896c5cfe4cc",
+        "sha256": "986a4a0838726aa79b234dbaa170be7ebb0b67f01a8fd7925f14f78f1d5e6395",
         "mediaType": "application/schema+json"
       }
     },
@@ -3280,78 +3943,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkApplyReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/ApplyReport.schema.json",
-        "sha256": "bf01f40ec02d9142be1c1013ce4e861b4c5197e6baf8988693019333ecea16c8",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkAttemptSettlementReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/AttemptSettlementReport.schema.json",
-        "sha256": "990ead4256ee1748ebd4425ed0849ad64c521328841a88bcd9f48f6c88dbe7be",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkAttemptUncertainMarkingReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json",
-        "sha256": "ce8e8f18981bcce5dd48607b98424f32a27aab9ca1cc6e586adc545603b7554a",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkCheckReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/CheckReport.schema.json",
-        "sha256": "8f8a8a11bdd370778be1b3f311961b3302c898a82f5a286451d2d06a24d3ac88",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3361,137 +3952,11 @@
       "description": "Registry Casework development clients JSON Schema.",
       "source": {
         "path": "crates/registry-caseworkctl/src/schema.rs",
-        "sha256": "73fc492acb16ee17f108d82b2e28384a845e387faf0592c8a848c39a1a7a5207"
+        "sha256": "78b8597ecf843091e0d23079e87a2b4edab3d9671375346a4ac1121635ee1745"
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "2648c8627f9671e3f8413dcf2fb6c20be90e96ad46c42e645c05230794f4764b",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/dev-events-report/dev-events-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkDevEventsReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/DevEventsReport.schema.json",
-        "sha256": "4f5157e4fa2a98a889f907c481b96ed2d368d5c3aa9aa5abb8c844dddf8ab1f1",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkDevGrantReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/DevGrantReport.schema.json",
-        "sha256": "5d793cc000b40bcf9cb8c23541143d6924590be659f642457b2abec2bd885db4",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/dev-identity-report/dev-identity-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkDevIdentityReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/DevIdentityReport.schema.json",
-        "sha256": "64c019dcb9d6e635b7d5e289f4dd9c7b0811863e504abc84d236fba3249f6ec1",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkDevReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/DevReport.schema.json",
-        "sha256": "c3e88b1a46da7f8643c0af6b35a3b33eafa75ad74277dc7dccde135746b0f110",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/dev-token-report/dev-token-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkDevTokenReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/DevTokenReport.schema.json",
-        "sha256": "9146508a68600bfa9fb21edbf98c5f7d04ce7a1a86bce54b04c7d02ae30964f4",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkDoctorReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/DoctorReport.schema.json",
-        "sha256": "9c9303fe3974ab57ff40fb3eaa18ad43826d10e32a593530ccf4d10a5860c562",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkExplainReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/ExplainReport.schema.json",
-        "sha256": "86593410e0cf8e59d1d40825c44c12efe830d7e6386be251d2ba4eafe07b0aa2",
+        "sha256": "58f76c1433576860b28b2c344acfc51d2d57b9915aab08d782704d522f96554c",
         "mediaType": "application/schema+json"
       }
     },
@@ -3501,15 +3966,15 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "owner": "casework",
-      "title": "Registry Casework fixture",
+      "title": "Registry Casework synthetic review fixture",
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "be9dcc20f6c7ed84659e5e8c75bdcbcdaf14a7e0f0674d436b4fa3cdd9a2c5d9"
+        "sha256": "76603343a97d90453469654b798ff5b272ad65a2a4b4fd77af39de31a457c47a"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
-        "sha256": "547bbdf015691d7149599113de2d4d515111b46899e45ddc0c58eb0d15eda14f",
+        "sha256": "b9158ab194325cbd1a807922d07d35f4616eff823d9b1c76892e73f330443cdd",
         "mediaType": "application/schema+json"
       }
     },
@@ -3523,83 +3988,11 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "be9dcc20f6c7ed84659e5e8c75bdcbcdaf14a7e0f0674d436b4fa3cdd9a2c5d9"
+        "sha256": "76603343a97d90453469654b798ff5b272ad65a2a4b4fd77af39de31a457c47a"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
-        "sha256": "81f63388bb7037d2bfd8cab40f393195b324ca31eaae12a862fa08261a605c4a",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkInitReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/InitReport.schema.json",
-        "sha256": "df35fa47d4a5bcc4cb4da2a30c9f5ecaf7c87228037c79b3f65fc91717ca27f4",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/lifecycle-report/lifecycle-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkLifecycleReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/LifecycleReport.schema.json",
-        "sha256": "9bee29f0c0cefe8978535e9d51994bbfd57e7c55ed31287c07bb5c80b7df583b",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/package-report/package-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkPackageReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/PackageReport.schema.json",
-        "sha256": "d2590d59911eacab1bc9a9d7563ad5b3b02221dd219d02e0cce3f42757482ffa",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/plan-report/plan-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkPlanReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/PlanReport.schema.json",
-        "sha256": "bed1ba280b7a00825f5b284f971eddf9cb7da3be231ef1a5f60518529f6a1678",
+        "sha256": "7131a57da2c495a5f2142ab5e682e6b95cfda65a2e60d743c15c5c0c00b175dd",
         "mediaType": "application/schema+json"
       }
     },
@@ -3613,29 +4006,29 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "be9dcc20f6c7ed84659e5e8c75bdcbcdaf14a7e0f0674d436b4fa3cdd9a2c5d9"
+        "sha256": "76603343a97d90453469654b798ff5b272ad65a2a4b4fd77af39de31a457c47a"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "35075a1ccd1b0cda4846749bd48d154a2db5159d67da7cf77838122db1592412",
+        "sha256": "a54a5d29464f6de1e0b46ea7ae91a2fd6ff563090f98f7686496ddad45344b7d",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/retention-erase-report/retention-erase-report.v1alpha3.schema.json",
+      "uri": "https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha3",
+      "compatibilityLine": "v1alpha1",
       "owner": "casework",
-      "title": "CaseworkRetentionEraseReport",
+      "title": "Casework command report",
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
+        "sha256": "1af0958150a6476245c5019f6bc55ae2b3fbe87e88b43900bb75cac4786f0674"
       },
       "artifact": {
-        "path": "products/casework/contracts/cli/RetentionEraseReport.schema.json",
-        "sha256": "ac2f79c1f1420bbdc923ee97d2e7f0713f833ce3e0df6b255f4d9e33b6e54639",
+        "path": "products/casework/contracts/cli/report.schema.json",
+        "sha256": "073149171864d41eae1eff6de29a901ec9adb40bcf4592f53e7920ae86fa0ffc",
         "mediaType": "application/schema+json"
       }
     },
@@ -3653,115 +4046,61 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "1b40bb165afc02ebcc102168e9d38ebcbcbd8956889f79dc3329e61dd2e30236",
+        "sha256": "d3edc783a9380b2bea17b731a4548c6bf1ab7e04c922be3682f208d7f456c741",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkSimulationReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/SimulationReport.schema.json",
-        "sha256": "ee2ddfb5ab344c5c7ac8b16f17503a2ddc02810dd3c15e170b0c240032d4c4e6",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/simulation/simulation.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Registry Casework simulation",
-      "description": "Registry Casework simulation JSON Schema.",
+      "owner": "coordinator",
+      "title": "CoordinatorProject",
+      "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
-        "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "be9dcc20f6c7ed84659e5e8c75bdcbcdaf14a7e0f0674d436b4fa3cdd9a2c5d9"
+        "path": "crates/registry-coordinator/src/authoring.rs",
+        "sha256": "859d0ab8425b5af0e914d8ee5226248f39d5436392c39b21eb6ce45e9dc67a27"
       },
       "artifact": {
-        "path": "products/casework/generated/simulation/simulation.schema.json",
-        "sha256": "77b426a808ae3a80e07d4ad50c79d2c61c0dcbe229eb6c111d994dfaad82838f",
+        "path": "products/coordinator/generated/project/project.schema.json",
+        "sha256": "8a850beb3bfcc11aebaf986fc90ceab0291e4189d9e8bc2b10d2e838867b77a0",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json",
+      "uri": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkSourceAddReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "RuntimeConfig",
+      "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
+        "path": "crates/registry-coordinator/src/runtime.rs",
+        "sha256": "2963cc34d692dccb61a5acfc9e455649f491b005aec59e1941f7853ecae43f57"
       },
       "artifact": {
-        "path": "products/casework/contracts/cli/SourceAddReport.schema.json",
-        "sha256": "1885ff7721ef4b5ddbd24280e8f62feef01fa79517af542b2d306cb156ceb08f",
+        "path": "products/coordinator/generated/runtime/runtime.schema.json",
+        "sha256": "32f9b2b297dbd2e9c8ac367d22e72a23c21a0719736188b30f86a2d30c2ad535",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/status-report/status-report.v1alpha3.schema.json",
+      "uri": "https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkStatusReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "CoordinatorScenarios",
+      "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
+        "path": "crates/registry-coordinator/src/scenarios.rs",
+        "sha256": "6bc5a10d20dcc4dddbc5bca003e550aeb866955b2d6898d74cc5f4d3811a4887"
       },
       "artifact": {
-        "path": "products/casework/contracts/cli/StatusReport.schema.json",
-        "sha256": "ad4c0af35951c030924d19060b9f9f780924978ce1867459fcf35534603675fe",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkTestReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/TestReport.schema.json",
-        "sha256": "969e18c1c226898aeac2c21697665878efc1e6a8ba6b2cb55ea919d7ec1f8133",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/casework/usage-report/usage-report.v1alpha3.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha3",
-      "owner": "casework",
-      "title": "CaseworkUsageReport",
-      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
-      "source": {
-        "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
-      },
-      "artifact": {
-        "path": "products/casework/contracts/cli/UsageReport.schema.json",
-        "sha256": "a6eb9aafd148d5821028f1b0132c0cecdf9eed76cc27fb3a9888c07605d84b37",
+        "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
+        "sha256": "6ef9e6024f86e8cb7e67594763795cccd5f614f98c39862dfde91331c7876c08",
         "mediaType": "application/schema+json"
       }
     },
@@ -3847,47 +4186,11 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
+        "sha256": "62464b27cb80552652f785f820ed3655cc9d48aa65dba30dcaea5696c5e79f70"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/access-client.schema.json",
-        "sha256": "d1f039cb33f28d2ba2336a9da11ca9b157f55dd58146959d4b973af9e0299b96",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/evidence/access-policy/access-policy.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "evidence",
-      "title": "Evidence local access policy",
-      "description": "Evidence authoring project marker and question JSON Schema.",
-      "source": {
-        "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
-      },
-      "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/access-policy.schema.json",
-        "sha256": "7cb7788aa97db48696aa1653f352de505298d0bcd9cd9b584d69809206c34dea",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "evidence",
-      "title": "Evidence authoring project marker",
-      "description": "Evidence authoring project marker and question JSON Schema.",
-      "source": {
-        "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
-      },
-      "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json",
-        "sha256": "2eeb18977105aac45ab3d5005152b25d456134621eeddf59aca612a9c4cebf6a",
+        "sha256": "5fd729f00c7942e6422b726a75b02d931218c416a1caffdfb7b129fd8ff22c4c",
         "mediaType": "application/schema+json"
       }
     },
@@ -3901,11 +4204,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "d258ddc77ff80875d92c35bd153d4bfc24d354cd77335a196a9964b5a89c61cd"
+        "sha256": "6b9d16998d1bbee1c27336b5d4232ee6aa9f596da5792095a24714e960447f37"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "d258ddc77ff80875d92c35bd153d4bfc24d354cd77335a196a9964b5a89c61cd",
+        "sha256": "6b9d16998d1bbee1c27336b5d4232ee6aa9f596da5792095a24714e960447f37",
         "mediaType": "application/yaml"
       }
     },
@@ -3955,7 +4258,7 @@
       "description": "Evidence code list JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "55634dc50eccff1bd4f7d616070ad4550b5a85e27a728a8420df16b18c4153c0"
+        "sha256": "42c9e8cde198b83a32ac493c7723de6a97af4a4b7300a2b4c12a6dd25642ee41"
       },
       "artifact": {
         "path": "products/evidence/generated/codelist/codelist.schema.json",
@@ -3973,11 +4276,11 @@
       "description": "Evidence fixture JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "55634dc50eccff1bd4f7d616070ad4550b5a85e27a728a8420df16b18c4153c0"
+        "sha256": "42c9e8cde198b83a32ac493c7723de6a97af4a4b7300a2b4c12a6dd25642ee41"
       },
       "artifact": {
         "path": "products/evidence/generated/fixture/fixture.schema.json",
-        "sha256": "f2b906327cfcbc04496c0b161a82464440c8600cf674ee3c21c0c16f64cb862f",
+        "sha256": "dfd68c8242ca73530057a7b473d668b9904e5a947fceaa80badff7647f127d50",
         "mediaType": "application/schema+json"
       }
     },
@@ -4009,7 +4312,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
+        "sha256": "62464b27cb80552652f785f820ed3655cc9d48aa65dba30dcaea5696c5e79f70"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json",
@@ -4036,20 +4339,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/evidence/project/project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "owner": "evidence",
-      "title": "Evidence authored question",
+      "title": "Evidence project",
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
+        "sha256": "62464b27cb80552652f785f820ed3655cc9d48aa65dba30dcaea5696c5e79f70"
       },
       "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/question.schema.json",
-        "sha256": "d59335a31143f20db204f2cba708a33af0840760739bb6d70e3dc8048a499118",
+        "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
+        "sha256": "33766068244ac170b52a335353287d94e5a105ef82e8590d47beab1682fa06ea",
         "mediaType": "application/schema+json"
       }
     },
@@ -4063,30 +4366,12 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "ded02705eebe3e4191008460b69a092dd25b565a39b2e1967c3d5e09871d6e2a"
+        "sha256": "1d1ef718bebe3d3deba5fd434579f32a05bb92e87836137e7b729f3fa4c26b4c"
       },
       "artifact": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "ded02705eebe3e4191008460b69a092dd25b565a39b2e1967c3d5e09871d6e2a",
+        "sha256": "1d1ef718bebe3d3deba5fd434579f32a05bb92e87836137e7b729f3fa4c26b4c",
         "mediaType": "application/yaml"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "evidence",
-      "title": "Evidence selector profile",
-      "description": "Evidence authoring project marker and question JSON Schema.",
-      "source": {
-        "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
-      },
-      "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
-        "sha256": "916eb5204c031df2f4732cd230b885bf367e237cb201bf4cfd1c402523658a8e",
-        "mediaType": "application/schema+json"
       }
     },
     {
@@ -4099,7 +4384,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
+        "sha256": "62464b27cb80552652f785f820ed3655cc9d48aa65dba30dcaea5696c5e79f70"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
@@ -4108,56 +4393,38 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/evidence/target-authority/target-authority.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "owner": "evidence",
-      "title": "Evidence source",
+      "title": "Evidence target authority",
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
+        "sha256": "62464b27cb80552652f785f820ed3655cc9d48aa65dba30dcaea5696c5e79f70"
       },
       "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/source.schema.json",
-        "sha256": "c149992d06b1a2d9a2f014391687acb41aedbf16ff7fad024e9cf620753e1666",
+        "path": "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+        "sha256": "a1bab27c4778502d75e2041b7d38dd0dc9cfffaa91d52625813b16cf694b9b22",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/evidence/target/target.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "owner": "evidence",
-      "title": "Evidence deployment target governance",
+      "title": "Evidence target",
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
+        "sha256": "62464b27cb80552652f785f820ed3655cc9d48aa65dba30dcaea5696c5e79f70"
       },
       "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
-        "sha256": "da3863063106f8c17bd76f8e35631656b924c55c97c60917f23fb086cc8bcb33",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "evidence",
-      "title": "Evidence deployment target settings",
-      "description": "Evidence authoring project marker and question JSON Schema.",
-      "source": {
-        "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
-      },
-      "artifact": {
-        "path": "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
-        "sha256": "111aad59a4b453e45a618ffdf4c0313db5b1031765d0498d013aa3bcf0c9b059",
+        "path": "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+        "sha256": "cbe92a3329351dbdf53f0a63d5f4f9dfc7b8bbcb0947ddf30f1558943d34e188",
         "mediaType": "application/schema+json"
       }
     },
@@ -4283,7 +4550,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "313efc6342fcb1fdbbabdd8fd279c58032e418476825fe823c67cdcf14029396",
+        "sha256": "8f0e1f2ec7ccf046f9a80f541aafca071f792f11dc05451ad9b1441889c777f8",
         "mediaType": "application/schema+json"
       }
     },
@@ -4459,11 +4726,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "cfddc0600ff8303c2f3d89815c888ac9ddac3124de47d8c232e51c0caa7ba92d"
+        "sha256": "9ff413ae3a1ef84f607733390a466966b5d000799ab7b98ab2e2ae7291b1a9f5"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "4925c4eb0cc9e80b946306aeace68105caf73c619a7b371d6740cbe2ea1bdb57",
+        "sha256": "1df71993187667485778479fd7274350cad34e07d89dc478adc935c39e204db6",
         "mediaType": "application/schema+json"
       }
     },

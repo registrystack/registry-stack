@@ -1,84 +1,108 @@
-# BReg and Evidence composition starter
+# BReg and Evidence composition
 
-These maintained teaching inputs compose the two products through their native
-commands and existing HTTP lookup API. All records, identities and policy names
-are synthetic. Follow [the export contract](../EVIDENCE.md) and
-[the native BReg development lifecycle](../DEV.md) for their operator boundaries.
-
-For a custom-model journey, derive `organization-selection.yaml` with
-`bregctl init --from publicschema --selection`, start and edit a record, then stop
-normally. `evidencectl source add ./registry ./evidence --source-id
-registry-name --selector-profile by-code` guides the code/name lookup authority
-and reports the connection it would configure; the same command with `--apply`
-configures it. Copy the `named-starter/` question, derivation, and
-fixtures into the created project. The archive supplies sample question material;
-source setup itself needs no archive or copied endpoint settings.
+These synthetic inputs connect independently governed products through public
+CLIs and the existing HTTP lookup contract. BReg owns stored records, exact
+selectors and source access. Evidence owns assertion meaning, caller grants,
+minimum disclosure and signing. An export creates no authority in either product.
+See [the export contract](../EVIDENCE.md) and [BReg development](../DEV.md).
 
 | Input | Responsibility |
 | --- | --- |
-| `registry/registry.yaml` | One stored record, two exact unique selectors, a separate operator and an explicit request-origin Evidence lookup profile. |
-| `registry/clients.yaml` | Separate synthetic operator and source clients, plus active, retired and missing-status seed records. Credentials are generated privately by `bregctl dev`. |
-| `registry/tests/journeys.yaml` | Native schema rehearsal of create, both authorized lookups and unresolved lookup. |
-| `organization-selection.yaml` | A custom PublicSchema Organization selection with code and name, no Evidence grant. |
-| `named-starter/` | One name-present question to add after guided source setup. |
-| `default-starter/` | One question and 11 fixtures compatible with plain `bregctl init`, for adding Evidence after registry use. |
-| `starter/` | Two questions, derivations, fixtures and a reviewed local target settings template for `evidencectl new --starter`. |
-| `offline-starter/` | One question with its own synthetic source and 13 fixtures that pass `check` and `test` offline, before any registry connection or source import. |
-| `tests/verify-composition.py` | Maintainer-only verification using native binaries; not part of the adopter workflow. |
+| `registry/` | Explicit native BReg project with two unique selectors, status facts, an operator and a lookup-only source profile. |
+| `offline-starter/` | Complete native EvidenceProject with named Functions, a local target, complete target authority and 13 SQLite fixtures. |
+| `starter/` | Reviewed authoring fragment, derive Functions and 22 fixtures for two definitions sharing the imported BReg Source. |
+| `tests/verify-composition.py` | Offline maintainer proof using matching installed binaries. |
 
-Copy the registry directory to an empty local working directory. Create the
-Evidence project and export the explicitly selected source contract:
+The default `bregctl init` creates a minimal contact directory with editor clients.
+It supplies no Evidence lookup profile, source client or unique business key.
+Use the explicit registry here for this integration; an existing institutional
+registry must deliberately declare the unique selector and source authority it needs.
+
+## Offline authoring and optional source import
+
+Copy `registry/` into a new working directory as `./registry`. Start with the
+complete offline project, which needs neither BReg nor a running service:
 
 ```sh
-evidencectl new ./evidence --starter <this-directory>/starter --profile local
+evidencectl init ./evidence --starter <this-directory>/offline-starter --profile local
+evidencectl check ./evidence
+evidencectl test ./evidence --target ./evidence/local-target.yaml
 bregctl generate evidence-source ./registry \
-  --access-profile evidence-source --entity record \
+  --access-profile evidence-source --record-type record \
   --selector by-code --selector by-registration-number \
   --fields status --source-id registry-status --connection registry \
-  --output ./exports/registry-status
+  --output ./registry-status-export
+evidencectl source import ./registry-status-export --project ./evidence
 ```
 
-Continue with the copied Evidence README to bind a target, import, run fixtures and
-build. For a BReg-first workflow, run `bregctl init ./registry`, start and edit a
-record, then stop with `bregctl dev stop ./registry` before creating Evidence from
-`default-starter/`. Export only `by-code` for that model. Copy the retained source
-credentials after Evidence creates its owner-only secrets directory:
+Import adds the normalized Source, selector profiles and named preparation and
+extraction Functions to `evidence.yaml`. It supplies no assertion or caller grant.
+The existing offline definition remains independently runnable.
+
+Follow [the definition fragment instructions](starter/README.md) to add the two
+BReg definitions and their Functions and fixtures. Then generate a complete local
+target and review its separate authority:
 
 ```sh
-bregctl dev export-client ./registry --client source \
-  --client-id-file ./evidence/secrets/registry-client-id \
-  --assertion-key-file ./evidence/secrets/registry-client-key
+evidencectl target new ./configured-target --local --project ./evidence
 ```
 
-For the broader copied registry use `--clients-file ./registry/clients.yaml` on its
-first start. Both starters use default BReg and stock issuer ports `8090` and `8091`.
-Normal stop/start preserves records, package, and credentials. Do not remove data
-or change the retained registry's model or client declarations to add Evidence.
+Add a `registry` connection to `configured-target/target.yaml`, with the registry
+origin and its operator-approved authentication references. For a retained local
+registry, [guided connection](#guided-local-connection) derives those bindings.
+The offline proof uses synthetic loopback bindings and resolves no credentials.
+Run the completed project:
 
-The source profile intentionally permits registry-wide exact lookups in this
-synthetic model, expressed as `rowBoundaries: unrestricted`. It cannot create or patch
-records, and cannot read `label`. The operator profile can maintain those fields.
-The export requests `status` and only the chosen selector's identity field;
-`registration-number` remains the logical identifier while `registrationNumber`
-is its HTTP property. An unresolved lookup or absent fact never signs `false`.
+```sh
+evidencectl check ./evidence --target ./configured-target
+evidencectl test ./evidence --target ./configured-target
+evidencectl package ./evidence --target ./configured-target --output ./candidate
+```
 
-Keep generated exports and candidates outside this maintained input tree. Record
-value changes require no export. When consumed lookup meaning changes, review a
-new export, compare it with `evidencectl source diff`, and coordinate provider and
-Evidence candidates before serving the changed contract.
+The candidate contains the immutable `bundle/` and a separate target handoff.
+Packaging is offline and does not deploy it. Keep generated exports, credentials
+and candidates outside this maintained input tree and out of version control.
 
-For maintainer verification, install PyYAML and run the test driver with matching
-`--bregctl`, `--evidencectl` and `--evidence` binary paths. It uses a disposable
-private directory, checks repeatable export bytes and all 22 fixture cases, builds
-the target, then proves provenance-only and consumed-behavior revision changes
-through native source diff and update. `--work-dir <new-directory>` retains the
-synthetic outputs for inspection. It also checks unmodified default init with the
-one-question starter and its 11 fixtures, and the offline starter passing its 13
-cases with no registry or import. The default run starts no services.
+## Guided local connection
 
-Add `--live`, a matching `--breg` binary path, and available Docker
-to execute the retained-record journey. It allocates unused loopback ports,
-creates and edits a record before Evidence exists, stops normally during setup,
-and verifies the signed answer after restart. It checks retained record and
-credential identity plus the source permission ceiling. Final cleanup stops
-its Evidence services and removes only its own BReg database and services.
+For a registry already used through `bregctl dev`, stop its retained session
+normally and review `evidencectl source add ./registry ./evidence`. Choose an
+existing required unique field, the facts, and explicit record scope. The command
+reviews by default; `--apply` performs the reviewed connection through public BReg
+commands. Its public selector flag is `--entity`, while BReg export uses
+`--record-type`. Matching `bregctl` must be on `PATH`.
+
+Guided setup is optional and requires a retained session. It prepares a dedicated
+lookup client and policy successor, imports the Source and copies credentials
+privately. It does not authorize Evidence callers or define an assertion.
+Use the maintained [retained-session procedure](../DEV.md#prepare-a-source-after-using-a-registry)
+for activation and recovery. A source identity already present in a project must
+be reviewed through `source diff` and `source update`, rather than attached again
+under conflicting choices.
+
+The explicit source profile permits registry-wide exact lookups, expressed as
+`rowBoundaries: unrestricted`. It cannot list, create or patch records and cannot
+read `label`. Exported identity fields bind exact returned records but never
+become facts. Missing status or unresolved identity never signs `false`.
+
+## Maintainer proof
+
+Run `tests/verify-composition.py` with matching `--bregctl`, `--evidencectl` and
+`--evidence` paths and PyYAML. `--work-dir <new-directory>` retains synthetic
+outputs privately. The runner starts no services and proves:
+
+- Native offline initialization, checking, all 35 fixtures and packaging.
+- Repeatable export bytes and inventory digests, unreadable-field refusal and
+  tampered-import refusal without authored changes.
+- Exact selector and returned-identity binding, minimum disclosure, unavailable
+  outcomes, SQLite statement bounds and stale extracts through fixtures.
+- Two definitions sharing one imported Source, with unrelated provenance leaving
+  revisions unchanged and a consumed change leaving the offline definition unchanged.
+- Native source update and incompatible fact rename refusal before authored changes.
+- Guided connection's matching-tool requirement and missing-session refusal.
+
+The offline runner does not establish successful retained-session attachment,
+HTTP authorization, live signing or service operation. Those need the separate
+native local lifecycle journey. Value changes need no new export; changes to a
+consumed contract need a new export, `source diff`, and reviewed provider and
+Evidence candidates before activation.

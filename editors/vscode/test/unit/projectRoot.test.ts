@@ -83,7 +83,10 @@ test('a Base Registry Engine registry.yaml beside an Evidence marker declares a 
     path.join(directory, 'registry.yaml'),
     'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\n',
   );
-  fs.writeFileSync(path.join(directory, 'evidence-project.yaml'), 'version: 1\n');
+  fs.writeFileSync(
+    path.join(directory, 'evidence.yaml'),
+    'apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\n',
+  );
   assert.strictEqual(isProjectRoot(directory), true);
 });
 
@@ -95,39 +98,44 @@ test('a symlinked registry.yaml does not declare a Relay V2 project root', () =>
   assert.strictEqual(isProjectRoot(directory), false);
 });
 
-test('a plain evidence-project.yaml declares a project root', () => {
+test('a normalized evidence.yaml declares a project root', () => {
   const directory = tempDirectory();
-  fs.writeFileSync(path.join(directory, 'evidence-project.yaml'), 'version: 1\n');
+  fs.writeFileSync(
+    path.join(directory, 'evidence.yaml'),
+    'apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\n',
+  );
   assert.strictEqual(isProjectRoot(directory), true);
 });
 
-test('a symlinked evidence-project.yaml does not declare a project root', () => {
+test('an unrelated evidence.yaml does not declare a project root', () => {
   const directory = tempDirectory();
-  const real = path.join(directory, 'real-evidence-project.yaml');
-  fs.writeFileSync(real, 'version: 1\n');
-  fs.symlinkSync(real, path.join(directory, 'evidence-project.yaml'));
+  fs.writeFileSync(path.join(directory, 'evidence.yaml'), 'kind: SomethingElse\n');
   assert.strictEqual(isProjectRoot(directory), false);
 });
 
-test('a plain OpenAPI description with a questions directory declares a project root', () => {
+test('a symlinked evidence.yaml does not declare a project root', () => {
   const directory = tempDirectory();
-  fs.writeFileSync(path.join(directory, 'source.openapi.yaml'), 'openapi: 3.1.0\n');
-  fs.mkdirSync(path.join(directory, 'questions'));
-  assert.strictEqual(isProjectRoot(directory), true);
+  const real = path.join(directory, 'real-evidence.yaml');
+  fs.writeFileSync(
+    real,
+    'apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\n',
+  );
+  fs.symlinkSync(real, path.join(directory, 'evidence.yaml'));
+  assert.strictEqual(isProjectRoot(directory), false);
 });
 
-test('a symlinked questions directory does not declare a project root', () => {
+test('retired Evidence markers do not declare a project root', () => {
   const directory = tempDirectory();
+  fs.writeFileSync(path.join(directory, 'evidence-project.yaml'), 'kind: EvidenceAuthoringProject\n');
   fs.writeFileSync(path.join(directory, 'source.openapi.yaml'), 'openapi: 3.1.0\n');
-  const realQuestions = path.join(directory, 'real-questions');
-  fs.mkdirSync(realQuestions);
-  fs.symlinkSync(realQuestions, path.join(directory, 'questions'));
+  fs.mkdirSync(path.join(directory, 'questions'));
   assert.strictEqual(isProjectRoot(directory), false);
 });
 
 
 for (const [file, content] of [
   ['casework.yaml', 'apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\n'],
+  ['workflow.yaml', 'apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1\n'],
   ['scheduling.yaml', 'apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\n'],
   ['messaging.yaml', 'kind: MessagingProject\n'],
   ['origins.yaml', 'apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\n'],
@@ -214,3 +222,15 @@ test('malformed explicit marker JSON does not declare a product root', () => {
   fs.writeFileSync(path.join(directory, '.registry-stack-editor/project.json'), '{');
   assert.strictEqual(isProjectRoot(directory), false);
 });
+
+for (const content of [
+  'kind: UnrelatedWorkflow\n',
+  'apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1-retired\n',
+  'metadata:\n  kind: CoordinatorProject\n',
+]) {
+  test(`a workflow.yaml with an unrelated discriminator does not declare a root: ${content.trim()}`, () => {
+    const directory = tempDirectory();
+    fs.writeFileSync(path.join(directory, 'workflow.yaml'), content);
+    assert.strictEqual(isProjectRoot(directory), false);
+  });
+}

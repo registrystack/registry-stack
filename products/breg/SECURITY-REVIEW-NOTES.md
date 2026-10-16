@@ -2058,7 +2058,7 @@ BREG-SEC-166.
   stay in revisions and the audit journal as pseudonyms; rotating the key
   changes them for later writes only.
 - **Horizon.** A held response stays available for
-  `idempotency.receiptRetentionDays` after its commit: default 7, at least 1,
+  `retention.receiptRetentionDays` after its commit: default 7, at least 1,
   at most 365, fixed on the row when it commits. Reading a spent key checks
   the binding first, erasure second, and the horizon third, so a changed
   request is told it conflicts, any retry of a key whose held response an
@@ -3525,3 +3525,138 @@ state to be served with no row lost.
   until the apply transaction ends, and each rebuild reads the table once.
   The registry is in maintenance for that time.
 - No security invariant row changes.
+
+## Review policy selection at first acceptance
+
+An ID-only Review policy selector delegates concrete version and digest choice
+to the configured trusted provider at first durable acceptance. BReg freezes
+the selector in the Proposal submission and stores the concrete accepted
+binding separately. Supplying both `version` and `digest` instead requires that
+exact policy before acceptance; partial pins are invalid.
+
+The threat is substitution of a different policy identity or exact pin before
+acceptance, or substitution of a different request, policy, subject, submission,
+or result after acceptance. `PolicySelection::matches` in
+`crates/registry-review-protocol/src/lib.rs` defines selection.
+`check_accepted` in `crates/registry-review-client/src/client.rs` checks the
+provider response against that selector, subject, and submission digest before
+returning it to `run_one_submission` in
+`crates/registry-breg/src/review_store.rs`. A mismatched response is a protocol
+failure: BReg records `remote-uncertain` without retaining an accepted binding
+or approval. The worker's additional `review-policy-changed` check is defensive;
+the canonical client rejects these mismatches before that branch can run.
+
+Once accepted, the worker refuses a replacement as
+`review-acceptance-changed`, including after operator resubmit. Feed
+reconciliation requires the same exact accepted binding, and
+`crates/registry-breg/src/review_integration.rs` independently checks exact
+result correlation before application. A review decision never grants source
+write authority or bypasses current commit conditions.
+
+### Tests
+
+`first_acceptance_refuses_wrong_policy_id_or_exact_pin` in
+`crates/registry-breg/tests/postgres_proposal_review_delivery.rs` uses the
+existing HTTP provider and real PostgreSQL fixture to return an otherwise
+correlated acceptance with the wrong ID, pinned version, or pinned digest.
+Each is refused without a retained binding, result, or Record mutation. Its
+permitted case accepts a newer version and digest for the same ID and retains
+that exact binding without rewriting the frozen selector.
+`current_policy_delivery_recovers_original_request_without_rewriting_frozen_identity`
+holds lost-response recovery to the original request and idempotency key.
+`operator_resubmit_preserves_acceptance_and_refuses_replacement_after_provider_loss`
+holds operator recovery to the original acceptance and refuses changed policy
+or request bindings. `result_correlation_requires_every_frozen_binding` in
+`review_integration.rs` retains the exact-result negative cases.
+These selection and correlation guarantees are recorded by BREG-SEC-34.
+
+### Accepted residuals and operator choice
+
+The trusted provider may change its policy while first acceptance is pending,
+including switching between human review and automatic assessment. The
+submission recovery window defaults to 30 days; operator resubmit restarts it
+but preserves any existing acceptance. A new submission after
+changes-requested selects the provider's current policy again unless pinned.
+Use a complete exact pin when the version chosen at submission must be the
+version that decides. ID-only selection intentionally trusts provider policy
+administration until first acceptance, then preserves exact correlation.
+
+## The task-grant status resource is named for what it binds
+
+A `taskGrantStatus` entry names the audience its status credential is
+requested for `statusResource` (was `caseworkResource`), because Coordinator
+or an external task authority can answer grant status as well as Casework.
+This is authorization configuration: the key selects the resource the
+runtime's own status credential is issued for. The rename changes no
+behavior. The value is read, validated as an absolute resource URI, and sent
+exactly as before, and the old key is refused with `config.removed-key`
+naming `statusResource` rather than read as an alias, so a file cannot carry
+both spellings with different values. Tests:
+`a_task_status_casework_resource_is_refused_naming_status_resource`, plus the
+existing structural refusal tests that now use `statusResource`.
+
+## Review state, decision and rejection on ordinary Proposal reads
+
+A Proposal Get holder sees the review state, `resultId`, `completedAt` and
+`availableUntil` of every retained submission version, the current one
+included, through `GET /v1/proposals/{id}/submissions/{version}`, and the
+current version's `decision` on the Proposal Get and in the list. Before the
+per-version read, review state sat only behind the separately grantable
+`get-review-status` operation. A deployment can no longer withhold it from a
+Get holder: the grant to read the Proposal is the grant to read how its
+Review went. This is a deliberate widening, recorded once for both reads by
+BREG-SEC-177, and BREG-SEC-173 now names the summary as the part of review
+data ordinary envelopes carry. `get-review-status` keeps the rest: the review
+authority, the accepted policy binding, the subject binding and the context
+reference.
+
+`decision` is `{status, decidedAt, publicReason}`. It is read from the stored
+result through the review protocol's own `ReviewResult` type, so a protocol
+rename is a compile error rather than a silent omission. `publicReason` is the
+text the protocol releases to the subject's owner and the only reviewer text
+BReg serves. The reviewer's private `result`, notes, internal reason and
+identity are never projected, and a stored result that does not decode as a
+`ReviewResult` fails the read as unavailable rather than serving a partial
+decision. A provider end (`cancelled`, `superseded`) and a result whose
+content retention erased carry no decision. Lifecycle command responses omit
+it. A read that serves a public reason records the fixed
+`proposal-review-public-reason` marker in its audit entry's field-set
+reference, never the text. The 410 `proposal.submission_expired` answer
+audits a result count of zero.
+
+A rejection of the current submission is terminal (BREG-SEC-178). The
+`reject` transition has no caller operation: it runs only when BReg records a
+verified review result for the exact current, not withdrawn submission, in
+the transaction that records the result and under the Proposal state lock,
+with a `rejected` lifecycle event whose `authorityKind` is `review`. A result
+for a superseded version changes no lifecycle state. Every transition out of
+`rejected` is refused with `proposal.rejected`, so rejected work can be
+neither revised into approval nor applied. A changes-requested result keeps
+the Proposal `submitted`, records `review-returned`, and grants nothing: the
+revised version needs its own Review.
+
+`turn` is derived from state that the same read already discloses and
+carries no new data. The `turn` list filter runs after each Proposal is
+authorized and projected, so it conceals exactly what the list already
+conceals.
+
+### Tests
+
+`submission_read_reports_each_version_separately_and_is_gone_after_its_windows`
+in `crates/registry-breg/tests/postgres_proposal.rs` asserts the exact
+`decision`, that a reviewer-only canary in the private result never reaches
+the response, the public-reason marker, that the public reason's text never
+reaches the audit journal, and the zero result count of the 410 read.
+`review_rejection_is_terminal_and_changes_requested_returns_to_the_party`
+asserts the `rejected` state and event, the `review-returned` event, the
+`turn` on the document, the event and the list filter, that the client offers
+no Revise of a rejected Proposal, and that the server answers the exact inert
+Revise link with 409 `proposal.rejected`. The workflow unit test in
+`crates/registry-breg/src/proposal_workflow.rs` refuses Edit, Revise, Rebase,
+Retry, Cancel and a second rejection from `rejected`.
+
+### Accepted residuals
+
+The public reason is whatever the reviewer wrote for the subject. BReg bounds
+its length through the protocol type but cannot judge its content; a
+reviewer who writes personal data there discloses it to every Get holder.

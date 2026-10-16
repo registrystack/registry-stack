@@ -225,17 +225,21 @@ tombstones, so a retried mutation key cannot replay an erased body. It leaves th
 every later revision, and the audit journal in place. Snapshot references at or after the earliest
 erased commit become unavailable until `bregctl history rebaseline` writes a new baseline commit.
 
-Change-request detail is separate from record history. `bregctl request-retention erase` removes
-the proposal and target snapshots, request revision snapshots, held idempotency responses, outbox
-payloads, and intake rows of one proposal version, and leaves the value-free lifecycle rows of the
-request. It applies only where the request entity declared `retention.mode: operator-erase`; the
-default, `retain`, keeps every proposal version and refuses operator erasure.
+Proposal detail has separate retention from record history. An Action's
+`execution.proposal.retention.mode: operator-erase` permits eligible detail erasure;
+the default, `retain`, refuses it. Use `bregctl proposal-retention dry-run` to inspect one
+exact Action, Proposal, and submission version before running `bregctl proposal-retention erase`.
+Erasure removes its eligible frozen snapshots, draft input, application reasons, Review payloads,
+held idempotency responses, and attachment references while preserving value-free lifecycle and
+spent-key evidence. Active detail remains pinned. Unresolved remote Review recovery retains the
+request and acceptance it still needs; external attachment deletion can remain pending separately.
+[Erase Proposal detail](../breg-retention/#erase-proposal-detail) gives the commands and scope.
 
 Spent idempotency keys live in `registry_internal.registry_idempotency`, one row per key, found by
 a digest of the verified issuer, principal value, and key. Until its receipt is dropped, the row
 also holds those raw values. Neither erasure removes that row or its raw values: both drop or
 tombstone only the held response, so a retry answers `409 idempotency.conflict`. A held response
-stays replayable for `idempotency.receiptRetentionDays`, 7 days by default, and
+stays replayable for `retention.receiptRetentionDays`, 7 days by default, and
 `bregctl idempotency-retention erase-expired` drops the ones past that horizon, together with the
 raw issuer, principal value, and key, while the digest keeps the key spent. The digest row is kept
 indefinitely, because the results and application of an immediate action hang off it and revision
@@ -252,8 +256,8 @@ clears a retained payload on the first successful delivery, and clears an undeli
 its expiry has passed, which is also the point after which that delivery can no longer be
 replayed. The delivery rows themselves stay; only the payload goes.
 
-An entity that declares `accessLog` writes one row per logged record read to
-`registry_internal.registry_subject_access_log`. Each row takes its expiry from the entity's
+A record type that declares `accessLog` writes one row per logged record read to
+`registry_internal.registry_subject_access_log`. Each row takes its expiry from the record type's
 `retentionDays` (default 90) when the read happens, and the subject's access-log route hides it once
 that expiry passes. A background job erases expired rows every minute in batches of 1000 until none
 remain, up to 100,000 rows a minute; a run that stops at that bound logs a warning with the
@@ -268,7 +272,7 @@ the chunk receipts that describe the erased revisions and leaves the run and its
 
 Import and export checkpoints live on the operator host, not in the database. `bregctl data import`
 writes a checkpoint file beside a `.state` sidecar it owns, and `bregctl data export` writes its
-output file beside a checkpoint that binds the package revision, schema fingerprint, entity,
+output file beside a checkpoint that binds the package revision, schema fingerprint, record type,
 profile, and operation. Both refuse a run whose files no longer match rather than resuming it, so
 keep each pair together and unedited or start both afresh. An export output holds record values and
 needs the handling any other extract gets.
@@ -279,7 +283,7 @@ every activation, and store secrets separately.
 
 {/* Evidence: crates/registry-breg/src/postgres/schema.rs;
     crates/registry-breg/src/history_erasure.rs;
-    crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/proposal_retention.rs;
     crates/registry-breg/src/idempotency.rs, lock_and_load(), tombstone_erased_cached_responses(),
     and drop_expired_receipts();
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;

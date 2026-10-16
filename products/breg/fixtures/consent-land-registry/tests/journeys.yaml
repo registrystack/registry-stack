@@ -7,7 +7,7 @@ journeys:
   - id: lender-reads-a-tenure-right-only-under-consent
     steps:
       - id: publish-notice
-        entity: tenure-right-privacy-notice
+        recordType: tenure-right-privacy-notice
         accessProfile: tenure-right-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -27,7 +27,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: notice
       - id: publish-lender-a-clause
-        entity: tenure-right-notice-clause
+        recordType: tenure-right-notice-clause
         accessProfile: tenure-right-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -43,7 +43,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: lender-a-clause
       - id: publish-consortium-clause
-        entity: tenure-right-notice-clause
+        recordType: tenure-right-notice-clause
         accessProfile: tenure-right-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -59,7 +59,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: consortium-clause
       - id: register-parcel
-        entity: parcel
+        recordType: parcel
         accessProfile: land-registry-operator
         claims:
           principal: synthetic-land-registrar
@@ -72,7 +72,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: parcel
       - id: register-tenure-right
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: land-registry-operator
         claims:
           principal: synthetic-land-registrar
@@ -89,7 +89,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: tenure-right
       - id: link-holder
-        entity: tenure-right-consent-link
+        recordType: tenure-right-consent-link
         accessProfile: tenure-right-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -100,7 +100,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: holder-link
       - id: lender-a-cannot-read-before-consent
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-a
@@ -133,7 +133,7 @@ journeys:
             effectiveAt: "2026-09-01T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: lender-a-reads-the-tenure-right
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-a
@@ -147,7 +147,7 @@ journeys:
           status: 200
           fields: {holderName: Imani Mwangi, tenureKind: customary, encumbered: false}
       - id: lender-b-cannot-read-lender-a-consent
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-b
@@ -180,7 +180,7 @@ journeys:
             effectiveAt: "2026-09-01T01:00:00Z"
         expect: {outcome: success, status: 200}
       - id: lender-b-reads-through-the-consortium
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-b
@@ -213,7 +213,7 @@ journeys:
             effectiveAt: "2026-09-01T02:00:00Z"
         expect: {outcome: success, status: 200}
       - id: lender-a-still-reads-through-the-consortium
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-a
@@ -246,7 +246,7 @@ journeys:
             effectiveAt: "2026-09-01T03:00:00Z"
         expect: {outcome: success, status: 200}
       - id: lender-a-cannot-read-after-both-withdrawals
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-a
@@ -257,7 +257,7 @@ journeys:
         request: {type: get, recordCapture: tenure-right}
         expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
       - id: lender-b-cannot-read-after-both-withdrawals
-        entity: tenure-right
+        recordType: tenure-right
         accessProfile: lender-assessment
         claims:
           principal: synthetic-lender-b
@@ -268,7 +268,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
       - id: lender-a-feed-shows-its-own-and-consortium-decisions
-        entity: tenure-right-consent-decision
+        recordType: tenure-right-consent-decision
         accessProfile: tenure-right-consent-recipient
         claims:
           principal: synthetic-lender-a-feed
@@ -276,7 +276,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 4}
       - id: lender-b-feed-shows-only-consortium-decisions
-        entity: tenure-right-consent-decision
+        recordType: tenure-right-consent-decision
         accessProfile: tenure-right-consent-recipient
         claims:
           principal: synthetic-lender-b-feed

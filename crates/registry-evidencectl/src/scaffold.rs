@@ -15,25 +15,21 @@ use std::{
 use anyhow::{bail, Context as _, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 
-use crate::{keygen, suggest, tooling_editor, OutputFormat};
+use crate::{authored, keygen, suggest, tooling_editor, OutputFormat};
+use serde_json::json;
 
 const RETAINED_OPENAPI_FILE: &str = "source.openapi.yaml";
 const MAX_STARTER_FILES: usize = 512;
 const MAX_STARTER_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STARTER_FILE_BYTES: u64 = 1024 * 1024;
-const STARTER_TOP_LEVEL_FILES: &[&str] = &["README.md"];
-const STARTER_DIRECTORIES: &[&str] = &[
-    "selectors",
-    "sources",
-    "adapters",
-    "schemas",
-    "questions",
-    "derivations",
-    "fixtures",
-    "codelists",
-    "queries",
-    "targets",
+const STARTER_TOP_LEVEL_FILES: &[&str] = &[
+    "README.md",
+    "evidence.yaml",
+    "local-target.yaml",
+    "dev-authority.yaml",
+    "serve-source.py",
 ];
+const STARTER_DIRECTORIES: &[&str] = &["functions", "fixtures", "codelists", "queries"];
 
 #[derive(Clone, Debug, ValueEnum)]
 pub enum AuthoringProfile {
@@ -89,7 +85,7 @@ pub(crate) fn create_source_project(directory: &Path) -> Result<()> {
     let starter = tempfile::tempdir().context("staging the source-first project description")?;
     write_new_file(
         &starter.path().join("README.md"),
-        b"# Evidence source project\n\nThis project holds imported source facts and a local connection. Author a question, its derivation, and fixtures under questions/, derivations/, and fixtures/ before building or starting Evidence. Source credentials grant no Evidence caller authority.\n",
+        b"# Evidence source project\n\nThis normalized EvidenceProject can receive imported Sources and Functions. Review its AssertionDefinitions and complete source bindings before deployment. Source credentials grant no Evidence caller authority.\n",
         0o644,
     )?;
     create(
@@ -144,12 +140,11 @@ fn create(
         AuthoringSource::Starter(starter) => collect_starter_files(starter)?,
         AuthoringSource::OpenApi(_) | AuthoringSource::SqliteExtract => Vec::new(),
     };
+    let supplied_normalized_starter = validate_normalized_starter(&starter_files)?;
     // A starter that ships no source (its README asks for one to be imported
     // or authored first) cannot yet prove itself with `fixtures run`, so the
     // printed next step must defer to the starter's own README instead.
-    let starter_ships_a_source = starter_files
-        .iter()
-        .any(|file| file.relative.starts_with("sources"));
+    let starter_ships_a_source = true;
 
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-new-")
@@ -159,7 +154,7 @@ fn create(
 
     write_new_file(
         &staged_root.join(".gitignore"),
-        b"secrets/\n.evidence/\n",
+        b".generated/secrets/\n.evidence/\n",
         0o644,
     )?;
     // A project a reader can edit needs a page naming what was written and what
@@ -180,37 +175,28 @@ fn create(
             0o644,
         )?;
     }
-    write_new_file(
-        &staged_root.join(registry_evidence_authoring::PROJECT_MARKER_FILE),
-        registry_evidence_authoring::default_project_marker_document().as_bytes(),
-        0o644,
-    )?;
-    for directory in [
-        "selectors",
-        "sources",
-        "adapters",
-        "schemas",
-        "questions",
-        "derivations",
-        "fixtures",
-    ] {
+    for directory in ["functions", "fixtures"] {
         fs::create_dir(staged_root.join(directory))
             .with_context(|| format!("creating the empty {directory} directory"))?;
     }
     if matches!(source, AuthoringSource::SqliteExtract) {
         fs::create_dir(staged_root.join("queries"))
             .context("creating the empty queries directory")?;
-        write_sqlite_starter(staged_root)?;
     }
     for file in starter_files {
         write_new_file(&staged_root.join(file.relative), &file.contents, 0o644)?;
     }
+    if !supplied_normalized_starter {
+        write_normalized_starter(staged_root, source)?;
+    }
 
-    keygen::generate_scaffold_key_material(&staged_root.join("secrets"))
-        .context("generating unbound local authoring key material")?;
+    keygen::generate_scaffold_key_material(
+        &staged_root.join(registry_evidence_authoring::layout::SECRETS_DIRECTORY),
+    )
+    .context("generating unbound local authoring key material")?;
 
     // Schema mappings belong to a project from its first minute, so that the
-    // editor an adopter writes their first question in already knows the form.
+    // editor knows the normalized forms before an adopter changes them.
     // Staging is the only place this can run without a conflict check that
     // could refuse: nothing else has ever written here.
     tooling_editor::setup_project_editor(staged_root)
@@ -251,28 +237,30 @@ fn create(
         );
     }
     println!(
-        "  selectors: {}",
-        args.directory.join("selectors").display()
+        "  project: {}",
+        args.directory.join("evidence.yaml").display()
     );
-    println!("  sources: {}", args.directory.join("sources").display());
+    println!(
+        "  functions: {}",
+        args.directory.join("functions").display()
+    );
     if matches!(source, AuthoringSource::SqliteExtract) || args.directory.join("queries").exists() {
         println!("  queries: {}", args.directory.join("queries").display());
     }
-    if args.directory.join("targets").exists() {
-        println!("  targets: {}", args.directory.join("targets").display());
-    }
     println!(
-        "  questions: {}",
-        args.directory.join("questions").display()
+        "  target: {}",
+        args.directory.join("local-target.yaml").display()
     );
     println!(
-        "  derivations: {}",
-        args.directory.join("derivations").display()
+        "  authority: {}",
+        args.directory.join("dev-authority.yaml").display()
     );
     println!("  fixtures: {}", args.directory.join("fixtures").display());
     println!(
         "  keys: {} (owner-only, disposable, and unbound)",
-        args.directory.join("secrets").display()
+        args.directory
+            .join(registry_evidence_authoring::layout::SECRETS_DIRECTORY)
+            .display()
     );
     match source {
         AuthoringSource::OpenApi(_) => println!(
@@ -300,13 +288,13 @@ fn create(
     }
     match source {
         AuthoringSource::OpenApi(_) => println!(
-            "No question, fixture case, runtime, target, or deployment bundle was generated."
+            "A normalized synthetic starter and local target were generated beside the retained OpenAPI document. Review or replace the starter Source and AssertionDefinition."
         ),
         AuthoringSource::SqliteExtract => println!(
-            "A synthetic source, question, and fixture were generated. No runtime, target, production extract, or deployment bundle was generated."
+            "A normalized synthetic Source, AssertionDefinition, and local target were generated. No production extract or deployment bundle was generated."
         ),
         AuthoringSource::Starter(starter) => println!(
-            "Starter files were copied from {}. No OpenAPI, secret, runtime, deployment target, production extract, or deployment bundle was imported.",
+            "Starter files were copied from {} and combined with the normalized project and local target. No production extract or deployment bundle was imported.",
             starter.display()
         ),
     }
@@ -385,6 +373,47 @@ fn collect_starter_files(root: &Path) -> Result<Vec<StarterFile>> {
     }
     files.sort_by(|left, right| left.relative.cmp(&right.relative));
     Ok(files)
+}
+
+/// Distinguish a complete normalized starter from a source-first starter.
+/// A complete starter is preserved byte for byte, but must prove that its
+/// project, target, and complete authority agree before any destination is
+/// created. A README-and-assets starter receives the synthetic normalized
+/// project below.
+fn validate_normalized_starter(files: &[StarterFile]) -> Result<bool> {
+    let find = |name: &str| {
+        files
+            .iter()
+            .find(|file| file.relative == Path::new(name))
+            .map(|file| file.contents.as_slice())
+    };
+    let Some(project_bytes) = find("evidence.yaml") else {
+        if find("local-target.yaml").is_some() || find("dev-authority.yaml").is_some() {
+            bail!("a normalized starter must supply evidence.yaml, local-target.yaml, and dev-authority.yaml together");
+        }
+        return Ok(false);
+    };
+    let target_bytes = find("local-target.yaml")
+        .context("a normalized starter with evidence.yaml must also supply local-target.yaml")?;
+    let authority_bytes = find("dev-authority.yaml")
+        .context("a normalized starter with evidence.yaml must also supply dev-authority.yaml")?;
+    let project =
+        registry_evidence_authoring::project::read_project("evidence.yaml", project_bytes)?.value;
+    let target =
+        registry_evidence_authoring::target::read_target("local-target.yaml", target_bytes)?.value;
+    if target.project != project.id || target.authority != "dev-authority.yaml" {
+        bail!("the starter local-target.yaml must name its EvidenceProject and dev-authority.yaml");
+    }
+    let authority = registry_evidence_authoring::target::read_authority(
+        "dev-authority.yaml",
+        authority_bytes,
+        &project,
+    )?
+    .value;
+    if authority.target != target.id || authority.project != project.id {
+        bail!("the starter dev-authority.yaml must name its EvidenceTarget and EvidenceProject");
+    }
+    Ok(true)
 }
 
 fn collect_starter_directory(
@@ -532,50 +561,196 @@ fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> anyhow::Result<()>
         .with_context(|| format!("persisting {}", path.display()))
 }
 
-const SQLITE_STARTER_FILES: &[(&str, &[u8])] = &[
-    (
-        "selectors/record-reference-v1.yaml",
-        include_bytes!("../templates/sqlite-extract/selectors/record-reference-v1.yaml"),
-    ),
-    (
-        "sources/record-status.yaml",
-        include_bytes!("../templates/sqlite-extract/sources/record-status.yaml"),
-    ),
-    (
-        "queries/record-status.sql",
-        include_bytes!("../templates/sqlite-extract/queries/record-status.sql"),
-    ),
-    (
-        "adapters/record-status-extract.rhai",
-        include_bytes!("../templates/sqlite-extract/adapters/record-status-extract.rhai"),
-    ),
-    (
-        "schemas/record-status-response.schema.yaml",
-        include_bytes!("../templates/sqlite-extract/schemas/record-status-response.schema.yaml"),
-    ),
-    (
-        "schemas/record-status-facts.schema.yaml",
-        include_bytes!("../templates/sqlite-extract/schemas/record-status-facts.schema.yaml"),
-    ),
-    (
-        "questions/record-status.yaml",
-        include_bytes!("../templates/sqlite-extract/questions/record-status.yaml"),
-    ),
-    (
-        "derivations/record-status.rhai",
-        include_bytes!("../templates/sqlite-extract/derivations/record-status.rhai"),
-    ),
-    (
-        "fixtures/record-status.yaml",
-        include_bytes!("../templates/sqlite-extract/fixtures/record-status.yaml"),
-    ),
-];
+fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow::Result<()> {
+    let sqlite = matches!(source, AuthoringSource::SqliteExtract);
+    let source_document = if sqlite {
+        json!({
+            "type": "sqlite-extract",
+            "acquisitionPosture": "record-transformed",
+            "selectors": [{"role":"subject","profiles":["record-reference"]}],
+            "request": {
+                "statement":"queries/record-status.sql",
+                "columns":[{"name":"qualifying_record_count","type":"integer"}],
+                "parameterBindings":{"record_reference":{"selector":{"role":"subject","profile":"record-reference","field":"record-reference"}}},
+                "maximumRows":2,
+                "maximumCellBytes":64,
+                "maximumStatementSteps":100000
+            },
+            "response": {
+                "projection":["/rows/*/qualifying_record_count"],
+                "shape":{"type":"object","required":["rows"],"properties":{"rows":{"type":"array","minItems":0,"maxItems":2,"items":{"type":"object","required":["qualifying_record_count"],"properties":{"qualifying_record_count":{"type":"bounded-integer","minimum":0,"maximum":1000000}}}}}},
+                "maximumBytes":8192
+            },
+            "extract":{"function":"extract-record-status"},
+            "facts":{"record-count":{"type":"bounded-integer","minimum":0,"maximum":1000000}},
+            "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":8},
+            "extractProfile":"record-status",
+            "maximumExtractAgeSeconds":604800
+        })
+    } else {
+        json!({
+            "type":"http-json",
+            "connection":"starter-source",
+            "acquisitionPosture":"record-transformed",
+            "selectors":[{"role":"subject","profiles":["record-reference"]}],
+            "request":{
+                "method":"GET",
+                "path":"/records/{record-reference}",
+                "pathBindings":{"record-reference":{"selector":{"role":"subject","profile":"record-reference","field":"record-reference"}}},
+                "fixedHeaders":[{"name":"Accept","value":"application/json"}]
+            },
+            "response":{
+                "projection":["/matched"],
+                "shape":{"type":"object","required":["matched"],"properties":{"matched":{"type":"boolean"}}},
+                "maximumBytes":4096
+            },
+            "extract":{"function":"extract-record-status"},
+            "facts":{"matched":{"type":"boolean"}},
+            "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":8}
+        })
+    };
+    let project = json!({
+        "apiVersion": registry_evidence_authoring::project::PROJECT_API_VERSION,
+        "kind": registry_evidence_authoring::project::PROJECT_KIND,
+        "id":"local-evidence",
+        "selectorProfiles":{"record-reference":{"maximumAggregateBytes":64,"fields":{"record-reference":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
+        "functions":[
+            {"id":"extract-record-status","interface":"source-extract/v1","source":"functions/extract-record-status.rhai"},
+            {"id":"derive-record-status","interface":"assertion-derive/v1","source":"functions/derive-record-status.rhai"}
+        ],
+        "sources":{"record-status":source_document},
+        "assertionDefinitions":{"record-status":{
+            "question":"Does the selected synthetic record satisfy the reviewed condition?",
+            "semantics":{"requirement":"urn:example:requirement:record-status:v1","kind":"criterion","evidenceType":"urn:example:evidence-type:record-status:v1","referenceFrameworks":["urn:example:framework:record-status:v1"]},
+            "purpose":"record-status-check",
+            "grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:local-evidence"]},
+            "subjects":[{"role":"subject","selectors":["record-reference"]}],
+            "acquisition":{"type":"single","source":"record-status"},
+            "derive":{"function":"derive-record-status"},
+            "outputs":{"satisfied":{"concept":"urn:example:concept:record-status:v1","type":"boolean"}},
+            "validitySeconds":300,
+            "subjectBinding":"audience-scoped",
+            "representations":["signed-jws"]
+            ,"fixtures":"fixtures/record-status.yaml"
+        }}
+    });
+    let project_yaml = authored::to_indented_yaml(&project)?;
+    registry_evidence_authoring::project::read_project("evidence.yaml", project_yaml.as_bytes())
+        .context("validating the generated normalized EvidenceProject")?;
+    write_new_file(&root.join("evidence.yaml"), project_yaml.as_bytes(), 0o644)?;
 
-fn write_sqlite_starter(root: &Path) -> anyhow::Result<()> {
-    for (relative, contents) in SQLITE_STARTER_FILES {
-        write_new_file(&root.join(relative), contents, 0o644)?;
+    let extract = if sqlite {
+        include_str!("../templates/sqlite-extract/functions/extract-record-status.rhai")
+    } else {
+        "fn extract(source_response, context) {\n    #{outcome: \"match\", facts: #{matched: source_response[\"matched\"]}}\n}\n"
+    };
+    let derive = if sqlite {
+        include_str!("../templates/sqlite-extract/functions/derive-record-status.rhai")
+    } else {
+        "fn derive(facts, selectors, context) {\n    [#{output: \"satisfied\", value: facts[\"matched\"]}]\n}\n"
+    };
+    write_new_file(
+        &root.join("functions/extract-record-status.rhai"),
+        extract.as_bytes(),
+        0o644,
+    )?;
+    write_new_file(
+        &root.join("functions/derive-record-status.rhai"),
+        derive.as_bytes(),
+        0o644,
+    )?;
+    let fixture = if sqlite {
+        include_str!("../templates/sqlite-extract/fixtures/record-status.yaml")
+    } else {
+        r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+syntheticOnly: true
+coequalAcceptanceDefinition: true
+common:
+  observedAt: '2026-01-01T00:00:00Z'
+  selectors:
+    subject:
+      profile: record-reference
+      values: {record-reference: REC-0001}
+cases:
+- id: positive
+  source: {matched: true}
+  expectedValue: true
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: negative
+  source: {matched: false}
+  expectedValue: false
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+privacyExpectation:
+  evidenceContains: [urn:example:concept:record-status:v1]
+  evidenceExcludes: [record-reference, REC-0001]
+  diagnosticsExclude: [REC-0001]
+"#
+    };
+    let fixture_path = root.join("fixtures/record-status.yaml");
+    if !fixture_path.exists() {
+        write_new_file(&fixture_path, fixture.as_bytes(), 0o644)?;
     }
-    Ok(())
+    if sqlite {
+        write_new_file(
+            &root.join("queries/record-status.sql"),
+            include_bytes!("../templates/sqlite-extract/queries/record-status.sql"),
+            0o644,
+        )?;
+    }
+
+    let target = json!({
+        "apiVersion": registry_evidence_authoring::target::TARGET_API_VERSION,
+        "kind": registry_evidence_authoring::target::TARGET_KIND,
+        "id":"local", "project":"local-evidence", "package":{"root":".generated/package"},
+        "authority":"dev-authority.yaml",
+        "service":{"providerId":"urn:example:provider:local-evidence","issuer":"urn:example:issuer:local-evidence","publicOrigin":"http://127.0.0.1:8080","trustDomain":"urn:example:trust:local-evidence"},
+        "listener":{"bind":"127.0.0.1:8080","trustProxyIdentityHeaders":false},
+        "authentication":{"oidc":{"issuer":"http://127.0.0.1:8081","audience":"urn:example:audience:local-evidence","tokenTypes":["at+jwt"],"algorithms":["ES256"],"jwksSource":{"type":"uri","uri":"http://127.0.0.1:8081/oauth2/jwks"},"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","requiredScopes":["evidence:request"],"maximumTokenLifetimeSeconds":300}},
+        "connections":{"starter-source":{"origin":"http://127.0.0.1:4010","authentication":{"type":"none"}}},
+        "secretProviders":{"file":{"root":".generated/secrets"}},
+        "signer":{"type":"local-jwk","algorithm":"ES256","privateKeyRef":"secret:file/signing-p256-private-jwk","publicJwkFile":".generated/secrets/signing-p256-public.jwk.json"},
+        "subjectBinding":{"secretRef":"secret:file/subject-binding-hmac-key","keyVersion":1},
+        "audit":{"path":".generated/audit/evidence.jsonl","hashKeyRef":"secret:file/audit-hmac-key","hashKeyVersion":1},
+        "rateLimits":{"requestsPerPrincipalPerMinute":60,"burstPerPrincipal":16,"failedSelectorAttemptsPerPrincipalAuthorityPerMinute":10},
+        "outboundTls":{"systemRoots":true,"trustProfiles":{}}
+    });
+    let target_yaml = authored::to_indented_yaml(&target)?;
+    registry_evidence_authoring::target::read_target("local-target.yaml", target_yaml.as_bytes())
+        .context("validating the generated local EvidenceTarget")?;
+    write_new_file(
+        &root.join("local-target.yaml"),
+        target_yaml.as_bytes(),
+        0o644,
+    )?;
+
+    let authority = json!({
+        "apiVersion":registry_evidence_authoring::target::AUTHORITY_API_VERSION,
+        "kind":registry_evidence_authoring::target::AUTHORITY_KIND,
+        "target":"local", "project":"local-evidence",
+        "accessProfiles":{"local-service":{"authority":"organizational","actorKind":"service","requesterTags":["local-service"],"grants":[{"definition":"record-status","purpose":"record-status-check","audienceFrom":"authenticated-requester","representations":["signed-jws"],"subjectBinding":"audience-scoped","subjects":[{"role":"subject","selectorProfile":"record-reference","valueOrigin":"request"}]}]}}
+    });
+    let authority_yaml = authored::to_indented_yaml(&authority)?;
+    let project = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        project_yaml.as_bytes(),
+    )?
+    .value;
+    registry_evidence_authoring::target::read_authority(
+        "dev-authority.yaml",
+        authority_yaml.as_bytes(),
+        &project,
+    )
+    .context("validating the generated local target authority")?;
+    write_new_file(
+        &root.join("dev-authority.yaml"),
+        authority_yaml.as_bytes(),
+        0o644,
+    )
 }
 
 fn publish(staging: tempfile::TempDir, destination: &Path) -> anyhow::Result<()> {
@@ -617,18 +792,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_starter_fixture_opens_with_the_modeline_naming_the_fixture_schema() {
-        let (_, contents) = SQLITE_STARTER_FILES
-            .iter()
-            .find(|(relative, _)| *relative == "fixtures/record-status.yaml")
-            .expect("the starter holds a fixture");
-        let first = std::str::from_utf8(contents)
-            .expect("the starter fixture is UTF-8")
-            .lines()
-            .next();
-        assert_eq!(
-            first,
-            Some("# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json")
-        );
+    fn generated_starter_documents_use_only_normalized_envelopes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("functions")).unwrap();
+        fs::create_dir(root.path().join("fixtures")).unwrap();
+        fs::create_dir(root.path().join("codelists")).unwrap();
+        fs::create_dir(root.path().join("queries")).unwrap();
+        write_normalized_starter(root.path(), AuthoringSource::SqliteExtract).unwrap();
+
+        let project = fs::read_to_string(root.path().join("evidence.yaml")).unwrap();
+        let target = fs::read_to_string(root.path().join("local-target.yaml")).unwrap();
+        let authority = fs::read_to_string(root.path().join("dev-authority.yaml")).unwrap();
+        assert!(project.contains("kind: EvidenceProject"));
+        assert!(target.contains("kind: EvidenceTarget"));
+        assert!(authority.contains("kind: EvidenceTargetAuthority"));
+        assert!(!project.contains("EvidenceQuestion"));
     }
 }

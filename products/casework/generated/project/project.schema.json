@@ -1,68 +1,5 @@
 {
   "$defs": {
-    "AccessProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "principalClaim": {
-          "type": "string"
-        },
-        "requiredScopes": {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "role": {
-          "$ref": "#/$defs/CaseworkRole"
-        }
-      },
-      "required": [
-        "id",
-        "principalClaim",
-        "requiredScopes",
-        "role"
-      ],
-      "type": "object"
-    },
-    "ActivityClockAnchor": {
-      "enum": [
-        "stage-entered-at"
-      ],
-      "type": "string"
-    },
-    "CalendarPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "holidaySet": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "timezone": {
-          "type": "string"
-        },
-        "workingWeekdays": {
-          "items": {
-            "$ref": "#/$defs/WorkingWeekday"
-          },
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "required": [
-        "id",
-        "timezone",
-        "workingWeekdays",
-        "holidaySet"
-      ],
-      "type": "object"
-    },
     "CaseworkRole": {
       "enum": [
         "staff",
@@ -71,98 +8,6 @@
         "requester"
       ],
       "type": "string"
-    },
-    "ClockPolicy": {
-      "description": "A named clock, chosen by its `type` member (CFG-ID-7). The shared reader's\nunion helper decodes it so every error inside a variant keeps its position\n(CFG-SCHEMA-8). The authored file, the stored record, the digest input, and\nthe HTTP description all carry this one spelling.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "after": {
-              "$ref": "#/$defs/ElapsedDuration"
-            },
-            "anchor": {
-              "$ref": "#/$defs/SubjectClockAnchor"
-            },
-            "completeOn": {
-              "$ref": "#/$defs/SubjectClockCompletion"
-            },
-            "id": {
-              "$ref": "#/$defs/LocalId"
-            },
-            "pauseWhile": {
-              "items": {
-                "$ref": "#/$defs/SubjectClockPause"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
-            "type": {
-              "const": "subject",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "anchor",
-            "completeOn",
-            "after",
-            "pauseWhile"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "after": {
-              "$ref": "#/$defs/WorkingDaysAfter"
-            },
-            "anchor": {
-              "$ref": "#/$defs/ActivityClockAnchor"
-            },
-            "atRisk": {
-              "$ref": "#/$defs/WorkingDaysBefore"
-            },
-            "calendar": {
-              "type": "string"
-            },
-            "dueTime": {
-              "type": "string"
-            },
-            "id": {
-              "$ref": "#/$defs/LocalId"
-            },
-            "reminders": {
-              "default": [],
-              "items": {
-                "$ref": "#/$defs/ClockReminder"
-              },
-              "type": "array"
-            },
-            "steps": {
-              "default": [],
-              "items": {
-                "$ref": "#/$defs/ClockStep"
-              },
-              "type": "array"
-            },
-            "type": {
-              "const": "activity",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "anchor",
-            "calendar",
-            "after",
-            "dueTime"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "ClockReassignment": {
       "additionalProperties": false,
@@ -173,25 +18,6 @@
       },
       "required": [
         "queue"
-      ],
-      "type": "object"
-    },
-    "ClockReminder": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "workingDaysBefore": {
-          "format": "uint32",
-          "maximum": 3650,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "workingDaysBefore"
       ],
       "type": "object"
     },
@@ -237,29 +63,66 @@
       ],
       "type": "string"
     },
-    "DisplayReferencePolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "field": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "field"
-      ],
-      "type": "object"
+    "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     },
     "ElapsedDuration": {
-      "additionalProperties": false,
-      "properties": {
-        "elapsed": {
-          "type": "string"
+      "description": "An elapsed budget in exactly one unit; a day is 24 elapsed hours.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "minutes": {
+              "format": "uint32",
+              "maximum": 5256000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "minutes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hours": {
+              "format": "uint32",
+              "maximum": 87600,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "hours"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "days": {
+              "format": "uint32",
+              "maximum": 3650,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "days"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "elapsed"
-      ],
-      "type": "object"
+      ]
     },
     "EvidenceRequesterContext": {
       "additionalProperties": false,
@@ -333,32 +196,20 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
-    "OccurrenceState": {
-      "enum": [
-        "open",
-        "claimed",
-        "waiting-applicant",
-        "waiting-application",
-        "synchronizing",
-        "completed",
-        "superseded",
-        "cancelled"
-      ],
-      "type": "string"
-    },
-    "PassiveTargetPolicy": {
+    "ProducerRetention": {
       "additionalProperties": false,
+      "description": "How long Casework keeps what a producer needs to recover a submission.",
       "properties": {
-        "after": {
-          "$ref": "#/$defs/ElapsedDuration"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
+        "receiptRetentionDays": {
+          "description": "Days a submission receipt stays readable for recovery, at most 365.",
+          "format": "uint32",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": [
-        "id",
-        "after"
+        "receiptRetentionDays"
       ],
       "type": "object"
     },
@@ -379,22 +230,6 @@
       ],
       "type": "object"
     },
-    "QueuePolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "label": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "label"
-      ],
-      "type": "object"
-    },
     "ReviewCompletionDestinationPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -411,174 +246,112 @@
       ],
       "type": "object"
     },
-    "ReviewContextStrategy": {
+    "ReviewContextCapability": {
       "enum": [
-        "submitted",
-        "source"
+        "human-display",
+        "service-status",
+        "task-grant-context",
+        "routing-context"
       ],
       "type": "string"
     },
-    "ReviewKindPolicy": {
+    "ReviewContextContract": {
       "additionalProperties": false,
       "properties": {
-        "clocks": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "contextStrategy": {
-          "$ref": "#/$defs/ReviewContextStrategy"
-        },
-        "displaySchema": {
-          "x-registry-foreign": "json-schema-2020-12"
-        },
         "id": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The producer-issued contract id, kept exactly as written: nonblank, no control characters, and at most 256 UTF-8 bytes. The byte ceiling is enforced by the Casework reader.",
+          "maxLength": 256,
+          "pattern": "\\S",
+          "x-registry-maxBytes": 256
         },
-        "outcomes": {
-          "items": {
-            "$ref": "#/$defs/ReviewOutcomePolicy"
-          },
-          "type": "array"
+        "revision": {
+          "$ref": "#/$defs/ContentDigest"
         },
-        "purpose": {
-          "$ref": "#/$defs/ReviewKindPurpose"
-        },
-        "resultSchema": {
-          "x-registry-foreign": "json-schema-2020-12"
-        },
-        "retention": {
-          "$ref": "#/$defs/ReviewRetentionPolicy"
-        },
-        "stages": {
-          "items": {
-            "$ref": "#/$defs/ReviewStagePolicy"
-          },
-          "type": "array"
-        },
-        "version": {
-          "type": "string"
+        "schemaDigest": {
+          "$ref": "#/$defs/Digest"
         }
       },
       "required": [
         "id",
-        "version",
-        "purpose",
-        "contextStrategy",
-        "stages",
-        "retention",
-        "displaySchema"
+        "revision",
+        "schemaDigest"
       ],
       "type": "object"
     },
-    "ReviewKindPurpose": {
-      "enum": [
-        "approval",
-        "answer"
-      ],
-      "type": "string"
-    },
-    "ReviewOutcomePolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
+    "ReviewContextPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "submitted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
         },
-        "label": {
-          "type": "string"
-        },
-        "reasonRequired": {
-          "type": "boolean"
-        },
-        "resultRequired": {
-          "type": "boolean"
-        },
-        "settlement": {
-          "$ref": "#/$defs/ReviewOutcomeSettlement"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contract": {
+              "$ref": "#/$defs/ReviewContextContract"
+            },
+            "mode": {
+              "const": "current-source",
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "provider",
+            "contract"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "id",
-        "label",
-        "settlement",
-        "reasonRequired"
-      ],
-      "type": "object"
+      ]
     },
     "ReviewOutcomeSettlement": {
       "enum": [
+        "approved",
         "rejected",
         "changes-requested",
         "answered"
       ],
       "type": "string"
     },
-    "ReviewProducerPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "completion": {
-          "$ref": "#/$defs/ReviewCompletionDestinationPolicy"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "initiatorProfile": {
-          "description": "The requester profile a person named as this producer's initiator\nauthenticates with to read the requester-visible history of their own\nrequests. Absent, no initiator reads anything.",
-          "type": "string"
-        },
-        "issuer": {
-          "$ref": "#/$defs/Url"
-        },
-        "kinds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "profile": {
-          "type": "string"
-        },
-        "recoveryDays": {
-          "format": "uint32",
-          "maximum": 3650,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "sourceNamespaces": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "subject": {
-          "type": "string"
-        },
-        "trustedInitiatorIssuer": {
-          "$ref": "#/$defs/Url"
-        }
-      },
-      "required": [
-        "id",
-        "profile",
-        "issuer",
-        "subject",
-        "sourceNamespaces",
-        "kinds",
-        "recoveryDays"
+    "ReviewPublicReasonRule": {
+      "description": "Whether a decision gives a public reason with an outcome.",
+      "enum": [
+        "required",
+        "optional",
+        "none"
       ],
-      "type": "object"
+      "type": "string"
+    },
+    "ReviewPurpose": {
+      "enum": [
+        "approval",
+        "answer"
+      ],
+      "type": "string"
     },
     "ReviewRetentionPolicy": {
       "additionalProperties": false,
       "properties": {
-        "accountabilityDays": {
+        "accountabilityRetentionDays": {
           "format": "uint32",
           "maximum": 3650,
           "minimum": 1,
           "type": "integer"
         },
-        "terminalDays": {
+        "terminalRetentionDays": {
           "format": "uint32",
           "maximum": 3650,
           "minimum": 1,
@@ -586,8 +359,8 @@
         }
       },
       "required": [
-        "terminalDays",
-        "accountabilityDays"
+        "terminalRetentionDays",
+        "accountabilityRetentionDays"
       ],
       "type": "object"
     },
@@ -629,25 +402,15 @@
       ],
       "type": "object"
     },
-    "RoutingActivity": {
-      "enum": [
-        "review",
-        "apply"
-      ],
-      "type": "string"
-    },
     "RoutingCondition": {
       "additionalProperties": false,
       "properties": {
-        "activity": {
-          "$ref": "#/$defs/RoutingActivity"
-        },
         "fields": {
           "additionalProperties": {
             "$ref": "#/$defs/RoutingPredicate"
           },
           "propertyNames": {
-            "$ref": "#/$defs/LocalId"
+            "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         },
@@ -735,93 +498,41 @@
       ],
       "type": "object"
     },
-    "SourcePolicy": {
+    "StageClockAnchor": {
       "additionalProperties": false,
+      "description": "The instant a stage clock counts from: `anchor: {type: stage-entered}`.",
       "properties": {
-        "adapter": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "requests": {
-          "items": {
-            "$ref": "#/$defs/SourceRequestPolicy"
-          },
-          "type": "array"
+        "type": {
+          "$ref": "#/$defs/StageClockAnchorType"
         }
       },
       "required": [
-        "id",
-        "adapter",
-        "description",
-        "requests"
+        "type"
       ],
       "type": "object"
     },
-    "SourceRequestPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "clock": {
-          "type": "string"
-        },
-        "contextProjection": {
-          "description": "Source fields that may be returned to an authorized human reviewing a\nunified source-context task. Values are fetched afresh through that\ncaller's source credential and are never retained by Casework.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "displayReference": {
-          "$ref": "#/$defs/DisplayReferencePolicy",
-          "description": "One source-owned string field that may be retained for exact officer\nlookup. It remains subject to the current caller's source disclosure."
-        },
-        "entity": {
-          "type": "string"
-        },
-        "projection": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "queue": {
-          "type": "string"
-        },
-        "routing": {
-          "items": {
-            "$ref": "#/$defs/RoutingRule"
-          },
-          "type": "array"
-        },
-        "target": {
-          "$ref": "#/$defs/PassiveTargetPolicy"
-        }
-      },
-      "required": [
-        "entity",
-        "queue"
+    "StageClockAnchorType": {
+      "enum": [
+        "stage-entered"
       ],
-      "type": "object"
+      "type": "string"
     },
     "SubjectClockAnchor": {
-      "enum": [
-        "first-submitted-at"
+      "additionalProperties": false,
+      "description": "The instant a subject clock counts from: `anchor: {type: request-accepted}`.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/SubjectClockAnchorType"
+        }
+      },
+      "required": [
+        "type"
       ],
-      "type": "string"
+      "type": "object"
     },
-    "SubjectClockCompletion": {
+    "SubjectClockAnchorType": {
       "enum": [
-        "review-completed"
-      ],
-      "type": "string"
-    },
-    "SubjectClockPause": {
-      "enum": [
-        "awaiting-applicant"
+        "request-accepted"
       ],
       "type": "string"
     },
@@ -913,170 +624,6 @@
       ],
       "type": "object"
     },
-    "TaskTemplate": {
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "else": {
-            "properties": {
-              "lifetimeSeconds": {
-                "maximum": 900
-              }
-            }
-          },
-          "if": {
-            "properties": {
-              "authorizationMode": {
-                "const": "deferred"
-              }
-            },
-            "required": [
-              "authorizationMode"
-            ]
-          },
-          "then": {
-            "properties": {
-              "lifetimeSeconds": {
-                "maximum": 604800
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "authorizationMode": {
-                "const": "deferred"
-              }
-            },
-            "required": [
-              "authorizationMode"
-            ]
-          },
-          "then": {
-            "properties": {
-              "bounds": {
-                "properties": {
-                  "type": {
-                    "not": {
-                      "const": "evidence"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      ],
-      "properties": {
-        "agent": {
-          "$ref": "#/$defs/TemplateAgent"
-        },
-        "authorizationMode": {
-          "$ref": "#/$defs/TaskAuthorizationMode",
-          "description": "Immediate authorizations last at most fifteen minutes. Deferred is an\nexplicit governed window of at most seven days; assertion TTL stays sixty seconds."
-        },
-        "bounds": {
-          "$ref": "#/$defs/TaskGrantBounds"
-        },
-        "client": {
-          "type": "string"
-        },
-        "eligibleProfiles": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "eligibleTeams": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "evidenceContext": {
-          "$ref": "#/$defs/EvidenceRequesterContext",
-          "description": "Evidence-only requester context signed into the authority assertion.\nOther products derive neither requester admission nor relying-party\naudience from these fields and therefore forbid the block entirely."
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "itemKinds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "itemStates": {
-          "items": {
-            "$ref": "#/$defs/OccurrenceState"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "label": {
-          "type": "string"
-        },
-        "lifetimeSeconds": {
-          "format": "uint64",
-          "maximum": 604800,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "purpose": {
-          "type": "string"
-        },
-        "resource": {
-          "type": "string"
-        },
-        "reviewKinds": {
-          "description": "Unified review kinds whose currently-held tasks may issue this grant.\nThis is a separate eligibility mode from source work-item kinds/states.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "scopes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "source": {
-          "type": "string"
-        },
-        "subjects": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Exact token identity keys mapped to governed source logical fields.\nValues are extracted from the approving caller's disclosed source read.",
-          "propertyNames": {
-            "$ref": "#/$defs/ExternalId"
-          },
-          "type": "object"
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "version",
-        "label",
-        "eligibleTeams",
-        "eligibleProfiles",
-        "source",
-        "agent",
-        "client",
-        "resource",
-        "scopes",
-        "purpose",
-        "bounds",
-        "subjects",
-        "lifetimeSeconds"
-      ],
-      "type": "object"
-    },
     "TemplateAgent": {
       "additionalProperties": false,
       "description": "The agent a template names, as `casework.yaml` writes it: the issuer is\nthe URL of the token issuer that authenticates the agent (CFG-VAL-7).",
@@ -1101,8 +648,9 @@
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     },
-    "WorkingDaysAfter": {
+    "WorkingDays": {
       "additionalProperties": false,
+      "description": "A number of working days: `after: {workingDays: N}`, and the lead time\ninside `before`.",
       "properties": {
         "workingDays": {
           "format": "uint32",
@@ -1118,16 +666,14 @@
     },
     "WorkingDaysBefore": {
       "additionalProperties": false,
+      "description": "A lead time before a stage clock is due: `{before: {workingDays: N}}`.",
       "properties": {
-        "workingDaysBefore": {
-          "format": "uint32",
-          "maximum": 3650,
-          "minimum": 1,
-          "type": "integer"
+        "before": {
+          "$ref": "#/$defs/WorkingDays"
         }
       },
       "required": [
-        "workingDaysBefore"
+        "before"
       ],
       "type": "object"
     },
@@ -1149,28 +695,216 @@
   "additionalProperties": false,
   "properties": {
     "accessProfiles": {
-      "items": {
-        "$ref": "#/$defs/AccessProfile"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "principalClaim": {
+            "type": "string"
+          },
+          "requiredScopes": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "role": {
+            "$ref": "#/$defs/CaseworkRole"
+          }
+        },
+        "required": [
+          "principalClaim",
+          "requiredScopes",
+          "role"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "apiVersion": {
       "const": "id.registrystack.org/formats/casework/project/v1alpha1",
       "type": "string"
     },
     "calendars": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/CalendarPolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "holidaySet": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "workingWeekdays": {
+            "items": {
+              "$ref": "#/$defs/WorkingWeekday"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "timezone",
+          "workingWeekdays",
+          "holidaySet"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "clocks": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ClockPolicy"
+      "additionalProperties": {
+        "description": "The serialized form of [`ClockPolicy`]: the shape the serializer emits.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "after": {
+                "$ref": "#/$defs/ElapsedDuration"
+              },
+              "anchor": {
+                "$ref": "#/$defs/SubjectClockAnchor"
+              },
+              "type": {
+                "const": "subject",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "anchor",
+              "after"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "after": {
+                "$ref": "#/$defs/WorkingDays"
+              },
+              "anchor": {
+                "$ref": "#/$defs/StageClockAnchor"
+              },
+              "atRisk": {
+                "$ref": "#/$defs/WorkingDaysBefore"
+              },
+              "calendar": {
+                "type": "string"
+              },
+              "dueTime": {
+                "type": "string"
+              },
+              "reminders": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "description": "A named reminder, written `reminders: {ID: {before: {workingDays: N}}}`.",
+                  "properties": {
+                    "before": {
+                      "$ref": "#/$defs/WorkingDays"
+                    }
+                  },
+                  "required": [
+                    "before"
+                  ],
+                  "type": "object"
+                },
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "type": "object"
+              },
+              "steps": {
+                "items": {
+                  "$ref": "#/$defs/ClockStep"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "stage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "anchor",
+              "calendar",
+              "after",
+              "dueTime"
+            ],
+            "type": "object"
+          }
+        ]
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "contextProviders": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/$defs/ReviewContextCapability"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "deploymentRef": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "serviceProfiles": {
+            "additionalProperties": false,
+            "default": {},
+            "properties": {
+              "human-display": {
+                "type": "string"
+              },
+              "routing-context": {
+                "type": "string"
+              },
+              "service-status": {
+                "type": "string"
+              },
+              "task-grant-context": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
+          },
+          "sourceNamespace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capabilities",
+          "sourceNamespace",
+          "deploymentRef"
+        ],
+        "type": "object"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "inbox": {
       "$ref": "#/$defs/InboxPolicy",
@@ -1190,38 +924,363 @@
       "$ref": "#/$defs/ProjectIdentity"
     },
     "queues": {
-      "items": {
-        "$ref": "#/$defs/QueuePolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
-    "reviewKinds": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ReviewKindPolicy"
+    "reviewPolicies": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "clocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "context": {
+            "$ref": "#/$defs/ReviewContextPolicy"
+          },
+          "displaySchema": {
+            "x-registry-foreign": "json-schema-2020-12"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "publicReason": {
+                  "$ref": "#/$defs/ReviewPublicReasonRule",
+                  "description": "Whether a decision with this outcome gives text for release to the\nsubject's owner. There is no default: the policy author decides what\nan applicant is told."
+                },
+                "reasonRequired": {
+                  "type": "boolean"
+                },
+                "resultRequired": {
+                  "type": "boolean"
+                },
+                "settlement": {
+                  "$ref": "#/$defs/ReviewOutcomeSettlement"
+                }
+              },
+              "required": [
+                "label",
+                "settlement",
+                "reasonRequired",
+                "publicReason"
+              ],
+              "type": "object"
+            },
+            "description": "Written in configuration as a mapping from each outcome id; served\nas a list by id.",
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
+          },
+          "purpose": {
+            "$ref": "#/$defs/ReviewPurpose"
+          },
+          "resultSchema": {
+            "x-registry-foreign": "json-schema-2020-12"
+          },
+          "retention": {
+            "$ref": "#/$defs/ReviewRetentionPolicy"
+          },
+          "routing": {
+            "items": {
+              "$ref": "#/$defs/RoutingRule"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/$defs/ReviewStagePolicy"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "purpose",
+          "context",
+          "stages",
+          "retention",
+          "displaySchema"
+        ],
+        "type": "object"
       },
-      "type": "array"
-    },
-    "reviewProducers": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ReviewProducerPolicy"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
       },
-      "type": "array"
-    },
-    "sources": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/SourcePolicy"
-      },
-      "type": "array"
+      "type": "object"
     },
     "taskTemplates": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/TaskTemplate"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "lifetimeSeconds": {
+                  "maximum": 900
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "authorizationMode": {
+                  "const": "deferred"
+                }
+              },
+              "required": [
+                "authorizationMode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "lifetimeSeconds": {
+                  "maximum": 604800
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "authorizationMode": {
+                  "const": "deferred"
+                }
+              },
+              "required": [
+                "authorizationMode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "bounds": {
+                  "properties": {
+                    "type": {
+                      "not": {
+                        "const": "evidence"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/TemplateAgent"
+          },
+          "authorizationMode": {
+            "$ref": "#/$defs/TaskAuthorizationMode",
+            "description": "Immediate authorizations last at most fifteen minutes. Deferred is an\nexplicit governed window of at most seven days; assertion TTL stays sixty seconds."
+          },
+          "bounds": {
+            "$ref": "#/$defs/TaskGrantBounds"
+          },
+          "client": {
+            "type": "string"
+          },
+          "eligibleProfiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "eligibleTeams": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidenceContext": {
+            "$ref": "#/$defs/EvidenceRequesterContext",
+            "description": "Evidence-only requester context signed into the authority assertion.\nOther products derive neither requester admission nor relying-party\naudience from these fields and therefore forbid the block entirely."
+          },
+          "label": {
+            "type": "string"
+          },
+          "lifetimeSeconds": {
+            "format": "uint64",
+            "maximum": 604800,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "reviewPolicies": {
+            "description": "Policies whose currently held ReviewTasks may issue this grant.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source": {
+            "type": "string"
+          },
+          "subjects": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Exact token identity keys mapped to governed source logical fields.\nValues are extracted from the approving caller's disclosed source read.",
+            "propertyNames": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "type": "object"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "label",
+          "eligibleTeams",
+          "eligibleProfiles",
+          "source",
+          "agent",
+          "client",
+          "resource",
+          "scopes",
+          "purpose",
+          "bounds",
+          "subjects",
+          "lifetimeSeconds"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "teams": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "memberProfiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "serves": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "supervisorProfiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "serves",
+          "memberProfiles",
+          "supervisorProfiles"
+        ],
+        "type": "object"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "trustedProducers": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "completion": {
+            "$ref": "#/$defs/ReviewCompletionDestinationPolicy"
+          },
+          "initiatorProfile": {
+            "description": "The requester profile a person named as this producer's initiator\nauthenticates with to read the requester-visible history of their own\nrequests. Absent, no initiator reads anything.",
+            "type": "string"
+          },
+          "issuer": {
+            "$ref": "#/$defs/Url"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "retention": {
+            "$ref": "#/$defs/ProducerRetention"
+          },
+          "reviewPolicies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sourceNamespaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "trustedInitiatorIssuer": {
+            "$ref": "#/$defs/Url"
+          }
+        },
+        "required": [
+          "profile",
+          "issuer",
+          "subject",
+          "sourceNamespaces",
+          "reviewPolicies",
+          "retention"
+        ],
+        "type": "object"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     }
   },
   "required": [

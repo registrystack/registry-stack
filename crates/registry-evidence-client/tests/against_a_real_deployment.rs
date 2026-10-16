@@ -834,13 +834,42 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
         ),
         "definition drift fails before the Evidence response-verification stage"
     );
+    let source_requests_before = deployment
+        ._source
+        .received_requests()
+        .await
+        .expect("the source request journal is available")
+        .iter()
+        .filter(|request| request.url.path() == "/v1/facts")
+        .count();
     let reviewed_result = reviewed_client.request(request()).await;
     let Err(reviewed_error) = reviewed_result else {
         panic!("a reviewed revision cannot silently adopt a live revision");
     };
+    let EvidenceClientError::Denied {
+        status,
+        code,
+        trace_id,
+        retry_after_seconds,
+    } = reviewed_error
+    else {
+        panic!("a stale reviewed revision is denied before a response is produced");
+    };
+    assert_eq!(status, 403);
+    assert_eq!(code, "evidence.denied");
+    assert!(trace_id.is_some_and(|trace_id| !trace_id.is_empty()));
+    assert_eq!(retry_after_seconds, None);
     assert_eq!(
-        reviewed_error,
-        EvidenceClientError::Verification(VerificationError::Policy)
+        deployment
+            ._source
+            .received_requests()
+            .await
+            .expect("the source request journal is available")
+            .iter()
+            .filter(|request| request.url.path() == "/v1/facts")
+            .count(),
+        source_requests_before,
+        "the stale independent revision is refused before source access"
     );
 }
 
@@ -1125,6 +1154,58 @@ async fn an_unregistered_client_key_is_refused_without_detail() {
         "the refusal reports the registered code and nothing else"
     );
     assert_eq!(issuer.issued_credential_count(), 0);
+}
+
+/// An RFC 8707 target refusal crosses the Evidence client boundary as its
+/// closed code, while the issuer's description and all Evidence-side effects
+/// stay behind the failed token exchange.
+#[tokio::test]
+async fn an_invalid_target_refusal_stops_before_evidence_or_source_effects() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    issuer.refuse_token_for_invalid_target().await;
+    let client = deployment.client_using(issuer.provider());
+    let audit_before = fs::read(&deployment.audit_path).expect("the audit is readable");
+    let source_requests_before = deployment
+        ._source
+        .received_requests()
+        .await
+        .expect("the source request journal is available")
+        .len();
+
+    let refusal = client
+        .discover()
+        .await
+        .expect_err("an invalid resource acquires no credential");
+
+    assert_eq!(
+        refusal,
+        EvidenceClientError::Token(TokenError::Refused {
+            code: OAuthErrorCode::InvalidTarget
+        }),
+    );
+    let rendered = refusal.to_string();
+    assert_eq!(
+        rendered,
+        "the authorization server declined to issue a token: invalid_target"
+    );
+    assert!(!rendered.contains("canary"), "{rendered}");
+    assert_eq!(issuer.issued_credential_count(), 0);
+    assert_eq!(
+        deployment
+            ._source
+            .received_requests()
+            .await
+            .expect("the source request journal is available")
+            .len(),
+        source_requests_before,
+        "the token refusal stops before source access"
+    );
+    assert_eq!(
+        fs::read(&deployment.audit_path).expect("the audit remains readable"),
+        audit_before,
+        "the token refusal stops before Evidence handles or releases data"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1743,6 +1824,20 @@ impl TokenIssuer {
 
     fn issued_credential_count(&self) -> usize {
         self.issued.load(Ordering::SeqCst)
+    }
+
+    /// Override the ordinary token responder with one exact RFC 8707 refusal.
+    async fn refuse_token_for_invalid_target(&self) {
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": "invalid_target",
+                "error_description": "canary target diagnostic"
+            })))
+            .with_priority(1)
+            .expect(1)
+            .mount(&self._server)
+            .await;
     }
 }
 

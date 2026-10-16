@@ -13,7 +13,7 @@ class BaseRegistryClientError extends Error {
     this.name = 'BaseRegistryClientError';
     this.kind = envelope.kind;
     this.outcomeUnknown = envelope.outcomeUnknown === true;
-    for (const field of ['code', 'planRefusal', 'refusalCode', 'reasonCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
+    for (const field of ['code', 'refusalCode', 'reasonCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
     if (envelope.fieldPath !== undefined && envelope.fieldPath !== null) {
@@ -218,11 +218,12 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['listRelationshipRecords', [3]], ['continueRelationshipList', [0], [0]],
   ['lookupRecord', [2, 3]], ['createRecord', [1], [1]],
   ['actionTargetConditions', [1], [1]], ['invokeAction', [1], [1]],
-  ['executeRecoveredAction'], ['executeRecoveredCreate'],
+  ['executeRecoveredAction'], ['executeRecoveredProposalStart'], ['executeRecoveredCreate'],
   ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
-  ['executeLifecycleAction'],
-  ['executeRecoveredLifecycleAction'],
-  ['uploadAttachment'], ['downloadAttachment'], ['deleteAttachment'],
+  ['startProposal'], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals'], ['executeProposal'],
+  ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
+  ['readProposalReviewStatus'], ['readProposalReviewContext'],
+  ['readProposalReviewById'], ['downloadProposalReviewDocument', [1], [1]],
   ['getRecordJson', [2]], ['listRecordsJson', [1]], ['continueListJson', [0], [0]],
   ['getGeoJsonRecordJson', [2]], ['listGeoJsonRecordsJson', [1]],
   ['continueGeoJsonListJson', [0], [0]],
@@ -230,11 +231,9 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['listRecordsAsOfJson', [1], [1]], ['continueAsOfListJson', [0], [0]],
   ['listSnapshotRecordsJson', [1]], ['continueSnapshotListJson', [0], [0]],
   ['listRelationshipRecordsJson', [3]], ['continueRelationshipListJson', [0], [0]],
-  ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'], ['executeLifecycleActionJson'],
+  ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'],
   ['actionTargetConditionsJson'], ['invokeActionJson'], ['batchRecordsJson'], ['tombstoneRecordJson'],
   ['executeRecoveredActionJson'], ['executeRecoveredCreateJson'],
-  ['executeRecoveredLifecycleActionJson'],
-  ['uploadAttachmentJson'], ['deleteAttachmentJson'],
   ['createIngestionRun', [1], [1]], ['listIngestionRuns', [1]],
   ['readIngestionRun'], ['submitIngestionChunk'], ['cancelIngestionRun'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
@@ -243,8 +242,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['prepareAction', [1], [1]], ['prepareActionJson'],
   ['recoverAction', [2], [2]], ['recoverActionJson'],
   ['prepareCreate', [1], [1]], ['prepareCreateJson'], ['recoverCreate'],
-  ['prepareLifecycleAction', [1], [1]], ['prepareLifecycleActionJson'],
-  ['recoverLifecycleAction'],
+  ['prepareProposal'], ['recoverProposal'],
 ]) {
   const original = native.BaseRegistryClient.prototype[method];
   native.BaseRegistryClient.prototype[method] = function (...args) {
@@ -290,85 +288,12 @@ function preparedClass(Class, label) {
 
 const BRegPreparedAction = preparedClass(native.BRegPreparedAction, 'BRegPreparedAction');
 const BRegPreparedCreate = preparedClass(native.BRegPreparedCreate, 'BRegPreparedCreate');
-const BRegPreparedLifecycle = preparedClass(
-  native.BRegPreparedLifecycle, 'BRegPreparedLifecycle',
-);
-
-const withReason = native.BRegLifecycleAction.prototype.withReason;
-native.BRegLifecycleAction.prototype.withReason = function (reason) {
-  try {
-    if (typeof reason !== 'string' || !reason.isWellFormed()) throw inputError('invalid-request');
-    return withReason.call(this, reason);
-  } catch (error) {
-    throw normalize(error, 'invalid-request');
-  }
-};
-
-const lifecycleActionsJson = native.BaseRegistryClient.prototype.lifecycleActionsJson;
-native.BaseRegistryClient.prototype.lifecycleActionsJson = function (...args) {
-  try { return lifecycleActionsJson.apply(this, args); }
-  catch (error) { throw normalize(error, 'invalid-request'); }
-};
-
-const lifecycleActions = native.BaseRegistryClient.prototype.lifecycleActions;
-native.BaseRegistryClient.prototype.lifecycleActions = function (...args) {
-  try {
-    const sanitized = sanitizeArguments(args, new Set([1]), new Set([1]));
-    return lifecycleActions.apply(this, sanitized);
-  } catch (error) {
-    throw normalize(error, 'invalid-request');
-  }
-};
-
-const requestHistory = native.BaseRegistryClient.prototype.requestHistory;
-native.BaseRegistryClient.prototype.requestHistory = function (...args) {
-  try {
-    const sanitized = sanitizeArguments(args, new Set([0]), new Set([0]));
-    return requestHistory.apply(this, sanitized);
-  } catch (error) {
-    throw normalize(error, 'invalid-request');
-  }
-};
-
-for (const name of ['findProposal', 'findApplication']) {
-  const original = native.RetainedRequestHistoryPage.prototype[name];
-  native.RetainedRequestHistoryPage.prototype[name] = function (...args) {
-    try {
-      const proposalVersion = args[2];
-      if (!Number.isSafeInteger(proposalVersion)
-        || proposalVersion < 1 || proposalVersion > 0xffff_ffff) {
-        throw inputError('invalid-request');
-      }
-      return original.apply(this, args);
-    } catch (error) {
-      throw normalize(error, 'invalid-request');
-    }
-  };
-}
-
-const valueIn = native.BRegAttachmentSlot.prototype.valueIn;
-native.BRegAttachmentSlot.prototype.valueIn = function (...args) {
-  try {
-    return valueIn.apply(this, sanitizeArguments(args, new Set([0]), new Set([0])));
-  } catch (error) {
-    throw normalize(error, 'invalid-request');
-  }
-};
-
-for (const name of ['prepareUpload', 'acceptsContentType']) {
-  const original = native.BRegAttachmentSlot.prototype[name];
-  native.BRegAttachmentSlot.prototype[name] = function (...args) {
-    try {
-      return original.apply(this, args);
-    } catch (error) {
-      throw normalize(error, 'invalid-request');
-    }
-  };
-}
+const BRegPreparedProposal = preparedClass(native.BRegPreparedProposal, 'BRegPreparedProposal');
 
 for (const name of [
-  'selectCreate', 'selectPatch', 'selectLifecycle', 'selectAttachments',
-  'selectImmediateAction', 'selectTombstone', 'selectBatch', 'changeRequestCapability',
+  'selectCreate', 'selectPatch',
+  'selectAction', 'selectTombstone', 'selectBatch', 'selectProposals', 'selectProposalGet',
+  'selectProposalReviewContext', 'selectProposalReviewStatus',
 ]) {
   const original = native.BRegMetadata.prototype[name];
   native.BRegMetadata.prototype[name] = function (...args) {
@@ -450,23 +375,19 @@ module.exports = {
   BRegMetadata: native.BRegMetadata,
   BRegCreateBinding: native.BRegCreateBinding,
   BRegPatchBinding: native.BRegPatchBinding,
-  BRegLifecycleAuthority: native.BRegLifecycleAuthority,
-  BRegLifecycleAction: native.BRegLifecycleAction,
-  BRegRequestResultReference: native.RequestResultReference,
-  BRegRetainedRequestProposalView: native.RetainedRequestProposal,
-  BRegRetainedRequestHistoryPage: native.RetainedRequestHistoryPage,
-  BRegAttachmentSlot: native.BRegAttachmentSlot,
-  BRegAttachmentUpload: native.BRegAttachmentUpload,
-  BRegImmediateActionBinding: native.BRegImmediateActionBinding,
+  BRegProposal: native.BRegProposal,
+  BRegProposalCollection: native.BRegProposalCollection,
+  BRegProposalGetBinding: native.BRegProposalGetBinding,
+  BRegProposalReviewBinding: native.BRegProposalReviewBinding,
+  BRegActionBinding: native.BRegActionBinding,
   BRegActionTargetConditions: native.BRegActionTargetConditions,
   BRegTombstoneBinding: native.BRegTombstoneBinding,
   BRegBatchBinding: native.BRegBatchBinding,
   BRegPreparedAction,
   BRegPreparedCreate,
-  BRegPreparedLifecycle,
+  BRegPreparedProposal,
   BRegRecoveredAction: native.BRegRecoveredAction,
   BRegRecoveredCreate: native.BRegRecoveredCreate,
-  BRegRecoveredLifecycle: native.BRegRecoveredLifecycle,
   BRegIngestionChunk: native.BRegIngestionChunk,
   BRegIngestionPrefixDigest: native.BRegIngestionPrefixDigest,
   encodeIngestionChunk,

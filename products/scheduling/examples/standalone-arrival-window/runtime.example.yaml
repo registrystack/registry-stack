@@ -73,12 +73,11 @@ authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:scheduling
-    # The claim carrying the accepted OAuth scopes. The default is
-    # `registry_scopes` for deployments that omit this field; stock ThunderID
-    # emits `scope`.
+    # The claim carrying the accepted OAuth scopes. The default is `scope`,
+    # the claim stock ThunderID emits.
     scopeClaim: scope
-    # The read scope defaults to `scheduling-read` and the explain scope to
-    # `scheduling-explain`; the two must differ. `allowedClients` names the
+    # The read scope defaults to `scheduling:read` and the explain scope to
+    # `scheduling:explain`; the two must differ. `allowedClients` names the
     # client ids the runtime admits. It is required in every file, development
     # loopback included: an omitted or empty list is refused when the file is
     # read, and `unrestricted` is a startup refusal, because it would admit
@@ -115,7 +114,7 @@ taskGrantStatus: unchecked-final-fifteen-minutes
 #     clientAssertionAudience: https://identity.example.test/realms/registry
 #     clientId: scheduling-task-status
 #     privateKeyRef: secret:file/scheduling-task-status-private-jwk
-#     caseworkResource: urn:example:casework
+#     statusResource: urn:example:casework
 audit:
   # One single-writer destination. `file`, the default, appends to the
   # absolute path, rotates at rotateBytes (default 100 MiB), and deletes
@@ -125,7 +124,8 @@ audit:
   path: /var/lib/registry-scheduling/audit.ndjson
   hashKeyRef: secret:file/scheduling-audit-key
 destinations: {}
-  # Where due reminder intents are delivered as CloudEvents 1.0 events. An
+  # Where due reminder intents are delivered as the shared hook envelope,
+  # application/json over HTTPS POST (see the README Events section). An
   # absent reminders destination is a supported deployment: the intents stay
   # readable in the outbox and are marked local, never pretended delivered.
   # reminders:
@@ -144,5 +144,5 @@ retention:
   # bounded lifetimes. Appointment, reminder, and history retention are
   # deferred; audit.retentionDays bounds rotated audit files. Seven days is a
   # default, not a jurisdictional recommendation.
-  attemptReceiptRetentionDays: 7
+  receiptRetentionDays: 7
   hookPayloadRetentionDays: 7

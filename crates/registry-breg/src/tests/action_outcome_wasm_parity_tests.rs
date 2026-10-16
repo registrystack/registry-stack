@@ -43,20 +43,21 @@ fn person_action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"wasm-parity","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"parity"}],"recordTypes":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
-        "actions":[{"id":"register-person","inputs":[
+        "functions":[{"id":"person-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}],
+        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
-            {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
-            {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
-            {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
+        ],"plan":{"type":"function","function":"person-plan","inputs":["given-name","family-name","person"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+            {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
+            {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
+            {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -87,21 +88,22 @@ fn record_action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"wasm-parity-records","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{"id":"record","primaryDataset":"parity","route":"records","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"parity"}],"recordTypes":[{"id":"record","primaryDataset":"parity","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
         ]}],
-        "actions":[{"id":"register-record","inputs":[
+        "functions":[{"id":"record-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}],
+        "actions":[{"id":"register-record","execution":{"mode":"immediate"},"inputs":[
             {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"required":true,"classification":"restricted"}
-        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-label","label":"A label is required."}],
-            "writes":[{"id":"record","target":{"entity":"record"},"operation":"create","fields":["label","count","amount"]}]
+        ],"plan":{"type":"function","function":"record-plan","inputs":["label","count","amount"],"refusals":[{"code":"blank-label","label":"A label is required."}],
+            "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
         "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
-                {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
+                {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
             ]
         }}]
     });
@@ -284,19 +286,19 @@ fn assert_parity(
 /// the pinned verdict).
 fn person_cases() -> Vec<(&'static str, String, String, Expected)> {
     use ActionHandlerError::{Ceiling, Result as ResultKind};
-    let script = |body: &str| format!("fn handle(ctx) {{ {body} }}");
+    let script = |body: &str| format!("fn plan(ctx) {{ {body} }}");
     vec![
         // Accepted proposals.
         (
             "create with literal and input reference envelope",
-            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromField":"person"}}}]}"#.into(),
-            script(r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromField:"person"}}}]} "#),
+            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromInput":"person"}}}]}"#.into(),
+            script(r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromInput:"person"}}}]} "#),
             Expected::Accepted,
         ),
         (
             "symbolic create chain with patch clear",
-            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromEffect":"friend"}}},{"id":"friend","set":{"name":"Sam"}},{"id":"existing","clear":["friend"]}]}"#.into(),
-            script(r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"friend",set:#{name:"Sam"}},#{id:"existing",clear:["friend"]}]} "#),
+            r#"{"effects":[{"id":"friend","set":{"name":"Sam"}},{"id":"person","set":{"name":"Mina","friend":{"fromEffect":"friend"}}},{"id":"existing","clear":["friend"]}]}"#.into(),
+            script(r#"#{effects:[#{id:"friend",set:#{name:"Sam"}},#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"existing",clear:["friend"]}]} "#),
             Expected::Accepted,
         ),
         (
@@ -431,8 +433,8 @@ fn person_cases() -> Vec<(&'static str, String, String, Expected)> {
         ),
         (
             "create slot missing a required field",
-            r#"{"effects":[{"id":"person","set":{"friend":{"fromField":"person"}}}]}"#.into(),
-            script(r#"#{effects:[#{id:"person",set:#{friend:#{fromField:"person"}}}]}"#),
+            r#"{"effects":[{"id":"person","set":{"friend":{"fromInput":"person"}}}]}"#.into(),
+            script(r#"#{effects:[#{id:"person",set:#{friend:#{fromInput:"person"}}}]}"#),
             Expected::Refused(Ceiling),
         ),
         (
@@ -455,9 +457,9 @@ fn person_cases() -> Vec<(&'static str, String, String, Expected)> {
             Expected::Refused(ResultKind),
         ),
         (
-            "reference envelope names an undeclared fromField",
-            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromField":"given-name"}}}]}"#.into(),
-            script(r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromField:"given-name"}}}]}"#),
+            "reference envelope names an undeclared fromInput",
+            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromInput":"given-name"}}}]}"#.into(),
+            script(r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromInput:"given-name"}}}]}"#),
             Expected::Refused(Ceiling),
         ),
         (
@@ -493,14 +495,14 @@ fn refused_proposals_carry_identical_pinned_diagnostics() {
         (
             "unknown write slot",
             r#"{"effects":[{"id":"unknown","set":{"name":"Mina"}}]}"#,
-            r#"fn handle(ctx) { #{effects:[#{id:"unknown",set:#{name:"Mina"}}]} }"#,
+            r#"fn plan(ctx) { #{effects:[#{id:"unknown",set:#{name:"Mina"}}]} }"#,
             ActionHandlerError::Ceiling,
             "Use an id from the handler's declared write slots.",
         ),
         (
             "set value is null",
             r#"{"effects":[{"id":"person","set":{"name":null}}]}"#,
-            r#"fn handle(ctx) { #{effects:[#{id:"person",set:#{name:()}}]} }"#,
+            r#"fn plan(ctx) { #{effects:[#{id:"person",set:#{name:()}}]} }"#,
             ActionHandlerError::Result,
             "Set a non-null value; use clear only for optional patch fields.",
         ),
@@ -524,7 +526,7 @@ fn refused_proposals_carry_identical_pinned_diagnostics() {
 #[test]
 fn exact_int64_and_decimal_string_values_survive_both_backends() {
     let document = r#"{"effects":[{"id":"record","set":{"label":"Alpha","count":9223372036854775807,"amount":"123456789012345678.90"}}]}"#;
-    let script = r#"fn handle(ctx) { #{effects:[#{id:"record",set:#{label:"Alpha",count:9223372036854775807,amount:"123456789012345678.90"}}]} }"#;
+    let script = r#"fn plan(ctx) { #{effects:[#{id:"record",set:#{label:"Alpha",count:9223372036854775807,amount:"123456789012345678.90"}}]} }"#;
     let action = record_action(script);
     let outcome = assert_parity(
         "int64 and decimal exactness",
@@ -542,9 +544,9 @@ fn exact_int64_and_decimal_string_values_survive_both_backends() {
         mutations
             .iter()
             .find_map(|mutation| match mutation {
-                crate::model::CompiledActionMutation::Set {
+                crate::model::CompiledPlanMutation::Set {
                     field: name,
-                    value: crate::model::CompiledActionValue::Literal { value },
+                    value: crate::model::CompiledPlanValue::Literal { value },
                 } if name == field => Some(value.clone()),
                 _ => None,
             })
@@ -558,7 +560,7 @@ fn exact_int64_and_decimal_string_values_survive_both_backends() {
 fn int64_field_refuses_floats_identically() {
     let document =
         r#"{"effects":[{"id":"record","set":{"label":"Alpha","count":1.5,"amount":"1.00"}}]}"#;
-    let script = r#"fn handle(ctx) { #{effects:[#{id:"record",set:#{label:"Alpha",count:1.5,amount:"1.00"}}]} }"#;
+    let script = r#"fn plan(ctx) { #{effects:[#{id:"record",set:#{label:"Alpha",count:1.5,amount:"1.00"}}]} }"#;
     let action = record_action(script);
     let _ = assert_parity(
         "float for an int64 field",
@@ -578,7 +580,7 @@ fn decode_layer_produces_identical_proposals() {
     for (case, document) in [
         (
             "effects document",
-            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromField":"person"}}}]}"#,
+            r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromInput":"person"}}}]}"#,
         ),
         (
             "refusal document",
@@ -672,7 +674,7 @@ fn oversized_outcome_is_rejected_before_decoding() {
 fn shared_output_bound_refuses_oversized_strings() {
     let oversized = "a".repeat(crate::rhai_planner::MAXIMUM_STRING_BYTES + 1);
     let document = format!(r#"{{"effects":[{{"id":"record","set":{{"label":"{oversized}"}}}}]}}"#);
-    let action = record_action(r#"fn handle(ctx) { 42 }"#);
+    let action = record_action(r#"fn plan(ctx) { 42 }"#);
     let handler = action
         .handler
         .as_ref()

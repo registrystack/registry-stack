@@ -1,21 +1,33 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha5.schema.json",
   "title": "RoutesExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain routes`. `routes` mixes two record shapes with no shared field beyond the injected `type` discriminator: an entity-route half, which is a passthrough of the compiled route table (CompiledRoute) with `type` injected after serialization, and an action-route half, which bregctl reconstructs field by field. Only the injected `type` and the action half are pinned in full; the entity half's other fields are outside this contract version.",
+  "description": "Wire shape of bregctl explain routes. Record and Action entries use their compiled inventories; Proposal instance and statistics entries project the same generated OpenAPI used by clients.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "routes"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "routes"
+  ],
   "$defs": {
     "DerivedId": {
       "description": "An identifier the compiler derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
       "type": "string"
+    },
+    "HttpMethod": {
+      "enum": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ]
     }
   },
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/routes-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/routes-explanation/v1alpha5"
     },
     "kind": {
       "const": "BRegRoutesExplanation"
@@ -26,12 +38,20 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Entity route. Passthrough of the compiled route table plus the injected `type`; fields beyond `type` follow CompiledRoute and are outside this contract version.",
-            "x-registry-passthrough": "bregctl writes each entity route as the engine holds it plus the injected type; only type is pinned, and its other members follow CompiledRoute and are outside this contract version.",
+            "description": "Record route. Fields beyond the pinned `type` and `id` follow CompiledRoute and are outside this contract version.",
+            "x-registry-passthrough": "bregctl writes each Record route as the engine holds it plus the injected type; only type and id are pinned, and other members follow CompiledRoute outside this contract version.",
             "additionalProperties": true,
-            "required": ["type"],
+            "required": [
+              "type",
+              "id"
+            ],
             "properties": {
-              "type": { "const": "entity" }
+              "type": {
+                "const": "record"
+              },
+              "id": {
+                "$ref": "#/$defs/DerivedId"
+              }
             }
           },
           {
@@ -51,22 +71,150 @@
               "requiresIdempotencyKey"
             ],
             "properties": {
-              "type": { "const": "action" },
-              "id": { "$ref": "#/$defs/DerivedId" },
-              "actionId": { "type": "string" },
-              "actionRouteKind": { "enum": ["invoke", "target-conditions"] },
-              "method": { "enum": ["DELETE", "GET", "PATCH", "POST"] },
-              "path": { "type": "string" },
-              "operation": {
+              "type": {
+                "const": "action"
+              },
+              "id": {
+                "$ref": "#/$defs/DerivedId"
+              },
+              "actionId": {
+                "type": "string"
+              },
+              "actionRouteKind": {
                 "enum": [
-                  "create", "get", "lookup", "list", "patch", "tombstone", "batch",
-                  "revisions", "snapshot", "submit-request", "revise-request",
-                  "cancel-request", "apply-request", "invoke"
+                  "invoke",
+                  "target-conditions",
+                  "start"
                 ]
               },
-              "accessProfiles": { "type": "array", "items": { "type": "string" } },
-              "defaultAccessProfile": { "type": ["string", "null"] },
-              "requiresIdempotencyKey": { "type": "boolean" }
+              "method": {
+                "$ref": "#/$defs/HttpMethod"
+              },
+              "path": {
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "get",
+                  "lookup",
+                  "list",
+                  "patch",
+                  "tombstone",
+                  "batch",
+                  "revisions",
+                  "snapshot",
+                  "invoke",
+                  "start"
+                ]
+              },
+              "accessProfiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "defaultAccessProfile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requiresIdempotencyKey": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "id",
+              "method",
+              "path",
+              "accessProfiles",
+              "defaultAccessProfile",
+              "requiresIdempotencyKey",
+              "requiresIfMatch"
+            ],
+            "properties": {
+              "type": {
+                "const": "proposal"
+              },
+              "id": {
+                "$ref": "#/$defs/DerivedId"
+              },
+              "method": {
+                "$ref": "#/$defs/HttpMethod"
+              },
+              "path": {
+                "type": "string"
+              },
+              "accessProfiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "defaultAccessProfile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requiresIdempotencyKey": {
+                "type": "boolean"
+              },
+              "requiresIfMatch": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "id",
+              "method",
+              "path",
+              "accessProfiles",
+              "defaultAccessProfile",
+              "requiresIdempotencyKey",
+              "requiresIfMatch"
+            ],
+            "properties": {
+              "type": {
+                "const": "statistics"
+              },
+              "id": {
+                "$ref": "#/$defs/DerivedId"
+              },
+              "method": {
+                "$ref": "#/$defs/HttpMethod"
+              },
+              "path": {
+                "type": "string"
+              },
+              "accessProfiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "defaultAccessProfile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requiresIdempotencyKey": {
+                "type": "boolean"
+              },
+              "requiresIfMatch": {
+                "type": "boolean"
+              }
             }
           }
         ]

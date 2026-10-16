@@ -1,24 +1,8 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::delivery_signature::{verify_v1, SignatureFields, VerificationError};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-
-const SIGNATURE_PREFIX: &str = "v1=";
-const SIGNATURE_BYTES: usize = 32;
-const SIGNATURE_TEXT_BYTES: usize = 43;
-const CE_SPECVERSION: &str = "ce-specversion";
-const CE_ID: &str = "ce-id";
-const CE_SOURCE: &str = "ce-source";
-const CE_TYPE: &str = "ce-type";
-const CE_TIME: &str = "ce-time";
-const CE_DATASCHEMA: &str = "ce-dataschema";
-const EVENT_GENERATION: &str = "x-registry-event-generation";
-const DELIVERY_ATTEMPT: &str = "x-registry-delivery-attempt";
-const DELIVERY_TIME: &str = "x-registry-delivery-time";
-const CONTENT_TYPE: &str = "content-type";
-const IDEMPOTENCY_KEY: &str = "idempotency-key";
-const SIGNATURE: &str = "x-registry-signature";
+use registry_platform_hooks::receiver::{
+    verify_delivery, DeliveryFreshness, ReceiverError, SignedDelivery,
+};
 
 /// Exact request material supplied to the BReg Version 1 webhook verifier.
 ///
@@ -95,121 +79,48 @@ impl BRegWebhookVerificationError {
 
 /// Verify one exact BReg Version 1 webhook delivery without applying receiver policy.
 ///
-/// This delegates the signature input, canonical delivery-time validation, and
-/// constant-time HMAC comparison to `registry-platform-crypto`. Passing the
-/// claimed delivery instant with zero skew disables only receiver clock policy;
-/// the caller receives that authenticated value to enforce its own skew bound.
+/// This delegates header extraction, the signature input, canonical
+/// delivery-time validation, and constant-time HMAC comparison to the shared
+/// `registry_platform_hooks::receiver::verify_delivery`. Verifying against the
+/// claimed delivery instant disables only receiver clock policy; the caller
+/// receives that authenticated value to enforce its own skew bound.
 pub fn verify_webhook_delivery(
     delivery: BRegWebhookDelivery<'_>,
 ) -> Result<BRegVerifiedWebhookDelivery, BRegWebhookVerificationError> {
-    let specversion = header(delivery.headers, CE_SPECVERSION)?;
-    if specversion != "1.0" {
-        return Err(BRegWebhookVerificationError::UnsupportedVersion);
-    }
-    let id = header(delivery.headers, CE_ID)?;
-    let source = header(delivery.headers, CE_SOURCE)?;
-    let event_type = header(delivery.headers, CE_TYPE)?;
-    let time = header(delivery.headers, CE_TIME)?;
-    let data_schema = header(delivery.headers, CE_DATASCHEMA)?;
-    let generation_text = header(delivery.headers, EVENT_GENERATION)?;
-    let attempt_text = header(delivery.headers, DELIVERY_ATTEMPT)?;
-    let delivery_time = header(delivery.headers, DELIVERY_TIME)?;
-    let content_type = header(delivery.headers, CONTENT_TYPE)?;
-    let idempotency_key = header(delivery.headers, IDEMPOTENCY_KEY)?;
-    let signature = header(delivery.headers, SIGNATURE)?;
-
-    validate_signature_shape(signature)?;
-    positive_decimal(generation_text)?;
-    positive_decimal(attempt_text)?;
-    let claimed_delivery_time = OffsetDateTime::parse(delivery_time, &Rfc3339)
-        .map(std::time::SystemTime::from)
-        .map_err(|_| BRegWebhookVerificationError::MalformedSignature)?;
-
-    verify_v1(
-        delivery.key,
-        SignatureFields {
-            id,
-            source,
-            event_type,
-            time,
-            data_schema,
-            generation: generation_text,
-            attempt: attempt_text,
-            delivery_time,
+    let verified = verify_delivery(
+        SignedDelivery {
             method: delivery.method,
             request_target: delivery.path,
-            content_type,
-            idempotency_key,
+            headers: delivery
+                .headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
             body: delivery.body,
+            key: delivery.key,
         },
-        signature,
-        claimed_delivery_time,
-        Duration::ZERO,
+        DeliveryFreshness::CallerEnforced,
     )
-    .map_err(map_verification_error)?;
+    .map_err(map_receiver_error)?;
 
     Ok(BRegVerifiedWebhookDelivery {
-        id: id.to_owned(),
-        source: source.to_owned(),
-        event_type: event_type.to_owned(),
-        time: time.to_owned(),
-        data_schema: data_schema.to_owned(),
-        generation: generation_text.to_owned(),
-        attempt: attempt_text.to_owned(),
-        delivery_time: delivery_time.to_owned(),
-        idempotency_key: idempotency_key.to_owned(),
+        id: verified.id.to_owned(),
+        source: verified.source.to_owned(),
+        event_type: verified.event_type.to_owned(),
+        time: verified.time.to_owned(),
+        data_schema: verified.data_schema.to_owned(),
+        generation: verified.generation.to_owned(),
+        attempt: verified.attempt.to_owned(),
+        delivery_time: verified.delivery_time.to_owned(),
+        idempotency_key: verified.idempotency_key.to_owned(),
         body: delivery.body.to_vec(),
     })
 }
 
-fn header<'a>(
-    headers: &'a BTreeMap<String, String>,
-    expected: &str,
-) -> Result<&'a str, BRegWebhookVerificationError> {
-    let mut matches = headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case(expected));
-    let (_, value) = matches
-        .next()
-        .ok_or(BRegWebhookVerificationError::MissingHeader)?;
-    if matches.next().is_some() {
-        return Err(BRegWebhookVerificationError::MalformedSignature);
-    }
-    Ok(value)
-}
-
-fn validate_signature_shape(signature: &str) -> Result<(), BRegWebhookVerificationError> {
-    let encoded = signature
-        .strip_prefix(SIGNATURE_PREFIX)
-        .ok_or(BRegWebhookVerificationError::UnsupportedVersion)?;
-    if encoded.len() != SIGNATURE_TEXT_BYTES {
-        return Err(BRegWebhookVerificationError::MalformedSignature);
-    }
-    let decoded = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .map_err(|_| BRegWebhookVerificationError::MalformedSignature)?;
-    if decoded.len() != SIGNATURE_BYTES || URL_SAFE_NO_PAD.encode(decoded) != encoded {
-        return Err(BRegWebhookVerificationError::MalformedSignature);
-    }
-    Ok(())
-}
-
-fn positive_decimal(value: &str) -> Result<i64, BRegWebhookVerificationError> {
-    let parsed = value
-        .parse::<i64>()
-        .ok()
-        .filter(|parsed| *parsed > 0 && parsed.to_string() == value)
-        .ok_or(BRegWebhookVerificationError::MalformedSignature)?;
-    Ok(parsed)
-}
-
-fn map_verification_error(error: VerificationError) -> BRegWebhookVerificationError {
+fn map_receiver_error(error: ReceiverError) -> BRegWebhookVerificationError {
     match error {
-        VerificationError::UnsupportedVersion => BRegWebhookVerificationError::UnsupportedVersion,
-        VerificationError::InvalidSignature => BRegWebhookVerificationError::SignatureMismatch,
-        VerificationError::InvalidKey
-        | VerificationError::InputTooLarge
-        | VerificationError::InvalidDeliveryTime
-        | VerificationError::DeliveryTimeSkew => BRegWebhookVerificationError::MalformedSignature,
+        ReceiverError::MissingHeader => BRegWebhookVerificationError::MissingHeader,
+        ReceiverError::UnsupportedVersion => BRegWebhookVerificationError::UnsupportedVersion,
+        ReceiverError::SignatureMismatch => BRegWebhookVerificationError::SignatureMismatch,
+        _ => BRegWebhookVerificationError::MalformedSignature,
     }
 }

@@ -32,8 +32,6 @@ pub const METADATA: &[u8] = include_bytes!("../fixtures/citizen-agent-metadata.j
 pub const PROFILE: &str = "citizen-agent";
 const REGISTRY: &str = "citizen-address-correction";
 const DETAILS_ENTITY: &str = "person-address";
-const APPLICATION_ENTITY: &str = "address-correction-request";
-const APPLICATIONS: &str = "address-correction-requests";
 
 /// One request the gateway sent.
 #[derive(Clone, Debug)]
@@ -53,6 +51,7 @@ pub struct Application {
     pub data: Map<String, Value>,
     pub revision: u64,
     pub request: Value,
+    pub owner: String,
 }
 
 #[derive(Default)]
@@ -61,8 +60,8 @@ struct Registry {
     applications: BTreeMap<Uuid, Application>,
     /// Each idempotency key the stand-in has answered, with the package
     /// revision it was bound under, the application it created, and the
-    /// creation record it replays.
-    created: BTreeMap<String, (u64, Uuid, Value)>,
+    /// creation record it replays, and the exact request it was bound to.
+    created: BTreeMap<String, (u64, Uuid, Value, Value)>,
     /// The consumed keys whose held response has passed the receipt
     /// horizon. A real engine keeps such a key spent and refuses to replay
     /// it.
@@ -70,6 +69,8 @@ struct Registry {
     /// The active package revision. A real engine binds every idempotency
     /// key to it, so a key first answered under another revision conflicts.
     package_revision: u64,
+    published_metadata: Option<Value>,
+    allowed_operations: Option<BTreeSet<String>>,
     seen: Vec<Seen>,
     next_problem: Option<(Method, String, BRegProblemCode)>,
 }
@@ -96,13 +97,15 @@ impl MockRegistry {
             .route("/v1/registry", get(metadata))
             .route("/v1/records/person-addresses", get(list_addresses))
             .route(
-                "/v1/records/address-correction-requests",
+                "/v1/actions/correct-address/proposals",
                 axum::routing::post(create_application),
             )
+            .route("/v1/proposals/{id}", get(get_application))
             .route(
-                "/v1/records/address-correction-requests/{id}",
-                get(get_application).patch(patch_application),
+                "/v1/proposals/{id}/edit",
+                axum::routing::post(patch_application),
             )
+            .route("/v1/proposals", get(list_applications))
             .fallback(unexpected)
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -140,12 +143,18 @@ impl MockRegistry {
     /// Hold an application with the given domain data and request extension.
     pub fn add_application(&self, data: Value, request: Value) -> Uuid {
         let identifier = Uuid::new_v4();
+        let mut input = data.as_object().expect("application input").clone();
+        let owner = input
+            .remove("owner")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "synthetic-citizen-a".to_owned());
         self.state.lock().applications.insert(
             identifier,
             Application {
-                data: data.as_object().expect("application data").clone(),
+                data: input,
                 revision: 1,
                 request,
+                owner,
             },
         );
         identifier
@@ -162,9 +171,25 @@ impl MockRegistry {
             .request = request;
     }
 
+    /// Simulate a Start receipt that advertises Get before that read is revoked.
+    pub fn promote_created_self_link(&self) {
+        for (_, identifier, created, _) in self.state.lock().created.values_mut() {
+            created["links"]["self"] = json!({
+                "method":"GET",
+                "path":format!("/v1/proposals/{identifier}"),
+                "operation":"get",
+                "accessProfile":PROFILE
+            });
+        }
+    }
+
     /// Activate another package revision, as an operator upgrade would.
     pub fn activate_package(&self) {
         self.state.lock().package_revision += 1;
+    }
+
+    pub fn publish_metadata(&self, metadata: Value) {
+        self.state.lock().published_metadata = Some(metadata);
     }
 
     /// Pass the receipt horizon of every key answered so far, as time does.
@@ -174,6 +199,13 @@ impl MockRegistry {
         registry.expired.extend(consumed);
     }
 
+    pub fn grant_issuer(&self) -> GrantIssuer {
+        GrantIssuer(self.state.clone())
+    }
+    pub fn restrict_operations(&self, operations: &[&str]) {
+        self.state.lock().allowed_operations =
+            Some(operations.iter().map(|value| (*value).to_owned()).collect());
+    }
     pub fn applications(&self) -> BTreeMap<Uuid, Application> {
         self.state.lock().applications.clone()
     }
@@ -199,7 +231,7 @@ impl MockRegistry {
 }
 
 pub fn draft_request() -> Value {
-    json!({"bregState": "draft", "editable": true, "effectDigest": null, "proposalVersion": 1})
+    json!({"state": "draft"})
 }
 
 pub fn etag(revision: u64) -> String {
@@ -288,6 +320,7 @@ fn json_response(status: StatusCode, body: &Value, entity: Option<&str>) -> Resp
     let headers = response.headers_mut();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    headers.insert("vary", HeaderValue::from_static("authorization, accept"));
     headers.insert("traceparent", parent.parse().expect("traceparent"));
     if let Some(entity) = entity {
         headers.insert(
@@ -327,6 +360,7 @@ pub fn problem(code: BRegProblemCode) -> Response {
         HeaderValue::from_static("application/problem+json"),
     );
     headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    headers.insert("vary", HeaderValue::from_static("authorization, accept"));
     headers.insert("traceparent", parent.parse().expect("traceparent"));
     response
 }
@@ -346,18 +380,29 @@ fn mutation(mut response: Response) -> Response {
     response
 }
 
-fn application_record(identifier: Uuid, application: &Application, with_request: bool) -> Value {
-    let mut data = json!({
-        "domainData": application.data,
-        "recordIdentifier": identifier.to_string(),
-        "revisionIdentifier": application.revision.to_string(),
-    });
-    if with_request {
-        data["request"] = application.request.clone();
-    } else {
-        data["snapshot"] = json!(format!("breg1_{}", Uuid::new_v4()));
+fn application_record(identifier: Uuid, application: &Application, headers: &HeaderMap) -> Value {
+    let state = application.request["state"].as_str().unwrap_or("draft");
+    let revision: Value = serde_json::from_slice(METADATA).unwrap();
+    let mut links = json!({"self":{"method":"GET","path":format!("/v1/proposals/{identifier}"),"operation":"get","accessProfile":PROFILE}});
+    if !grant_allows(headers, "get", Some(identifier)) {
+        links.as_object_mut().unwrap().remove("self");
     }
-    json!({"data": data, "meta": meta(APPLICATION_ENTITY)})
+    if state == "draft" && grant_allows(headers, "edit", Some(identifier)) {
+        links["edit"] = json!({"method":"POST","path":format!("/v1/proposals/{identifier}/edit"),"operation":"edit","accessProfile":PROFILE,
+            "ifMatch":etag(application.revision),"availability":{"available":true,"observedRevision":application.revision}});
+    }
+    let mut value = json!({"id":identifier,"actionId":"correct-address","actionRevision":revision["revision"],"revision":application.revision,
+        "submissionVersion":1,"state":state,"input":application.data,"links":links});
+    if state != "draft" {
+        if let Some(digest) = application.request.get("effectDigest") {
+            value["effectDigest"] = digest.clone();
+            if state == "applied" {
+                value["application"] = json!({"applicationId":identifier,
+                    "submissionVersion":1,"effectDigest":digest,"resultLinks":[]});
+            }
+        }
+    }
+    value
 }
 
 async fn metadata(
@@ -376,7 +421,22 @@ async fn metadata(
     if !profile_selected(query.as_deref()) {
         return problem(BRegProblemCode::ResourceNotFound);
     }
-    let body: Value = serde_json::from_slice(METADATA).expect("fixture metadata is JSON");
+    let mut body = state
+        .lock()
+        .published_metadata
+        .clone()
+        .unwrap_or_else(|| serde_json::from_slice(METADATA).expect("fixture metadata is JSON"));
+    if !grant_allows(&headers, "start", None) {
+        body["actions"][0].as_object_mut().unwrap().remove("route");
+        body["actions"][0]["routes"] = json!({});
+        body["actions"][0]["resultEffects"] = json!([]);
+    }
+    if !grant_has_operation(&headers, "get") {
+        body["proposals"]["get"]["accessProfiles"] = json!([]);
+    }
+    if !grant_has_operation(&headers, "list") {
+        body["proposals"]["accessProfiles"] = json!([]);
+    }
     json_response(StatusCode::OK, &body, None)
 }
 
@@ -423,17 +483,20 @@ async fn create_application(
     if let Some(code) = record(
         &state,
         Method::POST,
-        format!("/v1/records/{APPLICATIONS}"),
+        "/v1/actions/correct-address/proposals".to_owned(),
         query.clone(),
         &headers,
         Some(body.clone()),
     ) {
         return problem(code);
     }
-    if !profile_selected(query.as_deref()) || headers.get("idempotency-key").is_none() {
+    if !profile_selected(query.as_deref())
+        || headers.get("idempotency-key").is_none()
+        || !grant_allows(&headers, "start", None)
+    {
         return problem(BRegProblemCode::RequestInvalid);
     }
-    let Some(data) = body["data"].as_object().cloned() else {
+    let Some(data) = body["input"].as_object().cloned() else {
         return problem(BRegProblemCode::RequestInvalid);
     };
     let key = header_text(&headers, "idempotency-key");
@@ -441,15 +504,14 @@ async fn create_application(
     // answered, whatever state the application has reached since, but only
     // under the package revision it was bound to and within its receipt
     // horizon.
-    let (package_revision, consumed, expired) = {
-        let registry = state.lock();
-        (
-            registry.package_revision,
-            registry.created.get(&key).cloned(),
-            registry.expired.contains(&key),
-        )
-    };
-    if let Some((bound_revision, identifier, created)) = consumed {
+    let mut registry = state.lock();
+    let package_revision = registry.package_revision;
+    let consumed = registry.created.get(&key).cloned();
+    let expired = registry.expired.contains(&key);
+    if let Some((bound_revision, identifier, created, bound_request)) = consumed {
+        if body != bound_request {
+            return problem(BRegProblemCode::IdempotencyConflict);
+        }
         if bound_revision != package_revision {
             return problem(BRegProblemCode::IdempotencyConflict);
         }
@@ -460,26 +522,26 @@ async fn create_application(
     }
     let identifier = Uuid::new_v4();
     let application = Application {
-        data: data.into_iter().filter(|(key, _)| key != "owner").collect(),
+        owner: principal(&headers).unwrap_or_default(),
+        data,
         revision: 1,
         request: draft_request(),
     };
-    let created = application_record(identifier, &application, false);
-    let mut registry = state.lock();
+    let created = application_record(identifier, &application, &headers);
     registry.applications.insert(identifier, application);
     registry
         .created
-        .insert(key, (package_revision, identifier, created.clone()));
+        .insert(key, (package_revision, identifier, created.clone(), body));
     drop(registry);
     created_response(identifier, &created)
 }
 
 fn created_response(identifier: Uuid, created: &Value) -> Response {
-    let response = json_response(StatusCode::CREATED, created, Some(APPLICATION_ENTITY));
+    let response = json_response(StatusCode::CREATED, created, None);
     let mut response = mutation(with_etag(response, 1));
     response.headers_mut().insert(
         "location",
-        format!("/v1/records/{APPLICATIONS}/{identifier}")
+        format!("/v1/proposals/{identifier}")
             .parse()
             .expect("location"),
     );
@@ -500,7 +562,7 @@ async fn get_application(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let path = format!("/v1/records/{APPLICATIONS}/{identifier}");
+    let path = format!("/v1/proposals/{identifier}");
     let identifier = Uuid::parse_str(&identifier).unwrap_or_default();
     if let Some(code) = record(&state, Method::GET, path, query.clone(), &headers, None) {
         return problem(code);
@@ -511,11 +573,16 @@ async fn get_application(
     let Some(application) = state.lock().applications.get(&identifier).cloned() else {
         return problem(BRegProblemCode::ResourceNotFound);
     };
+    if principal(&headers).as_deref() != Some(&application.owner)
+        || !grant_allows(&headers, "get", Some(identifier))
+    {
+        return problem(BRegProblemCode::ResourceNotFound);
+    }
     with_etag(
         json_response(
             StatusCode::OK,
-            &application_record(identifier, &application, true),
-            Some(APPLICATION_ENTITY),
+            &application_record(identifier, &application, &headers),
+            None,
         ),
         application.revision,
     )
@@ -529,11 +596,11 @@ async fn patch_application(
     body: Bytes,
 ) -> Response {
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let path = format!("/v1/records/{APPLICATIONS}/{identifier}");
+    let path = format!("/v1/proposals/{identifier}/edit");
     let identifier = Uuid::parse_str(&identifier).unwrap_or_default();
     if let Some(code) = record(
         &state,
-        Method::PATCH,
+        Method::POST,
         path,
         query.clone(),
         &headers,
@@ -554,41 +621,62 @@ async fn patch_application(
     if if_match != Some(etag(application.revision).as_str()) {
         return problem(BRegProblemCode::PreconditionFailed);
     }
-    let Some(operations) = body.as_array() else {
+    if principal(&headers).as_deref() != Some(&application.owner)
+        || !grant_allows(&headers, "edit", Some(identifier))
+    {
+        return problem(BRegProblemCode::ResourceNotFound);
+    }
+    let Some(input) = body["input"].as_object() else {
         return problem(BRegProblemCode::RequestInvalid);
     };
-    let mut data = application.data.clone();
-    for operation in operations {
-        let Some(field) = operation["path"]
-            .as_str()
-            .and_then(|path| path.strip_prefix("/data/"))
-        else {
-            return problem(BRegProblemCode::RequestInvalid);
-        };
-        match operation["op"].as_str() {
-            Some("test") => {
-                if data.get(field) != Some(&operation["value"]) {
-                    return problem(BRegProblemCode::MutationConflict);
-                }
-            }
-            Some("add" | "replace") => {
-                data.insert(field.to_owned(), operation["value"].clone());
-            }
-            Some("remove") => {
-                data.insert(field.to_owned(), Value::Null);
-            }
-            _ => return problem(BRegProblemCode::RequestInvalid),
-        }
+    if input.get("address") != application.data.get("address") {
+        return problem(BRegProblemCode::MutationConflict);
     }
-    application.data = data;
+    application.data = input.clone();
     application.revision += 1;
     let revision = application.revision;
-    let body = application_record(identifier, application, false);
+    let body = application_record(identifier, application, &headers);
     drop(registry);
     mutation(with_etag(
-        json_response(StatusCode::OK, &body, Some(APPLICATION_ENTITY)),
+        json_response(StatusCode::OK, &body, None),
         revision,
     ))
+}
+
+async fn list_applications(
+    State(state): State<Shared>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(code) = record(
+        &state,
+        Method::GET,
+        "/v1/proposals".into(),
+        query.clone(),
+        &headers,
+        None,
+    ) {
+        return problem(code);
+    }
+    if !profile_selected(query.as_deref()) || !grant_has_operation(&headers, "list") {
+        return problem(BRegProblemCode::ResourceNotFound);
+    }
+    let pairs = url::form_urlencoded::parse(query.as_deref().unwrap_or("").as_bytes())
+        .collect::<BTreeMap<_, _>>();
+    let owner = principal(&headers).unwrap_or_default();
+    let registry = state.lock();
+    let items: Vec<_> = registry
+        .applications
+        .iter()
+        .filter(|(id, app)| app.owner == owner && grant_allows(&headers, "list", Some(**id)))
+        .filter(|(_, app)| {
+            pairs
+                .get("target")
+                .is_none_or(|target| app.data["address"].as_str() == Some(target.as_ref()))
+        })
+        .map(|(id, app)| application_record(*id, app, &headers))
+        .collect();
+    json_response(StatusCode::OK, &json!({"items":items}), None)
 }
 
 async fn unexpected(
@@ -606,4 +694,159 @@ async fn unexpected(
         None,
     );
     problem(BRegProblemCode::ResourceNotFound)
+}
+
+/// A source-owned grant issuer for protocol tests. It augments only an already
+/// exchanged token, using the platform server's public synthetic signing key.
+/// Instance bounds come from current source ownership, never tool arguments.
+#[derive(Clone)]
+pub struct GrantIssuer(Shared);
+impl GrantIssuer {
+    pub fn token(&self, token: &str) -> String {
+        let mut claims = token_claims(token).expect("issued token claims");
+        if claims.get("act").is_none() {
+            return token.to_owned();
+        }
+        let principal = claims["sub"].as_str().unwrap().to_owned();
+        let registry = self.0.lock();
+        let allows = |operation: &str| {
+            registry
+                .allowed_operations
+                .as_ref()
+                .is_none_or(|operations| operations.contains(operation))
+        };
+        let mut permissions = vec![json!({"collection":"person-addresses","operations":["list"]})];
+        if allows("start") {
+            permissions.push(json!({"collection":"action:correct-address","operations":["start"]}));
+        }
+        let operations: Vec<_> = ["get", "edit", "list"]
+            .into_iter()
+            .filter(|operation| allows(operation))
+            .collect();
+        for (id, application) in &registry.applications {
+            if application.owner == principal && !operations.is_empty() {
+                permissions
+                    .push(json!({"collection":format!("proposal:{id}"),"operations":operations}));
+            }
+        }
+        let target = registry
+            .addresses
+            .get(&principal)
+            .and_then(|addresses| addresses.first())
+            .map(|(id, _)| id.clone());
+        claims["registry_grant_id"] = json!(if principal.ends_with('b') {
+            "00000000-0000-4000-8000-000000000002"
+        } else {
+            "00000000-0000-4000-8000-000000000001"
+        });
+        claims["registry_grant_source_issuer"] = json!("https://tasks.example.test");
+        claims["registry_grant_client"] = claims["azp"].clone();
+        claims["registry_grant_resource"] = claims["aud"].clone();
+        claims["registry_grant_exp"] = claims["exp"].clone();
+        claims["registry_purpose"] = json!("address-correction");
+        claims["registry_actor_kind"] = json!("agent");
+        claims["registry_approver"] = json!("h:synthetic-task-owner");
+        claims["registry_grant_bounds"] = json!({"type":"breg","permissions":permissions});
+        claims["identity"] = json!({"address":target});
+        let (private, _) = registry_platform_testing::fixtures::ed25519_pair();
+        let kid = private.kid.as_deref().expect("fixture key identifier");
+        registry_platform_testing::sign_ed25519_compact_jwt_with_key(
+            &private, "at+jwt", kid, claims,
+        )
+    }
+}
+fn token_claims(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()?,
+    )
+    .ok()
+}
+fn grant_permissions(headers: &HeaderMap) -> Vec<Value> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(token_claims)
+        .and_then(|claims| {
+            claims
+                .pointer("/registry_grant_bounds/permissions")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+fn grant_has_operation(headers: &HeaderMap, operation: &str) -> bool {
+    grant_permissions(headers).iter().any(|permission| {
+        permission["collection"]
+            .as_str()
+            .is_some_and(|collection| collection.starts_with("proposal:"))
+            && permission["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.iter().any(|candidate| candidate == operation))
+    })
+}
+fn grant_allows(headers: &HeaderMap, operation: &str, id: Option<Uuid>) -> bool {
+    let collection = id.map_or_else(
+        || "action:correct-address".to_owned(),
+        |id| format!("proposal:{id}"),
+    );
+    grant_permissions(headers).iter().any(|permission| {
+        permission["collection"] == collection
+            && permission["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.iter().any(|candidate| candidate == operation))
+    })
+}
+#[derive(Clone)]
+struct GrantExchange {
+    upstream: String,
+    issuer: GrantIssuer,
+}
+pub async fn grant_exchange(upstream: String, issuer: GrantIssuer) -> String {
+    let app = Router::new()
+        .route("/token", axum::routing::post(exchange_grant))
+        .with_state(GrantExchange { upstream, issuer });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    endpoint
+}
+async fn exchange_grant(
+    State(exchange): State<GrantExchange>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mut request = reqwest::Client::new().post(exchange.upstream).body(body);
+    if let Some(content_type) = headers.get("content-type") {
+        request = request.header("content-type", content_type);
+    }
+    let Ok(response) = request.send().await else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    let status = response.status();
+    let Ok(mut value): Result<Value, _> = response.json().await else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    if status.is_success() {
+        if let Some(token) = value["access_token"].as_str() {
+            value["access_token"] = json!(exchange.issuer.token(token));
+        }
+    }
+    let mut response = (
+        StatusCode::from_u16(status.as_u16()).unwrap(),
+        axum::Json(value),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert("pragma", HeaderValue::from_static("no-cache"));
+    response
 }

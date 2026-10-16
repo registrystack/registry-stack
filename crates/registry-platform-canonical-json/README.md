@@ -25,3 +25,11 @@ Canonicalization validates every number before emitting output and writes JSON
 string escaping directly into the result buffer rather than allocating
 per-string serialization copies. Callers that treat canonical bytes as
 sensitive remain responsible for zeroizing the returned buffer after use.
+
+`parse_json_preserving_integers` is the same recursive duplicate-free decoder
+without the JCS integer restriction, for consumers that enforce their own
+numeric policy. It preserves exact `i64`/`u64` values, rejects trailing documents,
+and leaves fractional/exponent forms and larger integers subject to serde's
+binary64 rounding. Consumers requiring exact raw numeric literals must precheck
+them, as the BReg client does. Signed or hashed JCS artifacts continue to use
+`parse_json_strict`; the integer-preserving decoder does not weaken that boundary.

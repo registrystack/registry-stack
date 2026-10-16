@@ -10,21 +10,21 @@ use axum::http::StatusCode;
 use registry_breg_client::BRegProblemCode;
 use support::{
     browser, cookie_pair, sign_in_to, start_narrow_scope_provider, write_secret, AuditSink,
-    Harness, Options, ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CLIENT_ID, CURRENT_LINE_A,
-    ENTITY, EXPECTED_CSP, FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID, PROFILE,
-    PROPOSED_LOCALITY, REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
+    Harness, Options, ACTION, ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CLIENT_ID,
+    CURRENT_LINE_A, EXPECTED_CSP, FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID,
+    PROFILE, PROPOSED_LOCALITY, REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
 };
 
 fn review_path() -> String {
-    format!("/requests/{REQUEST_ID}")
+    format!("/proposals/{REQUEST_ID}")
 }
 
 fn submit_path() -> String {
-    format!("/requests/{REQUEST_ID}/submit")
+    format!("/proposals/{REQUEST_ID}/submit")
 }
 
 fn sign_in_location() -> String {
-    format!("/signin?return=%2Frequests%2F{REQUEST_ID}")
+    format!("/signin?return=%2Fproposals%2F{REQUEST_ID}")
 }
 
 /// A form post that finds no live session answers a page linking to sign-in,
@@ -103,13 +103,13 @@ async fn t6_foreign_or_absolute_return_path_is_refused() {
     let harness = Harness::start().await;
     let upper = REQUEST_ID.to_ascii_uppercase();
     let refused_returns = [
-        format!("https%3A%2F%2Fevil.example%2Frequests%2F{REQUEST_ID}"),
-        format!("%2F%2Fevil.example%2Frequests%2F{REQUEST_ID}"),
-        format!("%2F%5Cevil.example%2Frequests%2F{REQUEST_ID}"),
-        format!("%2Frequests%2F{REQUEST_ID}%2F..%2F..%2Fsignout"),
-        format!("%2Frequests%2F{REQUEST_ID}%3Fnext%3Dhttps%3A%2F%2Fevil.example"),
-        format!("%2Frequests%2F{upper}"),
-        "%2Frequests%2Fnot-a-request".to_owned(),
+        format!("https%3A%2F%2Fevil.example%2Fproposals%2F{REQUEST_ID}"),
+        format!("%2F%2Fevil.example%2Fproposals%2F{REQUEST_ID}"),
+        format!("%2F%5Cevil.example%2Fproposals%2F{REQUEST_ID}"),
+        format!("%2Fproposals%2F{REQUEST_ID}%2F..%2F..%2Fsignout"),
+        format!("%2Fproposals%2F{REQUEST_ID}%3Fnext%3Dhttps%3A%2F%2Fevil.example"),
+        format!("%2Fproposals%2F{upper}"),
+        "%2Fproposals%2Fnot-a-request".to_owned(),
         "%2Fhealth".to_owned(),
         String::new(),
     ];
@@ -124,7 +124,7 @@ async fn t6_foreign_or_absolute_return_path_is_refused() {
     assert_eq!(missing.status, StatusCode::BAD_REQUEST);
     let repeated = harness
         .get(
-            &format!("/signin?return=%2Frequests%2F{REQUEST_ID}&return=%2F%2Fevil.example"),
+            &format!("/signin?return=%2Fproposals%2F{REQUEST_ID}&return=%2F%2Fevil.example"),
             None,
         )
         .await;
@@ -249,12 +249,12 @@ async fn a_conflicted_submit_rerenders_from_a_fresh_read_not_the_stale_one() {
     let csrf = page.input("csrf").unwrap();
     let view = page.input("view").unwrap();
 
-    // Between the page's load and this submit, the draft changed (so the
-    // submit conflicts), and the moment it conflicts the target address
-    // stops being readable too. The submit's own read at the top of the
-    // POST still sees the address; only a fresh read after the conflict
-    // would see it gone.
-    harness.environment.registry.agent_patch();
+    // The source loses a revision race after the POST's fresh reads. Its
+    // conflict also revokes the current Record disclosure grant.
+    harness
+        .environment
+        .registry
+        .refuse_next_submit(BRegProblemCode::PreconditionFailed);
     harness
         .environment
         .registry
@@ -333,7 +333,7 @@ async fn t4_cross_citizen_read_and_submit_give_not_found() {
     // A record nobody holds reads exactly like a record someone else holds.
     let absent = harness
         .get(
-            &format!("/requests/{OTHER_REQUEST_ID}"),
+            &format!("/proposals/{OTHER_REQUEST_ID}"),
             Some(&owner_cookie),
         )
         .await;
@@ -359,12 +359,12 @@ async fn c8_a_draft_naming_another_citizens_address_offers_no_form() {
     let harness = Harness::start().await;
     let (cookie, _) = harness.review_as(CITIZEN_B, B_REQUEST_ID).await;
     let absent = harness
-        .get(&format!("/requests/{OTHER_REQUEST_ID}"), Some(&cookie))
+        .get(&format!("/proposals/{OTHER_REQUEST_ID}"), Some(&cookie))
         .await;
 
     let page = harness
         .get(
-            &format!("/requests/{FOREIGN_TARGET_REQUEST_ID}"),
+            &format!("/proposals/{FOREIGN_TARGET_REQUEST_ID}"),
             Some(&cookie),
         )
         .await;
@@ -389,9 +389,9 @@ async fn c8_a_crafted_post_for_a_foreign_target_never_calls_submit() {
     let csrf = own.input("csrf").unwrap();
     let own_view = own.input("view").unwrap();
     let not_found = harness
-        .get(&format!("/requests/{OTHER_REQUEST_ID}"), Some(&cookie))
+        .get(&format!("/proposals/{OTHER_REQUEST_ID}"), Some(&cookie))
         .await;
-    let path = format!("/requests/{FOREIGN_TARGET_REQUEST_ID}/submit");
+    let path = format!("/proposals/{FOREIGN_TARGET_REQUEST_ID}/submit");
 
     for view in [own_view.as_str(), "", "forged-view"] {
         let refused = harness
@@ -471,6 +471,99 @@ async fn review_shows_current_values_beside_proposed_ones() {
     assert!(!page.body.contains(ADDRESS_A));
 }
 
+fn changed_action_metadata() -> serde_json::Value {
+    let mut metadata = support::metadata();
+    metadata["actions"][0]["revision"] = serde_json::json!(format!("sha256:{}", "b".repeat(64)));
+    metadata["actions"][0]["display"]["label"] = serde_json::json!("Changed service label");
+    metadata["actions"][0]["inputs"][1]["label"] = serde_json::json!("Changed input label");
+    metadata
+}
+
+fn assert_action_changed(page: &support::Page) {
+    assert_eq!(page.status, StatusCode::CONFLICT, "{}", page.body);
+    assert_eq!(page.error_code(), Some("action-changed"));
+    assert!(page.body.contains("Your request is still saved"));
+    assert!(page.body.contains("Contact the service"));
+    for hidden in [
+        "Changed service label",
+        "Changed input label",
+        CURRENT_LINE_A,
+        PROPOSED_LOCALITY,
+        "&lt;script&gt;",
+        "data-values=",
+        "<form",
+    ] {
+        assert!(!page.body.contains(hidden), "{hidden}: {}", page.body);
+    }
+}
+
+#[tokio::test]
+async fn a_retained_draft_is_not_displayed_under_a_changed_action_revision() {
+    let harness = Harness::start().await;
+    harness
+        .environment
+        .registry
+        .publish_metadata(changed_action_metadata());
+    let cookie = cookie_pair(&harness.sign_in(CITIZEN_A).await);
+    let page = harness.get(&review_path(), Some(&cookie)).await;
+
+    assert_action_changed(&page);
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 0);
+    assert_eq!(harness.environment.registry.submits(), 0);
+    assert!(!harness.environment.registry.submitted(REQUEST_ID));
+}
+
+#[tokio::test]
+async fn an_action_changed_since_render_refuses_the_original_submit() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+    assert!(page.body.contains(PROPOSED_LOCALITY));
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 1);
+    harness
+        .environment
+        .registry
+        .publish_metadata(changed_action_metadata());
+
+    let refused = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+
+    assert_action_changed(&refused);
+    assert_eq!(harness.environment.registry.target_reads(ADDRESS_A), 1);
+    assert_eq!(harness.environment.registry.submits(), 0);
+    assert!(!harness.environment.registry.submitted(REQUEST_ID));
+}
+
+#[tokio::test]
+async fn an_unchanged_action_can_describe_a_draft_after_other_metadata_changes() {
+    let harness = Harness::start().await;
+    let mut metadata = support::metadata();
+    metadata["revision"] = serde_json::json!(format!("sha256:{}", "b".repeat(64)));
+    harness.environment.registry.publish_metadata(metadata);
+
+    let (cookie, page) = harness.review().await;
+    assert!(page.body.contains(PROPOSED_LOCALITY));
+    let submitted = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[
+                ("csrf", &page.input("csrf").unwrap()),
+                ("view", &page.input("view").unwrap()),
+            ],
+        )
+        .await;
+
+    assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
+    assert!(harness.environment.registry.submitted(REQUEST_ID));
+}
+
 #[tokio::test]
 async fn the_target_read_is_the_profile_get_whatever_reference_comes_first() {
     let harness = Harness::start().await;
@@ -486,20 +579,8 @@ fn the_mock_registry_answers_valid_caller_filtered_metadata() {
     registry_breg_client::BRegMetadata::from_slice(&bytes).unwrap();
     let bytes = serde_json::to_vec(&support::metadata()).unwrap();
     let metadata = registry_breg_client::BRegMetadata::from_slice(&bytes).unwrap();
-    let get = metadata
-        .operations()
-        .iter()
-        .find(|operation| operation.identifier() == "records.address-correction-request.get")
-        .unwrap();
-    let address = get
-        .fields()
-        .iter()
-        .find(|field| field.identifier() == support::TARGET_FIELD)
-        .unwrap();
-    assert_eq!(
-        address.reference_target_entity(),
-        Some(support::TARGET_ENTITY)
-    );
+    let target = &metadata.actions()[0].reference_inputs()[0];
+    assert_eq!(target.target_record_type(), support::TARGET_ENTITY);
 }
 
 #[tokio::test]
@@ -627,10 +708,10 @@ async fn rendered_record_values_are_inert_markup() {
     assert!(!page.body.contains("<script"));
     assert!(page.body.contains("&lt;script&gt;"));
     assert!(page.body.contains("New address line"));
-    assert!(page.body.contains("Moved house"));
-    assert!(!page.body.contains("relocation"));
+    assert!(page.body.contains("relocation"));
+
     assert!(page.body.contains("Not provided"));
-    assert!(page.body.contains("Address correction requests"));
+    assert!(page.body.contains("Address correction"));
 }
 
 #[tokio::test]
@@ -638,7 +719,7 @@ async fn every_response_carries_the_exact_security_headers() {
     let harness = Harness::start().await;
     let (cookie, review) = harness.review().await;
     let not_found = harness
-        .get(&format!("/requests/{OTHER_REQUEST_ID}"), Some(&cookie))
+        .get(&format!("/proposals/{OTHER_REQUEST_ID}"), Some(&cookie))
         .await;
     let redirect = harness.get(&review_path(), None).await;
     let health = harness.get("/health", None).await;
@@ -714,11 +795,11 @@ async fn the_callback_continues_to_the_return_path_without_script() {
 
     assert_eq!(callback.status, StatusCode::OK);
     assert!(callback.body.contains(&format!(
-        "<meta http-equiv=\"refresh\" content=\"0;url=/requests/{REQUEST_ID}\">"
+        "<meta http-equiv=\"refresh\" content=\"0;url=/proposals/{REQUEST_ID}\">"
     )));
     assert!(callback
         .body
-        .contains(&format!("href=\"/requests/{REQUEST_ID}\"")));
+        .contains(&format!("href=\"/proposals/{REQUEST_ID}\"")));
     assert!(!callback.body.contains("<script"));
 }
 
@@ -949,9 +1030,9 @@ async fn a_submit_the_registry_signs_out_links_to_sign_in_and_ends_the_session()
 async fn a_non_canonical_request_identifier_is_not_found_before_sign_in() {
     let harness = Harness::start().await;
     for path in [
-        format!("/requests/{}", REQUEST_ID.to_ascii_uppercase()),
-        "/requests/not-a-request".to_owned(),
-        format!("/requests/{{{REQUEST_ID}}}"),
+        format!("/proposals/{}", REQUEST_ID.to_ascii_uppercase()),
+        "/proposals/not-a-request".to_owned(),
+        format!("/proposals/{{{REQUEST_ID}}}"),
     ] {
         let page = harness.get(&path, None).await;
         assert_eq!(page.status, StatusCode::NOT_FOUND, "{path}");
@@ -1180,11 +1261,11 @@ async fn the_audit_journal_names_pseudonyms_actions_and_outcomes() {
         submit_request["correlation"],
         submit_response["correlation"]
     );
-    // The change request is named `changeRequestId`, so it cannot be joined
+    // The change request is named `proposalId`, so it cannot be joined
     // with the gateway's per-call `requestId`, and the person is named by the
     // same `principalPseudonym` key the registry's audit uses.
-    assert_eq!(read["changeRequestId"], REQUEST_ID);
-    assert_eq!(submit["changeRequestId"], REQUEST_ID);
+    assert_eq!(read["proposalId"], REQUEST_ID);
+    assert_eq!(submit["proposalId"], REQUEST_ID);
     assert_eq!(signed_in["principalPseudonym"], read["principalPseudonym"]);
     assert!(read["principalPseudonym"].as_str().unwrap().len() >= 32);
     for record in &records {
@@ -1235,7 +1316,7 @@ async fn a_session_over_its_own_limit_is_refused_while_another_proceeds() {
     assert!(refused.header("retry-after").is_some());
 
     let other = harness
-        .get(&format!("/requests/{B_REQUEST_ID}"), Some(&b))
+        .get(&format!("/proposals/{B_REQUEST_ID}"), Some(&b))
         .await;
     assert_eq!(other.status, StatusCode::OK, "{}", other.body);
 }
@@ -1244,7 +1325,7 @@ async fn a_session_over_its_own_limit_is_refused_while_another_proceeds() {
 async fn the_global_cap_still_limits_sign_in_starts() {
     let harness = limited(3, 30).await;
     let a = cookie_pair(&harness.sign_in(CITIZEN_A).await);
-    let start = format!("/signin?return=%2Frequests%2F{REQUEST_ID}");
+    let start = format!("/signin?return=%2Fproposals%2F{REQUEST_ID}");
 
     let admitted = harness.get(&start, None).await;
     assert_eq!(admitted.status, StatusCode::SEE_OTHER, "{}", admitted.body);
@@ -1502,7 +1583,7 @@ async fn start_custom_issuer_page(issuer: &str) -> CustomIssuerPage {
          publicOrigin: {origin}\n\
          secretProviders:\n  file:\n    root: {secrets}\n\
          signIn:\n  issuer: {issuer}\n  clientId: {CLIENT_ID}\n  clientKeyRef: secret:file/client-key.jwk\n  scopes: [\"{SCOPE}\"]\n\
-         registry:\n  baseUrl: {registry_base}\n  resource: {RESOURCE}\n  entity: {ENTITY}\n  targetField: {TARGET_FIELD}\n  accessProfile: {PROFILE}\n\
+         registry:\n  baseUrl: {registry_base}\n  resource: {RESOURCE}\n  action: {ACTION}\n  targetInput: {TARGET_FIELD}\n  accessProfile: {PROFILE}\n\
          audit:\n  path: {audit}\n  hashKeyRef: secret:file/audit-key\n",
         secrets = secrets.display(),
         audit = audit_path.display(),
@@ -1537,7 +1618,7 @@ async fn a_sign_in_request_audit_refusal_prevents_provider_io() {
     let start = support::page(
         page.http
             .get(format!(
-                "{}/signin?return=%2Frequests%2F{REQUEST_ID}",
+                "{}/signin?return=%2Fproposals%2F{REQUEST_ID}",
                 page.origin
             ))
             .send()

@@ -5,6 +5,13 @@ loader for the operator `runtime.yaml`, the configuration blocks every runtime
 spells the same way, and the `secret:` reference resolver. Each product still
 owns and validates the rest of its configuration contract.
 
+Secret consumers use `SecretResolver::resolve_reference` for bounded values
+without NUL bytes. Cryptographic consumers use `resolve_binary_reference` for
+opaque key files, which preserves every byte, including zero bytes. Both paths
+apply the same provider allowlist, owner-only regular-file checks, size bounds,
+redacted diagnostics, and zeroization. The consumer validates its key format and
+length; the resolver does not decode, trim, or reinterpret file contents.
+
 ## Loader
 
 `RuntimeConfigLoader` reads one runtime configuration file named by an
@@ -76,6 +83,13 @@ unchecked. Its refusals carry the `authored_config.environment_expression` and
 The effective digest of a loaded file is the `sha256:` label of the canonical
 JSON of the substituted document, so a comment or formatting change does not
 change it.
+
+## Secret references
+
+`registry-platform-yaml` owns the pure `SecretReference` grammar, provider
+discriminator, redacted debug form, serialization, and schema. This crate keeps
+the runtime facade that maps parse failures to `SecretError` and resolves an
+accepted reference through the explicitly enabled environment or file provider.
 
 ## Shared blocks
 

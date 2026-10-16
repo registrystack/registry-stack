@@ -15,9 +15,9 @@ from pathlib import Path
 PRODUCT_PREFIXES = (
     "registry-breg",
     "registry-casework",
+    "registry-coordinator",
     "registry-scheduling",
     "registry-evidence",
-    "registry-relay",
 )
 
 MESSAGING_PREFIX = "registry-messaging"

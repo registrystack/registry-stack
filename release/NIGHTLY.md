@@ -33,11 +33,17 @@ The channel publishes:
   commit only after the release assets and container images pass publication
   verification.
 
-Current manifests use `registry-stack.nightly.v2` with the frozen
-`registry-stack.nightly-roster.v2.0` profile. That profile names the complete
-image, installer, and binary payload roster; a source change cannot redefine an
-older manifest by recomputing its inventory. An incompatible inventory requires
-a new schema and profile. The reader still accepts frozen
+Current manifests use `registry-stack.nightly.v2` with a frozen roster
+profile. Each profile names the complete image, installer, and binary payload
+roster; a source change cannot redefine an older manifest by recomputing its
+inventory. `registry-stack.nightly-roster.v2.0` is the roster before Registry
+Coordinator joined. `registry-stack.nightly-roster.v2.1` adds the
+`coordinator` image and the Linux amd64 `coordinator` and `coordinatorctl`
+binaries, and nightlies use it from the base version that
+`COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` names. The
+reader accepts both, so a v2.0 nightly built from the same base version before
+Coordinator joined stays readable. An incompatible inventory requires a new
+schema and profile. The reader still accepts frozen
 `registry-stack.nightly.v1` manifests, including historical v0.39.0 nightlies
 that carried Relay, so an existing channel head can be reconciled and advanced
 without rewriting published bytes.

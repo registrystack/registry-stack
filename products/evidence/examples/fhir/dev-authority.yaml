@@ -1,0 +1,36 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: local
+project: fhir-record-evidence
+accessProfiles:
+  fhir-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - fhir-service
+    grants:
+    - definition: fhir-coverage-status
+      purpose: coverage-record-verification
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      - sd-jwt-vc
+      subjectBinding: audience-scoped
+      subjects:
+      - role: patient
+        selectorProfile: patient-by-id
+        valueOrigin: request
+      - role: coverage-record
+        selectorProfile: coverage-by-id
+        valueOrigin: request
+    - definition: fhir-healthcare-establishment
+      purpose: healthcare-establishment-verification
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      - sd-jwt-vc
+      subjectBinding: audience-scoped
+      subjects:
+      - role: organization
+        selectorProfile: organization-by-id
+        valueOrigin: request

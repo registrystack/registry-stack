@@ -23,7 +23,7 @@ use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
-use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
+use registry_breg::mutation::{MutationBody, MutationPlan, MutationRequest, MutationTransaction};
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
@@ -112,7 +112,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
         .expect("test lock identity is bounded");
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -1480,7 +1480,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
         .expect("test lock identity is bounded");
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         original_identity.clone(),
@@ -1678,7 +1678,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
         .expect("test lock identity is bounded");
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -1888,7 +1888,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
         .expect("test lock identity is bounded");
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -2044,7 +2044,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
         .expect("test lock identity is bounded");
-    let coordinator = MutationCoordinator::new_with_event_destinations(
+    let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
@@ -2226,7 +2226,7 @@ struct CapturedEvent {
 
 async fn create_event(
     database: &TestDatabase,
-    coordinator: &MutationCoordinator,
+    coordinator: &MutationTransaction,
     client: &mut deadpool_postgres::Client,
     plan: &MutationPlan,
     claims: &ClaimContext,
@@ -2319,7 +2319,7 @@ async fn create_event(
             "dataschema": captured.data_schema,
             "causation": {"root": captured.event_id.to_string(), "hop": 0},
             "data": {
-                "entity": "case",
+                "recordType": "case",
                 "recordId": record_id,
                 "revision": 1,
                 "trigger": "created",
@@ -2694,11 +2694,11 @@ fn independent_signature(fields: IndependentSignatureFields<'_>) -> String {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -2717,8 +2717,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case","operations":["create","get","list"],
+            "permissions":{"records":[{
+              "recordType":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -2735,11 +2735,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 /// reviewed local script instead of an operator destination.
 fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -2759,8 +2759,8 @@ fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case","operations":["create","get","list"],
+            "permissions":{"records":[{
+              "recordType":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

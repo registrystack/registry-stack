@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Rehearse the forward state path from the previous release to this source.
 
-The rehearsal downloads the previous release's published Base Registry
-Engine, Casework, Evidence, and Messaging binaries, authenticates them the way
-release/VERIFY.md describes, and uses them to write real state: an
-activated registry package with records and revisions, a Casework review
-queue with answered and in-flight work, an Evidence audit stream with a
-signed response, and a Messaging package ledger with scheduled and cancelled
-messages. It then points the binaries built from this source at that
-exact state and those exact files, runs the upgrade an operator runs, and
-fails unless the state is still served unchanged and no table lost a row.
-A product the previous release did not ship has no state to carry forward,
-so its leg is omitted and the report says why.
+The rehearsal downloads the previous release's published Evidence and Messaging
+binaries, authenticates them the way release/VERIFY.md describes, and uses them
+to write real state: an Evidence audit stream with a signed response and a
+Messaging package ledger with scheduled and cancelled messages. It then points
+the binaries built from this source at that exact state and those exact files,
+runs the upgrade an operator runs, and fails unless the state is still served
+unchanged and no table lost a row.
+A product the previous release did not ship, or whose contract starts at a
+new baseline, has no supported state to carry forward. Its leg is omitted and
+the report says why. Evidence starts at the normalized 0.42.0 baseline; earlier
+split projects and bundled authority have no in-place conversion.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -80,15 +80,46 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # the workspace version: the forward state path then starts at that release,
 # and this source reads no state an earlier release wrote.
 FORWARD_PATH_FLOOR = (0, 41, 0)
+# Evidence replaced split question/source projects and bundled authority with
+# the normalized project, target, and separately activated complete authority.
+# The current compiler deliberately refuses that retired authoring grammar.
+EVIDENCE_FORWARD_PATH_FLOOR = (0, 42, 0)
+EVIDENCE_NO_IN_PLACE_UPGRADE = (
+    "Evidence's normalized 0.42.0 baseline requires a newly authored evidence.yaml "
+    "project, target.yaml, and complete target authority; retired split projects "
+    "and bundled authority have no in-place conversion. Retain the previous "
+    "deployment and audit, author and package the current model, then verify a "
+    "fresh synthetic assertion before cutover"
+)
+
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
 
 BINARIES = (
-    "breg", "bregctl", "casework", "caseworkctl", "evidence", "evidencectl",
-    "messaging", "messagingctl",
+    "evidence", "evidencectl", "messaging", "messagingctl",
 )
 PLATFORMS = ("linux-amd64", "macos-arm64")
-PRODUCTS = ("breg", "casework", "evidence", "messaging")
+PRODUCTS = ("evidence", "messaging")
+PRODUCT_CHOICES = (*PRODUCTS, "breg", "casework")
+# Keep retired products selectable so a focused request receives their
+# supported transition instead of argparse's generic invalid-choice error.
+BREG_NO_IN_PLACE_UPGRADE = (
+    "BReg's native Record, Dataset, Action, and Proposal model requires a fresh "
+    "database; retired entity/Request state and packages have no in-place upgrade "
+    "path. Start a new native registry and use the maintained BReg operator "
+    "workflow gates for native package successors, history, and backup/restore"
+)
+CASEWORK_NO_IN_PLACE_UPGRADE = (
+    "Casework's current review-only contract requires a fresh database and refuses "
+    "retired schemas before mutation; drain or reconcile legacy review work under "
+    "the release that wrote it, provision a fresh database, then run "
+    "products/casework/scripts/check-review-journeys.sh and "
+    "products/casework/scripts/test-backup-restore.sh"
+)
+RETIRED_PRODUCTS = {
+    "breg": BREG_NO_IN_PLACE_UPGRADE,
+    "casework": CASEWORK_NO_IN_PLACE_UPGRADE,
+}
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
 # release_roster.MESSAGING_FIRST_RELEASE names Messaging's first release; while
@@ -96,7 +127,7 @@ PRODUCTS = ("breg", "casework", "evidence", "messaging")
 # Messaging state to upgrade.
 PRODUCT_PLATFORMS = {"messaging": ("linux-amd64",)}
 POSTGRES_IMAGE = (
-    "public.ecr.aws/docker/library/postgres:17.11@sha256:"
+    "docker.io/library/postgres:17.11@sha256:"
     "67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
 )
 # The server key must be owned by postgres with mode 0600, which a bind mount
@@ -248,19 +279,23 @@ def check_floor_is_current(released: list[str], version: str) -> None:
 
 def select_products(requested: list[str] | None, from_tag: str, platform: str,
                     downloading: bool) -> tuple[list[str], dict[str, str]]:
-    """The legs to run, and why each default leg the start cannot supply is omitted.
+    """The legs to run, and the reason for every default omission.
 
-    A product named with --product that the starting release cannot supply
-    is refused rather than omitted, so a focused run never passes empty.
+    A product named with --product whose rehearsal is unavailable is refused
+    rather than omitted, so a focused run never passes empty.
     """
 
     start = parse_tag(from_tag)
     products: list[str] = []
-    omitted: dict[str, str] = {}
+    omitted = {} if requested else dict(RETIRED_PRODUCTS)
     for product in requested or PRODUCTS:
         reason = None
         platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
-        if product == "messaging" and not release_roster.messaging_in_release(start):
+        if product in RETIRED_PRODUCTS:
+            reason = RETIRED_PRODUCTS[product]
+        elif product == "evidence" and start < EVIDENCE_FORWARD_PATH_FLOOR:
+            reason = EVIDENCE_NO_IN_PLACE_UPGRADE
+        elif product == "messaging" and not release_roster.messaging_in_release(start):
             first = release_roster.MESSAGING_FIRST_RELEASE
             if first is None:
                 reason = (f"{product} has not joined a release yet "
@@ -467,14 +502,6 @@ def retention_audit_losses(requested_before: int, erased_before: int,
     return losses
 
 
-def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
-    # An ETag binds the active package revision, which changes on rebuild.
-    # Record identifiers, domain data, and stored revisions must still match.
-    def state(views: dict[str, Any]) -> dict[str, Any]:
-        return {key: {field: value for field, value in view.items() if field != "etag"}
-                for key, view in views.items()}
-
-    return view_differences(state(before), state(after))
 
 
 def view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -956,663 +983,6 @@ def dump_yaml(path: Path, document: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Base Registry Engine: package, activate, write records, upgrade, compare.
-
-
-BREG_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
-BREG_AUDIENCE = "breg"
-BREG_CLIENT = "upgrade-rehearsal"
-BREG_KID = "upgrade-rehearsal-issuer"
-BREG_DATABASE_ID = "upgrade-rehearsal-db"
-# The schema-test credentials envelope the format registry
-# (products/platform/config-formats.yaml) records.
-BREG_CREDENTIALS_ENVELOPE = {
-    "apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
-    "kind": "BRegSchemaTestCredentials",
-}
-BREG_ENVIRONMENT = "staging"
-BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
-BREG_EMPTY_PLAN = "apply.package.empty-plan"
-
-
-def instance_claim(side: Side, runtime: Path) -> dict[str, Any] | None:
-    return side.run_json("bregctl", "--format", "json", "instance-claim", "status",
-                         "--runtime-config", str(runtime))["status"]["claim"]
-
-
-def claim_differences(before: dict[str, Any] | None,
-                      after: dict[str, Any] | None) -> list[str]:
-    """The upgrade carries a recorded instance claim over, or records one."""
-
-    if after is None:
-        return ["the upgraded database records no instance claim"]
-    if before is not None and before != after:
-        return ["the upgrade changed the instance claim the database recorded"]
-    return []
-
-
-def expect_plan(plan: dict[str, Any], activation: str, digest: str) -> None:
-    if (plan.get("pending") is not True or plan.get("activation") != activation
-            or plan.get("packageDigest") != digest):
-        raise RehearsalError(f"bregctl plan did not report a pending {activation} "
-                             "activation of the package")
-
-
-def expect_ledger(status: dict[str, Any], active: str) -> list[str]:
-    """Check the active package is the last applied, chained ledger entry.
-
-    Returns the ledger as planKind:outcome pairs in apply order.
-    """
-
-    entries = sorted(status["ledger"], key=lambda entry: entry["applyOrder"])
-    if status["activePackageDigest"] != active or status["maintenanceStatus"] != "ready":
-        raise RehearsalError("bregctl status did not report the applied package as "
-                             "active and ready")
-    applied = [entry for entry in entries if entry["outcome"] == "applied"]
-    if (not applied or applied[-1]["packageDigest"] != active
-            or applied[-1]["activationId"] != status["activationId"]):
-        raise RehearsalError("the active package is not the last applied ledger entry")
-    for previous, current in zip(applied, applied[1:]):
-        if current["predecessorPackageDigest"] != previous["packageDigest"]:
-            raise RehearsalError("an applied successor does not chain from the package "
-                                 "it replaced in the ledger")
-    return [f"{entry['planKind']}:{entry['outcome']}" for entry in entries]
-
-
-class Breg:
-    def __init__(self, work: Path, keys: Keys, postgres: Postgres) -> None:
-        self.work = private_directory(work)
-        self.keys = keys
-        self.postgres = postgres
-        self.secrets = private_directory(work / "secrets")
-        self.project = work / "project"
-        self.runtime = work / "runtime.yaml"
-        self.port = free_port()
-        self.operator: dict[str, Any] = {}
-
-    def provision(self) -> None:
-        passwords = {role: secrets.token_hex(16)
-                     for role in ("registry_migration", "registry_runtime")}
-        self.postgres.sql("postgres", "".join(
-            f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT "
-            f"NOBYPASSRLS PASSWORD '{password}';\n"
-            for role, password in passwords.items()
-        ))
-        for database in ("registry", "schematest"):
-            self.create_database(database)
-            for role, password in passwords.items():
-                kind = "migration" if role == "registry_migration" else "runtime"
-                write_secret(self.secrets / f"{kind}-url-{database}",
-                             self.postgres.url(role, password, database))
-        write_secret(self.secrets / "audit-key", secrets.token_hex(32))
-        write_secret(self.secrets / "cursor-key", secrets.token_hex(32))
-        write_secret(self.secrets / "jwks.json",
-                     json.dumps({"keys": [self.keys.ed25519_jwk(BREG_KID)]}))
-
-    def create_database(self, database: str) -> None:
-        """Create one empty database the way the operator guide provisions it."""
-
-        self.postgres.sql("postgres", f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE);')
-        self.postgres.sql("postgres", f'CREATE DATABASE "{database}";')
-        self.postgres.sql(database, f"""
-                CREATE EXTENSION btree_gist;
-                REVOKE ALL ON DATABASE "{database}" FROM PUBLIC;
-                GRANT CONNECT ON DATABASE "{database}" TO registry_migration, registry_runtime;
-                CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
-                CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
-                CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
-                CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
-                CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
-                REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source,
-                  registry_derived, registry_context FROM PUBLIC;
-            """)
-
-    def author(self, side: Side) -> None:
-        side.run("bregctl", "init", str(self.project))
-        journeys = load_yaml(self.project / "tests" / "journeys.yaml")
-        for journey in journeys["journeys"]:
-            for step in journey["steps"]:
-                if step.get("accessProfile") == "operator" and step.get("claims"):
-                    self.operator = step["claims"]
-                    break
-            if self.operator:
-                break
-        if not self.operator:
-            raise RehearsalError("the BReg starter journeys name no operator step")
-        self.clients = sorted({BREG_CLIENT} | {
-            step["claims"]["requesterClient"]
-            for journey in journeys["journeys"] for step in journey["steps"]
-            if "requesterClient" in (step.get("claims") or {})})
-
-    @staticmethod
-    def claims(claims: dict[str, Any]) -> dict[str, Any]:
-        """Turn a journey step's claims into the access token that carries them."""
-
-        token = {"iss": BREG_ISSUER, "aud": BREG_AUDIENCE, "sub": claims["principal"],
-                 "registry_principal": claims["principal"],
-                 "scope": " ".join(claims.get("scopes", [])),
-                 "registry_actor_kind": claims.get("actorKind", "human"),
-                 "client_id": claims.get("requesterClient", BREG_CLIENT)}
-        if "purpose" in claims:
-            token["registry_purpose"] = claims["purpose"]
-        token.update(claims.get("claims", {}))
-        token.update(claims.get("directClaims", {}))
-        return token
-
-    def write_runtime(self, path: Path, database: str, package_root: Path, port: int) -> None:
-        dump_yaml(path, {
-            "apiVersion": "id.registrystack.org/formats/breg/runtime/v1alpha1",
-            "kind": "BRegRuntimeConfig",
-            "listener": {"bind": f"127.0.0.1:{port}",
-                         "publicOrigin": f"http://127.0.0.1:{port}"},
-            "identity": {"environment": BREG_ENVIRONMENT,
-                         "instanceId": BREG_INSTANCE_ID,
-                         "databaseId": BREG_DATABASE_ID,
-                         "databaseInitializationEnvironment": BREG_ENVIRONMENT},
-            "secretProviders": {"file": {"root": str(self.secrets)}},
-            "database": {"runtimeUrlRef": f"secret:file/runtime-url-{database}",
-                         "migrationUrlRef": f"secret:file/migration-url-{database}",
-                         "pool": {"maximumConnections": 8},
-                         "roles": {"migration": "registry_migration",
-                                   "runtime": "registry_runtime"}},
-            "package": {"root": str(package_root)},
-            "authentication": {
-                "oidc": {"issuer": BREG_ISSUER, "audience": BREG_AUDIENCE,
-                         "allowedAlgorithm": "EdDSA", "accessTokenType": "at+jwt",
-                         "scopeClaim": "scope", "scopeSeparator": " ",
-                         "allowedClients": self.clients,
-                         "maximumTokenLifetimeSeconds": 300, "leewayMilliseconds": 30000,
-                         "jwksSource": {"type": "static",
-                                        "documentRef": "secret:file/jwks.json"}},
-                "authorityClaims": {"principal": "registry_principal",
-                                    "purpose": "registry_purpose"}},
-            "audit": {"hashKeyRef": "secret:file/audit-key",
-                      "path": str(private_directory(path.parent / "audit") / "breg.jsonl")},
-            "cursor": {"secretRef": "secret:file/cursor-key"},
-        })
-
-    def credentials(self, path: Path) -> None:
-        journeys = load_yaml(self.project / "tests" / "journeys.yaml")
-        bindings = []
-        for journey in journeys["journeys"]:
-            for step in journey["steps"]:
-                claims = step.get("claims")
-                if claims is None:
-                    # A registry serves authenticated callers only, so every
-                    # journey step is bound to a bearer token.
-                    raise RehearsalError("a BReg starter journey step names no claims")
-                name = f"journey-token-{journey['id']}-{step['id']}"
-                write_secret(self.secrets / name, self.keys.mint(
-                    "EdDSA", BREG_KID, self.claims(claims), lifetime=280))
-                credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
-                bindings.append({"journeyId": journey["id"], "stepId": step["id"],
-                                 "credential": credential})
-        path.write_text(json.dumps({**BREG_CREDENTIALS_ENVELOPE, "bindings": bindings},
-                                   indent=1))
-
-    def test_runtime(self, build: Path) -> tuple[Path, Path]:
-        """Prepare an empty schema-test database; return its runtime and credentials."""
-
-        private_directory(build)
-        self.create_database("schematest")
-        empty = private_directory(build / "empty-package-root")
-        test_runtime = build / "runtime-test.yaml"
-        self.write_runtime(test_runtime, "schematest", empty, free_port())
-        credentials = build / "credentials.json"
-        self.credentials(credentials)
-        return test_runtime, credentials
-
-    def package(self, side: Side, build: Path, baseline: Path | None = None) -> tuple[Path, str]:
-        """Test and package the project; return the package and its digest.
-
-        `baseline` is the active package this one succeeds.
-        """
-
-        test_runtime, credentials = self.test_runtime(build)
-        baseline_args = ["--baseline-package", str(baseline)] if baseline else []
-        side.run_json("bregctl", "--format", "json", "test", str(self.project),
-                      "--runtime-config", str(test_runtime), "--credentials",
-                      str(credentials), *baseline_args, "--output",
-                      str(build / "receipt.json"))
-        output = build / "out"
-        report = side.run_json("bregctl", "--format", "json", "package", str(self.project),
-                               *baseline_args, "--test-receipt", str(build / "receipt.json"),
-                               "--output", str(output))
-        digest = report.get("packageDigest")
-        if not isinstance(digest, str):
-            raise RehearsalError("bregctl package reported no packageDigest")
-        return output / "package", digest
-
-    def token(self) -> str:
-        return self.keys.mint("EdDSA", BREG_KID, self.claims(self.operator))
-
-    def call(self, method: str, path: str, body: Any = None,
-             headers: dict[str, str] | None = None,
-             content_type: str = "application/json") -> tuple[int, dict[str, str], Any]:
-        request_headers = {"Authorization": "Bearer " + self.token(),
-                           "Accept": "application/json", **(headers or {})}
-        if body is not None:
-            request_headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
-        return http(method, f"http://127.0.0.1:{self.port}{path}", headers=request_headers,
-                    body=body, content_type=content_type)
-
-    def create(self, route: str, data: dict[str, Any]) -> str:
-        status, _headers, body = self.call("POST", f"/v1/records/{route}", {"data": data})
-        expect_status(f"create {route}", status, body, 200, 201)
-        return body["data"]["recordIdentifier"]
-
-    def patch_status(self, record: str, value: str) -> None:
-        status, headers, body = self.call("GET", f"/v1/records/records/{record}")
-        expect_status("read record", status, body, 200)
-        status, _headers, body = self.call(
-            "PATCH", f"/v1/records/records/{record}",
-            [{"op": "replace", "path": "/data/status", "value": value}],
-            headers={"If-Match": headers["etag"]},
-            content_type="application/json-patch+json")
-        expect_status("patch record", status, body, 200)
-
-    def seed(self, tag: str) -> dict[str, list[str]]:
-        groups = [self.create("record-groups", {"code": f"{tag}-group-{index}",
-                                                "label": f"Group {index}"})
-                  for index in range(2)]
-        records = []
-        for index in range(4):
-            record = self.create("records", {"code": f"{tag}-record-{index}",
-                                             "label": f"Record {index}",
-                                             "group": groups[index % 2], "status": "draft"})
-            for value in ("active", "retired")[: index % 3]:
-                self.patch_status(record, value)
-            records.append(record)
-        return {"record-groups": groups, "records": records}
-
-    def views(self, seeded: dict[str, list[str]]) -> dict[str, Any]:
-        views: dict[str, Any] = {}
-        for route, identifiers in seeded.items():
-            for identifier in identifiers:
-                status, headers, body = self.call("GET", f"/v1/records/{route}/{identifier}")
-                expect_status(f"read {route}", status, body, 200)
-                data = body.get("data", {})
-                views[f"{route}/{identifier}"] = {
-                    "etag": headers.get("etag"),
-                    "domainData": data.get("domainData"),
-                    "revision": data.get("revisionIdentifier"),
-                }
-        return views
-
-
-def breg_rebuild_changes(side: Side, runtime: Path, package: Path) -> bool:
-    """Plan the predecessor rebuilt by this source's compiler. Return False
-    when bregctl refuses it only as having nothing to apply."""
-    result = side.run("bregctl", "--format", "json", "plan", "--runtime-config",
-                      str(runtime), "--package", str(package), check=False)
-    if result.returncode == 0:
-        return True
-    try:
-        codes = [entry.get("code") for entry in json.loads(result.stdout)["diagnostics"]]
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-        codes = []
-    if codes == [BREG_EMPTY_PLAN]:
-        return False
-    detail = (result.stderr or result.stdout).strip().splitlines()[-15:]
-    raise RehearsalError("bregctl plan refused the rebuilt predecessor package:\n"
-                         + "\n".join(detail))
-
-
-def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
-                  report: dict[str, Any]) -> None:
-    breg = Breg(work, keys, postgres)
-    breg.provision()
-    breg.author(old)
-    package, digest = breg.package(old, work / "build-1")
-    breg.write_runtime(breg.runtime, "registry", package, breg.port)
-    old.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
-                 str(breg.runtime), "--package", str(package), "--initial")
-    ready = f"http://127.0.0.1:{breg.port}/ready"
-    service = Service(old, "breg", breg_arguments(breg.runtime), work / "breg-old.log", ready)
-    try:
-        seeded = breg.seed("before")
-        before_views = breg.views(seeded)
-    finally:
-        service.stop()
-    before_counts = postgres.row_counts("registry")
-    claim_before = instance_claim(old, breg.runtime)
-
-    def apply(target: Path, digest: str) -> None:
-        plan = new.run_json("bregctl", "--format", "json", "plan", "--runtime-config",
-                            str(breg.runtime), "--package", str(target))
-        expect_plan(plan, "successor", digest)
-        new.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
-                     str(breg.runtime), "--package", str(target))
-        breg.write_runtime(breg.runtime, "registry", target, breg.port)
-
-    def serve(log: str) -> dict[str, Any]:
-        new.run_json("bregctl", "--format", "json", "verify", "--runtime-config",
-                     str(breg.runtime))
-        service = Service(new, "breg", breg_arguments(breg.runtime), work / log, ready)
-        try:
-            return breg.views(seeded)
-        finally:
-            service.stop()
-
-    # A package binds the compiler that built it. Rebuild against the verified
-    # predecessor and apply a changed package before any read or runtime
-    # startup with the new binaries. A rebuild always names its predecessor's
-    # digest, so an unchanged registry shows only as bregctl refusing the
-    # rebuild as an empty plan; the operator then keeps the active package.
-    predecessor_activation = "initial"
-    upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
-    if breg_rebuild_changes(new, breg.runtime, upgraded):
-        apply(upgraded, upgraded_digest)
-        predecessor_activation = "successor"
-        package = upgraded
-    breg.write_runtime(breg.runtime, "registry", package, breg.port)
-    # Count rows before the upgraded runtime can obscure a loss with its writes.
-    losses = row_count_losses(before_counts, postgres.row_counts("registry"))
-    claim_after = instance_claim(new, breg.runtime)
-    upgraded_views = serve("breg-upgraded.log")
-
-    # An additive successor proves the upgraded ledger moves forward.
-    registry = load_yaml(breg.project / "registry.yaml")
-    group = next(entity for entity in registry["entities"] if entity["id"] == "record-group")
-    group["fields"].append({"id": "rehearsal-note", "type": "string", "maximumLength": 200,
-                            "classification": "public"})
-    dump_yaml(breg.project / "registry.yaml", registry)
-    successor, successor_digest = breg.package(new, work / "build-successor", baseline=package)
-    apply(successor, successor_digest)
-    ledger = expect_ledger(
-        new.run_json("bregctl", "--format", "json", "status", "--runtime-config",
-                     str(breg.runtime)), successor_digest)
-    expected = [f"{predecessor_activation}:applied", "successor:applied"]
-    if ledger[-2:] != expected:
-        raise RehearsalError(f"the activation ledger recorded {ledger}, expected it to end "
-                             f"with {expected}")
-    successor_views = serve("breg-successor.log")
-    losses += row_count_losses(before_counts, postgres.row_counts("registry"))
-    service = Service(new, "breg", breg_arguments(breg.runtime), work / "breg-written.log",
-                      ready)
-    try:
-        written = breg.seed("after")
-        breg.views(written)
-    finally:
-        service.stop()
-    new.run_json("bregctl", "--format", "json", "doctor", "--runtime-config", str(breg.runtime))
-    differences = (breg_view_differences(before_views, upgraded_views)
-                   + breg_view_differences(before_views, successor_views)
-                   + claim_differences(claim_before, claim_after))
-
-    report["breg"] = {
-        "records": sum(len(value) for value in seeded.values()),
-        "tables": len(before_counts),
-        "ledger": ledger,
-        "instanceClaimRecordedBeforeUpgrade": claim_before is not None,
-        "viewDifferences": differences,
-        "rowLosses": losses,
-    }
-    if differences or losses:
-        raise RehearsalError("Base Registry Engine state did not survive the upgrade: "
-                             + "; ".join(differences + losses))
-
-
-# ---------------------------------------------------------------------------
-# Casework: activate, bootstrap, write review work, upgrade and apply,
-# compare.
-
-
-CASEWORK_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
-CASEWORK_AUDIENCE = "urn:upgrade-rehearsal:casework"
-CASEWORK_KID = "upgrade-rehearsal-rsa"
-CASEWORK_DATABASE_ID = "upgrade-rehearsal-casework"
-CASEWORK_OPERATOR_REFERENCE = "upgrade-rehearsal"
-CASEWORK_ALREADY_ACTIVE = "casework.activation.already-active"
-# What the upgraded runtime appends to the audit stream in `rehearse_casework`:
-# deciding a review task writes one request entry and one response entry.
-# Reading the views and creating a review request write none.
-CASEWORK_UPGRADED_AUDIT_RECORDS = 2
-CASEWORK_ACTORS = {
-    "administrator": ("upgrade-rehearsal-admin", "casework:admin", True),
-    "staff": ("upgrade-rehearsal-staff", "casework:staff", True),
-    "supervisor": ("upgrade-rehearsal-supervisor", "casework:supervisor", True),
-    "requester": ("upgrade-rehearsal-requester", "casework:request", False),
-}
-
-
-class Casework:
-    def __init__(self, work: Path, keys: Keys, postgres: Postgres) -> None:
-        self.work = private_directory(work)
-        self.keys = keys
-        self.postgres = postgres
-        self.secrets = private_directory(work / "secrets")
-        self.audit = private_directory(work / "audit")
-        self.project = work / "project"
-        self.package = work / "package"
-        self.runtime = work / "runtime.yaml"
-        self.port = free_port()
-
-    def provision(self) -> None:
-        migration, runtime = secrets.token_hex(16), secrets.token_hex(16)
-        self.postgres.sql("postgres", f"""
-            CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-              NOINHERIT NOBYPASSRLS PASSWORD '{migration}';
-            CREATE ROLE casework_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-              NOINHERIT NOBYPASSRLS PASSWORD '{runtime}';
-        """)
-        self.postgres.sql("postgres", "CREATE DATABASE casework;")
-        self.postgres.sql("casework", """
-            REVOKE ALL ON DATABASE casework FROM PUBLIC;
-            GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
-            ALTER SCHEMA public OWNER TO casework_migration;
-            REVOKE ALL ON SCHEMA public FROM PUBLIC;
-            GRANT USAGE ON SCHEMA public TO casework_runtime;
-            ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
-              GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO casework_runtime;
-            ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
-              GRANT USAGE, SELECT ON SEQUENCES TO casework_runtime;
-        """)
-        write_secret(self.secrets / "runtime-url",
-                     self.postgres.url("casework_runtime", runtime, "casework"))
-        write_secret(self.secrets / "migration-url",
-                     self.postgres.url("casework_migration", migration, "casework"))
-        write_secret(self.secrets / "database-root.pem", self.postgres.ca_file.read_bytes())
-        write_secret(self.secrets / "audit-key", secrets.token_hex(32))
-        write_secret(self.secrets / "jwks.json",
-                     json.dumps({"keys": [self.keys.rsa_jwk(CASEWORK_KID)]}))
-
-    def author(self, side: Side) -> None:
-        side.run("caseworkctl", "init", "--template", "standalone-decision", str(self.project))
-        project = load_yaml(self.project / "casework.yaml")
-        producers = project.get("reviewProducers") or []
-        if len(producers) != 1:
-            raise RehearsalError("the Casework starter must declare exactly one producer")
-        producers[0]["issuer"] = CASEWORK_ISSUER
-        producers[0]["subject"] = CASEWORK_ACTORS["requester"][0]
-        dump_yaml(self.project / "casework.yaml", project)
-        side.run("caseworkctl", "package", str(self.project), "--output", str(self.package))
-        dump_yaml(self.runtime, {
-            "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1",
-            "kind": "CaseworkRuntimeConfig",
-            "package": {"root": str(self.package)},
-            "listener": {"bind": f"127.0.0.1:{self.port}",
-                         "tlsTermination": "development-loopback",
-                         "networkExposure": "private-address"},
-            "secretProviders": {"file": {"root": str(self.secrets)}},
-            "database": {"runtimeUrlRef": "secret:file/runtime-url",
-                         "migrationUrlRef": "secret:file/migration-url",
-                         "trustedRootCertificateRef": "secret:file/database-root.pem"},
-            "authentication": {"oidc": {
-                "issuer": CASEWORK_ISSUER, "audience": CASEWORK_AUDIENCE,
-                "scopeClaim": "scope", "allowedClients": "unrestricted",
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"},
-                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
-            "audit": {"path": str(self.audit / "casework.ndjson"),
-                      "hashKeyRef": "secret:file/audit-key"},
-        })
-
-    def activate(self, side: Side, active: str | None = None) -> dict[str, Any]:
-        """Name the database in runtime.yaml, then plan and apply with the
-        migration credential, the upgrade step the Casework changelog names.
-        The first apply on an empty database migrates it and records the
-        first activation.
-
-        `active` is the activation the previous release already recorded. When
-        plan reports that activation as already active with nothing pending,
-        apply would refuse, so nothing is applied. Returns the apply report,
-        or the active activation when nothing was applied."""
-        runtime = load_yaml(self.runtime)
-        runtime.setdefault("identity", {})["databaseId"] = CASEWORK_DATABASE_ID
-        dump_yaml(self.runtime, runtime)
-        config = ["--runtime-config", str(self.runtime)]
-        planned = side.run_json("caseworkctl", "--format", "json", "plan", *config)
-        if planned.get("changesPending") is True:
-            return side.run_json("caseworkctl", "--format", "json", "apply", *config,
-                                 "--operator-reference", CASEWORK_OPERATOR_REFERENCE)
-        if active is None:
-            raise RehearsalError("caseworkctl plan reported nothing pending before the "
-                                 "first activation")
-        current = planned.get("active") or {}
-        refusals = [refusal.get("code") for refusal in planned.get("refusals") or []]
-        if current.get("activationId") != active or refusals != [CASEWORK_ALREADY_ACTIVE]:
-            raise RehearsalError("caseworkctl plan reported nothing pending without naming "
-                                 "the previous release's activation as already active")
-        return current
-
-    def call(self, actor: str, method: str, path: str, body: Any = None,
-             headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
-        subject, scope, human = CASEWORK_ACTORS[actor]
-        claims: dict[str, Any] = {"iss": CASEWORK_ISSUER, "aud": CASEWORK_AUDIENCE,
-                                  "sub": subject, "scope": scope, "client_id": subject}
-        if human:
-            claims["registry_actor_kind"] = "human"
-        request_headers = {
-            "Authorization": "Bearer " + self.keys.mint("RS256", CASEWORK_KID, claims),
-            "Accept": "application/json", "Registry-Casework-Profile": actor,
-            **(headers or {})}
-        if method == "POST":
-            request_headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
-        return http(method, f"http://127.0.0.1:{self.port}{path}",
-                    headers=request_headers, body=body)
-
-    def bootstrap(self) -> None:
-        status, _headers, body = self.call("administrator", "POST", "/v1/directory/bootstrap", {
-            "teamId": "decisions-team", "queueId": "decisions",
-            "staff": [{"issuer": CASEWORK_ISSUER, "subject": CASEWORK_ACTORS["staff"][0]}],
-            "supervisors": [{"issuer": CASEWORK_ISSUER,
-                             "subject": CASEWORK_ACTORS["supervisor"][0]}],
-        }, {"If-Match": '"0"'})
-        expect_status("directory bootstrap", status, body, 200, 201)
-
-    def request_review(self, reference: str) -> str:
-        digest = hashlib.sha256(reference.encode()).hexdigest()
-        status, _headers, body = self.call("requester", "POST", "/v1/review-requests", {
-            "kind": "decision",
-            "subject": {"source": "standalone", "type": "batch", "id": reference,
-                        "version": "1", "digest": f"sha256:{digest}"},
-            "requesterReference": reference,
-            "context": {"strategy": "submitted",
-                        "snapshot": {"summary": f"Upgrade rehearsal {reference}",
-                                     "reference": reference}},
-        })
-        expect_status("review request", status, body, 201)
-        return body["requestId"]
-
-    def tasks(self) -> list[dict[str, Any]]:
-        status, _headers, body = self.call("staff", "GET", "/v1/review-tasks?limit=25")
-        expect_status("review tasks", status, body, 200)
-        return body["items"]
-
-    def task_for(self, request_id: str) -> dict[str, Any]:
-        for task in self.tasks():
-            if task.get("requestId") == request_id:
-                return task
-        raise RehearsalError(f"no review task is open for request {request_id}")
-
-    def claim(self, request_id: str) -> dict[str, Any]:
-        task = self.task_for(request_id)
-        status, _headers, body = self.call(
-            "staff", "POST", f"/v1/review-tasks/{task['taskId']}/claim",
-            headers={"If-Match": f'"{task["revision"]}"'})
-        expect_status("claim review task", status, body, 200)
-        return body
-
-    def decide(self, request_id: str) -> None:
-        task = self.task_for(request_id)
-        status, _headers, body = self.call(
-            "staff", "POST", f"/v1/review-tasks/{task['taskId']}/decisions",
-            {"decision": {"type": "answer", "outcome": "confirmed"}},
-            {"If-Match": f'"{task["revision"]}"'})
-        expect_status("decide review task", status, body, 204)
-
-    def views(self, requests: list[str]) -> dict[str, Any]:
-        views: dict[str, Any] = {"tasks": sorted(
-            (task.get("taskId"), task.get("requestId"), task.get("state"),
-             task.get("revision")) for task in self.tasks())}
-        for request_id in requests:
-            status, _headers, body = self.call("requester", "GET",
-                                               f"/v1/review-requests/{request_id}")
-            expect_status("read review request", status, body, 200)
-            views[f"request/{request_id}"] = body
-            status, _headers, body = self.call("requester", "GET",
-                                               f"/v1/review-requests/{request_id}/result")
-            views[f"result/{request_id}"] = {"status": status, "body": body}
-        return views
-
-
-def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
-                      report: dict[str, Any]) -> None:
-    casework = Casework(work, keys, postgres)
-    casework.provision()
-    casework.author(old)
-    runtime = ["--runtime-config", str(casework.runtime)]
-    seeded = casework.activate(old)["activationId"]
-    ready = f"http://127.0.0.1:{casework.port}/ready"
-    service = Service(old, "casework", [*runtime, "serve"], work / "casework-old.log", ready)
-    try:
-        casework.bootstrap()
-        requests = [casework.request_review(f"before-{index}") for index in range(3)]
-        casework.claim(requests[0])
-        casework.decide(requests[0])
-        casework.claim(requests[1])
-        before_views = casework.views(requests)
-        if (before_views[f"result/{requests[0]}"]["status"] != 200
-                or len(before_views["tasks"]) < 2):
-            raise RehearsalError("the previous release did not record the answered "
-                                 "and in-flight review work the rehearsal compares")
-    finally:
-        service.stop()
-    before_counts = postgres.row_counts("casework")
-    records_before = audit_record_count(casework.audit, "casework.ndjson")
-
-    activation = casework.activate(new, seeded)
-    losses = row_count_losses(before_counts, postgres.row_counts("casework"))
-    service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
-    try:
-        after_views = casework.views(requests)
-        differences = view_differences(before_views, after_views)
-        casework.decide(requests[1])
-        casework.request_review("after-0")
-    finally:
-        service.stop()
-    losses += row_count_losses(before_counts, postgres.row_counts("casework"))
-    records_after = audit_record_count(casework.audit, "casework.ndjson")
-    losses += audit_stream_losses("Casework", records_before, records_after,
-                                  CASEWORK_UPGRADED_AUDIT_RECORDS)
-    new.run_json("caseworkctl", "--format", "json", "check", str(casework.project))
-
-    report["casework"] = {
-        "reviewRequests": len(requests),
-        "tables": len(before_counts),
-        "auditRecordsBefore": records_before,
-        "auditRecordsAfter": records_after,
-        "activationId": activation["activationId"],
-        "activatedOnUpgrade": activation["activationId"] != seeded,
-        "viewDifferences": differences,
-        "rowLosses": losses,
-    }
-    if differences or losses:
-        raise RehearsalError("Casework state did not survive the upgrade: "
-                             + "; ".join(differences + losses))
-
-
-# ---------------------------------------------------------------------------
 # Messaging: activate the starter, schedule and cancel messages, upgrade,
 # compare.
 
@@ -1704,6 +1074,9 @@ class Messaging:
             "authentication": {"oidc": {
                 "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
                 "allowedClients": ["case-system", "operations-console"],
+                # The scope claim default differs between releases, and one
+                # runtime file serves both sides, so it is named explicitly.
+                "scopeClaim": "registry_scopes",
                 "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
             "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},
@@ -1848,43 +1221,26 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
 EVIDENCE_KID = "upgrade-rehearsal-evidence-issuer"
 EVIDENCE_REQUIREMENT = "urn:example:requirement:record-status:v1"
 EVIDENCE_PURPOSE = "record-status-check"
-EVIDENCE_LOCAL_IDENTIFIERS = "urn:registrystack:evidence:local:"
-EVIDENCE_REHEARSAL_IDENTIFIERS = "urn:example:upgrade-rehearsal:"
 EVIDENCE_PUBLIC_ORIGIN = "https://evidence.example.test"
 
 
-def evidence_production_governance(document: dict[str, Any], issuer: str,
-                                   public_jwk_file: str) -> dict[str, Any]:
-    """Turn the governance `target new --local` writes into a production one:
-    `evidencectl package` refuses a local target, and a production profile
-    refuses the local starter's disposable identifiers, plain-HTTP origins,
-    and empty response formats."""
+def evidence_production_target(document: dict[str, Any], issuer: str,
+                               public_jwk_file: str) -> dict[str, Any]:
+    """Configure the normalized local target for production Transit signing.
 
-    text = json.dumps(document).replace(EVIDENCE_LOCAL_IDENTIFIERS,
-                                        EVIDENCE_REHEARSAL_IDENTIFIERS)
-    governance = json.loads(text)
-    governance["assuranceProfile"] = "production"
-    governance["service"]["publicOrigin"] = EVIDENCE_PUBLIC_ORIGIN
-    governance["publication"]["endpointUrl"] = EVIDENCE_PUBLIC_ORIGIN
-    governance["responseFormats"] = ["signed-jws"]
-    governance["signing"]["activePublicJwkFile"] = public_jwk_file
-    # A local target grants every starter request implicitly; production
-    # names the one path the rehearsal's request takes.
-    for profile in governance["authorityProfiles"].values():
-        if not profile["grants"]:
-            profile["grants"] = [{
-                "requirement": EVIDENCE_REQUIREMENT, "purpose": EVIDENCE_PURPOSE,
-                "audienceFrom": "authenticated-requester", "responseFormats": ["signed-jws"],
-                "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
-                              "valueOrigin": "request"}]}]
-    oidc = governance["authentication"]["oidc"]
+    Complete grants remain in the target's separate authority document.
+    """
+    target = json.loads(json.dumps(document))
+    target["assuranceProfile"] = "production"
+    target["service"]["publicOrigin"] = EVIDENCE_PUBLIC_ORIGIN
+    target["responseFormats"] = ["signed-jws"]
+    target["signer"] = {"type": "transit", "algorithm": "ES256",
+                        "publicJwkFile": public_jwk_file}
+    oidc = target["authentication"]["oidc"]
     oidc["issuer"] = issuer
+    oidc["algorithms"] = ["RS256"]
     oidc["jwksSource"] = {"type": "uri", "uri": f"{issuer}/oauth2/jwks"}
-    return governance
-
-
-def breg_arguments(runtime: Path) -> list[str]:
-    return ["--runtime-config", str(runtime)]
+    return target
 
 
 def evidence_arguments(runtime: Path, subcommand: str) -> list[str]:
@@ -1910,37 +1266,41 @@ class Evidence:
         signing_key.chmod(0o600)
         self.signing_jwk = ec_public_jwk(signing_key)
         self.transit = TransitServer(signing_key)
-        self.governance: dict[str, Any] = {}
+        self.target_document: dict[str, Any] = {}
+        self.authority: dict[str, Any] = {}
+        self.ca_file = tls / "ca.pem"
+        self.ca_file.chmod(0o444)
 
     def stop(self) -> None:
         self.jwks.stop()
         self.transit.stop()
 
-    def target_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
-        """Point a target runtime at this rehearsal's listener, audit file,
-        extract, Transit signer, and installed package."""
-
-        runtime["signer"] = {"type": "transit", "unixSocketPath": str(self.transit.socket_path),
-                             "mount": "transit", "keyName": TransitServer.KEY_NAME,
-                             "keyVersion": 1, "attemptTimeoutMilliseconds": 2000}
-        # The package is installed at a stable path outside the candidate.
-        runtime["package"]["root"] = str(self.installed)
-        runtime["listener"]["bind"] = f"127.0.0.1:{self.port}"
-        runtime["audit"]["path"] = str(self.audit / "evidence.jsonl")
+    def deployment_target(self, target: dict[str, Any]) -> dict[str, Any]:
+        """Bind authored target resources to the rehearsal's stable locations."""
+        target["signer"].update({"unixSocketPath": str(self.transit.socket_path),
+                                  "mount": "transit", "keyName": TransitServer.KEY_NAME,
+                                  "keyVersion": 1, "attemptTimeoutMilliseconds": 2000})
+        target["package"]["root"] = str(self.installed / "bundle")
+        target["listener"].update({"bind": f"127.0.0.1:{self.port}",
+                                    "tlsTermination": "operator-controlled-upstream"})
+        target["audit"]["path"] = str(self.audit / "evidence.jsonl")
+        target["secretProviders"]["file"]["root"] = str(self.project / ".generated" / "secrets")
+        target["authentication"]["oidc"]["tlsTrustProfile"] = "rehearsal"
+        target["outboundTls"] = {"systemRoots": True, "trustProfiles": {
+            "rehearsal": {"caBundleFile": str(self.ca_file)}}}
         extract = self.work / "record-status.sqlite"
         if not extract.exists():
             self.extract()
-        runtime["sourceExtracts"] = {"record-status-extract": {"path": str(extract)}}
-        return runtime
+        target["extracts"] = {"record-status": {"path": str(extract)}}
+        return target
 
     def package(self, side: Side, candidate: Path) -> None:
         """Package the target, install the package, and write the operative
         runtime beside it."""
 
-        target_runtime = self.target / "runtime.yaml"
         side.run("evidencectl", "package", "--target", str(self.target), "--output",
                  str(candidate), str(self.project))
-        runtime = load_yaml(target_runtime)
+        runtime = load_yaml(candidate / "runtime.yaml")
         if self.installed.exists():
             # evidencectl seals every package directory read-only.
             for directory, _, _ in os.walk(self.installed):
@@ -1952,25 +1312,25 @@ class Evidence:
         dump_yaml(self.runtime, runtime)
         # Evidence refuses a deployment input it could rewrite.
         self.runtime.chmod(0o444)
+        side.run("evidence", "authority", "activate", "--runtime-config", str(self.runtime),
+                 "--document", str(self.installed / "compiled-authority.yaml"))
 
     def author(self, side: Side) -> None:
-        side.run("evidencectl", "new", "--transport", "sqlite-extract", "--profile", "local",
+        side.run("evidencectl", "init", "--transport", "sqlite-extract", "--profile", "local",
                  str(self.project))
         side.run("evidencectl", "target", "new", "--local", "--project", str(self.project),
                  str(self.target))
         # `evidencectl package` refuses a local target, so the rehearsal
         # deploys a production one signing through Transit.
         public_keys = self.target / "public-keys"
-        for stale in public_keys.iterdir():
-            stale.unlink()
+        public_keys.mkdir(exist_ok=True)
         public_jwk_file = f"public-keys/{self.signing_jwk['kid']}.jwk.json"
         (self.target / public_jwk_file).write_text(json.dumps(self.signing_jwk) + "\n")
-        governance_path = self.target / "governance.yaml"
-        self.governance = evidence_production_governance(load_yaml(governance_path),
-                                                         self.issuer, public_jwk_file)
-        dump_yaml(governance_path, self.governance)
-        target_runtime = self.target / "runtime.yaml"
-        dump_yaml(target_runtime, self.target_runtime(load_yaml(target_runtime)))
+        target_path = self.target / "target.yaml"
+        self.target_document = self.deployment_target(evidence_production_target(
+            load_yaml(target_path), self.issuer, public_jwk_file))
+        dump_yaml(target_path, self.target_document)
+        self.authority = load_yaml(self.target / self.target_document["authority"])
         self.package(side, self.candidate)
 
     def upgrade(self, side: Side) -> None:
@@ -2000,15 +1360,15 @@ class Evidence:
         return path
 
     def request(self) -> tuple[int, Any]:
-        authentication = self.governance["authentication"]["oidc"]
-        profile = next(iter(self.governance["authorityProfiles"].values()))
+        authentication = self.target_document["authentication"]["oidc"]
+        profile = next(iter(self.authority["accessProfiles"].values()))
         claims = {"iss": self.issuer, "aud": authentication["audience"],
                   "sub": "upgrade-rehearsal-caller", "client_id": "upgrade-rehearsal-caller",
                   "scope": " ".join(authentication["requiredScopes"]),
                   "registry_actor_kind": "service",
                   authentication["requesterTagsClaim"]: profile["requesterTags"],
                   authentication["evidenceAudienceClaim"]:
-                      EVIDENCE_REHEARSAL_IDENTIFIERS + "caller"}
+                      authentication["audience"]}
         token = self.keys.mint("RS256", EVIDENCE_KID, claims)
         status, _headers, body = http(
             "POST", f"http://127.0.0.1:{self.port}/v1/evidence",
@@ -2016,8 +1376,8 @@ class Evidence:
             body={"requestNonce": b64url(secrets.token_bytes(32)),
                   "requirement": EVIDENCE_REQUIREMENT, "purpose": EVIDENCE_PURPOSE,
                   "subjects": [{"role": "subject", "selector": {
-                      "profile": "record-reference-v1",
-                      "values": {"record_reference": "REC-0001"}}}]})
+                      "profile": "record-reference",
+                      "values": {"record-reference": "REC-0001"}}}]})
         return status, body
 
 
@@ -2119,9 +1479,8 @@ def check_binaries(side: Side, expected_version: str | None,
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--to-bin-dir", type=Path,
-                        help="directory holding breg, bregctl, casework, caseworkctl, "
-                             "evidence, evidencectl, messaging, and messagingctl built "
-                             "from this source")
+                        help="directory holding evidence, evidencectl, "
+                             "messaging, and messagingctl built from this source")
     parser.add_argument("--fetch-only", action="store_true",
                         help="download and authenticate the previous release's binaries "
                              "into WORK_DIR/from-bin, check their versions, and stop")
@@ -2134,7 +1493,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="new directory for the rehearsal's state and logs")
     parser.add_argument("--container-name", default="registry-upgrade-rehearsal-postgres",
                         help="name of the disposable PostgreSQL container")
-    parser.add_argument("--product", action="append", choices=PRODUCTS,
+    parser.add_argument("--product", action="append", choices=PRODUCT_CHOICES,
                         help="rehearse only the named products; repeatable")
     parser.add_argument("--from-bin-dir", type=Path,
                         help="use these previous-release binaries instead of downloading "
@@ -2151,6 +1510,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
+        for product in args.product or []:
+            if product in RETIRED_PRODUCTS:
+                raise RehearsalError(RETIRED_PRODUCTS[product])
         version = workspace_version(ROOT)
         check_floor_is_current(released_versions(ROOT), version)
         from_tag = args.from_tag or select_from_tag(published_tags(), version)
@@ -2176,6 +1538,13 @@ def main(argv: list[str]) -> int:
                                   "platform": args.platform, "omitted": omitted}
         for product, reason in omitted.items():
             print(f"omitting {product}: {reason}", flush=True)
+        if not products:
+            report["fromProvenance"] = "no supported product predecessor selected"
+            if args.report:
+                args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            print("no supported predecessor legs to rehearse", flush=True)
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
         binaries = product_binaries(products)
         if unpublished:
             from_bin = args.to_bin_dir.resolve()
@@ -2203,18 +1572,14 @@ def main(argv: list[str]) -> int:
         keys = Keys(work / "keys")
         postgres = None
         try:
-            if {"breg", "casework", "messaging"} & set(products):
+            if "messaging" in products:
                 postgres = Postgres(args.container_name, tls)
             else:
                 Postgres._make_certificates(tls)
             for product in products:
                 print(f"rehearsing {product}: {from_tag} -> workspace {version}", flush=True)
                 leg_work = work / product
-                if product == "breg":
-                    rehearse_breg(leg_work, keys, postgres, old, new, report)
-                elif product == "casework":
-                    rehearse_casework(leg_work, keys, postgres, old, new, report)
-                elif product == "messaging":
+                if product == "messaging":
                     rehearse_messaging(leg_work, keys, postgres, old, new, report)
                 else:
                     rehearse_evidence(leg_work, keys, tls, old, new, report)

@@ -1,8 +1,7 @@
-# Breaking HTTP response change: Registry Record profile
+# Record responses and historical queries
 
 Successful record HTTP responses now use the shared Registry Record v1 profile.
-The previous single-record shape `{id, revision, data}` and mutation shape
-`{id, revision, snapshot, data}` are no longer served. A single record is now:
+A single record uses:
 
 ```json
 {
@@ -46,7 +45,7 @@ multiple rows return the same value-free `lookup.unresolved` problem. Malformed
 requests remain `400`; source and audit failures remain `503`. Existing Registry
 BReg problem identifiers are unchanged in this release.
 
-Batch mutations, change-request actions, immediate actions, and GeoJSON remain
+Batch mutations, Action receipts, Proposals, and GeoJSON remain
 named separate response shapes. Generated and caller-filtered OpenAPI documents
 declare each route's exact shape and media-specific closed schema. Operations
 that also serve GeoJSON use `x-registry-responseShapes` to assign every media
@@ -62,144 +61,10 @@ GeoJSON branch remains the named BReg shape in the media map.
 | Revision list | `BRegRevisionCollectionV1`, a shared collection of revision records |
 | Snapshot query | `BRegSnapshotCollectionV1`, a shared collection with snapshot selection metadata |
 | Batch mutation | `BRegAtomicBatchMutationResponseV1` |
-| Change-request and immediate actions | Their operation-specific BReg response shapes |
+| Actions and Proposals | Their operation-specific BReg response shapes |
 | GeoJSON get and list | `BRegGeoJsonFeatureV1` and `BRegGeoJsonFeatureCollectionV1` |
 
-# Breaking authoring change: plural catalogue resources
-
-`manifestProjection.dataset` and `manifestProjection.dataService` were removed.
-Projects now declare `project.canonicalBaseIri`, publisher `id`, one
-`publicService`, plural `datasets`, plural `dataServices` with nonempty
-`servesDatasets`, optional `distributions`, and one `primaryDataset` on every
-entity. Declare `datasets[]` and `dataServices[]` by hand, each with an `id`,
-and point every entity's `primaryDataset` at one of them.
-
-# Breaking authoring change: entity hooks
-
-`entities[].events` and `extendEntities[].events` were replaced by
-`entities[].hooks` and `extendEntities[].hooks`, which declare the shared
-Registry Stack hook shape from `registry-platform-hooks`. A hook adds a
-required `phase` and replaces the `webhook` member with a `handler` union
-tagged by `kind`. The old member is refused at compile time as an unknown
-field, so a project that still authors it fails to compile rather than
-silently losing its events.
-
-Before:
-
-```yaml
-entities:
-  - id: case
-    events:
-      - id: case-approved-v1
-        trigger: patched
-        projection: [status]
-        webhook:
-          destinationId: eligibility-service
-```
-
-After:
-
-```yaml
-entities:
-  - id: case
-    hooks:
-      - id: case-approved-v1
-        phase: after
-        trigger: patched
-        projection: [status]
-        handler:
-          kind: url
-          destinationId: eligibility-service
-```
-
-The rewrite is mechanical: rename the member to `hooks`, add `phase: after` to
-every hook, and replace `webhook: {destinationId: X}` with
-`handler: {kind: url, destinationId: X}`. `id`, `trigger`, `projection`, and
-`when` keep their spelling and meaning. An entity hook runs after the
-triggering transaction commits, so the compiler refuses `phase: before`. The
-local `rhai` and `wasm` handler kinds the shared declaration also offers run in
-the post-commit worker and name a reviewed script or module path instead of a
-destination.
-
-Runtime `eventDestinations` keeps its name and its keys, and retained delivery
-state keyed on the compiled delivery id survives a package upgrade. The stored
-and delivered body is the shared hook envelope rather than the bare
-CloudEvents request, and `X-Registry-Signature` covers exactly the envelope
-bytes a receiver is sent. A receiver built against the earlier request shape
-must verify the new body, and the outbox must be drained before upgrading.
-Diagnostic codes still read `event.*`, because they name the operator-facing
-concept rather than the authored member.
-
-Because a module's lock digest covers its parsed document, renaming the member
-changes every locked digest. Run `bregctl project lock PROJECT` after the
-rewrite.
-
-`caseworkctl source add` writes the new shape. A registry connected by an
-earlier `caseworkctl` carries the old member and must be rewritten by hand or
-reconnected.
-
-Projects maintained outside this repository need the same rewrite. The adopter
-demo in [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab)
-authors the old member and is not updated by this change.
-
-# Breaking authoring change: changeRequest review moves to an external authority
-
-`changeRequest.review.mode` and `changeRequest.review.stages` were removed.
-Review authority for a change request is now delegated to an external review
-producer through the runtime's `reviewAuthorities` block: author
-`review.authority` naming that authority id and `review.policyId` naming the
-policy it evaluates. `application` was renamed to `onApproved`;
-`application.mode` is now `onApproved.mode`, still `manual` or `automatic`.
-
-Before:
-
-```yaml
-changeRequest:
-  review:
-    stages:
-      - id: review
-        approvals: 1
-        excludeSubmitter: true
-  application:
-    mode: manual
-```
-
-After:
-
-```yaml
-changeRequest:
-  review:
-    authority: casework
-    policyId: lot-number-correction
-  onApproved:
-    mode: manual
-```
-
-The `approve_request`, `reject_request`, and `request_revision` profile
-operations were removed; a profile now needs only `get` and `apply_request` to
-apply a reviewed request. The per-stage `reviewStages` permission targets were
-removed from apply profiles in favor of a top-level `applyTargets` list, and
-both the submitter and application profiles gained `readableRequestFields` for
-the fields the external reviewer needs to read, such as `reason` and
-`review_state`.
-
-Add a `reviewAuthorities` entry in runtime configuration for every authority id
-a project's `review.authority` names. Each entry requires `endpoint`,
-`profile`, `producerId`, and `recoveryDays`, authenticates with either
-`privateKeyJwt` or an opaque `tokenRef`, and a completion-notified authority
-also sets `completionTokenRef` and `completionRecipient`. `bregctl dev` and
-`source add --apply` write this block and the paired Casework producer binding
-automatically; see [Review BReg changes in Casework](../../docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx)
-for the full authoring and binding shape.
-
-`caseworkctl source add` writes the new shape. A registry still authoring
-`review.stages` or `application`, or a profile still granting the three
-retired operations, must be rewritten by hand: replace the review stage list
-with an authority binding, rename `application` to `onApproved`, remove the
-retired operations, and add a `reviewAuthorities` entry for the named
-authority.
-
-# Corrections and historical queries
+## Corrections and historical queries
 
 Base Registry Engine retains complete stored-record revisions. A successful mutation
 returns a `snapshot` reference for its committed change. Every item in a
@@ -232,8 +97,7 @@ The start is required. Both fields use the same `date` or `timestamp` type; the
 end can be null. Intervals include the start and exclude the end. A non-null end
 must be later than the start. To prohibit overlapping intervals for a subject,
 add a `temporal-non-overlap` constraint with its `scopeFields` and the same two
-boundary fields. The deprecated `temporal.scopeFields` spelling is only a
-transition aid and must match an explicit non-overlap constraint.
+boundary fields.
 
 Grant the `snapshot` operation explicitly to an authenticated access profile.
 Live `list` access and per-record `revisions` access do not grant snapshot access.
@@ -303,7 +167,7 @@ unless every affected revision is currently visible to that caller.
 
 ## Coverage and operating limits
 
-History starts at an exact empty or verified existing-data baseline. A saved
+Initial activation installs an empty history baseline. A saved
 reference never falls back to current data. Authorized queries return
 `503 source.unavailable` when required history, compatible field metadata or a
 database execution budget is unavailable. Unauthorized callers retain ordinary
@@ -325,8 +189,7 @@ A chunked backfill is a direct reviewed `UPDATE` of one retained entity per
 chunk of at most 1,000 record identifiers; each chunk commits on its own with
 one migration commit for the rows it changed, so a resumed backfill never
 journals a committed chunk twice and the table size is bounded only by the
-step's `maxTotalRows`. Establishing an existing-data baseline also has a
-1,000-row limit.
+step's `maxTotalRows`.
 Unsupported data-changing migrations refuse before changing records. Runtime
 credentials do not acquire journal UPDATE or DELETE authority.
 
@@ -341,7 +204,7 @@ Prepare an absolute, owner-only JSON file, using permissions `0600` on Unix:
 
 ```json
 {
-  "entityId": "membership-record",
+  "recordType": "membership-record",
   "recordId": "00000000-0000-4000-8000-000000000001",
   "eraseThroughRevision": 2,
   "operatorReference": "approved-maintenance-001",
@@ -426,7 +289,8 @@ coverage baseline to it. It resurrects nothing: snapshot references before the
 new baseline remain unavailable, because the bytes they named are gone. The
 command refuses when coverage is already complete, when the registry is not
 ready, when a retained journal head is not indexed by a commit, and when a live
-row has no retained journal head that reproduces it. The 1,000-row live bound
-that applies to establishing an existing-data baseline applies here too. The
-result and keyed audit contain counts and positions, not record values; the
+row has no retained journal head that reproduces it. Verification pages through
+the live rows to bound memory; there is no total live-row cap. The transaction
+holds every Record type table in ACCESS EXCLUSIVE mode, so reads and writes wait
+until verification commits. The result and keyed audit contain counts and positions, not record values; the
 operator reference is recorded as a keyed hash.

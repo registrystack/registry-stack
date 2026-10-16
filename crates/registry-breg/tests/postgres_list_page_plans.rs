@@ -314,7 +314,7 @@ fn compile_registry() -> CompiledRegistry {
         .expect("test Registry compiles")
 }
 
-const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[
+const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[
   {"id":"asset","primaryDataset":"list-page-plan-registry","route":"assets","mutationMode":"mutable","classification":"internal",
    "fields":[{"id":"kind","type":"string","maximumLength":16,"required":true,"classification":"internal"},
              {"id":"code","type":"string","maximumLength":24,"required":true,"classification":"internal"},
@@ -327,7 +327,7 @@ const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/modul
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"list-page-plan-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://list-page-plan.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://list-page-plan.example.test","title":"List Page Plan Registry","publisher":{{"id":"list-page-plan-registry-authority","name":"List Page Plan Publisher"}}}},"publicService":{{"id":"list-page-plan-registry-service","title":"List Page Plan Registry"}},"datasets":[{{"id":"list-page-plan-registry","title":"List Page Plan Dataset","owner":"List Page Plan Publisher","status":"active"}}],"dataServices":[{{"id":"list-page-plan-registry-data-service","title":"List Page Plan Registry","endpointUrl":"https://list-page-plan.example.test","servesDatasets":["list-page-plan-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "list-page-plan-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"list-page-plan-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://list-page-plan.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://list-page-plan.example.test","title":"List Page Plan Registry","publisher":{{"id":"list-page-plan-registry-authority","name":"List Page Plan Publisher"}}}},"publicService":{{"id":"list-page-plan-registry-service","title":"List Page Plan Registry"}},"datasets":[{{"id":"list-page-plan-registry","title":"List Page Plan Dataset","owner":"List Page Plan Publisher","status":"active"}}],"dataServices":[{{"id":"list-page-plan-registry-data-service","title":"List Page Plan Registry","endpointUrl":"https://list-page-plan.example.test","servesDatasets":["list-page-plan-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }

@@ -179,21 +179,36 @@ Every pull request should make the review path clear:
   that names what would be lost, and the operator decides the next step. Cover
   the refusal with a test. Every retained domain and operational state table
   requires row preservation, and the release upgrade rehearsal checks it for
-  the products it rehearses. v0.40.0 is the one release that does not upgrade
+  the products it rehearses. v0.40.0 does not upgrade
   its predecessor's state in place: an operator applies it to new databases,
   as its release notes state, so it carries no v0.39.0 row forward. BReg's
   fresh installations contain the current caller-scoped replay and verified
   creator structures directly. No installation step converts or discards
-  earlier rows.
+  earlier rows. BReg's native Record, Dataset, Action, and Proposal replacement
+  is a fresh baseline with no in-place upgrade for retired entity/Request
+  packages or state; native package evolution remains covered by its operator
+  gates. Casework's review-only replacement is another explicit fresh
+  baseline: it refuses retired WorkItem tables without converting or
+  deleting their data. Operators drain or cancel old reviews, retain the old
+  deployment and audit journal for reconciliation, and install the current
+  model in a fresh database. Its current-schema install and backup/restore
+  checks replace the unsupported in-place Casework rehearsal. Evidence's
+  normalized v0.42.0 baseline likewise requires a newly authored `evidence.yaml`
+  project, target, and complete separate authority. Retired split projects
+  and bundled authority have no in-place conversion; retain the previous
+  deployment and audit, package the current model, and verify a fresh synthetic
+  assertion before cutover.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
-  and an operator upgrades one release at a time. v0.40.0 is the exception: it
+  and an operator upgrades one release at a time, except at the explicit fresh
+  baselines. v0.40.0 starts fresh: it
   does not upgrade state v0.39.0 wrote in place. It refuses a configuration
   file that keeps a retired key or `apiVersion` and names the replacement
   (`config.removed-key`, `config.retired-api-version`), refuses a BReg or
   Messaging package the earlier release built and a Scheduling database it
   wrote, and is applied to new databases; the BREAKING sections of its release
   notes give each step. v0.40.0 does not upgrade v0.39.0 state in place;
-  apply to a new database. From v0.40.0 onward, keep everything
+  apply to a new database. Except for the BReg, Casework, and Evidence fresh
+  baselines described above, from v0.40.0 onward keep everything
   the previous release could have written to a database, package,
   configuration file, or local state readable. Do not add code that reads,
   upgrades, or refuses by name the state of an older release, and remove such
@@ -203,7 +218,8 @@ Every pull request should make the review path clear:
   in [`CONFIG-CONVENTIONS.md`](products/platform/CONFIG-CONVENTIONS.md) keeps
   each refusal until its format's next stable version.
   `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-  earliest release this source reads state from, and
+  earliest shared predecessor; `EVIDENCE_FORWARD_PATH_FLOOR` separately names
+  Evidence's normalized baseline, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
   states the promise for operators.
 

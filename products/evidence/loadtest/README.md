@@ -1,10 +1,10 @@
 # Evidence load-test environment
 
-A local environment for measuring Evidence with one synthetic question: "Is
-the person at least 18 years old?" over an offline source. The launcher builds
-a project with `evidencectl init` from a tracked OpenAPI description, adds the
-tracked `adult-status` question and derivation, and serves 200 synthetic people
-through `evidencectl source mock serve`. It then delegates the service
+A local environment for measuring Evidence with one synthetic assertion:
+"Is the person at least 18 years old?" over an offline source. The launcher builds
+a private run copy of the maintained normalized standalone project, points that
+copy at a generated source mock, and serves 200 synthetic people through
+`evidencectl source mock serve`. It then delegates the service
 lifecycle to `evidencectl dev`: the retained local issuer container, the
 compiled development bundle, signing keys, and the supervised `evidence`
 process. Load evidence and the synthetic subject pool live under
@@ -49,20 +49,18 @@ before starting another environment.
 
 ## Deviation from the stock limits: one principal per load client
 
-The development bundle limits every principal to 60 requests per minute, with
-a burst of 10. `evidencectl dev` hard-codes these values when it renders the
-local bundle (`render_local_bundle` in
-`crates/registry-evidencectl/src/authoring.rs`), and it offers no flag or
-project setting to raise them. A single load client would therefore measure
-the rate limiter, not the service, above one request per second.
+The standalone project's local target limits every principal to 60 requests per
+minute, with a burst of 16. The harness keeps those reviewed target limits
+instead of patching private runtime state. A single load client would therefore
+measure the rate limiter, not the service, above one request per second.
 
 The harness keeps the stock limits and does not patch private runtime
 configuration behind the lifecycle's ownership boundary. Instead, `up.sh`
 registers `LOAD_CLIENTS` synthetic clients (default 128, at most 256), named
-`loadtest-001` onward, under one access policy. Each one is a distinct
-principal with its own bucket. The workload assigns iterations to clients
-round-robin, so each principal receives `rate / LOAD_CLIENTS` requests per
-second.
+`loadtest-001` onward, under the project's `standalone-service` access profile.
+Each one is a distinct principal with its own bucket. The workload assigns
+iterations to clients round-robin, so each principal receives `rate /
+LOAD_CLIENTS` requests per second.
 
 `run.sh` refuses any offered or peak rate above 90% of `LOAD_CLIENTS`
 requests per second (115 ops/s at the default). To offer more, start a fresh
@@ -95,8 +93,8 @@ deterministic per-VU PRNG (`RANDOM_SEED=20260925` by default).
 
 The unknown-subject share exercises the refusal path. Evidence answers it with
 `503 application/problem+json` and code `source.unavailable`, not 404. The
-compact OpenAPI question has no "no match" rule, so the source's 404 is a
-protocol failure of the fixed source. Only that exact problem is marked as an
+source mock has no case for an unknown subject, so its 404 is a protocol
+failure of the fixed source. Only that exact problem is marked as an
 expected status (`http.expectedStatuses(503)` on that request, tagged
 `evidence_absent`). Any other 503 fails the `checks` threshold. These refusals
 do not count against the failed-selector budget, which applies only to
@@ -162,8 +160,8 @@ Casework harnesses. Each run gets an owner-only directory under
 - `result.json`: throughput, errors, drops, p50/p95/p99 by operation and
   phase, HTTP status counts (including 429 and 503), and the SLO verdict;
 - `safety.json`: evidence scan proving that no current authorization header,
-  subject-identifier canary, compact JWT, unsafe k6 tag, or request or response
-  body was persisted.
+  subject-identifier or private-source canary, compact JWT, unsafe k6 tag, or
+  request or response body was persisted.
 
 The harness never saves bearer tokens, nonces, signed assertions, source
 records, raw principals, or request or response bodies. The only

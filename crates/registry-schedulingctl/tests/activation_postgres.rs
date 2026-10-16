@@ -253,7 +253,7 @@ impl Deployment {
              \x20 testOnlyPlaintext: true\n\
              taskGrantStatus: unchecked-final-fifteen-minutes\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/{audit_key}\n\
-             retention:\n  attemptReceiptRetentionDays: 2\n",
+             retention:\n  receiptRetentionDays: 2\n",
             package = package.display(),
             database_id = options.database_id,
             bind = options.bind,

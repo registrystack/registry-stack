@@ -13,11 +13,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use chrono::{TimeZone as _, Utc};
 use registry_casework_client::{
-    AbsenceInput, AssignmentRequest, BearerToken, CaseloadApplyRequest, CaseloadItemSelection,
-    CaseloadMoveRequest, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
-    CaseworkClientError, CaseworkProblemCode, ClockRecomputeApplyRequest, HolidaySetDocument,
-    HolidaySetRevisionInput, IssuerPrincipal, ReviewHistoryAudience, ReviewNoteRequest,
-    ReviewTaskDecisionRequest, ReviewerDecisionKind, Uuid,
+    AbsenceInput, BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
+    CaseworkClientError, CaseworkProblemCode, DecisionKind, HolidaySetDocument,
+    HolidaySetRevisionInput, IssuerPrincipal, ReviewCaseloadApplyRequest,
+    ReviewClockRecomputeApplyRequest, ReviewHistoryAudience, ReviewNoteRequest,
+    ReviewTaskDecisionRequest, Uuid,
 };
 use registry_casework_core::CASEWORK_PROBLEM_TYPE_BASE;
 use registry_platform_httputil::client::TransportKind;
@@ -36,8 +36,7 @@ const ABSENCE_DOCUMENT: &str = concat!(
 
 const HOLIDAY_DOCUMENT: &str = r#"{"holidaySet":"national","revision":2,"dates":["2026-12-25"]}"#;
 
-const RECOMPUTE_DOCUMENT: &str =
-    r#"{"previewId":"00000000-0000-0000-0000-000000000009","appliedOccurrences":[]}"#;
+const RECOMPUTE_DOCUMENT: &str = r#"{"tasks":[]}"#;
 
 #[derive(Clone)]
 struct Captured {
@@ -235,14 +234,6 @@ fn item() -> Uuid {
     Uuid::from_u128(7)
 }
 
-fn claim_action() -> CaseworkAction {
-    CaseworkAction {
-        operation: "claim".to_owned(),
-        href: format!("/v1/work-items/{}/claim", item()),
-        if_match: "\"7\"".to_owned(),
-    }
-}
-
 /// Every resend is the same request: method, route, every header, and every
 /// body byte, so the service can only replay it under the same key.
 fn assert_identical_resends(observations: &[Captured], key: &str) {
@@ -307,11 +298,7 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
     let refused = Answer::Problem(PRECONDITION_FAILED, None);
     let (address, script, server) = serve(&[
         unavailable,
-        refused,
-        unavailable,
         Answer::Json(StatusCode::OK, ABSENCE_DOCUMENT),
-        unavailable,
-        refused,
         Answer::Problem(RUNTIME_FAILURE, None),
         refused,
         unavailable,
@@ -321,13 +308,11 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
         unavailable,
         refused,
         unavailable,
-        Answer::Empty(StatusCode::NO_CONTENT),
-        unavailable,
         Answer::Json(StatusCode::CREATED, ABSENCE_DOCUMENT),
         unavailable,
         Answer::Empty(StatusCode::NO_CONTENT),
         unavailable,
-        Answer::Json(StatusCode::OK, "[]"),
+        Answer::Json(StatusCode::OK, "{\"moved\":[]}"),
         unavailable,
         Answer::Json(StatusCode::CREATED, HOLIDAY_DOCUMENT),
         unavailable,
@@ -337,32 +322,12 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
     let token = token();
     let client = client(config(&address));
     let staff = || CaseworkAuth::new(&token, "staff");
-    let source = || CaseworkAuth::new(&token, "staff").with_source_profile("reviewer");
     let task = Uuid::from_u128(11);
 
-    let assigned = client
-        .assign_work_item(
-            staff(),
-            item(),
-            7,
-            "assign-1",
-            &AssignmentRequest {
-                assignee: principal("staff-2"),
-                reason: None,
-            },
-        )
-        .await
-        .expect_err("the resend was refused");
-    assert_unavailable(&assigned);
     client
         .update_absence(staff(), Uuid::from_u128(5), 2, "absence-2", &absence())
         .await
         .expect("updated absence");
-    let claimed = client
-        .claim_work_item(source(), &claim_action(), "claim-1")
-        .await
-        .expect_err("the resend was refused");
-    assert_unavailable(&claimed);
     let claimed_task = client
         .claim_review_task(staff(), task, 4, "task-claim-1")
         .await
@@ -389,7 +354,10 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
             4,
             "task-decide-1",
             &ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
             },
         )
         .await
@@ -408,10 +376,6 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
         .expect_err("the resend was refused");
     assert_unavailable(&noted);
     client
-        .delete_draft(source(), item(), 7, "draft-1")
-        .await
-        .expect("deleted draft");
-    client
         .create_absence(staff(), 2, "absence-1", &absence())
         .await
         .expect("created absence");
@@ -423,17 +387,8 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
         .apply_caseload_move(
             staff(),
             "caseload-1",
-            &CaseloadApplyRequest {
-                movement: CaseloadMoveRequest {
-                    from: principal("staff-1"),
-                    to: principal("staff-2"),
-                    queue_id: None,
-                    reason: "Leave".to_owned(),
-                },
-                items: vec![CaseloadItemSelection {
-                    item_id: item(),
-                    expected_revision: 7,
-                }],
+            &ReviewCaseloadApplyRequest {
+                preview_id: Uuid::from_u128(9),
             },
         )
         .await
@@ -456,7 +411,7 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
         .apply_clock_recompute(
             staff(),
             "recompute-1",
-            &ClockRecomputeApplyRequest {
+            &ReviewClockRecomputeApplyRequest {
                 preview_id: Uuid::from_u128(9),
             },
         )
@@ -464,16 +419,13 @@ async fn every_keyed_mutation_resends_a_5xx_answer_under_the_same_key() {
         .expect("applied clock recompute");
 
     let observations = script.observations();
-    assert_eq!(observations.len(), 26);
+    assert_eq!(observations.len(), 20);
     for (pair, key) in observations.chunks(2).zip([
-        "assign-1",
         "absence-2",
-        "claim-1",
         "task-claim-1",
         "task-draft-1",
         "task-decide-1",
         "note-1",
-        "draft-1",
         "absence-1",
         "absence-3",
         "caseload-1",
@@ -669,8 +621,8 @@ async fn an_unkeyed_operation_is_never_resent() {
     .await;
     let token = token();
     let Err(error) = client(config(&address))
-        .revoke_task_grant(
-            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+        .revoke_review_task_grant(
+            CaseworkAuth::new(&token, "staff"),
             item(),
             Uuid::from_u128(13),
         )

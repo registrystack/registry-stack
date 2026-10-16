@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Offline, governed Evidence capabilities for immediate actions.
 use crate::{
-    contract::{ChangeRequestEvidenceSource, FieldTypeSource, ModuleAssetSource, RegistryProject},
+    contract::{CommitEvidenceSource, FieldTypeSource, ModuleAssetSource, RegistryProject},
     diagnostics::Diagnostic,
     model::CompiledActionInventory,
 };
@@ -96,10 +96,10 @@ fn valid_evidence_id(value: &str) -> bool {
         })
 }
 
-pub(crate) fn compile_request_evidence(
+pub(crate) fn compile_commit_evidence(
     project: &RegistryProject,
     assets: &[ModuleAssetSource],
-    source: &ChangeRequestEvidenceSource,
+    source: &CommitEvidenceSource,
 ) -> Result<CompiledEvidenceCapability, ()> {
     let provider = project
         .evidence_providers
@@ -161,7 +161,7 @@ pub(crate) fn compile_request_evidence(
             .all(|subject| subject.selector.value_origin == SelectorValueOrigin::Request)
         && source.requires.iter().all(|requirement| {
             let choices = usize::from(requirement.equals.is_some())
-                + usize::from(requirement.equals_from_request_field.is_some())
+                + usize::from(requirement.equals_from_input.is_some())
                 + usize::from(requirement.at_least.is_some())
                 + usize::from(requirement.at_most.is_some());
             choices == 1
@@ -403,8 +403,8 @@ pub(crate) fn compile_evidence(
         let path = format!("actions[{}].evidence", action.id);
         if source.evidence.len() > MAX_EVIDENCE_CAPABILITIES
             || (!source.evidence.is_empty()
-                && source.handler.as_ref().is_none_or(|handler| {
-                    handler.kind() != Some(crate::contract::ActionHandlerKindSource::Rhai)
+                && action.handler.as_ref().is_none_or(|handler| {
+                    handler.kind != crate::model::CompiledPlanFunctionKind::Rhai
                 }))
         {
             errors.push(Diagnostic::error(
@@ -487,9 +487,6 @@ pub(crate) fn compile_evidence(
                 maximum_observation_age_seconds: capability.maximum_observation_age_seconds,
                 subject_resolution: provider.subject_resolution,
             });
-        }
-        if !action.evidence.is_empty() {
-            action.contract_fingerprint = digest_fingerprint(Sha256::digest(registry_platform_canonical_json::canonicalize_json(&serde_json::json!({"action":action.contract_fingerprint,"evidence":action.evidence})).expect("serializable capabilities")));
         }
     }
     if errors.is_empty() {

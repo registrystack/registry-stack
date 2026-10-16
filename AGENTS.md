@@ -4,28 +4,39 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Five independent runtime products are relevant:
+The maintained runtime products include:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
   permissions, revision history, and audit journal.
 - **Evidence** returns signed, minimum-disclosure assertions from fixed
   requests to authoritative sources.
-- **Registry Casework** gives authorized human teams a coordinated inbox over
-  source-owned work while leaving eligibility and registry mutations with the
-  source system.
+- **Registry Casework** gives authorized human teams policy-bound review tasks
+  from trusted producers and returns correlated results, while each source
+  keeps current disclosure and independently authorized mutation.
 - **Registry Scheduling** publishes bookable services over anchored supply
   and gives authorized callers short holds and confirmed appointments, with
   every capacity decision made inside one transaction under a task grant.
 - **Registry Messaging** sends one message to one destination over one
   channel for an authorized caller, rendered from a reviewed template through
   an operator-configured provider, and reports what is known about delivery.
+- **Registry Coordinator** runs finite, reviewed workflows admitted by an authorized
+  caller, an explicitly trusted event source, or the shared Review protocol: product API calls made through the maintained
+  product clients, separated by waits, with progress kept durable across
+  outages and restarts. Products retain effect ownership and authorization; a
+  wait never renews an approval or creates downstream authority. A run
+  waits until an instant or for a named completion exposed by an accepted operation,
+  including a Casework result, exact BReg Proposal application, or bounded external
+  read. A completion wake-up only advances an eligible authoritative read.
+  Authenticated product events may start a run through an authored typed trigger.
+  A Review workflow maps explicit terminal outcomes to immutable review results.
+  Neither admission path grants authority to mutate the source or another product.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
-inherits none of that source's authorization. Casework may present source-owned work
-from a Base Registry Engine through its adapter, while current source
-visibility and action authority remain with that registry. Registry Scheduling
+inherits none of that source's authorization. Casework may review a Base Registry Engine Proposal through a read-only
+context provider, while current disclosure and later application remain
+independently authorized by that registry. Registry Scheduling
 may publish bookable supply for work another product governs, and another
 product may show an appointment Scheduling holds, without either side gaining
 the other's authority: eligibility stays with the source, and the authority to
@@ -48,10 +59,13 @@ and verifier libraries only: no Evidence crate depends on `registry-breg`, and
 
 `evidencectl source add` drives the `bregctl` binary of the same version found
 on `PATH` to export a client and connect a local registry as a fixed Evidence
-source. Adopter tooling may compose across products this way; runtimes may
-not. The composition happens through the public CLI of the other product,
-never through a crate dependency: `registry-evidencectl` does not depend on
-`registry-breg` or `registry-bregctl`.
+source. Adopter tooling may compose across products this way, through the
+public CLI of the other product and never through a crate dependency:
+`registry-evidencectl` does not depend on `registry-breg` or
+`registry-bregctl`. Outside its tests, a runtime never drives another
+product's CLI or links another product's runtime or tooling crates. It may
+compose products only through their public product clients, under a
+dependency gate that names what it may reach, as the Coordinator does.
 
 Registry Manifest describes sources portably; BReg and `registry-manifest-cli`
 consume its model and renderers. `registry-platform-*` crates are shared
@@ -70,6 +84,11 @@ The dependency runs one way only in production: no Evidence crate depends on
 
 | Area | Owns |
 |---|---|
+| `crates/registry-coordinator` | Optional Coordinator runtime and operator CLI, durable workflow state and client adapters |
+| `crates/registry-coordinator-client` | Bounded Rust Coordinator client over the runtime's HTTP contract |
+| `crates/registry-coordinator-client-node` | Internal napi-rs binding for the Coordinator client, built from source and not part of the unified Node.js client |
+| `crates/registry-coordinator-client-py` | Internal PyO3 binding for the Coordinator client, built from source and not part of the unified Python client |
+| `products/coordinator` | Coordinator product contract, deployment runbook, example projects, generated schemas, OpenAPI and operation contracts, and contributor check and test scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -82,16 +101,16 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
-| `crates/registry-breg-review` | Server-rendered citizen review page for BReg change requests and the `breg-review` binary |
+| `crates/registry-breg-review` | Server-rendered citizen review page for BReg Proposal drafts and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
-| `crates/registry-casework-core` | Source-neutral Casework model, HTTP DTOs, transition rules, and source adapter contract |
-| `crates/registry-casework-breg` | BReg source adapter for Casework discovery, current visibility, promoted actions, and attempt recovery |
+| `crates/registry-casework-core` | Source-neutral Casework review model, HTTP DTOs, transitions, and read-only context contract |
+| `crates/registry-casework-breg` | Read-only BReg Proposal context provider for exact human disclosure and service status |
 | `crates/registry-casework` | PostgreSQL-backed Casework runtime and the `casework` binary |
 | `crates/registry-caseworkctl` | Casework authoring and local operator tooling and the `caseworkctl` binary |
 | `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
 | `crates/registry-casework-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-casework-client-py` | Internal PyO3 binding used to assemble the unified Python client |
-| `crates/registry-review-protocol` | Runtime-free wire contract between review producers and Registry Casework |
+| `crates/registry-review-protocol` | Runtime-free wire contract between review producers and providers such as Casework and Coordinator |
 | `crates/registry-review-client` | Product-neutral bounded client for the review handoff protocol, shared by the Casework client and BReg |
 | `crates/registry-scheduling-core` | Source-neutral Scheduling policy model, wire DTOs, problem codes, and authoring checks |
 | `crates/registry-scheduling` | PostgreSQL-backed Scheduling runtime and the `scheduling` binary |
@@ -136,6 +155,7 @@ Before editing crates in these areas, also read the owning guide:
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
 - `registry-platform-*`: `products/platform/AGENTS.md`
 - `registry-evidence*` and `registry-language-server`: `products/evidence/AGENTS.md`
+- `registry-coordinator*`: `products/coordinator/AGENTS.md`
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
 
@@ -159,9 +179,14 @@ what the citizen may see or change is the registry's, under its agent access
 profile; the gateway writes an application's target record and owner itself,
 from the citizen's own linked record and the token subject, and never from tool
 arguments. No product crate depends on it, and it depends on the engine only
-through `registry-breg-client`; `registry-breg` is a dev-dependency for its
-PostgreSQL end-to-end suite. `crates/registry-breg-mcp/clippy.toml` disallows
-the client methods it must never reach, and
+through `registry-breg-client`. Its ignored `native_citizen` integration test
+composes independently built matching `breg`, `bregctl`, and `breg-review`
+executables over public HTTP and runs in the existing BReg `postgres` CI lane.
+Its own fixture provisions disposable databases and roles through
+`BREG_TEST_DATABASE_URL` and reads the built executables from `BREG_BIN`,
+`BREGCTL_BIN`, and `BREG_REVIEW_NATIVE_BIN`.
+`crates/registry-breg-mcp/clippy.toml` disallows the client methods it must never
+reach, and
 `products/breg/scripts/check-mcp-gateway-boundary.sh` proves that list still
 resolves and refuses. `registry-breg-review` (`breg-review`) is the paired
 review page a citizen uses to submit a draft the gateway prepared; it too
@@ -173,9 +198,9 @@ Registry Casework is implemented by `registry-casework`,
 its Rust, Node.js, and Python client crates. Its product contracts, generated
 OpenAPI, examples, checkpoint demo, and focused gates live under
 `products/casework`.
-Casework coordinates claims, private drafts, accountable attempts, and
-caller-visible inboxes. Source adapters retain source visibility and action
-authority. The source-neutral core and generic clients must not depend on BReg
+Casework coordinates pinned review rounds, claims, private drafts, human
+decisions, and results. Context providers preserve current source disclosure;
+Casework has no source write or apply authority. The source-neutral core and generic clients must not depend on BReg
 protocol types, and BReg must not depend on Casework.
 
 Registry Scheduling is implemented by `registry-scheduling`,
@@ -231,6 +256,28 @@ allowed to act on an item is not thereby allowed to send a message, the
 Messaging access profile decides. Messaging never writes to another product's
 database. The source-neutral core depends on no other Messaging crate, and the
 client never reaches the runtime.
+
+Registry Coordinator is implemented by `registry-coordinator`, which carries
+the `coordinator` runtime and the `coordinatorctl` operator CLI, and by
+`registry-coordinator-client` with its Node.js and Python bindings,
+`registry-coordinator-client-node` and `registry-coordinator-client-py`. Its
+deployment contract, generated schemas and OpenAPI document, examples, and
+focused gates live under `products/coordinator`. The Coordinator owns its
+reviewed workflow packages, its durable run state and prepared commands, its
+waits, and its audit journal; it never owns product authority, product
+data, eligibility, or capacity. It reaches each product only over that
+product's public HTTP contract through the maintained Rust client, inherits no
+authorization from a caller or a product, and never writes to another
+product's database. The runtime may depend on product clients, product cores,
+`registry-record`, and `registry-platform-*`, and never on a product runtime,
+adopter tooling, a supporting service, or a binding; its client reaches
+`registry-platform-*` only.
+No product crate depends on a Coordinator crate: only `registry-cli-docs`, on
+the runtime for the CLI reference, may. The Coordinator dependency-direction
+gate enforces both directions on the whole forward closure, and the Casework,
+Scheduling, and Messaging gates refuse the Coordinator from their side. The
+Coordinator reaches Casework through `registry-casework-client` alone, never
+`registry-casework-core` directly.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
@@ -515,6 +562,22 @@ skips, without `MESSAGING_TEST_DATABASE_URL`. The contracts check holds every
 security invariant row in `products/messaging/contracts/` to a threat, an
 enforcement point, a refusal, and either a runnable negative test or the
 later slice that owes one.
+
+Registry Coordinator product and gates:
+
+```bash
+python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
+python3 products/coordinator/scripts/check_dependency_direction.py
+products/coordinator/scripts/check-schemas.sh
+COORDINATOR_TEST_DATABASE_URL=<disposable database> \
+COORDINATOR_MESSAGING_TEST_DATABASE_URL=<separate disposable database> \
+  products/coordinator/scripts/test-postgres.sh
+```
+
+Root CI runs the dependency gate on every Rust change, so a crate anywhere in
+the workspace that starts depending on a Coordinator crate fails it.
+`products/coordinator/README.md` names the focused runtime test targets and
+the native-service journeys.
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

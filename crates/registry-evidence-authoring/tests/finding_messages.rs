@@ -12,11 +12,37 @@
 //! produced before the move. A message that drifts fails here, loudly, with the
 //! rule named.
 
-use registry_evidence_authoring::{
-    validate_answer, validate_answer_schema_document, validate_authored_answer, validate_question,
-    Finding, Question, QuestionAnswer,
-};
-use serde_json::{json, Map, Value};
+#![allow(
+    clippy::disallowed_macros,
+    reason = "this test target embeds the public canonical fixture; the library performs no I/O"
+)]
+
+use registry_evidence_authoring::{project, validate_output_schema_document, Finding};
+use serde_json::{json, Value};
+
+const NORMALIZED_PROJECT: &str =
+    include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
+
+fn normalized_project() -> project::EvidenceProject {
+    project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .expect("the canonical project reads")
+        .value
+}
+
+fn normalized_findings(mutate: impl FnOnce(&mut project::EvidenceProject)) -> Vec<Finding> {
+    let mut project = normalized_project();
+    mutate(&mut project);
+    project::validate_project(&project)
+}
+
+fn assert_normalized_finding(findings: &[Finding], code: &str, path: &str, message: &str) {
+    let matches = findings
+        .iter()
+        .filter(|finding| finding.code == code && finding.field.to_json_pointer() == path)
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "findings were: {findings:#?}");
+    assert_eq!(matches[0].message, message);
+}
 
 // --- the corpus --------------------------------------------------------------
 
@@ -38,574 +64,138 @@ fn base_question() -> Value {
     })
 }
 
-/// A derivation that passes every check.
-const BASE_DERIVATION: &str = "fn answer(facts, selectors, context) { #{ marked: true } }";
-
-struct Case<T> {
-    rule: &'static str,
-    build: fn() -> T,
-    message: &'static str,
-}
-
-fn question_cases() -> Vec<Case<Question>> {
-    vec![
-        Case {
-            rule: "question purpose",
-            build: || question(|document| document["purpose"] = json!("Record")),
-            message: "question purpose must be a lowercase local identifier",
-        },
-        Case {
-            rule: "both subject forms",
-            build: || {
-                question(|document| {
-                    document["subjects"] = json!([{ "role": "other", "selector": "record-key" }]);
-                })
-            },
-            message: "question must declare either subject or subjects, not both",
-        },
-        Case {
-            rule: "no subject at all",
-            build: || {
-                question(|document| {
-                    object(document).remove("subject");
-                })
-            },
-            message: "question must declare 1..=8 subjects",
-        },
-        Case {
-            rule: "subject identifier spelling",
-            build: || question(|document| document["subject"]["role"] = json!("Holder")),
-            message:
-                "question subjects must use lowercase local role, selector, and profile identifiers",
-        },
-        Case {
-            rule: "repeated subject role",
-            build: || {
-                question(|document| {
-                    object(document).remove("subject");
-                    document["subjects"] = json!([
-                        { "role": "holder", "selector": "record-key" },
-                        { "role": "holder", "selector": "other-key" },
-                    ]);
-                })
-            },
-            message: "question subject roles must be unique",
-        },
-        Case {
-            rule: "question text",
-            build: || question(|document| document["question"] = json!("")),
-            message: "question text must be a non-empty bounded line of text",
-        },
-        Case {
-            rule: "answer count",
-            build: || question(|document| document["answers"] = json!([])),
-            message: "answers must contain 1..=16 governed concepts",
-        },
-        Case {
-            rule: "response formats",
-            build: || question(|document| document["responseFormats"] = json!(["sd-jwt-vc"])),
-            message:
-                "responseFormats must contain signed-jws exactly once and may add sd-jwt-vc once",
-        },
-        Case {
-            rule: "answer concept spelling",
-            build: || question(|document| document["answers"][0]["concept"] = json!("Marked")),
-            message: "answer concept must be a lowercase local identifier",
-        },
-        Case {
-            rule: "repeated answer concept",
-            build: || {
-                question(|document| {
-                    document["answers"] = json!([
-                        { "concept": "marked", "type": "boolean" },
-                        { "concept": "marked", "type": "boolean" },
-                    ]);
-                })
-            },
-            message: "answer concepts must be unique",
-        },
-        Case {
-            rule: "sd-jwt-vc projection without the format",
-            build: || {
-                question(|document| {
-                    document["answers"] = json!([structured_answer("marked", "marker")]);
-                })
-            },
-            message: "an sdJwtVc projection requires responseFormats to include sd-jwt-vc",
-        },
-        Case {
-            rule: "repeated sd-jwt-vc claim",
-            build: || {
-                question(|document| {
-                    document["responseFormats"] = json!(["signed-jws", "sd-jwt-vc"]);
-                    document["answers"] = json!([
-                        structured_answer("marked", "marker"),
-                        structured_answer("noted", "marker"),
-                    ]);
-                    document["disclosure"]["allow"] = json!(["marked", "noted"]);
-                })
-            },
-            message: "sdJwtVc.claim names must be unique within a question",
-        },
-        Case {
-            rule: "source reference carrying more than a reference",
-            build: || {
-                question(|document| {
-                    document["source"] = json!({
-                        "ref": "records",
-                        "facts": [{ "name": "marker", "path": "/marker", "combine": "exactly-one" }]
-                    });
-                })
-            },
-            message: "a source reference must contain only one valid ref",
-        },
-        Case {
-            rule: "source-bound subject on a referenced source",
-            build: || {
-                question(|document| {
-                    document["source"] = json!({ "ref": "records" });
-                    document["subject"]["source"] = json!(true);
-                })
-            },
-            message: "subject.source is available only to an inline OpenAPI operation",
-        },
-        Case {
-            rule: "fact count",
-            build: || question(|document| document["source"]["facts"] = json!([])),
-            message: "source.facts must contain 1..=16 authored fact selections",
-        },
-        Case {
-            rule: "fact name",
-            build: || question(|document| document["source"]["facts"][0]["name"] = json!("Marker")),
-            message: "source fact names must be unique lowercase local identifiers",
-        },
-        Case {
-            rule: "fact path",
-            build: || question(|document| document["source"]["facts"][0]["path"] = json!("marker")),
-            message: "source fact paths must be unique bounded extended JSON Pointers",
-        },
-        Case {
-            rule: "collect over a path that visits no collection",
-            build: || {
-                question(|document| document["source"]["facts"][0]["combine"] = json!("collect"))
-            },
-            message: "this source fact uses `collect` but its path visits no collection",
-        },
-        Case {
-            rule: "one value expected from a path that visits a collection",
-            build: || {
-                question(|document| {
-                    document["source"]["facts"][0]["path"] = json!("/records/*/marker");
-                })
-            },
-            message:
-                "this source fact visits a collection and must explicitly use `combine: collect`",
-        },
-        Case {
-            rule: "collection bounds",
-            build: || {
-                question(|document| {
-                    document["source"]["collectionBounds"] = json!({ "records": 1 })
-                })
-            },
-            message:
-                "source.collectionBounds must contain bounded array pointers with values in 1..=256",
-        },
-        Case {
-            rule: "operation identifier",
-            build: || question(|document| document["source"]["operation"] = json!("")),
-            message: "source.operation must name one bounded OpenAPI operationId",
-        },
-        Case {
-            rule: "neither reference nor operation",
-            build: || question(|document| document["source"] = json!({})),
-            message: "source must declare either ref or operation with facts",
-        },
-        Case {
-            rule: "disclosure allowance",
-            build: || question(|document| document["disclosure"]["allow"] = json!(["other"])),
-            message: "disclosure.allow must contain exactly the declared answer concepts",
-        },
-        // The names the compiled bundle would refuse. These rules run last, on
-        // a document every rule above accepts; `tests/compiled_names.rs` holds
-        // each to the member it names.
-        Case {
-            rule: "question id longer than its compiled selector profile allows",
-            build: || question(|document| document["id"] = json!("a".repeat(48))),
-            message: "question id must be at most 47 bytes: the selector profile it compiles to, `local-subject-<id>-v1`, may hold 64",
-        },
-        Case {
-            rule: "question id and role longer than their compiled selector profile allows",
-            build: || {
-                question(|document| {
-                    object(document).remove("subject");
-                    document["subjects"] = json!([
-                        { "role": "holder", "selector": "record-key" },
-                        { "role": "b".repeat(35), "selector": "other-key", "derivation": true },
-                    ]);
-                })
-            },
-            message: "question id and subject role must be at most 46 bytes together: the selector profile they compile to, `local-subject-<id>-<role>-v1`, may hold 64",
-        },
-        Case {
-            rule: "dotted role that names a compiled selector profile",
-            build: || {
-                question(|document| {
-                    object(document).remove("subject");
-                    document["subjects"] = json!([
-                        { "role": "holder", "selector": "record-key" },
-                        { "role": "second.party", "selector": "other-key", "derivation": true },
-                    ]);
-                })
-            },
-            message: "subject role must not contain a dot: it names a selector profile in the compiled bundle",
-        },
-        Case {
-            rule: "dotted selector",
-            build: || question(|document| document["subject"]["selector"] = json!("record.key")),
-            message: "subject selector must not contain a dot: it names a selector field in the compiled bundle",
-        },
-        Case {
-            rule: "dotted named profile",
-            build: || {
-                question(|document| {
-                    document["source"] = json!({ "ref": "records" });
-                    document["subject"]["profile"] = json!("record-key.v1");
-                })
-            },
-            message: "subject profile must not contain a dot: it names a selector profile in the compiled bundle",
-        },
-        Case {
-            rule: "dotted alternative profile",
-            build: || {
-                question(|document| {
-                    document["source"] = json!({ "ref": "records" });
-                    document["subject"] = json!({ "role": "holder", "profiles": ["record-key.v1"] });
-                })
-            },
-            message: "subject profile must not contain a dot: it names a selector profile in the compiled bundle",
-        },
-        Case {
-            rule: "dotted source reference",
-            build: || question(|document| document["source"] = json!({ "ref": "record.source" })),
-            message: "source.ref must not contain a dot: it names a source in the compiled bundle",
-        },
-    ]
-}
-
-fn answer_cases() -> Vec<Case<QuestionAnswer>> {
-    vec![
-        Case {
-            rule: "boolean answer",
-            build: || answer(json!({ "concept": "marked", "type": "boolean", "values": ["yes"] })),
-            message: "a boolean answer must not declare values or numeric bounds",
-        },
-        Case {
-            rule: "controlled-category numeric bounds",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "controlled-category",
-                    "values": ["one", "two"],
-                    "minimum": 1
-                }))
-            },
-            message: "a controlled-category answer must not declare numeric bounds",
-        },
-        Case {
-            rule: "controlled-category values",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "controlled-category",
-                    "values": ["only"]
-                }))
-            },
-            message: "a controlled-category answer needs 2..=32 unique bounded values",
-        },
-        Case {
-            rule: "identifier constraints on another answer form",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "boolean",
-                    "prefix": "urn:example:report:"
-                }))
-            },
-            message: "identifier constraints require a bounded-identifier answer",
-        },
-        Case {
-            rule: "bounded-identifier shape",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "bounded-identifier",
-                    "prefix": "urn:example:report:",
-                    "minimumBytes": 20,
-                    "maximumBytes": 64,
-                    "values": ["A"]
-                }))
-            },
-            message: "a bounded identifier requires only prefix and byte bounds",
-        },
-        Case {
-            rule: "bounded-identifier prefix",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "bounded-identifier",
-                    "minimumBytes": 20,
-                    "maximumBytes": 64
-                }))
-            },
-            message: "a bounded identifier requires an ASCII prefix ending in a separator",
-        },
-        Case {
-            rule: "bounded-identifier byte bounds",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "bounded-identifier",
-                    "prefix": "urn:example:report:"
-                }))
-            },
-            message: "a bounded identifier requires minimumBytes and maximumBytes in 1..=1024",
-        },
-        Case {
-            rule: "bounded-integer category values",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "bounded-integer",
-                    "values": ["one"],
-                    "minimum": 0,
-                    "maximum": 1
-                }))
-            },
-            message: "a bounded-integer answer must not declare category values",
-        },
-        Case {
-            rule: "bounded-integer missing bounds",
-            build: || answer(json!({ "concept": "marked", "type": "bounded-integer" })),
-            message: "a bounded-integer answer requires minimum and maximum",
-        },
-        Case {
-            rule: "bounded-integer inconsistent bounds",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "bounded-integer",
-                    "minimum": 5,
-                    "maximum": 1
-                }))
-            },
-            message: "a bounded-integer answer needs consistent JSON-safe bounds",
-        },
-        Case {
-            rule: "reviewed structured scalar constraints",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "reviewed-structured-value",
-                    "schema": "schemas/marker.yaml",
-                    "maximumSerializedBytes": 1024,
-                    "minimum": 1
-                }))
-            },
-            message: "a reviewed structured answer must not declare scalar constraints",
-        },
-        Case {
-            rule: "reviewed structured missing schema",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "reviewed-structured-value",
-                    "maximumSerializedBytes": 1024
-                }))
-            },
-            message: "a reviewed structured answer requires schema",
-        },
-        Case {
-            rule: "reviewed structured schema path",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "reviewed-structured-value",
-                    "schema": "marker.yaml",
-                    "maximumSerializedBytes": 1024
-                }))
-            },
-            message: "answer schema must be one schemas/<name>.yaml file",
-        },
-        Case {
-            rule: "reviewed structured serialized size",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "reviewed-structured-value",
-                    "schema": "schemas/marker.yaml"
-                }))
-            },
-            message: "a reviewed structured answer requires maximumSerializedBytes in 1..=65536",
-        },
-        Case {
-            rule: "reserved sd-jwt-vc claim name",
-            build: || {
-                answer(json!({
-                    "concept": "marked",
-                    "type": "reviewed-structured-value",
-                    "schema": "schemas/marker.yaml",
-                    "maximumSerializedBytes": 1024,
-                    "sdJwtVc": { "claim": "iss", "disclosure": "top-level" }
-                }))
-            },
-            message: "sdJwtVc.claim must be a bounded JSON claim name",
-        },
-    ]
-}
-
-fn derivation_cases() -> Vec<Case<&'static str>> {
-    vec![
-        Case {
-            rule: "program that does not compile",
-            build: || "fn answer(facts, selectors, context) {",
-            message: "authored derivation does not compile as Rhai",
-        },
-        Case {
-            rule: "repeated function name",
-            build: || {
-                "fn helper(a) { a }\n\
-                 fn helper(a, b) { a + b }\n\
-                 fn answer(facts, selectors, context) { #{} }"
-            },
-            message: "authored derivation function names must be unique",
-        },
-        Case {
-            rule: "reserved entry point",
-            build: || {
-                "fn derive() { 1 }\n\
-                 fn answer(facts, selectors, context) { #{} }"
-            },
-            message: "the `derive` entry point is reserved for the generated concept binding",
-        },
-        Case {
-            rule: "answer signature",
-            build: || "fn answer(facts, selectors) { #{} }",
-            message: "authored derivation must declare answer(facts, selectors, context)",
-        },
-        Case {
-            rule: "no answer at all",
-            build: || "fn helper() { 1 }",
-            message:
-                "authored derivation must declare exactly one answer(facts, selectors, context)",
-        },
-    ]
-}
-
 // --- the assertions ----------------------------------------------------------
 
 #[test]
-fn every_question_rule_reports_its_historical_sentence() {
-    for case in question_cases() {
-        let findings = validate_question(&(case.build)());
-        assert_case(case.rule, case.message, &findings);
-    }
+fn normalized_question_rule_reports_its_exact_sentence() {
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .question
+            .clear();
+    });
+    assert_normalized_finding(
+        &findings,
+        "definition-question",
+        "/assertionDefinitions/adult-status/question",
+        "write one bounded human-readable question",
+    );
 }
 
 #[test]
-fn every_answer_rule_reports_its_historical_sentence() {
-    for case in answer_cases() {
-        let findings = validate_answer(&(case.build)());
-        assert_case(case.rule, case.message, &findings);
-    }
+fn normalized_output_rule_reports_its_exact_sentence() {
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .outputs
+            .values_mut()
+            .next()
+            .unwrap()
+            .values
+            .push("unexpected".to_owned());
+    });
+    assert_normalized_finding(
+        &findings,
+        "output-bounds",
+        "/assertionDefinitions/adult-status/outputs/adult",
+        "declare exactly the finite bounds required by this Output type",
+    );
 }
 
 #[test]
-fn every_derivation_rule_reports_its_historical_sentence() {
-    for case in derivation_cases() {
-        let findings = validate_authored_answer((case.build)());
-        assert_case(case.rule, case.message, &findings);
-    }
+fn normalized_function_rule_reports_its_exact_sentence() {
+    let findings = registry_evidence_authoring::derivation::validate_function(
+        "fn derive(facts, selectors) { #{} }",
+        project::FunctionInterface::AssertionDerive,
+    );
+    assert_case(
+        "Function signature",
+        "Function must expose exactly one entry point with its declared interface signature",
+        &findings,
+    );
+    assert_eq!(first(&findings).code, "function-signature");
 }
 
 #[test]
-fn a_usable_question_and_derivation_report_nothing() {
-    assert_eq!(validate_question(&question(|_| {})), Vec::new());
-    assert_eq!(validate_authored_answer(BASE_DERIVATION), Vec::new());
+fn a_usable_project_and_named_function_report_nothing() {
+    assert_eq!(project::validate_project(&normalized_project()), Vec::new());
+    assert_eq!(
+        registry_evidence_authoring::derivation::validate_function(
+            "fn derive(facts, selectors, context) { #{} }",
+            project::FunctionInterface::AssertionDerive,
+        ),
+        Vec::new()
+    );
 }
 
-/// Every rule reports under a code, and the set of codes is itself a contract:
-/// a caller may group, rank, or suppress findings by code rather than by
-/// matching their text. Adding a rule is expected to change this list; renaming
-/// a code silently is not.
-///
-/// Some cases share a code on purpose: `fact-combination` covers the two ways
-/// one fact can disagree with its own path, `compiled-name-length` the two
-/// selector profile names a question compiles to, and `compiled-name-dot` each
-/// member that names something in the compiled bundle. The field a finding
-/// names is what tells those cases apart.
 #[test]
-fn the_set_of_rule_codes_is_the_expected_one() {
+fn normalized_rule_codes_remain_machine_addressable() {
     let mut codes = Vec::new();
-    for case in question_cases() {
-        codes.push(first(&validate_question(&(case.build)())).code);
-    }
-    for case in answer_cases() {
-        codes.push(first(&validate_answer(&(case.build)())).code);
-    }
-    for case in derivation_cases() {
-        codes.push(first(&validate_authored_answer((case.build)())).code);
-    }
-    assert_eq!(codes.len(), 50, "codes were: {codes:?}");
+    codes.extend(normalized_findings(|project| {
+        project.functions.push(project.functions[0].clone());
+    }));
+    codes.extend(normalized_findings(|project| {
+        project.assertion_definitions.clear();
+    }));
+    codes.extend(normalized_findings(|project| {
+        project.functions[0].source = "../bad.rhai".to_owned();
+    }));
+    codes.extend(normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .question
+            .clear();
+    }));
+    codes.extend(normalized_findings(|project| project.functions.clear()));
+    codes.extend(normalized_findings(|project| {
+        project.selector_profiles.clear()
+    }));
+    codes.extend(normalized_findings(|project| {
+        project.sources.values_mut().next().unwrap().facts.clear();
+    }));
+    codes.extend(normalized_findings(|project| {
+        let output = project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .outputs
+            .values_mut()
+            .next()
+            .unwrap();
+        output.concept = "relative".to_owned();
+        output.value_type = "free-text".to_owned();
+    }));
+    let mut codes = codes
+        .into_iter()
+        .map(|finding| finding.code)
+        .collect::<Vec<_>>();
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(
         codes,
         [
-            "answer-concept-identifier",
-            "answer-concept-unique",
-            "answer-count",
-            "answer-schema-path",
-            "boolean-answer",
-            "bounded-identifier-bounds",
-            "bounded-identifier-prefix",
-            "bounded-identifier-shape",
-            "bounded-integer-bounds",
-            "bounded-integer-bounds-missing",
-            "bounded-integer-values",
-            "collection-bounds",
-            "compiled-name-dot",
-            "compiled-name-length",
-            "controlled-category-bounds",
-            "controlled-category-values",
-            "derivation-answer-count",
-            "derivation-answer-signature",
-            "derivation-compile",
-            "derivation-function-unique",
-            "derivation-reserved-entry-point",
-            "disclosure-allow",
-            "fact-combination",
-            "fact-count",
-            "fact-name",
-            "fact-path",
-            "identifier-constraints-form",
-            "operation-identifier",
-            "question-identifier",
-            "question-text",
-            "response-formats",
-            "sd-jwt-vc-claim-name",
-            "sd-jwt-vc-claim-unique",
-            "sd-jwt-vc-format",
-            "source-declaration",
-            "source-reference",
-            "structured-answer-constraints",
-            "structured-answer-schema",
-            "structured-answer-size",
-            "subject-count",
-            "subject-declaration",
-            "subject-identifier",
-            "subject-role-unique",
-            "subject-source-context",
+            "definition-count",
+            "definition-question",
+            "derive-selector-profile",
+            "function-interface",
+            "function-source",
+            "function-unique",
+            "output-bounds",
+            "output-concept",
+            "output-type",
+            "source-facts",
+            "source-selector",
+            "subject-selectors",
         ]
     );
 }
@@ -620,16 +210,6 @@ fn assert_case(rule: &str, expected: &str, findings: &[Finding]) {
         !finding.code.is_empty(),
         "the `{rule}` rule reports no code"
     );
-    let identifier_code = match rule {
-        "identifier constraints on another answer form" => Some("identifier-constraints-form"),
-        "bounded-identifier shape" => Some("bounded-identifier-shape"),
-        "bounded-identifier prefix" => Some("bounded-identifier-prefix"),
-        "bounded-identifier byte bounds" => Some("bounded-identifier-bounds"),
-        _ => None,
-    };
-    if let Some(code) = identifier_code {
-        assert_eq!(finding.code, code, "the `{rule}` rule changed its code");
-    }
 }
 
 fn first(findings: &[Finding]) -> &Finding {
@@ -641,70 +221,72 @@ fn first(findings: &[Finding]) -> &Finding {
     &findings[0]
 }
 
-// --- corpus helpers ----------------------------------------------------------
-
-fn question(mutate: impl FnOnce(&mut Value)) -> Question {
-    let mut document = base_question();
-    mutate(&mut document);
-    serde_json::from_value(document).expect("the corpus builds parseable questions")
-}
-
-fn answer(document: Value) -> QuestionAnswer {
-    serde_json::from_value(document).expect("the corpus builds parseable answers")
-}
-
 #[test]
-fn bounded_identifier_answer_requires_exact_governed_constraints() {
-    let accepted = answer(
-        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64}),
-    );
-    assert!(validate_answer(&accepted).is_empty());
-    for document in [
-        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64,"values":["A"]}),
-        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20}),
-        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":65,"maximumBytes":64}),
-        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report/space ","minimumBytes":20,"maximumBytes":64}),
-        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":19}),
-        json!({"concept":"report","type":"boolean","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64}),
+fn bounded_identifier_output_requires_exact_finite_constraints() {
+    let mut project = normalized_project();
+    let output = project
+        .assertion_definitions
+        .values_mut()
+        .next()
+        .unwrap()
+        .outputs
+        .values_mut()
+        .next()
+        .unwrap();
+    output.value_type = "bounded-identifier".to_owned();
+    output.prefix = Some("urn:example:report:".to_owned());
+    output.minimum_bytes = Some(serde_json::from_value(json!(20)).unwrap());
+    output.maximum_bytes = Some(serde_json::from_value(json!(64)).unwrap());
+    assert!(project::validate_project(&project).is_empty());
+
+    for mutate in [
+        |output: &mut project::Output| output.values.push("A".to_owned()),
+        |output: &mut project::Output| output.minimum_bytes = None,
+        |output: &mut project::Output| output.maximum_bytes = None,
+        |output: &mut project::Output| output.prefix = None,
     ] {
-        assert!(!validate_answer(&answer(document)).is_empty());
+        let mut invalid = project.clone();
+        mutate(
+            invalid
+                .assertion_definitions
+                .values_mut()
+                .next()
+                .unwrap()
+                .outputs
+                .values_mut()
+                .next()
+                .unwrap(),
+        );
+        assert!(project::validate_project(&invalid)
+            .iter()
+            .any(|finding| finding.code == "output-bounds"));
     }
 }
 
-fn structured_answer(concept: &str, claim: &str) -> Value {
-    json!({
-        "concept": concept,
-        "type": "reviewed-structured-value",
-        "schema": "schemas/marker.yaml",
-        "maximumSerializedBytes": 1024,
-        "sdJwtVc": { "claim": claim, "disclosure": "top-level" }
-    })
-}
-
-/// An object answer schema is the contract the output gate holds a derivation
+/// An object Output schema is the contract the output gate holds a derivation
 /// to, so it may not permit properties it never declared. The findings name the
 /// schema document's own fields, because the caller renders them beside
 /// `schemas/<name>.yaml` rather than beside the question that referenced it.
 #[test]
-fn an_object_answer_schema_must_close_the_properties_it_permits() {
+fn an_object_output_schema_must_close_the_properties_it_permits() {
     let closed = json!({
         "type": "object",
         "additionalProperties": false,
         "properties": {"marker": {"type": "string"}}
     });
-    assert_eq!(validate_answer_schema_document(&closed), Vec::new());
+    assert_eq!(validate_output_schema_document(&closed), Vec::new());
 
     let open = json!({
         "type": "object",
         "properties": {"marker": {"type": "string"}}
     });
-    let open_findings = validate_answer_schema_document(&open);
+    let open_findings = validate_output_schema_document(&open);
     let finding = first(&open_findings);
     assert_eq!(finding.field.to_string(), ".additionalProperties");
-    assert_eq!(finding.code, "evidence.answer-schema.open-object");
+    assert_eq!(finding.code, "evidence.output-schema.open-object");
     assert_eq!(
         finding.message,
-        "an object answer schema must set additionalProperties: false"
+        "an object Output schema must set additionalProperties: false"
     );
 
     // Only the boolean `false` closes the form; every other spelling, including
@@ -721,8 +303,8 @@ fn an_object_answer_schema_must_close_the_properties_it_permits() {
             "properties": {"marker": {"type": "string"}}
         });
         assert!(
-            !validate_answer_schema_document(&document).is_empty(),
-            "{additional} closed an object answer schema"
+            !validate_output_schema_document(&document).is_empty(),
+            "{additional} closed an object Output schema"
         );
     }
 
@@ -732,18 +314,18 @@ fn an_object_answer_schema_must_close_the_properties_it_permits() {
         "properties": {"marker": {"type": "string"}}
     });
     assert!(
-        !validate_answer_schema_document(&nullable).is_empty(),
-        "a nullable object answer schema escaped the closure rule"
+        !validate_output_schema_document(&nullable).is_empty(),
+        "a nullable object Output schema escaped the closure rule"
     );
 
     let undeclared = json!({"type": "object", "additionalProperties": false});
-    let undeclared_findings = validate_answer_schema_document(&undeclared);
+    let undeclared_findings = validate_output_schema_document(&undeclared);
     let finding = first(&undeclared_findings);
     assert_eq!(finding.field.to_string(), ".properties");
-    assert_eq!(finding.code, "evidence.answer-schema.declared-properties");
+    assert_eq!(finding.code, "evidence.output-schema.declared-properties");
     assert_eq!(
         finding.message,
-        "an object answer schema must declare the properties it permits"
+        "an object Output schema must declare the properties it permits"
     );
     let non_object_properties = json!({
         "type": "object",
@@ -751,7 +333,7 @@ fn an_object_answer_schema_must_close_the_properties_it_permits() {
         "properties": ["marker"]
     });
     assert!(
-        !validate_answer_schema_document(&non_object_properties).is_empty(),
+        !validate_output_schema_document(&non_object_properties).is_empty(),
         "a sequence of properties declared a property set"
     );
 }
@@ -767,98 +349,62 @@ fn a_schema_that_declares_no_object_type_is_not_checked_for_closure() {
         json!({}),
     ] {
         assert_eq!(
-            validate_answer_schema_document(&document),
+            validate_output_schema_document(&document),
             Vec::new(),
             "a non-object schema was checked for object closure"
         );
     }
 }
 
-fn object(document: &mut Value) -> &mut Map<String, Value> {
-    document
-        .as_object_mut()
-        .expect("the corpus builds JSON objects")
+#[test]
+fn normalized_subjects_are_closed_unique_and_reference_only() {
+    let mut value = serde_json::to_value(normalized_project()).unwrap();
+    value["assertionDefinitions"]["adult-status"]["subjects"][0]["selectors"] = json!([]);
+    let empty: project::EvidenceProject = serde_json::from_value(value.clone()).unwrap();
+    assert_normalized_finding(
+        &project::validate_project(&empty),
+        "subject-selectors",
+        "/assertionDefinitions/adult-status/subjects/0",
+        "declare distinct roles and existing selector profiles",
+    );
+
+    value["assertionDefinitions"]["adult-status"]["subjects"][0]["selectors"] =
+        json!(["record-by-id", "record-by-id"]);
+    assert!(serde_json::from_value::<project::EvidenceProject>(value.clone()).is_err());
+
+    value["assertionDefinitions"]["adult-status"]["subjects"][0]["selectors"] =
+        json!(["record-by-id"]);
+    value["assertionDefinitions"]["adult-status"]["subjects"][0]["selector"] = json!("record-id");
+    assert!(serde_json::from_value::<project::EvidenceProject>(value).is_err());
 }
 
 #[test]
-fn alternative_subject_profiles_are_closed_explicit_and_reference_only() {
-    let mut value = base_question();
-    value["source"] = json!({"ref":"records"});
-    value["subject"] = json!({"role":"holder","profiles":["by-code","by-code-and-region"]});
-    let parsed: Question = serde_json::from_value(value.clone()).unwrap();
-    assert!(validate_question(&parsed).is_empty());
-    for subject in [
-        json!({"role":"holder","profiles":[]}),
-        json!({"role":"holder","profiles":[],"selector":"code"}),
-    ] {
-        value["subject"] = subject;
-        assert!(serde_json::from_value::<Question>(value.clone()).is_err());
-    }
-    for subject in [
-        json!({"role":"holder","profiles":["by-code","by-code"]}),
-        json!({"role":"holder","profiles":["by-code"],"selector":"code"}),
-        json!({"role":"holder","profiles":["by-code"],"profile":"by-code"}),
-    ] {
-        value["subject"] = subject;
-        assert!(!validate_question(&serde_json::from_value(value.clone()).unwrap()).is_empty());
-    }
-    value["subject"] = json!({"role":"holder","profiles":["by-code"]});
-    value["source"] = base_question()["source"].clone();
-    assert!(!validate_question(&serde_json::from_value(value).unwrap()).is_empty());
-}
-
-/// The members a type now bounds are refused by the shared reader, where they
-/// are written, before any check runs: the identifier grammar, a collection
-/// bound, and a serialized size.
-#[test]
-fn the_reader_refuses_the_values_the_types_bound() {
-    let envelope =
-        "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\n";
-    let base = "id: record-check
-question: Does the record carry the reviewed marker?
-purpose: record-check
-subject: {role: holder, selector: record-key}
-source:
-  operation: getRecord
-  facts: [{name: marker, path: /records/*/marker, combine: collect}]
-  collectionBounds: {/records: 4}
-answers:
-  - {concept: marked, type: reviewed-structured-value, schema: schemas/marker.yaml, maximumSerializedBytes: 1024}
-derivation: derivations/record-check.rhai
-disclosure: {allow: [marked]}
-";
-    let accepted = format!("{envelope}{base}");
-    registry_evidence_authoring::formats::check_question(
-        "questions/record-check.yaml",
-        accepted.as_bytes(),
-    )
-    .expect("the base question is accepted");
+fn the_normalized_reader_refuses_values_at_the_bounded_field() {
+    project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .expect("the canonical project is accepted");
     for (from, to, code, path) in [
         (
-            "id: record-check",
-            "id: Record",
+            "id: standalone-evidence",
+            "id: Standalone",
             "config.invalid-value",
             "/id",
         ),
         (
-            "{/records: 4}",
-            "{/records: 0}",
+            "maximumAggregateBytes: 64",
+            "maximumAggregateBytes: 0",
             "config.out-of-range",
-            "/source/collectionBounds/~1records",
+            "/selectorProfiles/record-by-id/maximumAggregateBytes",
         ),
         (
-            "maximumSerializedBytes: 1024",
-            "maximumSerializedBytes: 0",
+            "validitySeconds: 300",
+            "validitySeconds: 0",
             "config.out-of-range",
-            "/answers/0/maximumSerializedBytes",
+            "/assertionDefinitions/adult-status/validitySeconds",
         ),
     ] {
-        let document = format!("{envelope}{}", base.replace(from, to));
-        let report = registry_evidence_authoring::formats::check_question(
-            "questions/record-check.yaml",
-            document.as_bytes(),
-        )
-        .expect_err("the reader refuses the value");
+        let document = NORMALIZED_PROJECT.replacen(from, to, 1);
+        let report = project::read_project("evidence.yaml", document.as_bytes())
+            .expect_err("the reader refuses the value");
         let diagnostic = &report.diagnostics()[0];
         assert_eq!(
             (diagnostic.code.as_str(), diagnostic.path.as_str()),
@@ -868,5 +414,439 @@ disclosure: {allow: [marked]}
             .source
             .as_ref()
             .is_some_and(|source| source.line.is_some()));
+    }
+}
+
+#[test]
+fn normalized_definition_diagnostics_keep_exact_messages_and_paths() {
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .question
+            .clear();
+    });
+    let finding = first(&findings);
+    assert_eq!(finding.code, "definition-question");
+    assert_eq!(finding.message, "write one bounded human-readable question");
+    assert_eq!(
+        finding.field.to_json_pointer(),
+        "/assertionDefinitions/adult-status/question"
+    );
+
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .semantics
+            .kind = "recommendation".to_owned();
+    });
+    let finding = first(&findings);
+    assert_eq!(finding.code, "requirement-kind");
+    assert_eq!(
+        finding.message,
+        "kind must be criterion, information-requirement or constraint"
+    );
+    assert_eq!(
+        finding.field.to_json_pointer(),
+        "/assertionDefinitions/adult-status/semantics/kind"
+    );
+}
+
+#[test]
+fn normalized_output_diagnostics_keep_type_and_constraint_sites_distinct() {
+    let findings = normalized_findings(|project| {
+        let output = project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .outputs
+            .values_mut()
+            .next()
+            .unwrap();
+        output.value_type = "free-text".to_owned();
+    });
+    assert!(findings.iter().any(|finding| {
+        finding.code == "output-type"
+            && finding.message == "declare a bounded Evidence output type"
+            && finding.field.to_json_pointer()
+                == "/assertionDefinitions/adult-status/outputs/adult/type"
+    }));
+
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .outputs
+            .values_mut()
+            .next()
+            .unwrap()
+            .concept = "not a URI".to_owned();
+    });
+    let finding = first(&findings);
+    assert_eq!(finding.code, "output-concept");
+    assert_eq!(finding.message, "an Output concept must be an absolute URI");
+    assert_eq!(
+        finding.field.to_json_pointer(),
+        "/assertionDefinitions/adult-status/outputs/adult/concept"
+    );
+}
+
+#[test]
+fn normalized_references_distinguish_missing_assets_and_wrong_function_interfaces() {
+    let findings = normalized_findings(|project| {
+        project.functions.clear();
+    });
+    assert!(findings.iter().any(|finding| {
+        finding.code == "function-interface"
+            && finding.message == "extract must name a source-extract/v1 Function"
+            && finding
+                .field
+                .to_json_pointer()
+                .ends_with("/extract/function")
+    }));
+    assert!(findings.iter().any(|finding| {
+        finding.code == "function-interface"
+            && finding.message == "derive must name an assertion-derive/v1 Function"
+            && finding
+                .field
+                .to_json_pointer()
+                .ends_with("/derive/function")
+    }));
+}
+
+#[test]
+fn normalized_project_and_semantic_diagnostics_keep_exact_sites() {
+    let findings = normalized_findings(|project| {
+        project.functions.push(project.functions[0].clone());
+    });
+    assert_normalized_finding(
+        &findings,
+        "function-unique",
+        "/functions",
+        "function IDs must be unique",
+    );
+
+    let findings = normalized_findings(|project| project.assertion_definitions.clear());
+    assert_normalized_finding(
+        &findings,
+        "definition-count",
+        "/assertionDefinitions",
+        "declare between one and 128 assertion definitions",
+    );
+
+    let findings = normalized_findings(|project| {
+        project.functions[0].source = "../extract.rhai".to_owned();
+    });
+    assert_normalized_finding(
+        &findings,
+        "function-source",
+        "/functions/0/source",
+        "name one project-relative .rhai function asset without traversal",
+    );
+
+    let findings = normalized_findings(|project| {
+        let requirement = project
+            .assertion_definitions
+            .values()
+            .next()
+            .unwrap()
+            .semantics
+            .requirement
+            .clone();
+        project
+            .assertion_definitions
+            .values_mut()
+            .nth(1)
+            .unwrap()
+            .semantics
+            .requirement = requirement;
+    });
+    assert!(findings.iter().any(|finding| {
+        finding.code == "requirement-unique"
+            && finding.message == "each definition must have a distinct Requirement URI"
+            && finding
+                .field
+                .to_json_pointer()
+                .ends_with("/semantics/requirement")
+    }));
+
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .semantics
+            .evidence_type = "relative".to_owned();
+    });
+    assert_normalized_finding(
+        &findings,
+        "semantic-uri",
+        "/assertionDefinitions/adult-status/semantics",
+        "declare absolute Requirement, Evidence Type and reference-framework URIs",
+    );
+
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .grant_ceiling
+            .authorities = Default::default();
+    });
+    assert_normalized_finding(
+        &findings,
+        "grant-ceiling-empty",
+        "/assertionDefinitions/adult-status/grantCeiling",
+        "declare complete, nonempty authority, actor, value-origin, audience and representation ceilings",
+    );
+}
+
+#[test]
+fn normalized_subject_and_acquisition_diagnostics_keep_exact_sites() {
+    let findings = normalized_findings(|project| {
+        project
+            .assertion_definitions
+            .values_mut()
+            .next()
+            .unwrap()
+            .subjects
+            .clear();
+    });
+    assert_normalized_finding(
+        &findings,
+        "subject-count",
+        "/assertionDefinitions/adult-status/subjects",
+        "declare between one and eight subject roles",
+    );
+
+    let findings = normalized_findings(|project| {
+        let definition = project.assertion_definitions.values_mut().next().unwrap();
+        definition.subjects.push(definition.subjects[0].clone());
+    });
+    assert_normalized_finding(
+        &findings,
+        "subject-selectors",
+        "/assertionDefinitions/adult-status/subjects/1",
+        "declare distinct roles and existing selector profiles",
+    );
+
+    let findings = normalized_findings(|project| {
+        project.selector_profiles.clear();
+    });
+    assert!(findings.iter().any(|finding| {
+        finding.code == "subject-selectors"
+            && finding.message == "name an existing selector profile"
+            && finding
+                .field
+                .to_json_pointer()
+                .ends_with("/subjects/0/selectors/0")
+    }));
+    assert!(findings.iter().any(|finding| {
+        finding.code == "source-selector"
+            && finding.message == "name an existing selector profile"
+            && finding
+                .field
+                .to_json_pointer()
+                .ends_with("/selectors/0/profiles/0")
+    }));
+
+    let findings = normalized_findings(|project| {
+        project.sources.clear();
+    });
+    assert!(findings.iter().any(|finding| {
+        finding.code == "acquisition-source"
+            && finding.message == "acquisition must name an existing Source"
+            && finding
+                .field
+                .to_json_pointer()
+                .ends_with("/acquisition/source")
+    }));
+}
+
+#[test]
+fn normalized_output_bounds_cover_each_retained_output_family() {
+    for value_type in [
+        "boolean",
+        "controlled-category",
+        "bounded-identifier",
+        "bounded-integer",
+        "reviewed-structured-value",
+        "controlled-code",
+        "bounded-decimal",
+        "date-bucket",
+        "time-bucket",
+        "audience-scoped-entity-reference",
+        "controlled-code-list",
+        "entity-reference-list",
+    ] {
+        let findings = normalized_findings(|project| {
+            let output = project
+                .assertion_definitions
+                .values_mut()
+                .next()
+                .unwrap()
+                .outputs
+                .values_mut()
+                .next()
+                .unwrap();
+            output.value_type = value_type.to_owned();
+            match value_type {
+                "boolean" => output.values.push("unexpected".to_owned()),
+                "controlled-category" => output.values.clear(),
+                "bounded-identifier" => output.prefix = Some("urn:example:".to_owned()),
+                "bounded-integer" => {
+                    output.minimum = Some(registry_evidence_authoring::output::Bound::Integer(1))
+                }
+                "reviewed-structured-value" => output.schema = Some("../shape.yaml".to_owned()),
+                "controlled-code"
+                | "bounded-decimal"
+                | "date-bucket"
+                | "time-bucket"
+                | "audience-scoped-entity-reference"
+                | "controlled-code-list"
+                | "entity-reference-list" => {}
+                _ => unreachable!(),
+            }
+        });
+        assert_normalized_finding(
+            &findings,
+            "output-bounds",
+            "/assertionDefinitions/adult-status/outputs/adult",
+            "declare exactly the finite bounds required by this Output type",
+        );
+    }
+}
+
+#[test]
+fn normalized_source_diagnostics_keep_private_fact_and_interface_sites() {
+    let findings = normalized_findings(|project| {
+        project.sources.values_mut().next().unwrap().facts.clear();
+    });
+    assert_normalized_finding(
+        &findings,
+        "source-facts",
+        "/sources/licence-record/facts",
+        "declare the private fact schema",
+    );
+
+    let findings = normalized_findings(|project| {
+        project.sources.values_mut().next().unwrap().connection = None;
+    });
+    assert_normalized_finding(
+        &findings,
+        "source-connection",
+        "/sources/licence-record/connection",
+        "an HTTP Source must name a target-bound connection",
+    );
+
+    let findings = normalized_findings(|project| {
+        let source = project.sources.values_mut().next().unwrap();
+        source.source_type = project::SourceType::SqliteExtract;
+        source.extract_profile = None;
+        source.maximum_extract_age_seconds = None;
+    });
+    assert_normalized_finding(
+        &findings,
+        "source-extract-binding",
+        "/sources/licence-record",
+        "a SQLite Source must name an extract profile and maximum age",
+    );
+
+    let findings = normalized_findings(|project| {
+        project.sources.values_mut().next().unwrap().selectors[0].profiles = Default::default();
+    });
+    assert_normalized_finding(
+        &findings,
+        "source-selector",
+        "/sources/licence-record/selectors/0/profiles",
+        "Source selectors must name existing profiles",
+    );
+}
+
+#[test]
+fn named_function_abi_reports_compile_signature_and_interface_failures() {
+    use registry_evidence_authoring::derivation::{validate_batch_function, validate_function};
+
+    let compile = validate_function("fn derive(", project::FunctionInterface::AssertionDerive);
+    assert_case(
+        "Function compile",
+        "Function does not compile as Rhai",
+        &compile,
+    );
+    assert_eq!(first(&compile).code, "function-compile");
+
+    let signature = validate_function(
+        "fn derive(facts, selectors) { #{} }",
+        project::FunctionInterface::AssertionDerive,
+    );
+    assert_case(
+        "Function signature",
+        "Function must expose exactly one entry point with its declared interface signature",
+        &signature,
+    );
+    assert_eq!(first(&signature).code, "function-signature");
+
+    let interface = validate_function(
+        "fn derive(facts, selectors, context) { #{} } fn extract(response, context) { #{} }",
+        project::FunctionInterface::AssertionDerive,
+    );
+    assert_case(
+        "Function interface",
+        "Function cannot expose another interface entry point",
+        &interface,
+    );
+    assert_eq!(first(&interface).code, "function-interface");
+
+    assert!(validate_function(
+        "fn derive(facts, selectors, context) { #{} }",
+        project::FunctionInterface::AssertionDerive,
+    )
+    .is_empty());
+    assert!(validate_function(
+        "fn extract(response, context) { #{} }",
+        project::FunctionInterface::SourceExtract,
+    )
+    .is_empty());
+    assert!(validate_function(
+        "fn extract(response, selectors, context) { #{} }",
+        project::FunctionInterface::SourceExtract,
+    )
+    .is_empty());
+
+    let batch = validate_batch_function(
+        "fn extract(response, selectors, context) { #{} }",
+        project::FunctionInterface::SourceExtract,
+    );
+    assert_case(
+        "batch Function signature",
+        "source batch Functions must expose the two-argument source interface",
+        &batch,
+    );
+    assert_eq!(first(&batch).code, "batch-function-signature");
+}
+
+#[test]
+fn retired_question_answer_and_inline_operation_grammar_is_closed() {
+    let retired = [
+        serde_json::to_string(&base_question()).unwrap(),
+        "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: old-question\nquestion: Old?\n".to_owned(),
+        "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nid: old-project\nquestions: []\n".to_owned(),
+        "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nid: old-project\naccessPolicies: []\n".to_owned(),
+    ];
+    for document in retired {
+        assert!(
+            project::read_project("evidence.yaml", document.as_bytes()).is_err(),
+            "retired grammar was accepted: {document}"
+        );
     }
 }

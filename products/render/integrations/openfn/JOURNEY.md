@@ -1,5 +1,10 @@
 # OpenFn journey record (walked 2026-09-17)
 
+This is a historical execution record using the BReg version in the table below.
+Its BReg configuration and command examples have not been migrated to the current
+Record, Action, and Proposal model. Use the current BReg examples for new integrations;
+this record is evidence only for the version that was walked.
+
 The DoD's OpenFn row, walked end to end without the App Kit: a job in the
 kit's tested idiom reads record data back through a least-privilege breg
 reader profile whose readable fields equal the template data contract,
@@ -10,8 +15,8 @@ The walk predates the same-day rewrite that made the example corpus generic.
 That rewrite changed the receipt bundle's content, so its field names and its
 pinned digests both moved. This record therefore names digests by reference to
 `products/render/golden.json` rather than quoting them, and shows the field list
-as it now stands; the invariants below are what the walk established, and
-re-walking it reproduces them against the current pinned values.
+as it stood after that rewrite. The invariants below are what the walk established;
+rechecking them against current products requires a migrated integration journey.
 
 ## What ran
 

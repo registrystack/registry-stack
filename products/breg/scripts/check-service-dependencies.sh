@@ -6,15 +6,9 @@ set -euo pipefail
 # `registry-breg-client`. Neither may link the registry runtime crate,
 # `registry-breg`, into the binary it ships: a service that did could call the
 # engine's internals and step around the authorization a registry enforces on
-# every request. Their PostgreSQL tests still run against a real engine, so the
-# runtime is allowed as a dev-dependency and nowhere else.
-#
-# This gate reads each service's normal dependency graph, with every feature
-# and every target enabled, and fails when the runtime appears in it, directly
-# or through any other crate. It then proves the check still works: the same
-# graph with dev-dependencies included must show the runtime, so a check that
-# stopped seeing it fails here instead of passing quietly, and the client,
-# whose name starts with the runtime's, must never be mistaken for it.
+# every request. Native protocol tests use HTTP substitutes and also have no
+# engine dependency. The gate checks both normal and test dependency graphs,
+# and uses the engine's own graph as a positive resolution probe.
 
 CDPATH=''
 repository_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -73,6 +67,13 @@ lists_package() {
   return 1
 }
 
+probe="$workspace/runtime.probe"
+dependency_graph "$runtime" normal "$probe"
+if ! lists_runtime "$probe"; then
+  printf 'The check cannot identify the engine in its own dependency graph.\n' >&2
+  exit 1
+fi
+
 status=0
 for service in "${services[@]}"; do
   normal="$workspace/$service.normal"
@@ -97,20 +98,18 @@ for service in "${services[@]}"; do
     continue
   fi
 
-  # The runtime is reintroduced here by including the dev edges its tests use.
-  # A check that cannot see it there would pass a normal edge just as quietly.
-  if ! lists_runtime "$with_tests"; then
-    printf 'The check does not find %s in the test graph of %s, so it proves nothing about the normal graph.\n' \
-      "$runtime" "$service" >&2
+  if lists_runtime "$with_tests"; then
+    printf '%s links the registry runtime through its test dependencies.\n' "$service" >&2
     status=1
     continue
   fi
 
-  printf '%-22s  runtime only in dev-dependencies\n' "$service"
+  printf '%-22s  HTTP client boundary in normal and test dependencies\n' "$service"
+
 done
 
 if [[ "$status" -ne 0 ]]; then
   exit "$status"
 fi
 
-printf '\nNeither service links the registry runtime outside its tests.\n'
+printf '\nNeither service links the registry runtime.\n'

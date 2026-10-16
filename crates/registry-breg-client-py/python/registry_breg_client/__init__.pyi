@@ -82,7 +82,6 @@ ExchangeAuthorization = TypedDict("ExchangeAuthorization", {"exchange": FirstPar
 class BaseRegistryClientError(Exception):
     kind: str
     code: str | None
-    plan_refusal: str | None
     refusal_code: str | None
     reason_code: str | None
     field_path: str | None
@@ -105,8 +104,7 @@ class BaseRegistryClientError(Exception):
 
 class BRegCreateBinding: ...
 class BRegPatchBinding: ...
-class BRegLifecycleAuthority: ...
-class BRegImmediateActionBinding: ...
+class BRegActionBinding: ...
 class BRegTombstoneBinding: ...
 class BRegBatchBinding: ...
 
@@ -136,6 +134,37 @@ def encode_ingestion_chunk(
     prefix_digest: str,
 ) -> BRegIngestionChunk: ...
 
+WebhookVerificationRefusalCode = Literal[
+    "missing-header",
+    "malformed-signature",
+    "signature-mismatch",
+    "unsupported-version",
+]
+
+class VerifiedWebhookDelivery(TypedDict):
+    id: str
+    source: str
+    type: str
+    time: str
+    dataschema: str
+    generation: str
+    attempt: str
+    delivery_time: str
+    idempotency_key: str
+    body: bytes
+
+def verify_webhook_delivery(
+    *,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+    body: bytes,
+    key: bytes,
+) -> VerifiedWebhookDelivery:
+    """Authenticate one exact Base Registry Engine Version 1 webhook delivery.
+    Apply delivery-time skew and deduplication policy before acting on the body."""
+    ...
+
 class BRegActionTargetConditions:
     @property
     def document(self) -> dict[str, JsonValue]: ...
@@ -147,10 +176,6 @@ class BRegPreparedCreate:
     def from_bytes(value: bytes) -> BRegPreparedCreate: ...
     def to_bytes(self) -> bytes: ...
 
-class BRegPreparedLifecycle:
-    @staticmethod
-    def from_bytes(value: bytes) -> BRegPreparedLifecycle: ...
-    def to_bytes(self) -> bytes: ...
 
 class BRegPreparedAction:
     @staticmethod
@@ -158,161 +183,33 @@ class BRegPreparedAction:
     def to_bytes(self) -> bytes: ...
 
 class BRegRecoveredCreate: ...
-class BRegRecoveredLifecycle: ...
 class BRegRecoveredAction: ...
 
-AttachmentVerificationStatus = Literal["notRequired", "pending", "approved", "rejected"]
-AttachmentClassification = Literal["public", "internal", "restricted"]
-
-class BRegAttachmentState(TypedDict):
-    slot_identifier: str
-    proposal_version: int
-    erased: bool
-    byte_size: int
-    sha256: str
-    content_type: str | None
-    uploaded_at: str | None
-    uploaded_by: str | None
-    verification_status: AttachmentVerificationStatus | None
-
-class BRegAttachmentSlotValue(TypedDict):
-    kind: Literal["not-selected", "empty", "filled"]
-    value: BRegAttachmentState | None
-
-class BRegAttachmentUpload:
-    @property
-    def content_type(self) -> str: ...
-    @property
-    def byte_size(self) -> int: ...
-
-class BRegAttachmentSlot:
-    @property
-    def slot_identifier(self) -> str: ...
-    @property
-    def entity_identifier(self) -> str: ...
-    @property
-    def access_profile(self) -> str: ...
-    @property
-    def required_for_submit(self) -> bool: ...
-    @property
-    def maximum_bytes(self) -> int: ...
-    @property
-    def content_types(self) -> list[str]: ...
-    @property
-    def classification(self) -> AttachmentClassification: ...
-    @property
-    def can_download(self) -> bool: ...
-    @property
-    def can_upload(self) -> bool: ...
-    @property
-    def can_remove(self) -> bool: ...
-    def accepts_content_type(self, content_type: str) -> bool: ...
-    def prepare_upload(self, content_type: str, body: bytes) -> BRegAttachmentUpload: ...
-    def value_in(
-        self,
-        record: dict[str, JsonValue],
-        *,
-        format: RecordFormat = "json",
-    ) -> BRegAttachmentSlotValue: ...
-
-class BRegLifecycleAction:
-    def with_reason(self, reason: str) -> BRegLifecycleAction: ...
-    @property
-    def operation(self) -> str: ...
-    @property
-    def href(self) -> str: ...
-    @property
-    def body(self) -> dict[str, JsonValue]: ...
-
-class BRegRequestResultReference:
-    @property
-    def target_entity_identifier(self) -> str: ...
-    @property
-    def target_record_identifier(self) -> str: ...
-    @property
-    def target_revision(self) -> int: ...
-
-class BRegRetainedRequestProposal:
-    @property
-    def request_entity_identifier(self) -> str: ...
-    @property
-    def request_identifier(self) -> str: ...
-    @property
-    def proposal_version(self) -> int: ...
-    @property
-    def breg_state(self) -> Literal["draft", "submitted", "cancelled", "applied"]: ...
-    @property
-    def current(self) -> bool: ...
-    @property
-    def detail_erased(self) -> bool: ...
-    @property
-    def application_identifier(self) -> str | None: ...
-    @property
-    def result_link_count(self) -> int: ...
-    @property
-    def result_references(self) -> list[BRegRequestResultReference]: ...
-
-class BRegRetainedRequestHistoryPage:
-    @property
-    def proposals(self) -> list[BRegRetainedRequestProposal]: ...
-    @property
-    def next_after_proposal_version(self) -> int | None: ...
-    def find_proposal(
-        self,
-        request_entity_identifier: str,
-        request_identifier: str,
-        proposal_version: int,
-    ) -> BRegRetainedRequestProposal | None: ...
-    def find_application(
-        self,
-        request_entity_identifier: str,
-        request_identifier: str,
-        proposal_version: int,
-        application_identifier: str,
-    ) -> BRegRetainedRequestProposal | None: ...
-class BRegChangeRequestCapability(TypedDict):
-    planner: dict[str, JsonValue]
-    effects: list[dict[str, JsonValue]]
-    review: dict[str, JsonValue]
-    on_approved: dict[str, JsonValue]
-    application: dict[str, JsonValue]
-
-class BRegLifecycleReceiptRequest(TypedDict):
-    breg_state: str
-    proposal_version: int | None
-    effect_digest: str | None
-    proposal: dict[str, JsonValue] | None
-    application: dict[str, JsonValue] | None
-
-class _BRegLifecycleReceiptRequired(TypedDict):
-    id: str
-    revision: int
-    snapshot: str
-    request: BRegLifecycleReceiptRequest
-
-class BRegLifecycleReceipt(_BRegLifecycleReceiptRequired, total=False):
-    actor_reference: str
-
-class BRegLifecycleComplete(TypedDict):
-    kind: Literal["complete"]
-    value: BRegLifecycleReceipt
-    trace_id: str
-    etag: str | None
-    location: str | None
+class BRegProposalActionDescriptor(TypedDict):
+    action_id: str
+    access_profile: str
+    operations: Sequence[str]
+    readable_inputs: Sequence[str]
 
 class BRegMetadata:
+    @property
+    def proposal_actions(self) -> Sequence[BRegProposalActionDescriptor]: ...
+    def select_proposal_get(self, profile: str) -> BRegProposalGetBinding: ...
+    def select_proposal_review_context(self, profile: str, action: str) -> BRegProposalReviewBinding: ...
+    def select_proposal_review_status(self, profile: str, action: str) -> BRegProposalReviewBinding: ...
+    def select_proposals(self, profile: str) -> BRegProposalCollection: ...
     @property
     def operations(self) -> Sequence[dict[str, JsonValue]]:
         """Operation request projections include allow_create and allow_patch as bool | None."""
         ...
     @property
-    def actions(self) -> JsonValue | None: ...
+    def action_metadata(self) -> JsonValue | None: ...
     @property
     def statistical_datasets(self) -> Sequence[BRegStatisticalDatasetDescriptor] | None:
         """Validated caller-filtered inert descriptions. They never grant entity authority."""
         ...
     @property
-    def immediate_actions(self) -> Sequence[dict[str, JsonValue]]: ...
+    def actions(self) -> Sequence[dict[str, JsonValue]]: ...
     @property
     def registry_identifier(self) -> str: ...
     @property
@@ -325,22 +222,25 @@ class BRegMetadata:
     def etag(self) -> str | None: ...
     def select_create(self, operation_identifier: str, expected_profile: str) -> BRegCreateBinding: ...
     def select_patch(self, operation_identifier: str, expected_profile: str) -> BRegPatchBinding: ...
-    def select_immediate_action(
+    def select_action(
         self, action_identifier: str, expected_profile: str
-    ) -> BRegImmediateActionBinding: ...
+    ) -> BRegActionBinding: ...
     def select_tombstone(
-        self, entity_identifier: str, expected_profile: str
+        self, record_type_identifier: str, expected_profile: str
     ) -> BRegTombstoneBinding: ...
     def select_batch(
-        self, entity_identifier: str, expected_profile: str
+        self, record_type_identifier: str, expected_profile: str
     ) -> BRegBatchBinding: ...
-    def select_lifecycle(self, entity_identifier: str, expected_profile: str) -> BRegLifecycleAuthority: ...
-    def select_attachments(self, entity_identifier: str, expected_profile: str) -> Sequence[BRegAttachmentSlot]: ...
-    def change_request_capability(
-        self, entity_identifier: str
-    ) -> BRegChangeRequestCapability | None: ...
 
 class BaseRegistryClient:
+    def get_proposal(self, binding: BRegProposalGetBinding, identifier: str) -> BRegProposal: ...
+    def start_proposal(self, binding: BRegActionBinding, inputs: dict[str, JsonValue], key: str) -> BRegProposal: ...
+    def read_proposal(self, proposal: BRegProposal) -> BRegProposal: ...
+    def read_proposal_submission(self, proposal: BRegProposal, version: int) -> dict[str, Any]: ...
+    def list_proposals(self, collection: BRegProposalCollection, query: dict[str, JsonValue]) -> BRegProposalPage: ...
+    def prepare_proposal(self, proposal: BRegProposal, operation: BRegProposalTransition, body: dict[str, JsonValue], key: str) -> BRegPreparedProposal: ...
+    def recover_proposal(self, proposal: BRegProposal, attempt: BRegPreparedProposal) -> BRegPreparedProposal: ...
+    def execute_proposal(self, attempt: BRegPreparedProposal) -> BRegProposal: ...
     def __init__(
         self,
         base_url: str,
@@ -388,7 +288,7 @@ class BaseRegistryClient:
         idempotency_key: str,
     ) -> dict[str, Any]: ...
     def registry_contract(self, access_profile: str | None = None) -> BRegMetadata: ...
-    def entity_schema(self, entity_identifier: str, access_profile: str | None = None) -> dict[str, Any]: ...
+    def entity_schema(self, record_type_identifier: str, access_profile: str | None = None) -> dict[str, Any]: ...
     def get_record(
         self,
         entity_route: str,
@@ -397,14 +297,7 @@ class BaseRegistryClient:
         select: Sequence[str] | None = None,
         access_profile: str | None = None,
         format: RecordFormat = "json",
-        request_history_after_proposal_version: int | None = None,
     ) -> dict[str, Any]: ...
-    def request_history(
-        self,
-        record: dict[str, Any],
-        *,
-        format: RecordFormat = "json",
-    ) -> BRegRetainedRequestHistoryPage | None: ...
     def get_geojson_record(
         self,
         entity_route: str,
@@ -571,35 +464,43 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def action_target_conditions(
         self,
-        binding: BRegImmediateActionBinding,
+        binding: BRegActionBinding,
         inputs: dict[str, JsonValue],
     ) -> BRegActionTargetConditions: ...
     def invoke_action(
         self,
-        binding: BRegImmediateActionBinding,
+        binding: BRegActionBinding,
         inputs: dict[str, JsonValue],
         idempotency_key: str,
         conditions: BRegActionTargetConditions | None = None,
     ) -> dict[str, Any]: ...
     def prepare_action(
         self,
-        binding: BRegImmediateActionBinding,
+        binding: BRegActionBinding,
         inputs: dict[str, JsonValue],
         idempotency_key: str,
         conditions: BRegActionTargetConditions | None = None,
     ) -> BRegPreparedAction: ...
     def recover_action(
         self,
-        binding: BRegImmediateActionBinding,
+        binding: BRegActionBinding,
         prepared: BRegPreparedAction,
         inputs: dict[str, JsonValue],
         idempotency_key: str,
     ) -> BRegRecoveredAction: ...
     def execute_recovered_action(
         self,
-        binding: BRegImmediateActionBinding,
+        binding: BRegActionBinding,
         recovered: BRegRecoveredAction,
     ) -> dict[str, Any]: ...
+    def execute_recovered_proposal_start(self, binding: BRegActionBinding, recovered: BRegRecoveredAction) -> BRegProposal: ...
+    def download_proposal_attachment(self, proposal: BRegProposal, slot: str) -> dict[str, Any]: ...
+    def read_proposal_review_status(self, proposal: BRegProposal) -> dict[str, Any]: ...
+    def read_proposal_review_context(self, proposal: BRegProposal) -> dict[str, Any]: ...
+    def read_proposal_review_by_id(self, binding: BRegProposalReviewBinding, identifier: str) -> dict[str, Any]: ...
+    def download_proposal_review_document(self, binding: BRegProposalReviewBinding, context: dict[str, Any], field: str) -> dict[str, Any]: ...
+    def upload_proposal_attachment(self, proposal: BRegProposal, slot: str, content_type: str, bytes: bytes, key: str) -> BRegProposal: ...
+    def delete_proposal_attachment(self, proposal: BRegProposal, slot: str, key: str) -> BRegProposal: ...
     def tombstone_record(
         self,
         binding: BRegTombstoneBinding,
@@ -627,7 +528,7 @@ class BaseRegistryClient:
         entity_route: str,
         *,
         limit: int | None = None,
-        after: str | None = None,
+        cursor: str | None = None,
         status: IngestionRunStatus | None = None,
         input_digest: str | None = None,
         access_profile: str | None = None,
@@ -658,57 +559,6 @@ class BaseRegistryClient:
         chunk_index: int,
         profile_id: str,
     ) -> dict[str, Any]: ...
-    def lifecycle_actions(
-        self,
-        authority: BRegLifecycleAuthority,
-        record: dict[str, JsonValue],
-        *,
-        format: RecordFormat = "json",
-    ) -> Sequence[BRegLifecycleAction]: ...
-    def prepare_lifecycle_action(
-        self,
-        authority: BRegLifecycleAuthority,
-        record: dict[str, JsonValue],
-        action: BRegLifecycleAction,
-        idempotency_key: str,
-        *,
-        format: RecordFormat = "json",
-    ) -> BRegPreparedLifecycle: ...
-    def recover_lifecycle_action(
-        self,
-        authority: BRegLifecycleAuthority,
-        prepared: BRegPreparedLifecycle,
-    ) -> BRegRecoveredLifecycle: ...
-    def execute_recovered_lifecycle_action(
-        self,
-        recovered: BRegRecoveredLifecycle,
-    ) -> BRegLifecycleComplete: ...
-    def execute_lifecycle_action(self, action: BRegLifecycleAction, idempotency_key: str) -> BRegLifecycleComplete: ...
-    def upload_attachment(
-        self,
-        slot: BRegAttachmentSlot,
-        record_identifier: str,
-        etag: str,
-        upload: BRegAttachmentUpload,
-        idempotency_key: str,
-        *,
-        format: RecordFormat = "json",
-    ) -> dict[str, Any]: ...
-    def download_attachment(
-        self,
-        slot: BRegAttachmentSlot,
-        record_identifier: str,
-        proposal_version: int,
-    ) -> dict[str, Any]: ...
-    def delete_attachment(
-        self,
-        slot: BRegAttachmentSlot,
-        record_identifier: str,
-        etag: str,
-        idempotency_key: str,
-        *,
-        format: RecordFormat = "json",
-    ) -> dict[str, Any]: ...
 
 __version__: str
 
@@ -719,3 +569,26 @@ class PrivateKeyJwt:
         """Fresh RFC 8693 exchange, requiring configured resource and scopes."""
         ...
     def bearer_token(self) -> str: ...
+
+BRegProposalTransition = Literal['edit', 'submit', 'revise', 'rebase', 'retry', 'cancel', 'apply']
+class BRegProposal:
+    @property
+    def input(self) -> dict[str, JsonValue] | None: ...
+    @property
+    def identifier(self) -> str: ...
+    @property
+    def action_identifier(self) -> str: ...
+    @property
+    def document(self) -> dict[str, JsonValue]: ...
+class BRegProposalCollection: ...
+class BRegProposalGetBinding: ...
+class BRegProposalReviewBinding: ...
+class BRegProposalPage:
+    @property
+    def items(self) -> list[BRegProposal]: ...
+    @property
+    def next_cursor(self) -> str | None: ...
+class BRegPreparedProposal:
+    @staticmethod
+    def from_bytes(value: bytes) -> BRegPreparedProposal: ...
+    def to_bytes(self) -> bytes: ...

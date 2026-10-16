@@ -1,0 +1,180 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: governed-action-follow-up
+  version: '1'
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required:
+    - applicationId
+    properties:
+      applicationId:
+        type: string
+        format: uuid
+contracts:
+  applications:
+    type: breg
+    source: generated/applications.contract.json
+functions:
+  information-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: information_route
+    inputs:
+      record:
+        operationOutput: applications-read-record
+    output:
+      type: string
+      enum:
+      - request
+      - skip
+  action-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: action_request
+    inputs:
+      input:
+        typeRef: workflow-input
+      record:
+        operationOutput: applications-read-record
+    output:
+      operationInput: applications-invoke-breg-action
+  notice-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs:
+      record:
+        operationOutput: applications-read-record
+      action:
+        operationOutput: applications-invoke-breg-action
+    output:
+      operationInput: notices-submit-message
+operations:
+  applications-read-record:
+    uses: breg.read-record/v1
+    connection: applications
+  applications-invoke-breg-action:
+    uses: breg.invoke-action/v1
+    connection: applications
+    action:
+      contract: applications
+      id: request-information
+  notices-submit-message:
+    uses: messaging.submit-message/v1
+    connection: notices
+workflow:
+  input:
+    typeRef: workflow-input
+  deadlineSeconds: 300
+  start: read-application
+  steps:
+    read-application:
+      type: call
+      operation: applications-read-record
+      input:
+        type: fields
+        fields:
+          collection:
+            type: literal
+            value: applications
+          recordId:
+            type: input
+            path: /applicationId
+      next: needs-information
+    needs-information:
+      type: choose
+      choose:
+        type: function
+        function: information-route
+        inputs:
+          record:
+            type: step
+            step: read-application
+      cases:
+        request: request-information
+        skip: skipped
+    request-information:
+      type: call
+      operation: applications-invoke-breg-action
+      input:
+        type: function
+        function: action-request
+        inputs:
+          input:
+            type: input
+          record:
+            type: step
+            step: read-application
+      next: notify
+      onDeclaredRefusal: action-refused
+    notify:
+      type: call
+      operation: notices-submit-message
+      input:
+        type: function
+        function: notice-request
+        inputs:
+          record:
+            type: step
+            step: read-application
+          action:
+            type: step
+            step: request-information
+      next: accepted
+    accepted:
+      type: finish
+      outcome: action-and-notice-accepted
+      output:
+        type: fields
+        fields:
+          actionApplicationId:
+            type: step
+            step: request-information
+            path: /applicationId
+          messageId:
+            type: step
+            step: notify
+            path: /id
+    skipped:
+      type: finish
+      outcome: no-information-request-needed
+    action-refused:
+      type: finish
+      outcome: information-request-refused
+      output:
+        type: fields
+        fields:
+          refusalCode:
+            type: step
+            step: request-information
+            path: /refusalCode
+  outcomes:
+    action-and-notice-accepted:
+      type: object
+      additionalProperties: false
+      required:
+      - actionApplicationId
+      - messageId
+      properties:
+        actionApplicationId:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+          format: uuid
+    no-information-request-needed:
+      type: 'null'
+    information-request-refused:
+      type: object
+      additionalProperties: false
+      required:
+      - refusalCode
+      properties:
+        refusalCode:
+          type: string
+          minLength: 1
+          maxLength: 128

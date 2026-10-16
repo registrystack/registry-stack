@@ -11,6 +11,8 @@ use std::{
     process::{Command, Output},
 };
 
+use registry_platform_yaml::Reader;
+
 fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
 }
@@ -21,6 +23,15 @@ fn stdout_of(output: &Output) -> String {
 
 fn stderr_of(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("utf8 stderr")
+}
+
+fn yaml_value(path: &Path) -> serde_json::Value {
+    let bytes = fs::read(path).expect("read YAML document");
+    Reader::new(path.to_string_lossy().into_owned())
+        .scan(&bytes)
+        .expect("scan YAML document")
+        .expect("YAML document")
+        .to_json_value()
 }
 
 /// Build a minimal deployment project: `runtime.yaml` at the root and a
@@ -115,6 +126,9 @@ if [ "$step" = "${{FAIL_STEP:-}}" ]; then
   if [ "$explain_json" = "true" ]; then
     printf '{{"passed":false,"evaluatedCases":%s,"cases":%s}}\n' "$cases_json" "${{STUB_CASES:-[]}}"
   fi
+  if [ -n "${{STUB_REFUSAL:-}}" ]; then
+    printf '%s\n' "$STUB_REFUSAL"
+  fi
   printf 'stub failure for %s\n' "$step" >&2
   if [ -n "${{FAIL_CASE:-}}" ]; then
     if [ -n "${{FAIL_EXPECTED:-}}" ]; then
@@ -188,7 +202,13 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
     assert_eq!(
         invocations,
         vec![
-            vec!["check", "--runtime-config", runtime_path],
+            vec![
+                "check",
+                "--runtime-config",
+                runtime_path,
+                "--format",
+                "json"
+            ],
             vec![
                 "evaluate",
                 "--runtime-config",
@@ -254,7 +274,13 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
     assert_eq!(
         read_argv_log(&argv_log),
         vec![
-            vec!["check", "--runtime-config", runtime_path],
+            vec![
+                "check",
+                "--runtime-config",
+                runtime_path,
+                "--format",
+                "json"
+            ],
             vec![
                 "evaluate",
                 "--runtime-config",
@@ -312,7 +338,7 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     let project = dir.path().join("sqlite-project");
     let created = evidencectl()
         .args([
-            "new",
+            "init",
             project.to_str().expect("project path is UTF-8"),
             "--transport",
             "sqlite-extract",
@@ -322,6 +348,7 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
         .output()
         .expect("create SQLite starter");
     assert!(created.status.success(), "{}", stderr_of(&created));
+    let project = fs::canonicalize(project).expect("canonical SQLite project");
 
     let stub = write_stub_evidence(dir.path());
     let argv_log = dir.path().join("argv.log");
@@ -352,14 +379,20 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     assert_eq!(invocations[2][0], "bundle-evaluate");
     assert_eq!(invocations[2][1], "--bundle");
     assert_eq!(
-        invocations[2][3..],
+        invocations[2][3..9],
         [
             "--fixture",
             "fixtures/record-status.yaml",
             "--explain",
             "--explain-format",
-            "json"
+            "json",
+            "--authority-document"
         ]
+    );
+    assert!(
+        invocations[2][9].ends_with("/compiled-authority.yaml"),
+        "the delegated fixture evaluation must receive the compiled complete authority: {:?}",
+        invocations[2]
     );
 }
 
@@ -928,7 +961,13 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
     assert_eq!(
         invocations,
         vec![
-            vec!["check", "--runtime-config", runtime_path],
+            vec![
+                "check",
+                "--runtime-config",
+                runtime_path,
+                "--format",
+                "json"
+            ],
             vec![
                 "evaluate",
                 "--runtime-config",
@@ -1208,22 +1247,16 @@ fn evidence_bin_env_var_is_used_when_the_flag_is_omitted() {
     assert_eq!(invocations.len(), 2, "check plus one fixture");
 }
 
-/// The documented local authoring journey, end to end: scaffold a project,
-/// create its first local target without pre-creating `targets/`, then check
-/// and explain the project against that target.
-///
-/// `target new --local` names the governed signing key in governance and
-/// writes the same key beside it from one read, so the target it publishes is
-/// the one the offline check accepts: `check --target` and `explain --target`
-/// must both complete rather than refuse, which is what a fresh adopter sees
-/// before any hand-authored governance exists.
+/// The documented local target journey, end to end: scaffold a project,
+/// create a complete target without pre-creating `targets/`, then inspect its
+/// authored grants offline and check the deployment closure through Evidence.
 #[test]
-fn a_fresh_local_target_journey_checks_and_explains_without_a_pretargets_directory() {
+fn a_fresh_local_target_journey_checks_and_explains_complete_normalized_grants() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = fs::canonicalize(dir.path()).unwrap();
     let project = root.join("project");
     let created = evidencectl()
-        .args(["new"])
+        .args(["init"])
         .arg(&project)
         .args(["--transport", "sqlite-extract", "--profile", "local"])
         .output()
@@ -1231,7 +1264,7 @@ fn a_fresh_local_target_journey_checks_and_explains_without_a_pretargets_directo
     assert!(created.status.success(), "{}", stderr_of(&created));
     assert!(
         !project.join("targets").exists(),
-        "init scaffolds no targets/ directory; target new must create it"
+        "init leaves custom deployment target directories to the operator"
     );
 
     let target = project.join("targets/local");
@@ -1245,135 +1278,118 @@ fn a_fresh_local_target_journey_checks_and_explains_without_a_pretargets_directo
         .expect("create the first local target");
     assert!(created.status.success(), "{}", stderr_of(&created));
 
-    // The governed key reference and the written key file must name the same
-    // material, drawn from the project's own signing key.
-    let governance: serde_json::Value = serde_norway::from_slice(
-        &fs::read(target.join("governance.yaml")).expect("governance is written"),
-    )
-    .expect("governance parses");
-    let active = governance["signing"]["activePublicJwkFile"]
+    let target_document = yaml_value(&target.join("target.yaml"));
+    assert_eq!(target_document["project"], "local-evidence");
+    assert_eq!(target_document["authority"], "authority.yaml");
+    let public_key = target_document["signer"]["publicJwkFile"]
         .as_str()
-        .expect("governance names its active key");
+        .expect("target names its public signing key");
     assert_eq!(
-        fs::read(target.join(active)).expect("the named key is written"),
-        fs::read(project.join("secrets/signing-p256-public.jwk.json"))
-            .expect("the project signing key"),
-        "governance and the written key file come from one read"
+        fs::read(target.join(public_key)).expect("target public key asset"),
+        fs::read(project.join(".generated/secrets/signing-p256-public.jwk.json"))
+            .expect("project signing public key"),
+        "the target publishes the public half of the generated project key"
+    );
+    assert!(
+        !target
+            .join(".generated/secrets/signing-p256-private.jwk.json")
+            .exists(),
+        "target authoring must never copy the private signing key"
     );
 
-    // The stub answers the version handshake, the provider-publication
-    // compiler, and the bundle-only check seam with the report shape
-    // `evidencectl check --target` parses.
-    let stub = root.join("evidence");
-    let stub_script = format!(
-        concat!(
-            "#!/bin/sh\n",
-            "if [ \"${{1:-}}\" = \"--version\" ]; then\n",
-            "  printf 'evidence %s\\n' \"{version}\"\n",
-            "  exit 0\n",
-            "fi\n",
-            "case \"$1\" in\n",
-            "  render-discovery-description) printf 'stub catalog\\n'; exit 0 ;;\n",
-            "  bundle-check) printf '%s\\n' '{report}'; exit 0 ;;\n",
-            "esac\n",
-            "exit 0\n",
-        ),
-        version = registry_platform_buildinfo::DISPLAY_VERSION,
-        report = r#"{"packageDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirement:record-status:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}"#,
-    );
-    fs::write(&stub, stub_script).expect("write check stub");
-    let mut permissions = fs::metadata(&stub).expect("stat stub").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&stub, permissions).expect("chmod stub");
-    let checked = evidencectl()
-        .args(["check"])
-        .arg(&project)
-        .arg("--target")
-        .arg(&target)
-        .env("EVIDENCE_BIN", &stub)
-        .output()
-        .expect("check against the fresh target");
-    assert!(checked.status.success(), "{}", stderr_of(&checked));
-    let stdout = stdout_of(&checked);
-    assert!(stdout.contains("deployment-closure"), "{stdout}");
+    let authority = yaml_value(&target.join("authority.yaml"));
+    let profiles = authority["accessProfiles"]
+        .as_object()
+        .expect("complete target access profiles");
+    assert_eq!(profiles.len(), 1);
+    let grant = &profiles.values().next().unwrap()["grants"][0];
+    assert_eq!(grant["definition"], "record-status");
+    assert_eq!(grant["purpose"], "record-status-check");
+    assert_eq!(grant["subjects"][0]["selectorProfile"], "record-reference");
 
     let explained = evidencectl()
-        .args(["explain"])
+        .args(["--format", "json", "target", "explain"])
+        .arg(&target)
+        .arg(&project)
+        .output()
+        .expect("explain the fresh target");
+    assert!(explained.status.success(), "{}", stderr_of(&explained));
+    let report: serde_json::Value =
+        serde_json::from_slice(&explained.stdout).expect("target explanation JSON");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["offline"], true);
+    assert_eq!(report["secretResolution"], false);
+    assert!(report["accessProfiles"]
+        .as_object()
+        .is_some_and(|p| !p.is_empty()));
+
+    // The shared runtime stub answers the version handshake, provider
+    // publication, bundle check and structured fixture-evaluation seams. The
+    // target's referenced public key is a real published asset.
+    let stub = write_stub_evidence(&root);
+    let checked = evidencectl()
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--target")
         .arg(&target)
-        .env("EVIDENCE_BIN", &stub)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", root.join("argv.log"))
+        .env("CASES", "13")
         .output()
-        .expect("explain against the fresh target");
-    assert!(explained.status.success(), "{}", stderr_of(&explained));
-    let stdout = stdout_of(&explained);
-    assert!(stdout.contains("Status: complete"), "{stdout}");
-    assert!(stdout.contains("record-status"), "{stdout}");
+        .expect("check and evaluate against the fresh target");
+    assert!(
+        checked.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&checked),
+        stderr_of(&checked)
+    );
+    assert!(stdout_of(&checked).contains("13 cases"));
 }
 
 #[test]
-fn local_target_created_before_questions_uses_current_local_caller_governance() {
+fn local_target_generation_is_idempotent_and_refuses_changed_authored_settings() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = fs::canonicalize(dir.path()).unwrap();
     let project = root.join("project");
     let created = evidencectl()
-        .args(["new"])
+        .args(["init"])
         .arg(&project)
         .args(["--transport", "sqlite-extract", "--profile", "local"])
         .output()
         .unwrap();
     assert!(created.status.success(), "{}", stderr_of(&created));
-    fs::rename(project.join("questions"), root.join("questions")).unwrap();
-    let target = project.join("local-target");
-    let created = evidencectl()
-        .args(["target", "new"])
-        .arg(&target)
-        .arg("--project")
-        .arg(&project)
-        .arg("--local")
-        .output()
-        .unwrap();
-    assert!(created.status.success(), "{}", stderr_of(&created));
-    fs::rename(root.join("questions"), project.join("questions")).unwrap();
-    let governance_path = target.join("governance.yaml");
-    let original = fs::read(&governance_path).unwrap();
-    let stub = write_stub_evidence(&root);
-    let argv_log = root.join("argv.log");
-    let output = evidencectl()
-        .args(["fixtures", "run"])
-        .arg(&project)
-        .arg("--target")
-        .arg(&target)
-        .arg("--local")
-        .arg("--evidence-bin")
-        .arg(&stub)
-        .env("ARGV_LOG", &argv_log)
-        .env("CASES", "13")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr_of(&output));
-    assert!(stdout_of(&output).contains("13 cases"));
-    assert_eq!(fs::read(&governance_path).unwrap(), original);
-    let mut governance: serde_json::Value = serde_norway::from_slice(&original).unwrap();
-    governance["assuranceProfile"] = serde_json::json!("production");
-    fs::write(
-        &governance_path,
-        serde_norway::to_string(&governance).unwrap(),
-    )
-    .unwrap();
-    let rejected = evidencectl()
-        .args(["fixtures", "run"])
-        .arg(&project)
-        .arg("--target")
-        .arg(&target)
-        .arg("--local")
-        .arg("--evidence-bin")
-        .arg(&stub)
-        .env("ARGV_LOG", &argv_log)
-        .output()
-        .unwrap();
+    let target = project.join("targets/local");
+    let create_target = || {
+        evidencectl()
+            .args(["target", "new"])
+            .arg(&target)
+            .arg("--project")
+            .arg(&project)
+            .arg("--local")
+            .output()
+            .unwrap()
+    };
+    let first = create_target();
+    assert!(first.status.success(), "{}", stderr_of(&first));
+    let target_path = target.join("target.yaml");
+    let original = fs::read(&target_path).unwrap();
+    let repeated = create_target();
+    assert!(repeated.status.success(), "{}", stderr_of(&repeated));
+    assert_eq!(fs::read(&target_path).unwrap(), original);
+
+    let mut changed = yaml_value(&target_path);
+    changed["assuranceProfile"] = serde_json::json!("production");
+    fs::write(&target_path, serde_norway::to_string(&changed).unwrap()).unwrap();
+    let changed_bytes = fs::read(&target_path).unwrap();
+    let rejected = create_target();
     assert!(!rejected.status.success());
-    assert!(stderr_of(&rejected).contains("assuranceProfile local"));
+    assert!(
+        stderr_of(&rejected).contains("different authored settings"),
+        "{}",
+        stderr_of(&rejected)
+    );
+    assert_eq!(fs::read(&target_path).unwrap(), changed_bytes);
 }
 
 /// `target new --local` defaults `--project` to the current directory, so a
@@ -1394,7 +1410,7 @@ fn target_new_local_outside_a_project_refuses_before_writing_key_material() {
 
     assert!(!output.status.success());
     let stderr = stderr_of(&output);
-    assert!(stderr.contains("Evidence project marker"), "{stderr}");
+    assert!(stderr.contains("Evidence project"), "{stderr}");
     assert!(
         !root.join("secrets").exists(),
         "a refused target new wrote key material: {stderr}"
@@ -1550,12 +1566,13 @@ fn test_with_mutated_fixture(
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("sqlite-project");
     let created = evidencectl()
-        .args(["new"])
+        .args(["init"])
         .arg(&project)
         .args(["--transport", "sqlite-extract", "--profile", "local"])
         .output()
         .expect("create SQLite starter");
     assert!(created.status.success(), "{}", stderr_of(&created));
+    let project = fs::canonicalize(project).expect("canonical SQLite project");
     let fixture = project.join(FIXTURE_FILE);
     let original = fs::read_to_string(&fixture).expect("read the starter fixture");
     fs::write(&fixture, mutate(original)).expect("write the mutated fixture");
@@ -1685,12 +1702,13 @@ fn a_project_with_no_fixture_file_says_so_and_where_one_goes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let project = dir.path().join("sqlite-project");
         let created = evidencectl()
-            .args(["new"])
+            .args(["init"])
             .arg(&project)
             .args(["--transport", "sqlite-extract", "--profile", "local"])
             .output()
             .expect("create SQLite starter");
         assert!(created.status.success(), "{}", stderr_of(&created));
+        let project = fs::canonicalize(project).expect("canonical SQLite project");
         fs::remove_dir_all(project.join("fixtures")).expect("remove the starter fixtures");
         if !remove_directory {
             fs::create_dir(project.join("fixtures")).expect("recreate an empty fixtures directory");
@@ -1725,4 +1743,32 @@ fn a_project_with_no_fixture_file_says_so_and_where_one_goes() {
             "{report}"
         );
     }
+}
+
+#[test]
+fn native_fixture_refusal_diagnostics_survive_the_driver_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let diagnostic = serde_json::json!({
+        "severity":"error","code":"config.duplicate-id","artifact":"EvidenceFixture",
+        "path":"/cases/1/id","message":"a case ID is repeated","suggestedAction":"Give each case a unique ID.",
+        "source":{"file":project.join("bundle/fixtures/a.yaml"),"line":6,"column":9},
+        "related":[{"file":project.join("bundle/fixtures/a.yaml"),"path":"/cases/0/id","line":5,"column":9,"message":"the first case ID is here"}]
+    });
+    let refusal = serde_json::json!({"ok":false,"diagnostics":[diagnostic.clone()]});
+    let output = evidencectl()
+        .args(["fixtures", "run"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", dir.path().join("argv.log"))
+        .env("FAIL_STEP", "check")
+        .env("STUB_REFUSAL", refusal.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"], serde_json::json!([diagnostic]));
 }

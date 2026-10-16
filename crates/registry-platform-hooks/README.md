@@ -51,8 +51,10 @@ stay with the owning product.
 
 ## Budgets
 
-- The envelope carries the same 2 MiB payload bound the delivery store enforces
-  (2,097,152 bytes). A per-delivery bound can only tighten it:
+- The envelope carries the 1 MiB Version 1 signable bound (1,048,576 bytes,
+  the delivery signature's `MAX_BODY_BYTES`), so every envelope can be signed
+  and verified. The delivery store's 2 MiB payload column is a looser outer
+  bound. A per-delivery bound can only tighten it:
   `EnvelopeLimits::tightened_to` clamps a wider request back to
   `MAX_ENVELOPE_BYTES`.
 - A handler's returned message carries the executor output ceiling,

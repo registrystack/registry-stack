@@ -135,6 +135,11 @@ subjects, and deadline. Products first enforce their own supported bounds and
 claim profile. A product may retain its own persisted binding and refuse bounds
 it does not support before delegating to the shared transport.
 
+An explicit empty subjects map is valid when the governed grant needs no
+source-derived claims. Missing signed identity data remains invalid. The fresh
+status response must still match the complete authorization, including the
+exact empty map.
+
 `TaskGrantStatusEndpoint` names one authority: its issuer, the base URL and the
 status path appended to it, which holds exactly one whole `{grantId}` segment,
 the token endpoint and client credentials, and the one resource and one scope

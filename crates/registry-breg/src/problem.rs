@@ -37,10 +37,11 @@ pub enum ProblemCode {
     MutationConflict,
     PreconditionFailed,
     PreconditionRequired,
+    ProposalRejected,
+    ProposalSubmissionExpired,
     QueryCursorInvalid,
     QueryInvalid,
     RequestInvalid,
-    RequestPlanRefused,
     RequestTimeout,
     ResourceNotFound,
     RuntimeFieldEncryptionUnavailable,
@@ -72,10 +73,11 @@ impl ProblemCode {
         Self::MutationConflict,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
+        Self::ProposalRejected,
+        Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
-        Self::RequestPlanRefused,
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeFieldEncryptionUnavailable,
@@ -108,10 +110,11 @@ impl ProblemCode {
         Self::MutationConflict,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
+        Self::ProposalRejected,
+        Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
-        Self::RequestPlanRefused,
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeFieldEncryptionUnavailable,
@@ -142,10 +145,11 @@ impl ProblemCode {
             Self::MutationConflict => "mutation.conflict",
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
+            Self::ProposalRejected => "proposal.rejected",
+            Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
-            Self::RequestPlanRefused => "request.plan_refused",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
             Self::RuntimeFieldEncryptionUnavailable => "runtime.field_encryption.unavailable",
@@ -164,10 +168,7 @@ impl ProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid
-            | Self::QueryInvalid
-            | Self::RequestInvalid
-            | Self::RequestPlanRefused => 400,
+            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::IngestionProfileMismatch => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
@@ -176,9 +177,11 @@ impl ProblemCode {
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
             | Self::MutationConflict
+            | Self::ProposalRejected
             | Self::StatisticalDatasetVersionConflict => 409,
             Self::IdempotencyExpired
             | Self::IngestionReceiptErased
+            | Self::ProposalSubmissionExpired
             | Self::StatisticalDatasetVersionWithdrawn => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
@@ -241,12 +244,15 @@ impl ProblemCode {
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",
             Self::PreconditionRequired => "The mutation precondition is required.",
+            Self::ProposalRejected => {
+                "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."
+            }
+            Self::ProposalSubmissionExpired => {
+                "The review result and application receipt of the submission are no longer retained."
+            }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
-            Self::RequestPlanRefused => {
-                "The change-request planner refused the submission, naming the failure kind."
-            }
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
             Self::RuntimeFieldEncryptionUnavailable => {

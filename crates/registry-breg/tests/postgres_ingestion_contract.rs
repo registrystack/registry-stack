@@ -532,14 +532,14 @@ fn claims_with(
 /// label-only reader the concealment proofs stay outside. The batch byte bound
 /// is a parameter so one variant can sit at the protocol's highest.
 fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegistry> {
-    let fixture = json!({
+    let fixture = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
             "id": "ingestion-contract-registry", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://contract.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "widget", "primaryDataset": "test-dataset", "route": "widgets",
             "mutationMode": "mutable", "classification": "public",
             "batch": {"maximumItems": 3, "maximumBytes": batch_maximum_bytes},
@@ -559,8 +559,8 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             {
                 "id": "operator", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "requiredPurposes": ["case-management"],
-                "permissions": {"entities": [{
-                    "entity": "widget", "operations": ["create", "get", "patch", "batch"],
+                "permissions": {"records": [{
+                    "recordType": "widget", "operations": ["create", "get", "patch", "batch"],
                     "readableFields": ["jurisdiction", "label", "quantity", "payload"],
                     "writableFields": ["jurisdiction", "label", "quantity", "payload"],
                     "rowBoundaries": [
@@ -570,8 +570,8 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             },
             {
                 "id": "label-reader", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "entity": "widget", "operations": ["get", "list"],
+                "permissions": {"records": [{
+                    "recordType": "widget", "operations": ["get", "list"],
                     "readableFields": ["label"],
                     "rowBoundaries": "unrestricted"
                 }]}

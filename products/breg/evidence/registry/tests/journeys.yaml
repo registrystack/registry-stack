@@ -8,7 +8,7 @@ journeys:
 - id: source-lookup-boundary
   steps:
   - id: operator-creates-record
-    entity: record
+    recordType: record
     accessProfile: operator
     claims:
       principal: generic-registry-operator
@@ -30,7 +30,7 @@ journeys:
         status: active
     capture: record
   - id: source-looks-up-by-code
-    entity: record
+    recordType: record
     accessProfile: evidence-source
     claims:
       principal: evidence-source
@@ -49,7 +49,7 @@ journeys:
         code: SYNTHETIC-JOURNEY
         status: active
   - id: source-looks-up-by-registration-number
-    entity: record
+    recordType: record
     accessProfile: evidence-source
     claims:
       principal: evidence-source
@@ -68,7 +68,7 @@ journeys:
         registration-number: SYNTHETIC-JOURNEY-REG
         status: active
   - id: source-unresolved-is-not-a-negative-status
-    entity: record
+    recordType: record
     accessProfile: evidence-source
     claims:
       principal: evidence-source

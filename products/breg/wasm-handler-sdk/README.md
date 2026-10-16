@@ -157,25 +157,42 @@ admission-time enforcement.)
 
 ## Package it into a BREG project
 
-The registry project's action handler declares the module instead of a
-script:
+Declare a named Function and select it from an immediate Action's bounded plan:
 
-```json
-"handler": {
-  "type": "wasm",
-  "module": "wasm/handler.wasm",
-  "abi": "registry.action-handler/v1",
-  "refusals": [
-    {"code": "invalid-phone", "label": "The phone number is not a valid phone number."},
-    {"code": "invalid-region", "label": "The region is not a usable phone region."}
-  ],
-  "writes": [
-    {"id": "phone", "target": {"entity": "person"}, "operation": "create", "fields": ["phone"]}
-  ]
-}
+```yaml
+functions:
+  - id: normalize-phone-plan
+    runtime: wasm
+    source: wasm/handler.wasm
+    entrypoint: plan
+    abi: registry.action-plan/v1
 ```
 
-The `module` path is project-local, relative, ending in `.wasm`. The
+```yaml
+execution:
+  mode: immediate
+plan:
+  type: function
+  function: normalize-phone-plan
+  inputs: [phone, region]
+  refusals:
+    - code: invalid-phone
+      label: The phone number is not a valid phone number.
+    - code: invalid-region
+      label: The region is not a usable phone region.
+  writes:
+    - id: phone
+      target:
+        recordType: person
+      operation: create
+      fields: [phone]
+```
+
+These fragments sit beside the complete project's typed inputs, Record types,
+datasets, and explicit grants. The SDK guest exports remain separate from the
+public Action plan declaration.
+
+The `source` path is project-local, relative, ending in `.wasm`. The
 declared input ids, write-slot ids, fields, and refusal codes must match
 what the module reads and emits; the admission proof's project
 (`admission/src/lib.rs`) is a complete working example. At compile time the

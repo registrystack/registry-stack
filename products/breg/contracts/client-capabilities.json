@@ -11,11 +11,8 @@
     "Import",
     "Revisions",
     "Snapshot",
-    "SubmitRequest",
-    "ReviseRequest",
-    "CancelRequest",
-    "ApplyRequest",
-    "Invoke"
+    "Invoke",
+    "Start"
   ],
   "queryKinds": [
     "List",
@@ -35,11 +32,20 @@
     "asOf",
     "snapshot",
     "validAt",
-    "requestHistoryAfterProposalVersion",
-    "proposalVersion",
     "from",
     "to",
-    "status"
+    "status",
+    "action",
+    "owner",
+    "target",
+    "state",
+    "cursor",
+    "limit",
+    "turn",
+    "submissionVersion",
+    "reviewContextField",
+    "effectDigest",
+    "contextSchemaDigest"
   ],
   "queryOptionBindings": {
     "accessProfile": {
@@ -102,16 +108,6 @@
       "node": ["SnapshotListOptions.validAt"],
       "python": ["BaseRegistryClient.list_snapshot_records.valid_at"]
     },
-    "requestHistoryAfterProposalVersion": {
-      "rust": ["BRegRecordOptions.request_history_after_proposal_version.value"],
-      "node": ["RecordOptions.requestHistoryAfterProposalVersion"],
-      "python": ["BaseRegistryClient.get_record.request_history_after_proposal_version"]
-    },
-    "proposalVersion": {
-      "rust": ["BaseRegistryClient.download_attachment.proposal_version"],
-      "node": ["BaseRegistryClient.downloadAttachment.proposalVersion"],
-      "python": ["BaseRegistryClient.download_attachment.proposal_version"]
-    },
     "from": {
       "rust": ["BaseRegistryClient.statistics_live.from", "BaseRegistryClient.statistics_release_series.from"],
       "node": ["BaseRegistryClient.statisticsLive.from", "BaseRegistryClient.statisticsReleaseSeries.from"],
@@ -126,6 +122,65 @@
       "rust": ["BaseRegistryClient.statistics_latest_release.selection", "BaseRegistryClient.statistics_release_series.selection"],
       "node": ["BaseRegistryClient.statisticsLatestRelease.selection", "BaseRegistryClient.statisticsReleaseSeries.selection"],
       "python": ["BaseRegistryClient.statistics_latest_release.selection", "BaseRegistryClient.statistics_release_series.selection"]
+    },
+    "action": {
+      "rust": ["BRegProposalQuery.action"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "owner": {
+      "rust": ["BRegProposalQuery.owner_is_caller"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "target": {
+      "rust": ["BRegProposalQuery.target"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "state": {
+      "rust": ["BRegProposalQuery.state"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "cursor": {
+      "rust": ["BRegProposalQuery.cursor"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "limit": {
+      "rust": ["BRegProposalQuery.limit"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "turn": {
+      "rust": ["BRegProposalQuery.turn"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "submissionVersion": {
+      "source": "server-issued Proposal value or Review context; callers cannot replace its submission version",
+      "rust": ["BaseRegistryClient.download_proposal_attachment.proposal", "BaseRegistryClient.download_proposal_review_document.context"],
+      "node": ["BaseRegistryClient.downloadProposalAttachment.proposal", "BaseRegistryClient.downloadProposalReviewDocument.context"],
+      "python": ["BaseRegistryClient.download_proposal_attachment.proposal", "BaseRegistryClient.download_proposal_review_document.context"]
+    },
+    "reviewContextField": {
+      "source": "explicitly selected projected document field in the exact server-issued Review context",
+      "rust": ["BaseRegistryClient.download_proposal_review_document.field"],
+      "node": ["BaseRegistryClient.downloadProposalReviewDocument.field"],
+      "python": ["BaseRegistryClient.download_proposal_review_document.field"]
+    },
+    "effectDigest": {
+      "source": "exact frozen submission in the server-issued Review context",
+      "rust": ["BaseRegistryClient.download_proposal_review_document.context"],
+      "node": ["BaseRegistryClient.downloadProposalReviewDocument.context"],
+      "python": ["BaseRegistryClient.download_proposal_review_document.context"]
+    },
+    "contextSchemaDigest": {
+      "source": "exact producer contract in the server-issued Review context",
+      "rust": ["BaseRegistryClient.download_proposal_review_document.context"],
+      "node": ["BaseRegistryClient.downloadProposalReviewDocument.context"],
+      "python": ["BaseRegistryClient.download_proposal_review_document.context"]
     }
   },
   "representations": [
@@ -256,30 +311,6 @@
       ]
     },
     {
-      "id": "proposal-history",
-      "rust": [
-        "get_record"
-      ],
-      "node": [
-        "getRecord"
-      ],
-      "python": [
-        "get_record"
-      ]
-    },
-    {
-      "id": "applied-request-results",
-      "rust": [
-        "retained_history"
-      ],
-      "node": [
-        "requestHistory"
-      ],
-      "python": [
-        "request_history"
-      ]
-    },
-    {
       "id": "relationships",
       "rust": [
         "list_relationship_records",
@@ -350,36 +381,9 @@
     },
     {
       "id": "attachments",
-      "rust": [
-        "upload_attachment",
-        "download_attachment",
-        "delete_attachment"
-      ],
-      "node": [
-        "uploadAttachment",
-        "downloadAttachment",
-        "deleteAttachment"
-      ],
-      "python": [
-        "upload_attachment",
-        "download_attachment",
-        "delete_attachment"
-      ]
-    },
-    {
-      "id": "lifecycle",
-      "rust": [
-        "lifecycle_actions",
-        "execute_lifecycle_action"
-      ],
-      "node": [
-        "lifecycleActions",
-        "executeLifecycleAction"
-      ],
-      "python": [
-        "lifecycle_actions",
-        "execute_lifecycle_action"
-      ]
+      "rust": ["upload_proposal_attachment", "download_proposal_attachment", "delete_proposal_attachment"],
+      "node": ["uploadProposalAttachment", "downloadProposalAttachment", "deleteProposalAttachment"],
+      "python": ["upload_proposal_attachment", "download_proposal_attachment", "delete_proposal_attachment"]
     },
     {
       "id": "create-recovery",
@@ -394,21 +398,6 @@
       "python": [
         "prepare_create",
         "recover_create"
-      ]
-    },
-    {
-      "id": "lifecycle-recovery",
-      "rust": [
-        "prepare_lifecycle_action",
-        "recover_lifecycle_action"
-      ],
-      "node": [
-        "prepareLifecycleAction",
-        "recoverLifecycleAction"
-      ],
-      "python": [
-        "prepare_lifecycle_action",
-        "recover_lifecycle_action"
       ]
     },
     {
@@ -482,6 +471,24 @@
       "python": [
         "tombstone_record"
       ]
+    },
+    {
+      "id": "proposals",
+      "rust": ["start_proposal", "get_proposal", "read_proposal", "read_proposal_submission", "list_proposals"],
+      "node": ["startProposal", "getProposal", "readProposal", "readProposalSubmission", "listProposals"],
+      "python": ["start_proposal", "get_proposal", "read_proposal", "read_proposal_submission", "list_proposals"]
+    },
+    {
+      "id": "proposal-recovery",
+      "rust": ["prepare_proposal", "recover_proposal", "execute_proposal"],
+      "node": ["prepareProposal", "recoverProposal", "executeProposal"],
+      "python": ["prepare_proposal", "recover_proposal", "execute_proposal"]
+    },
+    {
+      "id": "proposal-review",
+      "rust": ["read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"],
+      "node": ["readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewById", "downloadProposalReviewDocument"],
+      "python": ["read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"]
     }
   ]
 }

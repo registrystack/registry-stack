@@ -7,8 +7,8 @@ pub(super) struct PrepareSourceArgs {
     /// Existing registry project with a retained development session.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Entity authored directly in registry.yaml; omit to inspect available fields.
-    #[arg(long)]
+    /// Record type authored directly in registry.yaml; omit to inspect available fields.
+    #[arg(long = "record-type", value_name = "ID")]
     entity: Option<String>,
     /// Existing required scalar identifier with an exact single-field unique constraint.
     #[arg(long)]
@@ -16,7 +16,7 @@ pub(super) struct PrepareSourceArgs {
     /// Comma-separated selection of 1 to 16 readable fact fields; the identifier is also readable for identity verification.
     #[arg(long, value_delimiter = ',')]
     readable_fields: Vec<String>,
-    /// Explicitly authorize lookup across all records of the selected entity.
+    /// Explicitly authorize lookup across all records of the selected Record type.
     #[arg(long, conflicts_with = "row_field")]
     all_records: bool,
     /// Existing string, text or vocabulary-code field that bounds permitted records.
@@ -31,7 +31,7 @@ pub(super) struct PrepareSourceArgs {
     /// Fresh dedicated local client ID; identical prepared requests reuse its credentials.
     #[arg(long, default_value = "evidence-source")]
     client: String,
-    /// Fresh lookup-only access profile ID for the selected entity and facts.
+    /// Fresh lookup-only access profile ID for the selected Record type and facts.
     #[arg(long, default_value = "evidence-source")]
     access_profile: String,
     /// Fresh selector profile ID for the selected unique identifier.
@@ -389,8 +389,8 @@ fn documents(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, Value
         .collect()
 }
 fn inventory(docs: &BTreeMap<String, Value>, compiled: &registry_breg::CompiledRegistry) -> Value {
-    json!(docs.get("registry.yaml").into_iter().flat_map(|doc| doc["entities"].as_array().into_iter().flatten()).filter(|entity| {
-        entity["id"].as_str().and_then(|id|compiled.entities().get(id)).is_some_and(|entity|entity.change_request.is_none())
+    json!(docs.get("registry.yaml").into_iter().flat_map(|doc| doc["recordTypes"].as_array().into_iter().flatten()).filter(|entity| {
+        entity["id"].as_str().is_some_and(|id|compiled.entities().contains_key(id))
     }).map(|entity| {
         let fields = entity["fields"].as_array().cloned().unwrap_or_default();
         let supported = |field: &Value, selector: bool| {
@@ -428,7 +428,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .unwrap_or_default();
     let captured = capture(&project, &bytes)?;
     if captured.digest != state.source_digest {
-        bail!("authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle");
+        bail!(
+            "authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle"
+        );
     }
     let mut docs = documents(&captured.files)?;
     let compiled = crate::compile(&project, crate::ProfileArg::Production, "prepare-source")
@@ -442,7 +444,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             || args.all_records
             || args.row_field.is_some()
         {
-            bail!("select --entity, --selector-field, --readable-fields and explicit row authority to preview or apply");
+            bail!(
+                "select --record-type, --selector-field, --readable-fields and explicit row authority to preview or apply"
+            );
         }
         return Ok(report);
     };
@@ -455,7 +459,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         )
         .map_err(|_| anyhow::anyhow!(INVALID_PREPARATION))?;
         if prepared.request_digest != request_digest {
-            bail!("selected source client already has different prepared authority; use fresh IDs for a separate source");
+            bail!(
+                "selected source client already has different prepared authority; use fresh IDs for a separate source"
+            );
         }
         let mut report = prepared.report;
         report["requiresRestart"] = json!(!state.activated);
@@ -468,7 +474,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         || !state.activated
         || state.package_digest.is_none()
     {
-        bail!("prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source");
+        bail!(
+            "prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source"
+        );
     }
     for value in [&args.client, &args.access_profile, &args.selector_profile] {
         if !config::identifier(value) {
@@ -488,7 +496,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         bail!("select 1..16 distinct --readable-fields explicitly");
     }
     if !args.all_records && args.row_field.is_none() {
-        bail!("select --all-records or an explicit --row-field, --row-claim and --row-value-file binding");
+        bail!(
+            "select --all-records or an explicit --row-field, --row-claim and --row-value-file binding"
+        );
     }
     let mut clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     if clients
@@ -505,9 +515,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     }) {
         bail!("access profile already exists; select a fresh dedicated profile ID");
     }
-    let path = docs.iter().filter(|(path,_)|path.as_str() == "registry.yaml").find(|(_, doc)| doc["entities"].as_array().is_some_and(|entities|entities.iter().any(|e|e["id"] == *entity_id)))
+    let path = docs.iter().filter(|(path,_)|path.as_str() == "registry.yaml").find(|(_, doc)| doc["recordTypes"].as_array().is_some_and(|entities|entities.iter().any(|e|e["id"] == *entity_id)))
         .map(|(path,_)|path.clone()).context("source preparation supports entities authored directly in registry.yaml; use the normal reviewed package lifecycle for module-owned entities")?;
-    let entity = docs.get_mut(&path).unwrap()["entities"]
+    let entity = docs.get_mut(&path).unwrap()["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -520,7 +530,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .iter()
         .any(|f| f["id"] == *selector && identifier(entity, f))
     {
-        bail!("selector must be an existing required, bounded scalar field with an exact single-field unique constraint");
+        bail!(
+            "selector must be an existing required, bounded scalar field with an exact single-field unique constraint"
+        );
     }
     for id in &args.readable_fields {
         if !fields.iter().any(|f| f["id"] == *id && scalar(f)) {
@@ -602,7 +614,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     };
     registry["accessProfiles"].as_array_mut().context("access profiles missing")?.push(json!({
         "id":args.access_profile,"principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
-        "permissions":{"entities":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
+        "permissions":{"records":[{"recordType":entity_id,"operations":["lookup"],"readableFields":grant_fields,
             "lookups":[{"selector":args.selector_profile,"valueOrigin":"request"}],"rowBoundaries":row_boundaries}]}}));
     let sequence = state
         .sequence
@@ -700,13 +712,26 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             report[key] = value;
         }
         if args.apply {
-            let originals = replacements.keys().map(|path| {
-                let expected = if path == &state.clients_file { bytes.clone() } else {
-                    captured.files[path.strip_prefix(&project)?.to_str().context("source path must be UTF-8")?].clone()
-                };
-                if read_authoring(path)? != expected { bail!("authoring changed during source preview; inspect the changes and retry"); }
-                Ok((path.clone(),expected))
-            }).collect::<Result<_>>()?;
+            let originals = replacements
+                .keys()
+                .map(|path| {
+                    let expected = if path == &state.clients_file {
+                        bytes.clone()
+                    } else {
+                        captured.files[path
+                            .strip_prefix(&project)?
+                            .to_str()
+                            .context("source path must be UTF-8")?]
+                        .clone()
+                    };
+                    if read_authoring(path)? != expected {
+                        bail!(
+                            "authoring changed during source preview; inspect the changes and retry"
+                        );
+                    }
+                    Ok((path.clone(), expected))
+                })
+                .collect::<Result<_>>()?;
             let transition = Transition {
                 api_version: transition_api_version(),
                 kind: transition_kind(),
@@ -722,7 +747,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             let journal = serde_json::to_vec(&transition)?;
             // A journal the reader would refuse could never be recovered.
             if journal.len() > registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES {
-                bail!("source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry");
+                bail!(
+                    "source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry"
+                );
             }
             private::replace(&root.join("source-transition.json"), &journal)?;
             finish(&state, &transition)?;
@@ -853,7 +880,7 @@ fn finish(original: &State, transition: &Transition) -> Result<()> {
 
 /// Keep full-line author notes with their top-level section while normalizing
 /// the changed YAML. This does not pretend to preserve arbitrary YAML layout.
-fn yaml_with_comments(value: &Value, original: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn yaml_with_comments(value: &Value, original: &[u8]) -> Result<Vec<u8>> {
     let object = value
         .as_object()
         .context("source document must be a mapping")?;
@@ -962,7 +989,7 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/evidence/registry");
         let mut model: Value =
             serde_norway::from_slice(&fs::read(fixture.join("registry.yaml")).unwrap()).unwrap();
-        model["entities"][0]
+        model["recordTypes"][0]
             .as_object_mut()
             .unwrap()
             .remove("selectorProfiles");
@@ -979,13 +1006,13 @@ mod tests {
                 .unwrap()
                 .remove("permissions")
                 .unwrap();
-            let mut permission = permissions["entities"].as_array_mut().unwrap().remove(0);
-            permission.as_object_mut().unwrap().remove("entity");
+            let mut permission = permissions["records"].as_array_mut().unwrap().remove(0);
+            permission.as_object_mut().unwrap().remove("recordType");
             operator
                 .as_object_mut()
                 .unwrap()
                 .extend(permission.as_object().unwrap().clone());
-            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendEntities":[{"entity":"record","accessProfiles":[operator]}]});
+            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendRecordTypes":[{"recordType":"record","accessProfiles":[operator]}]});
             let module_bytes = serde_norway::to_string(&module).unwrap().into_bytes();
             let parsed = registry_breg::contract::parse_module_yaml(&module_bytes).unwrap();
             model["modules"] = json!([{"id":"local-authority","version":"1","digest":registry_breg::compiler::module_digest(&parsed)}]);
@@ -1278,7 +1305,7 @@ mod tests {
         let (_temporary, mut state) = source_fixture();
         let path = state.project.join("registry.yaml");
         let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        model["entities"][0]["fields"][0]["minimumLength"] = json!(0);
+        model["recordTypes"][0]["fields"][0]["minimumLength"] = json!(0);
         let bytes = serde_norway::to_string(&model).unwrap().into_bytes();
         fs::write(&path, &bytes).unwrap();
         private::replace(&state.root().join("project/registry.yaml"), &bytes).unwrap();
@@ -1382,7 +1409,7 @@ mod tests {
             let root = state.root();
             let path = state.project.join("registry.yaml");
             let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-            model["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
+            model["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
                 json!([{"field":field,"claim":"existing_row","operator":operator}]);
             let model = serde_norway::to_string(&model).unwrap().into_bytes();
             fs::write(&path, &model).unwrap();
@@ -1429,23 +1456,23 @@ mod tests {
         let (_temporary, mut state) = source_fixture();
         let path = state.project.join("registry.yaml");
         let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let mut target = model["entities"][0].clone();
+        let mut target = model["recordTypes"][0].clone();
         target["id"] = json!("organization");
         target["route"] = json!("organizations");
-        model["entities"].as_array_mut().unwrap().push(target);
-        let mut target_grant = model["accessProfiles"][0]["permissions"]["entities"][0].clone();
-        target_grant["entity"] = json!("organization");
-        model["accessProfiles"][0]["permissions"]["entities"]
+        model["recordTypes"].as_array_mut().unwrap().push(target);
+        let mut target_grant = model["accessProfiles"][0]["permissions"]["records"][0].clone();
+        target_grant["recordType"] = json!("organization");
+        model["accessProfiles"][0]["permissions"]["records"]
             .as_array_mut()
             .unwrap()
             .push(target_grant);
-        model["entities"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}));
-        model["entities"][0]["constraints"]
+        model["recordTypes"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}));
+        model["recordTypes"][0]["constraints"]
             .as_array_mut()
             .unwrap()
             .push(json!({"type":"unique","fields":["organization"]}));
         for key in ["readableFields", "writableFields"] {
-            model["accessProfiles"][0]["permissions"]["entities"][0][key]
+            model["accessProfiles"][0]["permissions"]["records"][0][key]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("organization"));

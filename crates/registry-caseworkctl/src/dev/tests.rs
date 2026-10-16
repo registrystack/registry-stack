@@ -30,8 +30,7 @@ fn session(project: &Path) -> State {
         directory_teams: 0,
         binaries: BTreeMap::new(),
         failure: None,
-        sources: BTreeMap::new(),
-        borrowed_scopes: BTreeMap::new(),
+        context_providers: Vec::new(),
     }
 }
 
@@ -330,41 +329,12 @@ fn integrations_read_identifiers_and_urls_through_shared_types() {
         structured[0].1,
         "/integrations/serviceClients/0/claims/tenant"
     );
-    // The session leaves a source's timeouts and reconciliation interval at
-    // the runtime's defaults; a retained key is a removed key, not an unknown
-    // one.
-    for key in [
-        "requestTimeoutMilliseconds",
-        "connectTimeoutMilliseconds",
-        "reconciliationIntervalMilliseconds",
-    ] {
-        let retained = refused(
-            integrations(&format!(
-                "  sources:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      readerProfile: casework-reader\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/service-reader-id\n      clientAssertionKeyRef: secret:file/service-reader-key\n      webhookSecretRef: secret:file/source-webhook\n      eventSource: urn:example:source\n      {key}: 5000\n"
-            ))
-            .as_bytes(),
-        );
-        assert_eq!(
-            retained,
-            expected(&[(
-                "config.removed-key",
-                &format!("/integrations/sources/source/{key}")
-            )])
-        );
-    }
-    // The runtime's current name for the attempt timeout was never a key of
-    // this file, so it is an unknown key.
-    let timeout = refused(
-        integrations(
-            "  sources:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      readerProfile: casework-reader\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/service-reader-id\n      clientAssertionKeyRef: secret:file/service-reader-key\n      webhookSecretRef: secret:file/source-webhook\n      eventSource: urn:example:source\n      attemptTimeoutMilliseconds: 5000\n",
-        )
-        .as_bytes(),
-    );
+    let timeout = refused(integrations("  contextProviders:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      statusProfile: review-status\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/reader-id\n      clientAssertionKeyRef: secret:file/reader-key\n      requestTimeoutMilliseconds: 5000\n").as_bytes());
     assert_eq!(
         timeout,
         expected(&[(
             "config.unknown-key",
-            "/integrations/sources/source/attemptTimeoutMilliseconds"
+            "/integrations/contextProviders/source/requestTimeoutMilliseconds"
         )])
     );
 }
@@ -956,7 +926,7 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
         config.database.trusted_root_certificate_ref.as_deref(),
         Some("secret:file/database-root.pem")
     );
-    assert!(config.sources.is_empty());
+    assert!(config.context_providers.is_empty());
     assert_eq!(
         config.authentication.oidc.provider.issuer.as_str(),
         state.issuer_origin()
@@ -990,89 +960,6 @@ fn a_retained_session_config_is_rewritten_with_every_key_the_runtime_reads() {
     let config = RuntimeConfig::load(&path).expect("the rewritten config loads");
     assert_eq!(config.database_id(), "casework-local-session");
     assert_eq!(config.package.root, session_root.join(SESSION_PACKAGE));
-}
-
-#[test]
-fn a_project_declaring_sources_is_refused_before_anything_starts() {
-    let root = crate::canonical_tempdir();
-    let project = root.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
-    let refusal = format!("{:#}", capture(&project, &clients).unwrap_err());
-    assert!(refusal.contains("source"), "{refusal}");
-}
-
-#[test]
-fn borrowed_source_mode_is_explicit_pinned_and_refuses_session_qualified_subjects() {
-    let root = crate::canonical_tempdir();
-    let project = root.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let policy = crate::project::load_and_check_policy(&project).unwrap();
-    let description = project.join(&policy.sources[0].description);
-    fs::create_dir_all(description.parent().unwrap()).unwrap();
-    fs::write(&description, b"synthetic source description").unwrap();
-    let registry = root.path().join("registry");
-    fs::create_dir(&registry).unwrap();
-    let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
-    let source = [registry.display().to_string()];
-    let first = capture_with_sources(
-        &project,
-        "dev-clients.yaml",
-        &clients,
-        &source,
-        &BTreeMap::new(),
-    )
-    .unwrap();
-    let other = root.path().join("other-registry");
-    fs::create_dir(&other).unwrap();
-    let moved = [other.display().to_string()];
-    assert_ne!(
-        first.digest,
-        capture_with_sources(
-            &project,
-            "dev-clients.yaml",
-            &clients,
-            &moved,
-            &BTreeMap::new()
-        )
-        .unwrap()
-        .digest
-    );
-    let policy_path = project.join("casework.yaml");
-    let changed = fs::read_to_string(&policy_path)
-        .unwrap()
-        .replace("principalClaim: registry_principal", "principalClaim: sub");
-    fs::write(policy_path, changed).unwrap();
-    let refusal = capture_with_sources(
-        &project,
-        "dev-clients.yaml",
-        &clients,
-        &source,
-        &BTreeMap::new(),
-    )
-    .unwrap_err();
-    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
-    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
-    assert_eq!(
-        diagnostic["code"],
-        "caseworkctl.dev.borrowed-principal-invalid"
-    );
-    assert_eq!(
-        diagnostic["path"],
-        "casework.yaml:/accessProfiles/principalClaim"
-    );
-}
-
-#[test]
-fn task_templates_cannot_use_the_borrowed_source_issuer() {
-    let refusal = validate_source_mode(true, false, true)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refusal.contains("task templates require explicit integrations"),
-        "{refusal}"
-    );
-    assert!(validate_source_mode(true, true, false).is_ok());
 }
 
 #[test]
@@ -1363,10 +1250,8 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
         issuer_port: None,
         issuer_project: None,
         database_port: None,
-        source_project: Vec::new(),
         casework_bin: Some(project.join("missing-casework")),
         docker_bin: None,
-        bregctl_bin: None,
     })
     .is_err());
 
@@ -1425,10 +1310,8 @@ fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
             issuer_port: None,
             issuer_project: None,
             database_port: None,
-            source_project: Vec::new(),
             casework_bin: None,
             docker_bin: None,
-            bregctl_bin: None,
         })
         .unwrap_err()
     );
@@ -1473,12 +1356,24 @@ fn the_report_names_every_local_credential_without_a_secret() {
     assert_eq!(report["clients"][0]["id"], "requester");
     assert_eq!(report["clients"][0]["role"], "requester");
     assert_eq!(
+        report["clients"][0]["subject"],
+        config::principal("requester")
+    );
+    assert_eq!(
         report["clients"][0]["assertionKeyFile"],
         json!(state.root().join("credentials/requester/assertion-key.jwk"))
     );
     let text = report.to_string();
     assert!(!text.contains("token\":\""), "{text}");
     assert!(!text.contains("password"), "{text}");
+    let typed = crate::report::CliReport::from_value("dev", report).unwrap();
+    let typed = serde_json::to_value(typed).unwrap();
+    assert_eq!(typed["ok"], true);
+    assert_eq!(typed["data"]["issuer"], state.issuer_origin());
+    assert_eq!(
+        typed["data"]["clients"][0]["subject"],
+        config::principal("requester")
+    );
 }
 
 #[test]
@@ -1515,37 +1410,15 @@ impl DockerInventory {
         let container = root.path().join("container-active");
         let volume = root.path().join("volume-active");
         let fail_create = root.path().join("fail-create");
-        fs::write(
+        // Execute a fixed fixture: concurrent child creation can briefly
+        // inherit a writable descriptor for a freshly written script on Linux,
+        // making its immediate exec fail with ETXTBSY before the owned-resource
+        // recovery path is exercised. The symlink preserves the private $0 root.
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-inventory.sh"),
             &executable,
-            br#"#!/bin/sh
-set -eu
-fixture=$(dirname "$0")
-if [ "$1" = "ps" ]; then
-    if [ -f "$fixture/container-active" ]; then printf 'container\n'; fi
-elif [ "$1" = "inspect" ]; then
-    cat "$fixture/container.json"
-elif [ "$1" = "volume" ] && [ "$2" = "create" ]; then
-    touch "$fixture/volume-active"
-    cat "$fixture/volume-name"
-elif [ "$1" = "volume" ] && [ "$2" = "ls" ]; then
-    if [ -f "$fixture/volume-active" ]; then cat "$fixture/volume-name"; fi
-elif [ "$1" = "volume" ] && [ "$2" = "inspect" ]; then
-    cat "$fixture/volume.json"
-elif [ "$1" = "create" ]; then
-    if [ -f "$fixture/fail-create" ]; then
-        printf 'injected container creation failure\n' >&2
-        exit 42
-    fi
-    touch "$fixture/container-active"
-    cat "$fixture/container-id"
-else
-    printf 'unexpected fake Docker command: %s\n' "$*" >&2
-    exit 43
-fi
-"#,
         )
         .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let id = "a".repeat(64);
         fs::write(root.path().join("container-id"), format!("{id}\n")).unwrap();
         fs::write(
@@ -1723,7 +1596,7 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
         "Name": format!("/{}", state.container_name()),
         "Config": { "Labels": { (LABEL): state.owner }, "Image": IMAGE },
     });
-    for image in [CANONICAL_IMAGE, IMAGE] {
+    for image in [CANONICAL_IMAGE, IMAGE, LEGACY_ECR_IMAGE] {
         let mut owned = container.clone();
         owned["Config"]["Image"] = json!(image);
         verified_container(&state, &owned).unwrap();
@@ -1743,6 +1616,10 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
     for image in [
         IMAGE.replace("67f41722", "07f41722"),
         CANONICAL_IMAGE.replace("67f41722", "07f41722"),
+        LEGACY_ECR_IMAGE.replace("67f41722", "07f41722"),
+        IMAGE.replace(":17.11@", ":17.10@"),
+        CANONICAL_IMAGE.replace(":17.11@", ":17.10@"),
+        LEGACY_ECR_IMAGE.replace(":17.11@", ":17.10@"),
         format!("untrusted.example/{CANONICAL_IMAGE}"),
         "postgres:17.11".to_owned(),
         "public.ecr.aws/docker/library/postgres:17.11".to_owned(),
@@ -3138,7 +3015,7 @@ fn retained_state_of_another_shape_is_invalid_without_mutation() {
         (foreign_owner, STATE_OWNERSHIP),
         (shared_port, STATE_OWNERSHIP),
     ];
-    for field in ["binaries", "sources", "borrowedScopes"] {
+    for field in ["binaries", "contextProviders"] {
         let mut missing = current.clone();
         missing.as_object_mut().unwrap().remove(field).unwrap();
         cases.push((missing, INVALID_STATE));
@@ -3225,7 +3102,7 @@ fn unsafe_token_clients_are_refused_without_effects() {
 fn a_token_header_file_carries_the_bearer_and_the_registered_profile() {
     assert_eq!(
         header_file(b"header.payload.signature", Some("staff")).as_slice(),
-        b"Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\n"
+        b"Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\nRegistry-Review-Profile: staff\n"
     );
     // An integration client carries no Casework profile.
     assert_eq!(
@@ -3352,7 +3229,7 @@ fn dev_token_writes_a_profile_line_only_for_a_client_bound_to_an_access_profile(
     assert_eq!(staff["command"], "dev token");
     assert_eq!(
         header(&staff),
-        "Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\n"
+        "Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\nRegistry-Review-Profile: staff\n"
     );
 
     let seed = dev_token("seed").unwrap();
@@ -3423,17 +3300,10 @@ fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
     // its own beyond the ones it borrows.
     let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
-    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
-    policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
     let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
-    let integrations: integrations::Integrations = serde_json::from_value(json!({
-        "resource":"urn:casework:source-group",
-        "sources":{"source":{"baseUrl":"http://127.0.0.1:8800","readerProfile":"reader",
-            "tokenEndpoint":"http://127.0.0.1:8093/oauth2/token","clientAssertionAudience":"http://127.0.0.1:8093",
-            "resource":"urn:casework:source-group","scopes":["records:get"],
-            "clientIdRef":"secret:file/service-reader-id","clientAssertionKeyRef":"secret:file/service-reader-key",
-            "webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:source:instance:local"}}
-    })).unwrap();
+    let integrations: integrations::Integrations =
+        serde_json::from_value(json!({"resource":"urn:casework:source-group"})).unwrap();
     clients.integrations = Some(integrations.clone());
     integrations.validate(&clients, &policy).unwrap();
     let mut state = session(&project);
@@ -3457,19 +3327,18 @@ fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
 }
 
 #[test]
-fn explicit_local_integrations_render_only_governed_authority_and_bind_the_source() {
+fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provider() {
     let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
-    policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
+    policy.context_providers.push(provider_policy());
     let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":"urn:casework:source-group",
-        "sources":{"source":{"baseUrl":"http://127.0.0.1:8800","readerProfile":"reader",
+        "contextProviders":{"deployment":{"baseUrl":"http://127.0.0.1:8800","statusProfile":"reader",
             "tokenEndpoint":"http://127.0.0.1:8093/oauth2/token","clientAssertionAudience":"http://127.0.0.1:8093",
             "resource":"urn:casework:source-group","scopes":["records:get"],
-            "clientIdRef":"secret:file/service-reader-id","clientAssertionKeyRef":"secret:file/service-reader-key",
-            "webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:source:instance:local"}},
+            "clientIdRef":"secret:file/service-reader-id","clientAssertionKeyRef":"secret:file/service-reader-key"}},
         "serviceClients":[
             {"id":"reader","scopes":["records:get"]},
             {"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},
@@ -3535,7 +3404,10 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
         operator["authentication"]["oidc"]["assertionIssuers"],
         json!({"task-agent": ["https://casework.local.example"]})
     );
-    assert_eq!(operator["sources"]["source"]["resource"], state.audience());
+    assert_eq!(
+        operator["contextProviders"]["deployment"]["resource"],
+        state.audience()
+    );
     assert_eq!(description.exchange_issuers.len(), 1);
     let mut wrong = integrations.clone();
     wrong.resource = "private-preflight-canary".into();
@@ -3547,12 +3419,16 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     assert_eq!(finding.pointer, "/integrations/resource");
     assert!(!format!("{findings:?}").contains("private-preflight-canary"));
     let mut wrong = integrations.clone();
-    wrong.sources.get_mut("source").unwrap().resource = Some("urn:other".into());
+    wrong
+        .context_providers
+        .get_mut("deployment")
+        .unwrap()
+        .resource = Some("urn:other".into());
     assert!(wrong.validate_session(&state, &policy).is_err());
     let mut wrong = integrations.clone();
     wrong
-        .sources
-        .get_mut("source")
+        .context_providers
+        .get_mut("deployment")
         .unwrap()
         .client_assertion_audience = Some("https://other.example".into());
     assert!(wrong.validate_session(&state, &policy).is_err());
@@ -3566,76 +3442,18 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     assert!(wrong.validate(&clients, &policy).is_err());
     let mut wrong = integrations.clone();
     wrong
-        .sources
-        .get_mut("source")
+        .context_providers
+        .get_mut("deployment")
         .unwrap()
         .client_assertion_key_ref = "secret:file/service-status-key".into();
     assert!(wrong.validate_session(&state, &policy).is_err());
     let mut wrong = integrations.clone();
     wrong.service_clients[0].scopes.push("records:patch".into());
     assert!(wrong.validate_session(&state, &policy).is_err());
-    // Invalid binding input never installs a partially initialized session.
-    fs::write(
-        project.join("casework.yaml"),
-        serde_norway::to_string(&policy).unwrap(),
-    )
-    .unwrap();
-    fs::write(project.join("source.json"), serde_json::to_vec(&json!({
-        "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
-        "kind":"CaseworkBregSourceDescription","origin":"bregctl explain change-requests","authority":"none",
-        "sourceId":"source","sourceRevision":"sha256:source",
-        "requests":[{"requestEntity":"correction","requestRoute":"corrections",
-            "fields":[],"contractFingerprint":"sha256:contract",
-            "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
-            "onApproved":{"mode":"manual"},"application":{}}]
-    })).unwrap()).unwrap();
-    let client_bytes = serde_norway::to_string(&clients).unwrap();
-    assert!(capture_with_sources(
-        &project,
-        "dev-clients.yaml",
-        client_bytes.as_bytes(),
-        &[],
-        &BTreeMap::new()
-    )
-    .is_ok());
-    assert!(capture_with_sources(
-        &project,
-        "dev-clients.yaml",
-        client_bytes.as_bytes(),
-        &["source=/tmp/registry".into()],
-        &BTreeMap::new()
-    )
-    .unwrap_err()
-    .to_string()
-    .contains("explicit integrations"));
-    let webhook = root.join("webhook-input");
-    private::create(&webhook, b"synthetic-webhook-secret-at-least-32-bytes").unwrap();
-    let mut staged_integrations = integrations.clone();
-    staged_integrations
-        .secret_files
-        .insert("source-webhook".into(), webhook);
-    staged_integrations
-        .sources
-        .get_mut("source")
-        .unwrap()
-        .event_source = "urn:invalid:event".into();
-    clients.integrations = Some(staged_integrations);
-    parent_directory(&project).unwrap();
-    assert!(initialize(&state.root(), &state, &clients).is_err());
-    assert!(!state.root().exists());
-    clients
-        .integrations
-        .as_mut()
-        .unwrap()
-        .sources
-        .get_mut("source")
-        .unwrap()
-        .event_source = "urn:registrystack:registry:source:instance:local".into();
-    initialize(&state.root(), &state, &clients).unwrap();
-    assert!(state.root().join("operator.yaml").exists());
-    let mut wrong = integrations;
-    wrong.sources.clear();
-    assert!(wrong.validate(&clients, &policy).is_err());
+    let mut optional = integrations;
+    optional.context_providers.clear();
+    optional.validate(&clients, &policy).unwrap();
+    optional.validate_session(&state, &policy).unwrap();
 }
 
 /// The committed example `bregctl check` reads stands for the state a
@@ -3667,6 +3485,59 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
     )
     .unwrap();
     assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
+
+    let administrator = "  administrator:\n    principalClaim: sub\n";
+    assert!(STANDALONE_YAML.contains(administrator));
+    fs::write(
+        project.join("casework.yaml"),
+        STANDALONE_YAML.replacen(
+            administrator,
+            "  administrator:\n    principalClaim: custom_principal\n",
+            1,
+        ),
+    )
+    .unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    state.clients = vec![
+        ReportedClient {
+            id: "staff".to_owned(),
+            profile: "staff".to_owned(),
+            role: CaseworkRole::Staff,
+            principal: config::principal("staff"),
+        },
+        ReportedClient {
+            id: "administrator".to_owned(),
+            profile: "administrator".to_owned(),
+            role: CaseworkRole::Administrator,
+            principal: "custom-administrator".to_owned(),
+        },
+    ];
+    private::create(
+        &owner_root.join("clients.json"),
+        &serde_json::to_vec(&json!({"clients":[{"id":"staff"},{"id":"administrator"}]})).unwrap(),
+    )
+    .unwrap();
+    let subjects = config::borrowed_subjects(&state, &policy).unwrap();
+    let expected =
+        registry_thunderid_tooling::local::agent_id(owner["instanceId"].as_str().unwrap(), "staff");
+    assert_eq!(subjects["staff"], expected);
+    assert!(
+        !subjects.contains_key("administrator"),
+        "custom principal claims retain their authored identity"
+    );
+    assert!(
+        verify_borrowed_subjects(&state, &project).is_err(),
+        "the standalone issuer's subject is not accepted under the borrowed issuer"
+    );
+    state.clients[0].principal = expected;
+    verify_borrowed_subjects(&state, &project).unwrap();
+    assert_eq!(state.clients[1].principal, "custom-administrator");
+    let mut foreign_owner = state.clone();
+    foreign_owner.issuer_owner = Some(uuid::Uuid::new_v4().to_string());
+    assert!(config::borrowed_subjects(&foreign_owner, &policy).is_err());
+    let mut foreign_issuer = state.clone();
+    foreign_issuer.issuer_port += 1;
+    assert!(config::borrowed_subjects(&foreign_issuer, &policy).is_err());
 
     let fields = owner.as_object_mut().unwrap();
     fields.remove("apiVersion").unwrap();
@@ -3837,7 +3708,7 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     policy.task_templates.push(
         serde_json::from_value(json!({
             "id":"task","version":"1","label":"Task","eligibleTeams":[],
-            "eligibleProfiles":[],"source":"source","itemKinds":[],"itemStates":["claimed"],
+            "eligibleProfiles":[],"source":"source","reviewPolicies":[],
             "agent":{"issuer":"http://127.0.0.1:8093",
                 "subject":registry_thunderid_tooling::local::agent_id(owner_instance, client)},
             "client":client,"resource":"urn:casework:source-group","scopes":["records:get"],
@@ -3917,19 +3788,9 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     assert!(refusal.contains("destination scopes"), "{refusal}");
     let mut sub_profile = policy.clone();
     sub_profile.access_profiles[0].principal_claim = "sub".to_owned();
-    let refusal = integrations
+    integrations
         .validate_session(&borrowed, &sub_profile)
-        .unwrap_err();
-    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
-    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
-    assert_eq!(
-        diagnostic["code"],
-        "caseworkctl.dev.borrowed-principal-invalid"
-    );
-    assert_eq!(
-        diagnostic["path"],
-        "casework.yaml:/accessProfiles/principalClaim"
-    );
+        .unwrap();
 
     let standalone = session(&project);
     assert!(integrations.validate_session(&standalone, &policy).is_err());
@@ -4090,450 +3951,6 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
                 "caseworkctl.dev.shared-task-authority-mismatch"
             }
         );
-    }
-}
-
-struct RegistrySession {
-    _root: tempfile::TempDir,
-    executable: PathBuf,
-    project: PathBuf,
-    calls: PathBuf,
-}
-
-impl RegistrySession {
-    fn create_project(root: &Path, name: &str) -> PathBuf {
-        let project = root.join(name);
-        fs::create_dir(&project).unwrap();
-        fs::write(
-            project.join("registry.yaml"),
-            serde_json::to_vec(&json!({
-                "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
-                "kind": "BRegProject",
-                "project": {"id": "professional-licences"},
-                "package": {}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            project.join(".fixture-token-endpoint"),
-            "http://127.0.0.1:8191/oauth2/token",
-        )
-        .unwrap();
-        fs::write(project.join(".fixture-audience"), "urn:breg:dev:fixture").unwrap();
-        fs::write(project.join(".fixture-credential"), "shared-key").unwrap();
-        fs::canonicalize(project).unwrap()
-    }
-
-    fn new() -> Self {
-        let root = crate::canonical_tempdir();
-        let project = Self::create_project(root.path(), "registry");
-        let executable = root.path().join("bregctl");
-        fs::write(
-            &executable,
-            br#"#!/bin/sh
-set -eu
-fixture=$(dirname "$0")
-printf '%s
-' "$*" >> "$fixture/calls"
-project=""
-client=""
-id_file=""
-key_file=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        export-client) project=$2; shift 2;;
-        --client) client=$2; shift 2;;
-        --client-id-file) id_file=$2; shift 2;;
-        --assertion-key-file) key_file=$2; shift 2;;
-        *) shift;;
-    esac
-done
-audience=$(cat "$project/.fixture-audience")
-token_endpoint=$(cat "$project/.fixture-token-endpoint")
-credential=$(cat "$project/.fixture-credential")
-case "$client" in
-  casework-reader) scopes='["casework:source-reader"]';;
-  administrator) scopes='["casework:admin"]';;
-  supervisor) scopes='["casework:supervisor","starter:reviewer"]';;
-  staff) scopes='["casework:staff","starter:reviewer"]';;
-  requester) scopes='["casework:request"]';;
-  integration-requester) scopes='["casework:reviews:request"]';;
-  *) scopes='["casework:fixture"]';;
-esac
-umask 077
-printf '%s' "$client" > "$id_file"
-printf '{"kty":"EC","fixture":"%s"}' "$credential" > "$key_file"
-issuer=${token_endpoint%/oauth2/token}
-printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http://127.0.0.1:8090","tokenEndpoint":"%s","clientAssertionAudience":"%s","resource":"%s","audience":"%s","scopes":%s}
-' "$client" "$token_endpoint" "$issuer" "$audience" "$audience" "$scopes"
-"#,
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        Self {
-            calls: root.path().join("calls"),
-            _root: root,
-            executable,
-            project,
-        }
-    }
-
-    fn add_project(&self, name: &str) -> PathBuf {
-        Self::create_project(self._root.path(), name)
-    }
-
-    fn calls(&self) -> Vec<String> {
-        fs::read_to_string(&self.calls)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    }
-
-    fn set_audience(project: &Path, audience: &str) {
-        fs::write(project.join(".fixture-audience"), audience).unwrap();
-    }
-
-    fn set_credentials(project: &Path, credential: &str) {
-        fs::write(project.join(".fixture-credential"), credential).unwrap();
-    }
-}
-
-fn prepare_source_export_destinations(state: &State, clients: &Clients) {
-    let root = state.root();
-    for directory in ["credentials", "secrets"] {
-        private::directory(&root.join(directory)).unwrap();
-    }
-    for client in &clients.clients {
-        private::directory(&root.join("credentials").join(&client.id)).unwrap();
-    }
-}
-
-fn retained_credential_canaries(state: &State, clients: &Clients) -> BTreeMap<PathBuf, Vec<u8>> {
-    let root = state.root();
-    let mut canaries = BTreeMap::new();
-    for client in &clients.clients {
-        let directory = root.join("credentials").join(&client.id);
-        for (name, bytes) in [
-            ("client-id", b"RETAINED-CLIENT-ID".as_slice()),
-            (
-                "assertion-key.jwk",
-                b"RETAINED-CLIENT-ASSERTION-KEY".as_slice(),
-            ),
-        ] {
-            let path = directory.join(name);
-            private::create(&path, bytes).unwrap();
-            canaries.insert(path, bytes.to_vec());
-        }
-    }
-    for id in state.sources.keys() {
-        for (suffix, bytes) in [
-            ("reader-client-id", b"RETAINED-READER-ID".as_slice()),
-            (
-                "reader-assertion-key.jwk",
-                b"RETAINED-READER-ASSERTION-KEY".as_slice(),
-            ),
-            ("webhook-key", b"RETAINED-WEBHOOK-KEY".as_slice()),
-        ] {
-            let path = root.join("secrets").join(format!("{id}-{suffix}"));
-            private::create(&path, bytes).unwrap();
-            canaries.insert(path, bytes.to_vec());
-        }
-    }
-    canaries
-}
-
-#[test]
-fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_session() {
-    let workspace = crate::canonical_tempdir();
-    let project = workspace.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let registry = RegistrySession::new();
-    let mut state = persisted_session(&project);
-    let root = state.root();
-    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
-    for directory in ["credentials", "secrets"] {
-        private::directory(&root.join(directory)).unwrap();
-    }
-    for client in &clients.clients {
-        private::directory(&root.join("credentials").join(&client.id)).unwrap();
-    }
-    state.sources.insert(
-        "professional-licences".into(),
-        SourceSession {
-            project: registry.project.clone(),
-            binding: None,
-        },
-    );
-
-    export_sources(&registry.executable, &mut state, &clients).unwrap();
-
-    let binding = state.sources["professional-licences"]
-        .binding
-        .as_ref()
-        .unwrap();
-    assert_eq!(binding.breg_url, "http://127.0.0.1:8090");
-    assert_eq!(binding.token_endpoint, "http://127.0.0.1:8191/oauth2/token");
-    assert_eq!(binding.audience, "urn:breg:dev:fixture");
-    assert_eq!(
-        binding.event_source,
-        "urn:registrystack:registry:professional-licences:instance:professional-licences"
-    );
-    assert_eq!(
-        fs::read_to_string(root.join("secrets/professional-licences-reader-client-id")).unwrap(),
-        "casework-reader"
-    );
-    assert!(file_has_bytes(
-        &root.join("secrets/professional-licences-reader-assertion-key.jwk")
-    ));
-    let webhook =
-        fs::read_to_string(root.join("secrets/professional-licences-webhook-key")).unwrap();
-    assert_eq!(webhook.len(), 64);
-    for client in &clients.clients {
-        let directory = root.join("credentials").join(&client.id);
-        assert_eq!(
-            fs::read_to_string(directory.join("client-id")).unwrap(),
-            client.id
-        );
-        assert!(file_has_bytes(&directory.join("assertion-key.jwk")));
-    }
-    let calls = registry.calls();
-    assert_eq!(calls.len(), 1 + clients.clients.len(), "{calls:?}");
-    let prefix = format!(
-        "--format json dev export-client {} --client ",
-        registry.project.display()
-    );
-    assert!(
-        calls[0].starts_with(&format!("{prefix}casework-reader ")),
-        "{}",
-        calls[0]
-    );
-    for client in &clients.clients {
-        assert!(
-            calls
-                .iter()
-                .any(|call| call.starts_with(&format!("{prefix}{} ", client.id))),
-            "{calls:?}"
-        );
-    }
-    // The retained state carries the binding across restarts.
-    assert_eq!(
-        read_state(&root).unwrap().sources["professional-licences"].binding,
-        state.sources["professional-licences"].binding
-    );
-
-    // A restart exports the pairs again instead of refusing the retained copies.
-    export_sources(&registry.executable, &mut state, &clients).unwrap();
-    assert_eq!(registry.calls().len(), 2 * (1 + clients.clients.len()));
-    assert_eq!(
-        webhook,
-        fs::read_to_string(root.join("secrets/professional-licences-webhook-key")).unwrap()
-    );
-}
-
-#[test]
-fn incompatible_source_issuers_leave_retained_credentials_unchanged() {
-    let workspace = crate::canonical_tempdir();
-    let project = workspace.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let registry = RegistrySession::new();
-    let other_registry = registry.add_project("other-registry");
-    RegistrySession::set_audience(&other_registry, "urn:breg:dev:other");
-    let mut state = persisted_session(&project);
-    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
-    state.sources.insert(
-        "alpha".into(),
-        SourceSession {
-            project: registry.project.clone(),
-            binding: None,
-        },
-    );
-    state.sources.insert(
-        "beta".into(),
-        SourceSession {
-            project: other_registry,
-            binding: None,
-        },
-    );
-    state.save().unwrap();
-    prepare_source_export_destinations(&state, &clients);
-    let canaries = retained_credential_canaries(&state, &clients);
-    let retained_state = fs::read(state.root().join("state.json")).unwrap();
-
-    let refusal = format!(
-        "{:#}",
-        export_sources(&registry.executable, &mut state, &clients).unwrap_err()
-    );
-
-    assert!(refusal.contains("different local issuers"), "{refusal}");
-    assert_eq!(
-        fs::read(state.root().join("state.json")).unwrap(),
-        retained_state
-    );
-    for (path, bytes) in canaries {
-        assert_eq!(fs::read(path).unwrap(), bytes);
-    }
-    assert!(state
-        .sources
-        .values()
-        .all(|source| source.binding.is_none()));
-}
-
-#[test]
-fn sources_need_the_same_shared_casework_client_credentials() {
-    let workspace = crate::canonical_tempdir();
-    let project = workspace.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let registry = RegistrySession::new();
-    let other_registry = registry.add_project("other-registry");
-    RegistrySession::set_credentials(&other_registry, "other-key");
-    let mut state = persisted_session(&project);
-    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
-    state.sources.insert(
-        "alpha".into(),
-        SourceSession {
-            project: registry.project.clone(),
-            binding: None,
-        },
-    );
-    state.sources.insert(
-        "beta".into(),
-        SourceSession {
-            project: other_registry,
-            binding: None,
-        },
-    );
-    state.save().unwrap();
-    prepare_source_export_destinations(&state, &clients);
-    let canaries = retained_credential_canaries(&state, &clients);
-    let retained_state = fs::read(state.root().join("state.json")).unwrap();
-
-    let refusal = format!(
-        "{:#}",
-        export_sources(&registry.executable, &mut state, &clients).unwrap_err()
-    );
-
-    assert!(refusal.contains("sources alpha and beta"), "{refusal}");
-    assert!(
-        refusal.contains("different credentials for Casework client"),
-        "{refusal}"
-    );
-    assert_eq!(
-        fs::read(state.root().join("state.json")).unwrap(),
-        retained_state
-    );
-    for (path, bytes) in canaries {
-        assert_eq!(fs::read(path).unwrap(), bytes);
-    }
-    assert!(state
-        .sources
-        .values()
-        .all(|source| source.binding.is_none()));
-}
-
-#[test]
-fn two_sources_can_share_one_registry_client_registration() {
-    let workspace = crate::canonical_tempdir();
-    let project = workspace.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let registry = RegistrySession::new();
-    let mut state = persisted_session(&project);
-    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
-    for id in ["alpha", "beta"] {
-        state.sources.insert(
-            id.into(),
-            SourceSession {
-                project: registry.project.clone(),
-                binding: None,
-            },
-        );
-    }
-    state.save().unwrap();
-    prepare_source_export_destinations(&state, &clients);
-
-    export_sources(&registry.executable, &mut state, &clients).unwrap();
-
-    assert!(state
-        .sources
-        .values()
-        .all(|source| source.binding.is_some()));
-    for id in state.sources.keys() {
-        assert_eq!(
-            fs::read_to_string(
-                state
-                    .root()
-                    .join("secrets")
-                    .join(format!("{id}-reader-client-id"))
-            )
-            .unwrap(),
-            "casework-reader"
-        );
-    }
-    for client in &clients.clients {
-        let directory = state.root().join("credentials").join(&client.id);
-        assert_eq!(
-            fs::read_to_string(directory.join("client-id")).unwrap(),
-            client.id
-        );
-        assert_eq!(
-            fs::read_to_string(directory.join("assertion-key.jwk")).unwrap(),
-            r#"{"kty":"EC","fixture":"shared-key"}"#
-        );
-    }
-    assert_eq!(registry.calls().len(), 2 * (1 + clients.clients.len()));
-    assert_eq!(read_state(&state.root()).unwrap().sources, state.sources);
-}
-
-#[test]
-fn active_source_revalidation_refuses_rotated_credentials_without_replacement() {
-    let workspace = crate::canonical_tempdir();
-    let project = workspace.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let registry = RegistrySession::new();
-    let mut state = persisted_session(&project);
-    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
-    state.sources.insert(
-        "professional-licences".into(),
-        SourceSession {
-            project: registry.project.clone(),
-            binding: None,
-        },
-    );
-    state.save().unwrap();
-    prepare_source_export_destinations(&state, &clients);
-    private::create(
-        &state.root().join("clients.json"),
-        &serde_json::to_vec(&clients).unwrap(),
-    )
-    .unwrap();
-    export_sources(&registry.executable, &mut state, &clients).unwrap();
-    let mut retained = BTreeMap::new();
-    for client in &clients.clients {
-        for name in ["client-id", "assertion-key.jwk"] {
-            let path = state.root().join("credentials").join(&client.id).join(name);
-            retained.insert(path.clone(), fs::read(path).unwrap());
-        }
-    }
-    for suffix in ["reader-client-id", "reader-assertion-key.jwk"] {
-        let path = state
-            .root()
-            .join("secrets")
-            .join(format!("professional-licences-{suffix}"));
-        retained.insert(path.clone(), fs::read(path).unwrap());
-    }
-
-    RegistrySession::set_credentials(&registry.project, "rotated-key");
-    let refusal = require_active_source_bindings(&registry.executable, &state)
-        .unwrap_err()
-        .to_string();
-
-    assert!(
-        refusal.contains("earlier BREG reader registration"),
-        "{refusal}"
-    );
-    for (path, bytes) in retained {
-        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 }
 
@@ -4734,7 +4151,8 @@ fn a_start_on_an_occupied_port_names_the_port() {
         diagnostic["code"], "caseworkctl.dev.port-occupied",
         "{report}"
     );
-    assert_eq!(diagnostic["artifact"], "dev-session");
+    assert_eq!(report["command"], "dev");
+    assert_eq!(report["status"], "operational-failure");
     assert_eq!(diagnostic["path"], format!("dev:/ports/{port}"));
     assert_eq!(
         diagnostic["message"],
@@ -4771,7 +4189,8 @@ fn an_edited_project_over_retained_records_names_dev_stop_remove() {
         diagnostic["code"], "caseworkctl.dev.inputs-changed",
         "{report}"
     );
-    assert_eq!(diagnostic["artifact"], "dev-session");
+    assert_eq!(report["command"], "dev");
+    assert_eq!(report["status"], "operational-failure");
     assert_eq!(diagnostic["path"], ".casework/dev");
     assert!(
         diagnostic["message"]
@@ -4814,7 +4233,8 @@ fn a_retained_audit_stream_from_an_earlier_release_names_the_directory_to_move()
         diagnostic["code"], "caseworkctl.dev.audit-format-unsupported",
         "{report}"
     );
-    assert_eq!(diagnostic["artifact"], "dev-session");
+    assert_eq!(report["command"], "dev");
+    assert_eq!(report["status"], "operational-failure");
     assert_eq!(diagnostic["path"], ".casework/dev/audit");
     let message = diagnostic["message"].as_str().unwrap();
     assert!(message.contains(".casework/dev/audit"), "{report}");
@@ -4949,49 +4369,6 @@ fn a_failed_supervised_start_names_the_log_directory_without_its_cause() {
     }
 }
 
-#[test]
-fn a_first_bridged_source_start_checks_the_audit_before_the_bridge_writes_its_configuration() {
-    let workspace = crate::canonical_tempdir();
-    let project = workspace.path().join("project");
-    crate::project::init(&project, "professional-review").unwrap();
-    let project = fs::canonicalize(project).unwrap();
-    let policy = crate::project::load_and_check_policy(&project).unwrap();
-    let description = project.join(&policy.sources[0].description);
-    fs::create_dir_all(description.parent().unwrap()).unwrap();
-    fs::write(&description, b"synthetic source description").unwrap();
-    let registry = RegistrySession::new();
-    // A directory is refused by name as the casework executable, the first
-    // prerequisite the start locates after its audit check.
-    let not_executable = workspace.path().join("casework");
-    fs::create_dir(&not_executable).unwrap();
-
-    let refusal = start(StartArgs {
-        project: project.clone(),
-        clients_file: None,
-        casework_port: Some(free_port()),
-        issuer_port: None,
-        issuer_project: None,
-        database_port: Some(free_port()),
-        source_project: vec![format!(
-            "professional-licences={}",
-            registry.project.display()
-        )],
-        casework_bin: Some(not_executable),
-        docker_bin: None,
-        bregctl_bin: Some(registry.executable.clone()),
-    })
-    .unwrap_err();
-
-    // The bridge writes the operator configuration only after the start has
-    // located its prerequisites, so the audit check must not need that file:
-    // this start gets past it to the casework prerequisite.
-    assert!(!project.join(".casework/dev/operator.yaml").exists());
-    assert!(
-        format!("{refusal:#}").contains("installed executable must be a regular file"),
-        "{refusal:#}"
-    );
-}
-
 /// The suggested action for a retained audit stream the writer refuses for
 /// a reason other than its format, after `arrange` prepares the stream.
 fn audit_unavailable_action(arrange: impl FnOnce(&Path)) -> String {
@@ -5078,44 +4455,129 @@ fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
 }
 
 #[test]
-fn borrowed_principals_and_invalid_source_bindings_have_specific_safe_diagnostics() {
-    let workspace = crate::canonical_tempdir();
-    let project = standalone(workspace.path());
-    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
-    for profile in &mut policy.access_profiles {
-        profile.principal_claim = "registry_principal".into();
-    }
-    config::require_stable_borrowed_principals(&policy).unwrap();
-    policy.access_profiles[0].principal_claim = "sub".into();
-    let error = config::require_stable_borrowed_principals(&policy).unwrap_err();
+fn invalid_source_bindings_have_specific_safe_diagnostics() {
+    let error =
+        integrations::provider_binding_failure(registry_casework_core::ReviewContextError::Invalid);
     let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
     assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
     assert_eq!(
         diagnostic["code"],
-        "caseworkctl.dev.borrowed-principal-invalid"
+        "caseworkctl.dev.context-provider-binding-invalid"
     );
     assert_eq!(
         diagnostic["path"],
-        "casework.yaml:/accessProfiles/principalClaim"
+        "dev-clients.yaml:/integrations/contextProviders"
     );
-    assert!(diagnostic["suggestedAction"]
-        .as_str()
-        .unwrap()
-        .contains("Do not use sub"));
-
-    let error =
-        integrations::source_binding_failure(registry_casework_core::SourceAdapterError::Invalid);
-    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
-    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
-    assert_eq!(diagnostic["code"], "caseworkctl.dev.source-binding-invalid");
-    assert_eq!(diagnostic["path"], "dev-clients.yaml:/integrations/sources");
-    let error = integrations::source_binding_failure(
-        registry_casework_core::SourceAdapterError::Unavailable,
+    let error = integrations::provider_binding_failure(
+        registry_casework_core::ReviewContextError::Unavailable,
     );
     assert!(error
-        .downcast_ref::<registry_casework_core::SourceAdapterError>()
+        .downcast_ref::<registry_casework_core::ReviewContextError>()
         .is_some());
     let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
     assert_eq!(exit, crate::OPERATIONAL_FAILURE_EXIT);
     assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
+}
+
+fn provider_policy() -> registry_casework_core::ReviewContextProviderPolicy {
+    serde_json::from_value(json!({"id":"source","deploymentRef":"deployment","sourceNamespace":"urn:source","capabilities":["human-display","service-status"]})).unwrap()
+}
+
+#[test]
+fn provider_connections_are_optional_and_use_declared_deployment_references() {
+    let workspace = crate::canonical_tempdir();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    policy.context_providers.push(provider_policy());
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
+    let mut integrations: integrations::Integrations =
+        serde_json::from_value(json!({"resource":"urn:casework:dev"})).unwrap();
+    integrations.validate(&clients, &policy).unwrap();
+    let binding = json!({"baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status","tokenEndpoint":"http://127.0.0.1:8801/oauth2/token","clientIdRef":"secret:file/provider-id","clientAssertionKeyRef":"secret:file/provider-key"});
+    integrations.context_providers.insert(
+        "source".into(),
+        serde_json::from_value(binding.clone()).unwrap(),
+    );
+    assert!(integrations.validate(&clients, &policy).is_err());
+    integrations.context_providers.clear();
+    integrations.context_providers.insert(
+        "deployment".into(),
+        serde_json::from_value(binding).unwrap(),
+    );
+    integrations.validate(&clients, &policy).unwrap();
+    let state = session(&project);
+    assert!(integrations.validate_session(&state, &policy).is_err());
+    integrations
+        .secret_files
+        .insert("provider-id".into(), project.join("provider-id"));
+    integrations
+        .secret_files
+        .insert("provider-key".into(), project.join("provider-key"));
+    integrations.validate_session(&state, &policy).unwrap();
+    let mut operator = config::operator(&state);
+    integrations
+        .operator(&state, &clients, &mut operator)
+        .unwrap();
+    assert!(operator["contextProviders"].get("deployment").is_some());
+    assert!(operator.get("sources").is_none());
+    assert!(!format!("{integrations:?}").contains("127.0.0.1:8801"));
+}
+
+#[test]
+fn obsolete_source_session_state_is_refused_without_mutation() {
+    let workspace = crate::canonical_tempdir();
+    let project = standalone(workspace.path());
+    let state = session(&project);
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["sources"] = json!({});
+    assert!(serde_json::from_value::<State>(document).is_err());
+    assert!(!state.root().exists());
+}
+
+#[test]
+fn task_templates_require_explicit_authority_without_a_provider_bridge() {
+    let workspace = crate::canonical_tempdir();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    policy.task_templates.push(serde_json::from_value(json!({
+        "id":"summary","version":"1","label":"Prepare summary","eligibleTeams":[],"eligibleProfiles":[],
+        "source":"notice","reviewPolicies":["decision"],"agent":{"issuer":"http://127.0.0.1:8093","subject":config::principal("task-agent")},
+        "client":"task-agent","resource":"urn:registry:records","scopes":["records:get"],"purpose":"prepare-summary",
+        "bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get"]}]},"subjects":{},"lifetimeSeconds":900
+    })).unwrap());
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
+    let findings = config::against(&clients, &policy).unwrap_err();
+    assert!(findings.iter().any(|finding| finding.code
+        == "casework.dev-clients.missing-integrations"
+        && finding.pointer == "/integrations"));
+    assert!(findings
+        .iter()
+        .all(|finding| !finding.suggested_action.contains("source-project")));
+}
+
+#[test]
+fn imported_provider_secret_files_must_be_owner_only() {
+    let workspace = crate::canonical_tempdir();
+    let project = standalone(workspace.path());
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let source = project.join("provider-key");
+    fs::write(&source, b"private-provider-test-canary").unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+    let integrations: integrations::Integrations = serde_json::from_value(json!({
+        "resource":"urn:casework:dev","secretFiles":{"provider-key":source}
+    }))
+    .unwrap();
+    let root = project.join("private");
+    private::directory(&root).unwrap();
+    private::directory(&root.join("secrets")).unwrap();
+    let error = integrations
+        .prepare(&root, &session(&project), None, &policy)
+        .unwrap_err();
+    assert!(!format!("{error:#}").contains("private-provider-test-canary"));
+    assert!(!root.join("secrets/provider-key").exists());
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+    integrations
+        .prepare(&root, &session(&project), None, &policy)
+        .unwrap();
+    private::check(&root.join("secrets/provider-key"), false).unwrap();
 }

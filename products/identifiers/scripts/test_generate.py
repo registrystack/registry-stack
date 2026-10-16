@@ -433,20 +433,23 @@ class CatalogGeneratorTest(unittest.TestCase):
 class RepositoryCatalogSourceTest(unittest.TestCase):
     """The repository's own catalog source, read as it is committed."""
 
-    def test_the_breg_explain_group_names_the_line_its_schemas_carry(self) -> None:
+    def test_breg_explain_groups_name_each_schemas_own_compatibility_line(self) -> None:
         repo_root = SCRIPT.parents[3]
         source = json.loads(
             (repo_root / "products/identifiers/contracts/catalog-source.json").read_text()
         )
-        (group,) = [
+        groups = [
             group
             for group in source["schemaSources"]
-            if group["glob"] == "products/breg/contracts/explain/*.schema.json"
+            if group["glob"].startswith("products/breg/contracts/explain/")
         ]
-        schemas = sorted(repo_root.glob(group["glob"]))
+        schemas = sorted(repo_root.glob("products/breg/contracts/explain/*.schema.json"))
         self.assertTrue(schemas)
         for path in schemas:
             with self.subTest(schema=path.name):
+                matching = [group for group in groups if path in repo_root.glob(group["glob"])]
+                self.assertEqual(len(matching), 1, "each schema has exactly one catalog owner")
+                group = matching[0]
                 identifier = json.loads(path.read_text())["$id"]
                 self.assertTrue(
                     identifier.endswith(f".{group['compatibilityLine']}.schema.json"),

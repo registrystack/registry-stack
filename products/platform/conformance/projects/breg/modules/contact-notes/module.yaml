@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: contact-notes
+version: 0.1.0
+extendRecordTypes:
+  - recordType: contact
+    fields:
+      - {id: internal-note, type: string, maximumLength: 500, classification: internal}

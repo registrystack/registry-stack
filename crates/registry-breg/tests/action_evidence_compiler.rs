@@ -13,20 +13,22 @@ fn project() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"test-dataset"}],
+        "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
-        "actions":[{"id":"register-person","inputs":[
+        "functions":[{"id":"register-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}],
+        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
-            {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
-            {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
-            {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
+        ],"plan":{"type":"function","function":"register-plan","inputs":["given-name","family-name","person"],"capabilities":["evidence"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+            {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
+            {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
+            {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
     })
 }
 
@@ -47,7 +49,7 @@ fn compile(
     let mut assets = vec![ModuleAssetSource {
         module: None,
         path: "handlers/register.rhai".into(),
-        bytes: b"fn handle(ctx) { #{effects: []} }".to_vec(),
+        bytes: b"fn plan(ctx) { #{effects: []} }".to_vec(),
     }];
     if let Some(contract) = contract {
         assets.push(ModuleAssetSource {
@@ -63,8 +65,8 @@ fn offline_contract_is_exact_and_fingerprinted() {
     let compiled = compile(configured(), Some(contracts())).unwrap();
     let action = &compiled.actions().actions[0];
     assert_eq!(action.evidence.len(), 1);
-    assert!(action.contract_fingerprint.starts_with("sha256:"));
-    assert_eq!(action.contract_fingerprint.len(), 71);
+    assert!(action.definition_revision.starts_with("sha256:"));
+    assert_eq!(action.definition_revision.len(), 71);
     assert_eq!(
         action,
         &compile(configured(), Some(contracts()))
@@ -87,10 +89,48 @@ fn offline_contract_is_exact_and_fingerprinted() {
         json!(format!("sha256:{}", "1".repeat(64)));
     let other = compile(configured(), Some(changed)).unwrap();
     assert_ne!(
-        action.contract_fingerprint,
-        other.actions().actions[0].contract_fingerprint
+        action.definition_revision,
+        other.actions().actions[0].definition_revision
     );
     assert!(compile(configured(), None).is_err());
+}
+
+#[test]
+fn commit_evidence_binds_typed_selectors_predicates_and_final_revision() {
+    let mut source = configured();
+    source["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("evidence");
+    source["actions"][0]["inputs"][0]["minimumLength"] = json!(1);
+    source["actions"][0]["commitGuards"] = json!({"evidence":[{
+        "id":"commit-status","provider":"provider","requirement":"urn:example:client:requirement:status:v1",
+        "subjects":{"subject":{"profile":"record-lookup-v1","selectors":{"record_reference":{"type":"input","input":"given-name"}}}},
+        "requires":[{"output":"status-holds","equals":true}],"maximumObservationAgeSeconds":60
+    }]});
+    let mut reviewed = contracts();
+    reviewed["definitions"][0]["subjects"][0]["selector"]["fields"] =
+        json!([{"type":"string","name":"record_reference","minimumBytes":1,"maximumBytes":200}]);
+    let model = compile(source.clone(), Some(reviewed.clone())).unwrap();
+    assert_eq!(model.actions().actions[0].commit_evidence.len(), 1);
+    let revision = &model.actions().actions[0].definition_revision;
+    let mut changed = reviewed.clone();
+    changed["definitions"][0]["configurationRevision"] =
+        json!(format!("sha256:{}", "2".repeat(64)));
+    assert_ne!(
+        revision,
+        &compile(source.clone(), Some(changed))
+            .unwrap()
+            .actions()
+            .actions[0]
+            .definition_revision
+    );
+    let mut bad_selector = source.clone();
+    bad_selector["actions"][0]["commitGuards"]["evidence"][0]["subjects"]["subject"]["selectors"]
+        ["record_reference"]["input"] = json!("missing");
+    assert!(compile(bad_selector, Some(reviewed.clone())).is_err());
+    source["actions"][0]["commitGuards"]["evidence"][0]["requires"][0]["equals"] = json!(1);
+    assert!(compile(source, Some(reviewed)).is_err());
 }
 #[test]
 fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
@@ -128,7 +168,7 @@ fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
                 let cap = source["actions"][0]["evidence"][0].clone();
                 source["actions"][0]["evidence"] = json!([cap, cap, cap]);
             }
-            "abi" => source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v2"),
+            "abi" => source["functions"][0]["abi"] = json!("registry.action-plan/v2"),
             "schema" => contract["schema"] = json!("unknown"),
             "bounds" => {
                 contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] =
@@ -145,7 +185,7 @@ fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
     let action = &declared.actions().actions[0];
     assert_eq!(
         action.handler.as_ref().unwrap().abi,
-        "registry.action-handler/v1"
+        "registry.action-plan/v1"
     );
     assert_eq!(action.evidence.len(), 1);
     assert!(compile(project(), None).unwrap().actions().actions[0]
@@ -156,15 +196,15 @@ fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
 fn the_retired_evidence_abi_is_refused_where_it_is_declared() {
     for (source, contract) in [(configured(), Some(contracts())), (project(), None)] {
         let mut source = source;
-        source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v2");
+        source["functions"][0]["abi"] = json!("registry.action-plan/v2");
         let failure = compile(source, contract).expect_err("one handler ABI is accepted");
         let diagnostic = failure
             .diagnostics()
             .iter()
             .find(|diagnostic| diagnostic.code == "breg.action.handler-abi-invalid")
             .unwrap_or_else(|| panic!("expected the ABI refusal: {:?}", failure.diagnostics()));
-        assert_eq!(diagnostic.path, "actions[register-person].handler.abi");
-        assert!(diagnostic.message.contains("registry.action-handler/v1"));
+        assert_eq!(diagnostic.path, "functions[id=register-plan].abi");
+        assert!(diagnostic.message.contains("registry.action-plan/v1"));
         assert!(!diagnostic.message.contains("v2"));
     }
 }
@@ -210,7 +250,7 @@ fn imported_contract_is_sealed_and_rederived() {
     let assets = vec![
         PackageSourceFile {
             path: "handlers/register.rhai".into(),
-            bytes: b"fn handle(ctx) { #{effects: []} }".to_vec(),
+            bytes: b"fn plan(ctx) { #{effects: []} }".to_vec(),
         },
         PackageSourceFile {
             path: "evidence/contracts.json".into(),
@@ -242,7 +282,7 @@ fn invalid_evidence_helper_dispatch_is_refused_offline_even_inside_catch() {
         "evidence::nested::resolve(\"status\", #{})",
     ] {
         let script =
-            format!("fn handle(ctx) {{ try {{ {call}; }} catch (error) {{ }} #{{effects: []}} }}");
+            format!("fn plan(ctx) {{ try {{ {call}; }} catch (error) {{ }} #{{effects: []}} }}");
         let assets = vec![
             ModuleAssetSource {
                 module: None,
@@ -301,7 +341,7 @@ fn evidence_calls_require_a_declared_capability_in_statements_expressions_and_ne
         r#"if ctx.inputs.givenName != "" { evidence::resolve("status", #{}); }"#,
         r#"try { evidence::resolve("status", #{}); } catch (error) { }"#,
     ] {
-        let script = format!("fn handle(ctx) {{ {body} #{{effects: []}} }}");
+        let script = format!("fn plan(ctx) {{ {body} #{{effects: []}} }}");
         for declared in [false, true] {
             // Both projects declare the one handler ABI and the same provider;
             // only the action's own Evidence declaration differs.
@@ -312,10 +352,7 @@ fn evidence_calls_require_a_declared_capability_in_statements_expressions_and_ne
                     .unwrap()
                     .remove("evidence");
             }
-            assert_eq!(
-                source["actions"][0]["handler"]["abi"],
-                "registry.action-handler/v1"
-            );
+            assert_eq!(source["functions"][0]["abi"], "registry.action-plan/v1");
             let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
             let assets = vec![
                 ModuleAssetSource {
@@ -344,7 +381,7 @@ fn evidence_calls_require_a_declared_capability_in_statements_expressions_and_ne
                     .iter()
                     .find(|diagnostic| diagnostic.code == "breg.action.handler-helper-contract")
                     .unwrap_or_else(|| panic!("{body}: {:?}", failure.diagnostics()));
-                assert_eq!(diagnostic.path, "actions[register-person].handler.script");
+                assert_eq!(diagnostic.path, "functions[id=register-plan].source");
                 assert!(!diagnostic.message.contains("v2"), "{body}");
             }
         }
@@ -353,7 +390,7 @@ fn evidence_calls_require_a_declared_capability_in_statements_expressions_and_ne
 
 #[cfg(feature = "schema")]
 #[test]
-fn published_authoring_schema_accepts_farmer_and_rejects_every_other_abi() {
+fn published_authoring_schema_accepts_evidence_action_and_rejects_every_other_abi() {
     let documents = registry_breg::schema::documents().unwrap();
     let schema: Value =
         serde_json::from_str(&documents[registry_breg::schema::REGISTRY_PROJECT_SCHEMA_FILE])
@@ -362,30 +399,13 @@ fn published_authoring_schema_accepts_farmer_and_rejects_every_other_abi() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .unwrap();
-    let mut farmer: Value = serde_norway::from_str(include_str!(
-        "../../../products/breg/acceptance/farmer-landholding-evidence/registry.yaml"
-    ))
-    .unwrap();
-    let errors = validator
-        .validate(&farmer)
-        .err()
-        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>());
+    let mut source = configured();
     assert!(
-        errors.is_none(),
-        "actual farmer authoring must validate: {errors:?}"
+        validator.is_valid(&source),
+        "canonical Evidence Action validates"
     );
-    let action = farmer["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|action| action.get("handler").is_some())
-        .unwrap();
-    assert_eq!(
-        farmer["actions"][action]["handler"]["abi"],
-        "registry.action-handler/v1"
-    );
-    for other in ["registry.action-handler/v2", "registry.action-handler/v3"] {
-        farmer["actions"][action]["handler"]["abi"] = json!(other);
-        assert!(!validator.is_valid(&farmer), "{other}");
+    for other in ["registry.action-plan/v2", "registry.action-plan/v3"] {
+        source["functions"][0]["abi"] = json!(other);
+        assert!(!validator.is_valid(&source), "{other}");
     }
 }

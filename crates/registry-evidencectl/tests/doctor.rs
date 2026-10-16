@@ -984,7 +984,7 @@ fn doctor_names_the_next_commands_when_the_project_is_still_editable() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("over18");
     let created = evidencectl(&[
-        "new",
+        "init",
         project.to_str().expect("project path"),
         "--transport",
         "sqlite-extract",

@@ -563,17 +563,7 @@ fn revision_sql(
             "SELECT revision.record_id, revision.record_revision, revision.predecessor_revision,
                     revision.record_lifecycle, revision.package_revision, revision.operation_id,
                     revision.mutation_kind, revision.principal_reference,
-                    revision.request_reference, revision.snapshot, revision.created_at,
-                    EXISTS (
-                        SELECT 1
-                          FROM registry_internal.registry_request_revision_links l
-                         WHERE l.entity_id = revision.entity_id
-                           AND l.record_id = revision.record_id
-                           AND l.record_revision = revision.record_revision
-                           AND l.request_entity_id = revision.entity_id
-                           AND l.request_id = revision.record_id
-                           AND l.link_kind = 'request-lifecycle'
-                    ) AS request_lifecycle_revision{context_select}
+                    revision.request_reference, revision.snapshot, revision.created_at{context_select}
                FROM registry_internal.registry_revisions AS revision
                {context_join}
               WHERE {}
@@ -772,9 +762,6 @@ async fn revision_from_row(
     let created_at = row
         .try_get::<_, SystemTime>(10)
         .map_err(|_| ReadServiceError::Unavailable)?;
-    let request_lifecycle_revision = row
-        .try_get::<_, bool>(11)
-        .map_err(|_| ReadServiceError::Unavailable)?;
     if revision <= 0
         || predecessor.is_some_and(|value| value <= 0 || value >= revision)
         || !matches!(lifecycle.as_str(), "active" | "tombstoned")
@@ -786,7 +773,6 @@ async fn revision_from_row(
             &mutation_kind,
             &actor_reference,
             &request_reference,
-            request_lifecycle_revision,
         )
     {
         return Err(ReadServiceError::Unavailable);
@@ -963,11 +949,8 @@ async fn revision_change_context(
     if provenance_fields.is_empty() {
         return Ok(None);
     }
-    if row.len() < 14 {
-        return Err(ReadServiceError::Unavailable);
-    }
     let Some(commit_position) = row
-        .try_get::<_, Option<i64>>(12)
+        .try_get::<_, Option<i64>>(11)
         .map_err(|_| ReadServiceError::Unavailable)?
     else {
         return Ok(None);
@@ -976,7 +959,7 @@ async fn revision_change_context(
         return Err(ReadServiceError::Unavailable);
     }
     let Some(change_context) = row
-        .try_get::<_, Option<Vec<u8>>>(13)
+        .try_get::<_, Option<Vec<u8>>>(12)
         .map_err(|_| ReadServiceError::Unavailable)?
     else {
         return Ok(None);
@@ -1126,14 +1109,6 @@ fn project_change_context(
     Ok((!projected.is_empty()).then_some(projected))
 }
 
-fn valid_request_journal_operation(entity_id: &str, operation_id: &str) -> bool {
-    let prefix = format!("records.{entity_id}.request.");
-    let Some(action) = operation_id.strip_prefix(&prefix) else {
-        return false;
-    };
-    matches!(action, "submit" | "revise" | "cancel" | "apply")
-}
-
 fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadServiceError> {
     let value = row
         .try_get::<_, String>(index)
@@ -1153,15 +1128,10 @@ fn valid_revision_provenance(
     mutation_kind: &str,
     actor_reference: &str,
     request_reference: &str,
-    request_lifecycle_revision: bool,
 ) -> bool {
     match mutation_kind {
         "create" | "patch" | "tombstone" => {
-            (operation_id == format!("records.{}.{}", entity.id, mutation_kind)
-                || (request_lifecycle_revision
-                    && entity.change_request.is_some()
-                    && mutation_kind == "patch"
-                    && valid_request_journal_operation(&entity.id, operation_id)))
+            operation_id == format!("records.{}.{}", entity.id, mutation_kind)
                 && valid_hmac_reference(actor_reference)
                 && valid_hmac_reference(request_reference)
         }
@@ -1297,7 +1267,6 @@ fn strict_claim_context(
         row_boundaries,
     )
     .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
-    .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)
 }

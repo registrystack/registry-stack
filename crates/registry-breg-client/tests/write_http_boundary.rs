@@ -14,12 +14,10 @@ use registry_breg_client::{
     ingestion_chunk_digest, ingestion_prefix_digest, BRegActionInvocationRequest, BRegBatchBuilder,
     BRegBatchError, BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag,
     BRegIdempotencyKey, BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest,
-    BRegIngestionRunStatus, BRegLifecycleOperation, BRegMetadataErrorKind,
-    BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal, BRegProblemCode,
-    BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions,
+    BRegIngestionRunStatus, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
+    BRegPatchRequest, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat,
     BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
-    RegistryRecordRepresentation, RegistryRecordResponse, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
-    REGISTRY_RECORD_CONTEXT_IDENTIFIER,
+    BREG_INGESTION_CHUNK_ALGORITHM_VERSION, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{
     BearerToken, TokenError, TokenProvider, DEFAULT_MUTATION_RETRIES,
@@ -34,11 +32,7 @@ const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER_RECORD_ID: &str = "00000000-0000-4000-8000-000000000002";
 const SERVER_ETAG: &str = "\"breg-record-000000000001\"";
-const ACTION_ETAG: &str =
-    "\"breg-action-hmac-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"";
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const EFFECT_DIGEST: &str =
-    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/base/v1/schemas/company>; rel=\"describedby\"";
 // A package declares its own refusal catalogue, so both the code and the label
 // stand in for one declared entry rather than for fixed client-side text.
@@ -239,11 +233,11 @@ fn operation(
         "method": method,
         "path": path,
         "operation": kind,
-        "sourceEntity": "company",
-        "responseEntity": "company",
+        "sourceRecordType": "company",
+        "responseRecordType": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": capabilities,
-        "entityLabel": "Companies",
+        "recordTypeLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
         "fields": [field()],
@@ -331,8 +325,8 @@ fn metadata_fixture() -> Value {
         "id": "business-registry",
         "version": "1.2.3",
         "revision": REVISION,
-        "metadataVersion": "1",
-        "entities": [{
+        "metadataVersion": "2",
+        "recordTypes": [{
             "id": "company",
             "datasetIdentifier": "legal-entities",
             "route": "companies",
@@ -397,7 +391,7 @@ fn metadata_fixture_with_create_batch() -> Value {
             json!(["legal-name"]),
             json!([]),
         ));
-    metadata["entities"][0]["operations"]
+    metadata["recordTypes"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!({"operation": "batch", "accessProfile": "company-writer"}));
@@ -448,61 +442,6 @@ fn mutation_response(
         );
     }
     response
-}
-
-fn lifecycle_record_body() -> Value {
-    json!({
-        "data": {
-            "recordIdentifier": RECORD_ID,
-            "revisionIdentifier": "7",
-            "domainData": {"legalName": "Example Ltd"},
-            "request": {
-                "bregState": "draft",
-                "proposalVersion": 7,
-                "effectDigest": EFFECT_DIGEST,
-                "editable": true,
-                "actions": [{
-                    "operation": "submit-request",
-                    "method": "POST",
-                    "href": format!(
-                        "/v1/records/companies/{RECORD_ID}/actions/submit?accessProfile=company-writer"
-                    ),
-                    "ifMatch": ACTION_ETAG
-                }]
-            }
-        },
-        "meta": {
-            "registryIdentifier": "business-registry",
-            "datasetIdentifier": "legal-entities",
-            "entityTypeIdentifier": "company"
-        }
-    })
-}
-
-fn lifecycle_record_response() -> MockResponse {
-    MockResponse::json(StatusCode::OK, lifecycle_record_body())
-        .with_header("etag", SERVER_ETAG)
-        .with_header("link", PROFILE_LINK)
-}
-
-fn receipt_body(record_identifier: &str, state: &str) -> Value {
-    json!({
-        "id": record_identifier,
-        "revision": 8,
-        "snapshot": format!("breg1_{record_identifier}"),
-        "request": {
-            "bregState": state,
-            "proposalVersion": 7,
-            "effectDigest": EFFECT_DIGEST,
-            "application": null
-        }
-    })
-}
-
-fn lifecycle_response(body: Value) -> MockResponse {
-    MockResponse::json(StatusCode::OK, body)
-        .with_header("cache-control", "no-store")
-        .with_header("vary", "authorization, accept")
 }
 
 fn create_request() -> BRegCreateRequest {
@@ -561,7 +500,7 @@ fn patch_binding(
 #[tokio::test]
 async fn registry_contract_keeps_the_metadata_decode_reason_instead_of_discarding_it() {
     let mut fixture = metadata_fixture();
-    fixture["entities"] = json!("not-an-array");
+    fixture["recordTypes"] = json!("not-an-array");
     let response = MockResponse::json(StatusCode::OK, fixture);
     let fixture = test_client(vec![response]).await;
 
@@ -587,7 +526,7 @@ async fn registry_contract_keeps_the_metadata_decode_reason_instead_of_discardin
 #[tokio::test]
 async fn registry_contract_reports_the_engine_version_even_when_the_document_fails_to_decode() {
     let mut malformed = metadata_fixture();
-    malformed["entities"] = json!("not-an-array");
+    malformed["recordTypes"] = json!("not-an-array");
     let fixture = test_client(vec![
         metadata_response().with_header("registry-engine-version", "0.34.0"),
         MockResponse::json(StatusCode::OK, malformed)
@@ -756,87 +695,6 @@ async fn metadata_selected_create_and_patch_use_the_exact_http_contract() {
     }
 }
 
-#[tokio::test]
-async fn promoted_lifecycle_action_uses_the_exact_route_headers_body_and_receipt() {
-    let fixture = test_client(vec![
-        metadata_response(),
-        lifecycle_record_response(),
-        lifecycle_response(receipt_body(RECORD_ID, "submitted")),
-    ])
-    .await;
-    let metadata = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .unwrap()
-        .value;
-    let authority = metadata
-        .select_lifecycle("company", "company-writer")
-        .expect("select lifecycle authority");
-    let record = fixture
-        .client
-        .get_record(
-            "companies",
-            RECORD_ID,
-            &BRegRecordOptions::default()
-                .access_profile("company-writer")
-                .unwrap(),
-        )
-        .await
-        .expect("request record")
-        .value;
-    let actions = fixture
-        .client
-        .lifecycle_actions(&authority, &record)
-        .expect("promote advertised action");
-    assert_eq!(actions.len(), 1);
-    assert_eq!(
-        actions[0].operation(),
-        BRegLifecycleOperation::SubmitRequest
-    );
-
-    let receipt = fixture
-        .client
-        .execute_lifecycle_action(&actions[0], &key("action-exchange-1"))
-        .await
-        .expect("execute action");
-    assert_eq!(receipt.value.record_identifier(), RECORD_ID);
-    assert_eq!(receipt.value.revision(), 8);
-    let receipt_value = receipt.value.to_value();
-    assert_eq!(receipt_value, receipt_body(RECORD_ID, "submitted"));
-    assert_eq!(
-        registry_breg_client::BRegLifecycleActionReceipt::from_value(receipt_value).unwrap(),
-        receipt.value
-    );
-    assert!(receipt.metadata.etag().is_none());
-    assert!(receipt.metadata.location().is_none());
-
-    let requests = fixture.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 3);
-    assert_eq!(
-        requests[1].uri,
-        format!("/tenant/base/v1/records/companies/{RECORD_ID}?accessProfile=company-writer")
-    );
-    assert_eq!(requests[2].method, "POST");
-    assert_eq!(
-        requests[2].uri,
-        format!(
-            "/tenant/base/v1/records/companies/{RECORD_ID}/actions/submit?accessProfile=company-writer"
-        )
-    );
-    assert_eq!(requests[2].accept.as_deref(), Some("application/json"));
-    assert_eq!(
-        requests[2].content_type.as_deref(),
-        Some("application/json")
-    );
-    assert_eq!(
-        requests[2].idempotency_key.as_deref(),
-        Some("action-exchange-1")
-    );
-    assert_eq!(requests[2].if_match.as_deref(), Some(ACTION_ETAG));
-    assert_eq!(requests[2].body, br#"{}"#);
-}
-
 #[derive(Clone, Copy, Debug)]
 enum DirectResponseCase {
     MissingEtag,
@@ -973,92 +831,6 @@ async fn direct_write_success_headers_and_status_fail_closed() {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum LifecycleHeaderCase {
-    Etag,
-    Location,
-    Link,
-    Status,
-}
-
-#[tokio::test]
-async fn lifecycle_success_forbids_record_response_headers() {
-    for (case, expected) in [
-        (LifecycleHeaderCase::Etag, BRegProtocolFailure::EntityTag),
-        (LifecycleHeaderCase::Location, BRegProtocolFailure::Location),
-        (LifecycleHeaderCase::Link, BRegProtocolFailure::ProfileLink),
-        (LifecycleHeaderCase::Status, BRegProtocolFailure::Status),
-    ] {
-        let response = match case {
-            LifecycleHeaderCase::Etag => lifecycle_response(receipt_body(RECORD_ID, "submitted"))
-                .with_header("etag", SERVER_ETAG),
-            LifecycleHeaderCase::Location => {
-                lifecycle_response(receipt_body(RECORD_ID, "submitted"))
-                    .with_header("location", &format!("/v1/records/companies/{RECORD_ID}"))
-            }
-            LifecycleHeaderCase::Link => lifecycle_response(receipt_body(RECORD_ID, "submitted"))
-                .with_header("link", PROFILE_LINK),
-            LifecycleHeaderCase::Status => {
-                let mut response = lifecycle_response(receipt_body(RECORD_ID, "submitted"));
-                response.status = StatusCode::CREATED;
-                response
-            }
-        };
-        let error = execute_submit(response)
-            .await
-            .expect_err("forbidden action header is refused");
-        assert!(
-            matches!(
-                error,
-                BaseRegistryClientError::Protocol { failure, .. } if failure == expected
-            ),
-            "{case:?}: {error:?}"
-        );
-    }
-}
-
-async fn execute_submit(
-    response: MockResponse,
-) -> Result<
-    registry_breg_client::BRegComplete<registry_breg_client::BRegLifecycleActionReceipt>,
-    BaseRegistryClientError,
-> {
-    let fixture = test_client(vec![
-        metadata_response(),
-        lifecycle_record_response(),
-        response,
-    ])
-    .await;
-    let metadata = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await?
-        .value;
-    let authority = metadata
-        .select_lifecycle("company", "company-writer")
-        .expect("lifecycle metadata");
-    let record = fixture
-        .client
-        .get_record(
-            "companies",
-            RECORD_ID,
-            &BRegRecordOptions::default()
-                .access_profile("company-writer")
-                .unwrap(),
-        )
-        .await?
-        .value;
-    let action = fixture
-        .client
-        .lifecycle_actions(&authority, &record)
-        .expect("promote action")
-        .remove(0);
-    fixture
-        .client
-        .execute_lifecycle_action(&action, &key("action-response-case"))
-        .await
-}
-
 #[tokio::test]
 async fn mutation_records_and_action_receipts_are_validated_against_the_selected_operation() {
     for body in [
@@ -1147,32 +919,6 @@ async fn mutation_records_and_action_receipts_are_validated_against_the_selected
             ..
         }
     ));
-
-    for receipt in [
-        receipt_body(OTHER_RECORD_ID, "submitted"),
-        receipt_body(RECORD_ID, "approved"),
-        {
-            let mut receipt = receipt_body(RECORD_ID, "submitted");
-            receipt["unexpected"] = json!(true);
-            receipt
-        },
-        {
-            let mut receipt = receipt_body(RECORD_ID, "submitted");
-            receipt["revision"] = json!(9);
-            receipt
-        },
-    ] {
-        let error = execute_submit(lifecycle_response(receipt))
-            .await
-            .expect_err("inexact action receipt is refused");
-        assert!(matches!(
-            error,
-            BaseRegistryClientError::Protocol {
-                failure: BRegProtocolFailure::Body,
-                ..
-            }
-        ));
-    }
 }
 
 #[tokio::test]
@@ -1210,12 +956,55 @@ async fn every_registered_problem_is_accepted_exactly_for_a_direct_write() {
 }
 
 #[tokio::test]
+async fn retired_plan_problems_have_only_generic_unknown_problem_semantics() {
+    let retired = MockResponse::json(StatusCode::BAD_REQUEST, json!({
+        "type": "https://id.registrystack.org/problems/registry-breg/request/plan_refused",
+        "title": "Bad Request",
+        "status": 400,
+        "detail": "The change-request planner refused the submission: change_request.planner.disposition.",
+        "code": "request.plan_refused",
+        "traceId": TRACE_ID,
+        "fieldPath": "/private/legacy-location",
+        "refusalCode": "private-legacy-refusal",
+    }))
+    .without_header("content-type")
+    .with_header("content-type", "application/problem+json")
+    .with_header("cache-control", "no-store");
+    let fixture = single_attempt_client(vec![metadata_response(), retired]).await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let error = fixture
+        .client
+        .create_record(
+            &create_binding(&metadata),
+            &create_request(),
+            &key("retired-plan"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), "problem");
+    assert_eq!(error.status(), Some(400));
+    assert_eq!(error.problem_code(), None);
+    assert!(error.field_path().is_none());
+    assert!(error.refusal_code().is_none());
+    assert!(!error.is_outcome_unknown());
+    assert!(!error.to_string().contains("planner"));
+    assert!(!format!("{error:?}").contains("private-legacy"));
+    assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata() {
     let generic = problem_response(BRegProblemCode::MutationConflict);
     let mut pattern: Value = serde_json::from_slice(&generic.body).unwrap();
     pattern["detail"] = json!("The field does not conform to its declared storage pattern.");
     let without_location = pattern.clone();
-    pattern["entityId"] = json!("company");
+    pattern["recordType"] = json!("company");
     pattern["fieldId"] = json!("registration_number");
     let response_for = |value: Value| {
         let mut response = generic.clone();
@@ -1223,7 +1012,14 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         response
     };
     let mut bad = Vec::new();
-    for member in ["entityId", "fieldId"] {
+    let mut removed_location = pattern.clone();
+    removed_location
+        .as_object_mut()
+        .unwrap()
+        .remove("recordType");
+    removed_location["entityId"] = json!("company");
+    bad.push(response_for(removed_location));
+    for member in ["recordType", "fieldId"] {
         let mut absent = pattern.clone();
         absent.as_object_mut().unwrap().remove(member);
         bad.push(response_for(absent));
@@ -1252,13 +1048,13 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
     }
     let evidence = problem_response(BRegProblemCode::ActionEvidenceFailed);
     let mut misplaced: Value = serde_json::from_slice(&evidence.body).unwrap();
-    misplaced["entityId"] = json!("company");
+    misplaced["recordType"] = json!("company");
     misplaced["fieldId"] = json!("registration_number");
     bad.push(MockResponse {
         body: serde_json::to_vec(&misplaced).unwrap(),
         ..evidence
     });
-    for member in ["entityId", "fieldId", "detail"] {
+    for member in ["recordType", "fieldId", "detail"] {
         let mut duplicate = generic.clone();
         duplicate.body = format!(
             "{{\"{member}\":\"duplicate-canary\",{}",
@@ -1374,7 +1170,7 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     accepted.push(response_for(additive));
     for (member, value) in [
         ("refusalCode", json!("private-canary")),
-        ("entityId", json!("private-canary")),
+        ("recordType", json!("private-canary")),
         ("detail", json!("private-canary")),
         ("status", json!(409)),
         ("traceId", json!("0123456789abcdef0123456789abcdef")),
@@ -1384,7 +1180,7 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
         refused.push(response_for(invalid));
     }
     let mut paired = located.clone();
-    paired["entityId"] = json!("company");
+    paired["recordType"] = json!("company");
     paired["fieldId"] = json!("registration_number");
     refused.push(response_for(paired));
     for code in [
@@ -1965,10 +1761,15 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::MutationConflict => "The mutation conflicts with current state.",
         Code::PreconditionFailed => "The mutation precondition failed.",
         Code::PreconditionRequired => "The mutation precondition is required.",
+        Code::ProposalRejected => {
+            "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."
+        }
+        Code::ProposalSubmissionExpired => {
+            "The review result and application receipt of the submission are no longer retained."
+        }
         Code::QueryCursorInvalid => "The query cursor is invalid.",
         Code::QueryInvalid => "The query request is invalid.",
         Code::RequestInvalid => "The request is invalid.",
-        Code::RequestPlanRefused(refusal) => plan_refused_detail(refusal),
         Code::RequestTimeout => "The request timed out.",
         Code::ResourceNotFound => "The requested resource was not found.",
         Code::RuntimeFieldEncryptionUnavailable => {
@@ -1991,35 +1792,6 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         }
         Code::UnsupportedMediaType => "The request media type is not supported.",
         _ => panic!("unregistered problem code"),
-    }
-}
-
-fn plan_refused_detail(refusal: BRegPlanRefusal) -> &'static str {
-    use BRegPlanRefusal as Refusal;
-
-    match refusal {
-        Refusal::Source => {
-            "The change-request planner refused the submission: change_request.planner.source."
-        }
-        Refusal::Entrypoint => {
-            "The change-request planner refused the submission: change_request.planner.entrypoint."
-        }
-        Refusal::Execution => {
-            "The change-request planner refused the submission: change_request.planner.execution."
-        }
-        Refusal::Result => {
-            "The change-request planner refused the submission: change_request.planner.result."
-        }
-        Refusal::Ceiling => {
-            "The change-request planner refused the submission: change_request.planner.ceiling."
-        }
-        Refusal::Disposition => {
-            "The change-request planner refused the submission: change_request.planner.disposition."
-        }
-        Refusal::Resource => {
-            "The change-request planner refused the submission: change_request.planner.resource."
-        }
-        _ => panic!("unregistered plan refusal"),
     }
 }
 
@@ -2110,68 +1882,6 @@ async fn a_create_answered_with_a_5xx_is_resent_byte_identically_under_the_same_
     assert_eq!(first.idempotency_key, second.idempotency_key);
     assert_eq!(first.if_match, second.if_match);
     assert_eq!(first.body, second.body);
-}
-
-/// A failed handler is rolled back before commit and fails the same way on a
-/// resend, so the action is not resent; a failed Evidence dependency may
-/// follow a transient source failure, so it is.
-#[tokio::test]
-async fn a_lifecycle_action_is_resent_after_an_evidence_failure_but_not_a_handler_failure() {
-    for (code, resent) in [
-        (BRegProblemCode::ActionHandlerFailed, false),
-        (BRegProblemCode::ActionEvidenceFailed, true),
-    ] {
-        let fixture = test_client(vec![
-            metadata_response(),
-            lifecycle_record_response(),
-            problem_response(code),
-            lifecycle_response(receipt_body(RECORD_ID, "submitted")),
-        ])
-        .await;
-        let metadata = fixture
-            .client
-            .registry_contract(Some("company-writer"))
-            .await
-            .unwrap()
-            .value;
-        let authority = metadata
-            .select_lifecycle("company", "company-writer")
-            .expect("select lifecycle authority");
-        let record = fixture
-            .client
-            .get_record(
-                "companies",
-                RECORD_ID,
-                &BRegRecordOptions::default()
-                    .access_profile("company-writer")
-                    .unwrap(),
-            )
-            .await
-            .expect("request record")
-            .value;
-        let action = fixture
-            .client
-            .lifecycle_actions(&authority, &record)
-            .expect("promote action")
-            .remove(0);
-        let result = fixture
-            .client
-            .execute_lifecycle_action(&action, &key("action-resend-1"))
-            .await;
-        if resent {
-            result.expect("the resent action settles");
-        } else {
-            let error = result.expect_err("the handler failure is returned");
-            assert_eq!(error.problem_code(), Some(code));
-            assert!(!error.is_outcome_unknown());
-        }
-        let requests = fixture.requests.lock().unwrap();
-        let sends = requests.len() - 2;
-        assert_eq!(sends, if resent { 2 } else { 1 }, "{code}");
-        assert!(requests[2..]
-            .iter()
-            .all(|send| send.idempotency_key.as_deref() == Some("action-resend-1")));
-    }
 }
 
 /// Three unknown outcomes in a row: the first send and both default resends.
@@ -2279,13 +1989,14 @@ async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically
     let mut metadata = metadata_fixture();
     metadata["actions"] = json!([{
         "id": "register-company", "route": "/v1/actions/register-company",
-        "conditionRoute": null, "contractFingerprint": REVISION,
+        "conditionRoute": null,
+        "apiName": "registerCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
         "inputMode": "fixed", "maximumInputStringBytes": null,
-        "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
+        "inputs": [{"id": "legal-name", "apiName": "legalName", "schema":{"type":"string","minLength":0,"maxLength":100}, "fieldType": {
             "type": "string", "minimumLength": 0, "maximumLength": 100},
             "required": true, "nullable": false, "classification": "internal"}],
         "referenceInputs": [], "requiredConditionKeys": [],
-        "resultEffects": [{"effect": "company", "entity": "company", "operation": "create"}],
+        "resultEffects": [{"effect": "company", "recordType": "company", "operation": "create"}],
         "access": {"selectedProfile": "company-writer"},
         "routes": {"invoke": {"method": "POST", "path": "/v1/actions/register-company",
             "operationId": "actions.register-company.invoke", "requiresIdempotencyKey": true,
@@ -2307,7 +2018,7 @@ async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically
         .unwrap()
         .value;
     let action = metadata
-        .select_immediate_action("register-company", "company-writer")
+        .select_action("register-company", "company-writer")
         .expect("select exact immediate action");
     let request = BRegActionInvocationRequest::new(
         &action,
@@ -2342,21 +2053,6 @@ async fn source_mismatch_and_invalid_bodies_are_refused_before_token_or_io() {
         .value;
     let create = create_binding(&metadata);
     let patch = patch_binding(&metadata);
-    let authority = metadata
-        .select_lifecycle("company", "company-writer")
-        .unwrap();
-    let RegistryRecordResponse::Single(record) = RegistryRecordResponse::from_value(
-        lifecycle_record_body(),
-        RegistryRecordRepresentation::Json,
-    )
-    .unwrap() else {
-        panic!("single record expected")
-    };
-    let action = source
-        .client
-        .lifecycle_actions(&authority, &record)
-        .unwrap()
-        .remove(0);
 
     let other = test_client(Vec::new()).await;
     let errors = [
@@ -2382,11 +2078,6 @@ async fn source_mismatch_and_invalid_bodies_are_refused_before_token_or_io() {
             )
             .await
             .expect_err("cross-source PATCH refused"),
-        other
-            .client
-            .execute_lifecycle_action(&action, &key("cross-source-action"))
-            .await
-            .expect_err("cross-source action refused"),
     ];
     assert!(errors
         .iter()
@@ -2440,15 +2131,13 @@ async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bind
     use registry_breg_client::BRegPreparedCreate;
 
     let mut route_metadata = metadata_fixture();
-    route_metadata["entities"][0]["route"] = json!("alternate-companies");
+    route_metadata["recordTypes"][0]["route"] = json!("alternate-companies");
     route_metadata["operations"][0]["path"] = json!("/v1/records/alternate-companies");
     route_metadata["operations"][1]["path"] = json!("/v1/records/alternate-companies/{record_id}");
-    route_metadata["operations"][2]["path"] =
-        json!("/v1/records/alternate-companies/{record_id}/actions/submit");
 
     let mut profile_metadata = metadata_fixture();
     profile_metadata["operations"][0]["accessProfile"] = json!("recovery-writer");
-    profile_metadata["entities"][0]["operations"][0]["accessProfile"] = json!("recovery-writer");
+    profile_metadata["recordTypes"][0]["operations"][0]["accessProfile"] = json!("recovery-writer");
 
     let mut revision_metadata = metadata_fixture();
     revision_metadata["revision"] =
@@ -2628,204 +2317,6 @@ async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bind
     assert!(BRegPreparedCreate::from_slice(b"{\"version\":1,\"version\":1}").is_err());
 }
 
-fn apply_metadata_fixture() -> Value {
-    let mut metadata = metadata_fixture();
-    let operation = &mut metadata["operations"][2];
-    operation["id"] = json!("records.company.request.apply");
-    operation["path"] = json!("/v1/records/companies/{record_id}/actions/apply");
-    operation["operation"] = json!("apply-request");
-    operation["request"]["schema"] = json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object", "additionalProperties": false,
-        "required": ["proposalVersion", "effectDigest"],
-        "properties": {
-            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-            "effectDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the immutable proposal effects displayed to the actor."},
-            "reason": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$", "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}
-        }
-    });
-    metadata["entities"][0]["operations"][2]["operation"] = json!("apply-request");
-    metadata
-}
-
-#[tokio::test]
-async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
-    use registry_breg_client::BRegPreparedLifecycle;
-    let metadata = apply_metadata_fixture();
-    let mut record = lifecycle_record_body();
-    record["data"]["request"]["bregState"] = json!("submitted");
-    record["data"]["request"]["editable"] = json!(false);
-    let action = &mut record["data"]["request"]["actions"][0];
-    action["operation"] = json!("apply-request");
-    action["href"] = json!(format!(
-        "/v1/records/companies/{RECORD_ID}/actions/apply?accessProfile=company-writer"
-    ));
-    action["proposalVersion"] = json!(7);
-    action["effectDigest"] = json!(EFFECT_DIGEST);
-    let RegistryRecordResponse::Single(original_record) =
-        RegistryRecordResponse::from_value(record.clone(), RegistryRecordRepresentation::Json)
-            .unwrap()
-    else {
-        panic!("single")
-    };
-    record["data"]["request"]["actions"] = json!([]);
-    let RegistryRecordResponse::Single(current_record) =
-        RegistryRecordResponse::from_value(record, RegistryRecordRepresentation::Json).unwrap()
-    else {
-        panic!("single")
-    };
-    let mut receipt = receipt_body(RECORD_ID, "applied");
-    receipt["request"]["application"] = json!({"applicationId": OTHER_RECORD_ID, "proposalVersion": 7, "effectDigest": EFFECT_DIGEST, "appliedAt": "2026-09-08T00:00:00Z"});
-    let mut changed = metadata.clone();
-    changed["revision"] =
-        json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    let fixture = test_client(vec![
-        MockResponse::json(StatusCode::OK, metadata.clone()),
-        lifecycle_response(receipt.clone()),
-        MockResponse::json(StatusCode::OK, metadata),
-        lifecycle_response(receipt),
-        metadata_response(),
-        MockResponse::json(StatusCode::OK, changed),
-    ])
-    .await;
-    let contract = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .unwrap()
-        .value;
-    let authority = contract
-        .select_lifecycle("company", "company-writer")
-        .unwrap();
-    let action = fixture
-        .client
-        .lifecycle_actions(&authority, &original_record)
-        .unwrap()
-        .remove(0)
-        .with_reason("Applied after the registrar's sign-off.")
-        .unwrap();
-    let prepared = fixture
-        .client
-        .prepare_lifecycle_action(&authority, &original_record, &action, &key("attempt-apply"))
-        .unwrap();
-    // The mock returns the retained receipt, exercising exact wire replay. Real
-    // commit-before-checkpoint transaction proof belongs to the native journey.
-    fixture
-        .client
-        .execute_lifecycle_action(&action, &key("attempt-apply"))
-        .await
-        .unwrap();
-    let saved = prepared.as_bytes().to_vec();
-    let minimal: Value = serde_json::from_slice(&saved).unwrap();
-    let legacy_saved = serde_json::to_vec(&json!({
-        "version": 1,
-        "source": minimal["source"],
-        "registry_revision": action.registry_revision(),
-        "record": original_record,
-        "href": action.href(),
-        "body": serde_json::to_string(action.body()).unwrap(),
-        "if_match": action.if_match().as_str(),
-        "idempotency_key": "attempt-apply",
-    }))
-    .unwrap();
-    drop(prepared);
-    let prepared = BRegPreparedLifecycle::from_slice(&saved).unwrap();
-    let contract = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .unwrap()
-        .value;
-    let authority = contract
-        .select_lifecycle("company", "company-writer")
-        .unwrap();
-    assert!(fixture
-        .client
-        .lifecycle_actions(&authority, &current_record)
-        .unwrap()
-        .is_empty());
-    let (recovered, key) = fixture
-        .client
-        .recover_lifecycle_action(&authority, &prepared)
-        .unwrap();
-    assert_eq!(action.operation(), recovered.operation());
-    assert_eq!(action.href(), recovered.href());
-    assert_eq!(action.if_match(), recovered.if_match());
-    assert_eq!(action.body(), recovered.body());
-    // Version 1 evidence carried the record itself; only version 2 is accepted.
-    assert!(BRegPreparedLifecycle::from_slice(&legacy_saved).is_err());
-    fixture
-        .client
-        .execute_lifecycle_action(&recovered, &key)
-        .await
-        .unwrap();
-    let requests = fixture.requests.lock().unwrap().clone();
-    assert_eq!(requests[1].uri, requests[3].uri);
-    assert_eq!(requests[1].body, requests[3].body);
-    assert_eq!(requests[1].if_match, requests[3].if_match);
-    assert_eq!(requests[1].idempotency_key, requests[3].idempotency_key);
-    let contract = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .unwrap()
-        .value;
-    let revoked_authority = contract
-        .select_lifecycle("company", "company-writer")
-        .unwrap();
-    assert!(fixture
-        .client
-        .recover_lifecycle_action(&revoked_authority, &prepared)
-        .is_err());
-    let contract = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .unwrap()
-        .value;
-    let changed_authority = contract
-        .select_lifecycle("company", "company-writer")
-        .unwrap();
-    let token_count = fixture.token.0.load(Ordering::SeqCst);
-    assert!(fixture
-        .client
-        .recover_lifecycle_action(&changed_authority, &prepared)
-        .is_err());
-    for (field, value) in [
-        ("href", json!("https://attacker.invalid/")),
-        ("body", json!("{}")),
-        ("ifMatch", json!("\"changed\"")),
-    ] {
-        let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
-        if field == "body" {
-            tampered[field] = value;
-        } else {
-            tampered["action"][field] = value;
-        }
-        let tampered =
-            BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
-        assert!(fixture
-            .client
-            .recover_lifecycle_action(&authority, &tampered)
-            .is_err());
-    }
-    let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
-    tampered["authority"]["profile"] = json!("other-profile");
-    let tampered =
-        BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
-    assert!(fixture
-        .client
-        .recover_lifecycle_action(&authority, &tampered)
-        .is_err());
-    assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count);
-    let other = test_client(vec![]).await;
-    assert!(other
-        .client
-        .recover_lifecycle_action(&authority, &prepared)
-        .is_err());
-    assert_eq!(other.token.0.load(Ordering::SeqCst), 0);
-}
-
 #[tokio::test]
 async fn record_revisions_uses_bounded_native_route_and_refuses_invalid_selectors_before_io() {
     let fixture = test_client(vec![MockResponse::json(
@@ -2877,7 +2368,7 @@ fn ingestion_run_wire(status: &str) -> Value {
         "runId": RECORD_ID,
         "status": status,
         "blockedReason": null,
-        "entityId": "company",
+        "recordType": "company",
         "operation": "create",
         "profileId": INGESTION_PROFILE,
         "packageRevision": "revision-1",
@@ -2943,7 +2434,7 @@ fn ingestion_announcement(profile: &str) -> BRegIngestionRunRequest {
 
 #[tokio::test]
 async fn ingestion_exchanges_select_the_announced_run_access_profile() {
-    let page = json!({"runs": [], "hasMore": false, "nextAfter": null});
+    let page = json!({"runs": [], "hasMore": false, "nextCursor": null});
     let fixture = test_client(vec![
         ingestion_response(
             StatusCode::CREATED,
@@ -3201,7 +2692,7 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
         refused.push(response_for(value));
     }
     let mut paired = document.clone();
-    paired["entityId"] = json!("company");
+    paired["recordType"] = json!("company");
     paired["fieldId"] = json!("registration_number");
     refused.push(response_for(paired));
     for code in [

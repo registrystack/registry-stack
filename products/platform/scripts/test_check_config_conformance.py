@@ -375,6 +375,49 @@ pub struct SampleRuntime {
             self.block_row(),
         )
 
+    def test_a_runtime_list_of_the_shared_type_passes(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT.replace(
+                "pub package: PackageConfig", "pub packages: Vec<PackageConfig>"
+            )
+        )
+        self.assertEqual(
+            [],
+            self.problems(
+                self.block_row(
+                    gate.RustBlock(
+                        "crates/sample/src/lib.rs",
+                        "SampleRuntime",
+                        "packages",
+                        "PackageConfig",
+                        repeated=True,
+                    )
+                )
+            ),
+        )
+
+    def test_a_runtime_list_of_another_type_is_refused(self) -> None:
+        for written in ("Vec<PackageRuntime>", "PackageConfig"):
+            with self.subTest(written=written):
+                self.with_runtime_struct(
+                    self.RUNTIME_STRUCT.replace(
+                        "pub package: PackageConfig", f"pub packages: {written}"
+                    )
+                )
+                self.assert_one_problem(
+                    "sample: crates/sample/src/lib.rs SampleRuntime.packages is not "
+                    "typed Vec<PackageConfig>",
+                    self.block_row(
+                        gate.RustBlock(
+                            "crates/sample/src/lib.rs",
+                            "SampleRuntime",
+                            "packages",
+                            "PackageConfig",
+                            repeated=True,
+                        )
+                    ),
+                )
+
     def test_a_local_copy_of_a_shared_type_is_refused(self) -> None:
         self.with_runtime_struct(
             self.RUNTIME_STRUCT + "pub struct PackageConfig { pub root: String }\n",

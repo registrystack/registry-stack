@@ -1,0 +1,1234 @@
+{
+  "$defs": {
+    "Acquisition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "single",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fetch": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "search": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "search-then-fetch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "search",
+            "fetch"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fetch": {
+              "items": {
+                "$ref": "#/$defs/FetchMember"
+              },
+              "type": "array"
+            },
+            "maximumAcquisitionMilliseconds": {
+              "format": "uint64",
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "search": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "search-then-fetch-set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "search",
+            "fetch",
+            "maximumAcquisitionMilliseconds"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AcquisitionCapability": {
+      "enum": [
+        "search-then-fetch-set",
+        "source-batch"
+      ],
+      "type": "string"
+    },
+    "ActorKind": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "AssertionDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "acquisition": {
+          "$ref": "#/$defs/Acquisition"
+        },
+        "derive": {
+          "$ref": "#/$defs/FunctionCall"
+        },
+        "description": {
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disclosureGuard": true,
+        "existenceDisclosure": {
+          "default": "collapse-unresolved",
+          "type": "string"
+        },
+        "fixtures": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grantCeiling": {
+          "$ref": "#/$defs/GrantCeiling"
+        },
+        "label": {
+          "description": "Optional presentation label. Stable references use the identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observationTimezone": {
+          "default": "UTC",
+          "type": "string"
+        },
+        "outputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Output"
+          },
+          "maxProperties": 16,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "representations": {
+          "items": {
+            "$ref": "#/$defs/Representation"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "semantics": {
+          "$ref": "#/$defs/Semantics"
+        },
+        "subjectBinding": {
+          "$ref": "#/$defs/BindingMode"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "type": "array"
+        },
+        "validitySeconds": {
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "question",
+        "semantics",
+        "purpose",
+        "grantCeiling",
+        "subjects",
+        "acquisition",
+        "derive",
+        "outputs",
+        "validitySeconds",
+        "subjectBinding",
+        "representations"
+      ],
+      "type": "object"
+    },
+    "AuthorityKind": {
+      "enum": [
+        "statutory",
+        "organizational",
+        "consent",
+        "delegated",
+        "explicit-request"
+      ],
+      "type": "string"
+    },
+    "BatchResponse": {
+      "additionalProperties": false,
+      "description": "The batch response uses the Source's byte and transport ceilings.",
+      "properties": {
+        "projection": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "shape": true
+      },
+      "required": [
+        "projection",
+        "shape"
+      ],
+      "type": "object"
+    },
+    "BindingMode": {
+      "enum": [
+        "audience-scoped",
+        "holder-bound"
+      ],
+      "type": "string"
+    },
+    "DeriveSelectorInput": {
+      "additionalProperties": false,
+      "properties": {
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/SelectorAlternative"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "role",
+        "alternatives"
+      ],
+      "type": "object"
+    },
+    "FetchMember": {
+      "additionalProperties": false,
+      "properties": {
+        "factInputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "source": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "source",
+        "factInputs"
+      ],
+      "type": "object"
+    },
+    "Field": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maximumBytes": {
+              "format": "uint64",
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minimumBytes": {
+              "format": "uint64",
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "string",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "minimumBytes",
+            "maximumBytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maximum": {
+              "format": "int64",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "minimum": {
+              "format": "int64",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "minimum",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "codelist": {
+              "type": "string"
+            },
+            "codelistVersion": {
+              "type": "string"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maximumBytes": {
+              "format": "uint64",
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "controlled-code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "codelist",
+            "codelistVersion",
+            "maximumBytes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Function": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "interface": {
+          "$ref": "#/$defs/FunctionInterface"
+        },
+        "label": {
+          "description": "Optional presentation label. Stable references use the identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "interface",
+        "source"
+      ],
+      "type": "object"
+    },
+    "FunctionCall": {
+      "additionalProperties": false,
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "type": "object",
+          "x-registry-passthrough": "Literal reviewed Function parameter bindings, checked at the named Function call site."
+        },
+        "selectorInputs": {
+          "items": {
+            "$ref": "#/$defs/DeriveSelectorInput"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "function"
+      ],
+      "type": "object"
+    },
+    "FunctionInterface": {
+      "enum": [
+        "source-prepare/v1",
+        "source-extract/v1",
+        "assertion-derive/v1"
+      ],
+      "type": "string"
+    },
+    "GrantCeiling": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKinds": {
+          "items": {
+            "$ref": "#/$defs/ActorKind"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "audiences": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "authorities": {
+          "items": {
+            "$ref": "#/$defs/AuthorityKind"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "valueOrigins": {
+          "items": {
+            "$ref": "#/$defs/ValueOrigin"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "authorities",
+        "actorKinds",
+        "valueOrigins",
+        "audiences"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Output": {
+      "additionalProperties": false,
+      "properties": {
+        "bucketScheme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "categoryScheme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "codelist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "codelistVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "concept": {
+          "type": "string"
+        },
+        "description": {
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Optional presentation label. Stable references use the identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputNumericBound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maximumBytes": {
+          "format": "uint64",
+          "maximum": 8192,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximumItems": {
+          "format": "uint64",
+          "maximum": 64,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximumScale": {
+          "format": "uint64",
+          "maximum": 9,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximumSerializedBytes": {
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputNumericBound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "minimumBytes": {
+          "format": "uint64",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimumItems": {
+          "format": "uint64",
+          "maximum": 64,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schemeVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdJwtVc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputProjection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "enum": [
+            "boolean",
+            "controlled-code",
+            "controlled-category",
+            "bounded-identifier",
+            "bounded-integer",
+            "bounded-decimal",
+            "date-bucket",
+            "time-bucket",
+            "audience-scoped-entity-reference",
+            "controlled-code-list",
+            "entity-reference-list",
+            "reviewed-structured-value"
+          ],
+          "type": "string"
+        },
+        "unique": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "concept",
+        "type"
+      ],
+      "type": "object"
+    },
+    "OutputNumericBound": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "maxLength": 30,
+          "minLength": 1,
+          "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$",
+          "type": "string"
+        }
+      ]
+    },
+    "OutputProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "type": "string"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/ProjectionDisclosure"
+        }
+      },
+      "required": [
+        "claim",
+        "disclosure"
+      ],
+      "type": "object"
+    },
+    "ProjectionDisclosure": {
+      "enum": [
+        "top-level"
+      ],
+      "type": "string"
+    },
+    "Representation": {
+      "enum": [
+        "signed-jws",
+        "sd-jwt-vc",
+        "unsigned-json",
+        "sd-jwt-vc-batch"
+      ],
+      "type": "string"
+    },
+    "SelectorAlternative": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "profile": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "profile",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "SelectorProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Field"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "label": {
+          "description": "Optional presentation label. Stable references use the identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximumAggregateBytes": {
+          "format": "uint64",
+          "maximum": 8192,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumAggregateBytes",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "Semantics": {
+      "additionalProperties": false,
+      "properties": {
+        "evidenceType": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "referenceFrameworks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requirement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement",
+        "kind",
+        "evidenceType",
+        "referenceFrameworks"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "acquisitionPosture": {
+          "type": "string"
+        },
+        "adapterParameters": true,
+        "adapterParametersSchema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
+        "batch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceBatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "behaviorRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": true,
+        "extract": {
+          "$ref": "#/$defs/SourceFunctionRef"
+        },
+        "extractProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "facts": {
+          "additionalProperties": true,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object",
+          "x-registry-passthrough": "Reviewed bounded private fact schemas, normalized by the Evidence compiler and checked by the kernel."
+        },
+        "forwardAccessAttribution": {
+          "default": false,
+          "type": "boolean"
+        },
+        "label": {
+          "description": "Optional presentation label. Stable references use the identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limits": {
+          "$ref": "#/$defs/SourceLimits"
+        },
+        "maximumExtractAgeSeconds": {
+          "format": "uint64",
+          "maximum": 2592000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "preparationLimits": true,
+        "prepare": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceFunctionRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": true,
+        "response": {
+          "$ref": "#/$defs/SourceResponse"
+        },
+        "selectors": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceSelector"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/$defs/SourceType"
+        },
+        "unresolvedProblem": true
+      },
+      "required": [
+        "type",
+        "acquisitionPosture",
+        "request",
+        "response",
+        "extract",
+        "facts",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "SourceBatch": {
+      "additionalProperties": false,
+      "description": "A bounded physical Source call serving independent slotted logical lookups.\nThe same reviewed Function interfaces are used with their batch call-site types.",
+      "properties": {
+        "extract": {
+          "$ref": "#/$defs/SourceFunctionRef"
+        },
+        "maximumItems": {
+          "format": "uint64",
+          "maximum": 16,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "prepare": {
+          "$ref": "#/$defs/SourceFunctionRef"
+        },
+        "response": {
+          "$ref": "#/$defs/BatchResponse"
+        }
+      },
+      "required": [
+        "maximumItems",
+        "prepare",
+        "extract",
+        "response"
+      ],
+      "type": "object"
+    },
+    "SourceFunctionRef": {
+      "additionalProperties": false,
+      "description": "Source preparation and extraction share the Source's declared adapter\nparameters and minimized selector inputs. Call sites cannot override them.",
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "function"
+      ],
+      "type": "object"
+    },
+    "SourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumConcurrency": {
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attemptTimeoutMilliseconds",
+        "maximumConcurrency"
+      ],
+      "type": "object"
+    },
+    "SourceResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumBytes": {
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "projection": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "shape": true
+      },
+      "required": [
+        "projection",
+        "shape",
+        "maximumBytes"
+      ],
+      "type": "object"
+    },
+    "SourceSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "profiles": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "role": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "role",
+        "profiles"
+      ],
+      "type": "object"
+    },
+    "SourceType": {
+      "enum": [
+        "http-json",
+        "sqlite-extract"
+      ],
+      "type": "string"
+    },
+    "Subject": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "selectors": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "role",
+        "selectors"
+      ],
+      "type": "object"
+    },
+    "ValueOrigin": {
+      "enum": [
+        "request",
+        "authenticated-context",
+        "authenticated-grant"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acquisitionCapabilities": {
+      "description": "Package opt-in ceilings. Operators must separately enable these acquisitions.",
+      "items": {
+        "$ref": "#/$defs/AcquisitionCapability"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/project/v1alpha1",
+      "type": "string"
+    },
+    "assertionDefinitions": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AssertionDefinition"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "description": {
+      "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "functions": {
+      "items": {
+        "$ref": "#/$defs/Function"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "EvidenceProject",
+      "type": "string"
+    },
+    "label": {
+      "description": "Optional presentation label. Stable references use the identifier.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "maximumHolderBoundBatchSize": {
+      "description": "Maximum assertions released together in one holder-bound batch; omission means one.",
+      "format": "uint64",
+      "maximum": 16,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "selectorProfiles": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SelectorProfile"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Source"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "selectorProfiles",
+    "functions",
+    "sources",
+    "assertionDefinitions"
+  ],
+  "title": "Evidence project",
+  "type": "object"
+}

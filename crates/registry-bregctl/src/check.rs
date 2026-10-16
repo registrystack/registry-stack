@@ -30,10 +30,10 @@ use registry_platform_yaml::{
 use serde::Serialize;
 
 use super::{
-    capture_project_source, compile_captured_project, ensure_source_entry_identity, file_check,
-    has_parent_component, inspect_package_integrity, path_diagnostic, read_module_directory_names,
-    write_ctl_report, OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError,
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
+    canonicalize_project_path, capture_resolved_project_source, compile_captured_project,
+    ensure_source_entry_identity, file_check, has_parent_component, inspect_package_integrity,
+    path_diagnostic, read_module_directory_names, write_ctl_report, OutputFormat, ProfileArg,
+    SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -44,16 +44,14 @@ const MODULE_ARTIFACT: &str = registry_breg::contract::MODULE_FORMAT.kind;
 
 const CORRECT_SOURCE: &str =
     "Correct the source at this path so it meets the rule the message states.";
-const WRITE_REQUIRED_ROW_BOUNDARY: &str =
-    "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
+const WRITE_REQUIRED_ROW_BOUNDARY: &str = "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
 const REVIEW_FINDING: &str =
     "Review the finding, and change the source if the behavior it describes is not intended.";
 const RUN_SCHEMA_TEST: &str =
     "Run bregctl test against a disposable PostgreSQL database to verify the pattern.";
 const LOCK_MODULES: &str =
     "Run bregctl project lock against this project, then review the module lock change it records.";
-const FIND_PROJECT: &str =
-    "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
+const FIND_PROJECT: &str = "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
 const REBUILD_PACKAGE: &str = "Rebuild the package with bregctl package PROJECT --test-receipt RECEIPT --output BUILD; a package is checked as the build wrote it, unmodified.";
 
 /// What `bregctl check` was asked to check.
@@ -207,6 +205,21 @@ fn check_project(
     profile: ProfileArg,
     outcome: &mut Outcome,
 ) -> Option<CompiledRegistry> {
+    let selected_project = match canonicalize_project_path(project) {
+        Ok(path) => path,
+        Err(diagnostic) => {
+            outcome.unavailable = diagnostic.code == "breg.source.project-invalid";
+            outcome.report.push(file_diagnostic(
+                &diagnostic.code,
+                project,
+                Some(PROJECT_ARTIFACT),
+                &diagnostic.message,
+                FIND_PROJECT,
+            ));
+            return None;
+        }
+    };
+    let project = selected_project.as_path();
     let compiled = compile_project(project, profile, outcome);
     check_tool_files(project, compiled.as_ref(), outcome);
     compiled
@@ -281,7 +294,7 @@ fn compile_project(
     outcome: &mut Outcome,
 ) -> Option<CompiledRegistry> {
     let documents = read_documents(project, outcome)?;
-    let source = match capture_project_source(project) {
+    let source = match capture_resolved_project_source(project) {
         Ok(source) => source,
         Err(diagnostic) => {
             outcome
@@ -324,6 +337,46 @@ fn compile_project(
     }
 }
 
+/// Compile the same authoring source as `check`, retaining its positioned
+/// diagnostics. Inspection does not validate unrelated dev clients or journeys.
+pub(super) fn compile_for_inspection(
+    project: &Path,
+    profile: ProfileArg,
+) -> Result<(CompiledRegistry, Vec<Diagnostic>), super::Refusal> {
+    let selected = canonicalize_project_path(project).map_err(|diagnostic| {
+        super::source_failure(
+            "explain",
+            diagnostic,
+            super::DiagnosticArtifact::RegistryProject,
+            super::SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
+    let mut outcome = Outcome::default();
+    match compile_project(&selected, profile, &mut outcome) {
+        Some(compiled) => Ok((compiled, outcome.report.into_diagnostics())),
+        None => Err(super::Refusal::Document(super::DocumentRefusal {
+            command: "explain",
+            subject: "the project",
+            report: outcome.report,
+        })),
+    }
+}
+
+/// Compiler findings from a command without source documents still use the
+/// shared diagnostic contract. `compile_for_inspection` additionally places them.
+pub(super) fn compiler_diagnostic(diagnostic: registry_breg::Diagnostic) -> Diagnostic {
+    let severity = severity_of(diagnostic.severity);
+    let mut result = Diagnostic::error(
+        diagnostic.code.clone(),
+        diagnostic.path,
+        diagnostic.message,
+        action_for(&diagnostic.code, severity),
+    );
+    result.severity = severity;
+    result.artifact = Some(PROJECT_ARTIFACT.to_owned());
+    result
+}
+
 /// A native pattern is checked offline for its structure and bounds only.
 fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagnostic> {
     compiled
@@ -334,7 +387,7 @@ fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagno
                 field.pattern.as_ref().map(|_| registry_breg::Diagnostic {
                     severity: DiagnosticSeverity::Finding,
                     code: "breg.field.pattern-unverified-offline".to_owned(),
-                    path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
+                    path: format!("recordTypes[{}].fields[{}].pattern", entity.id, field.id),
                     message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
                 })
             })
@@ -681,10 +734,18 @@ fn package_code(error: &PackageError) -> &'static str {
 
 fn package_action(error: &PackageError) -> &'static str {
     match error {
-        PackageError::UnsafePath => "Point --package at the package directory itself, by a path without symbolic links.",
-        PackageError::Permissions => "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again.",
-        PackageError::Read => "Point --package at a readable package directory that bregctl package wrote.",
-        PackageError::RetiredApiVersion => "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD.",
+        PackageError::UnsafePath => {
+            "Point --package at the package directory itself, by a path without symbolic links."
+        }
+        PackageError::Permissions => {
+            "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again."
+        }
+        PackageError::Read => {
+            "Point --package at a readable package directory that bregctl package wrote."
+        }
+        PackageError::RetiredApiVersion => {
+            "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
+        }
         _ => REBUILD_PACKAGE,
     }
 }
@@ -716,7 +777,7 @@ fn place(
     match path {
         "project" => return file_level(project.to_path_buf(), Some(PROJECT_ARTIFACT)),
         "registry.yaml" => {
-            return file_level(project.join("registry.yaml"), Some(PROJECT_ARTIFACT))
+            return file_level(project.join("registry.yaml"), Some(PROJECT_ARTIFACT));
         }
         "modules" => return file_level(project.join("modules"), None),
         "arguments" => {
@@ -838,9 +899,9 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
     };
     match steps {
         [Step::Member(entities), Step::Select { value: entity, .. }, Step::Member(profiles), Step::Select { value: profile, .. }, rest @ ..]
-            if entities == "entities" && profiles == "accessProfiles" =>
+            if entities == "recordTypes" && profiles == "accessProfiles" =>
         {
-            under_profile("entities", "entity", entity, profile, rest)
+            under_profile("records", "recordType", entity, profile, rest)
         }
         [Step::Member(actions), Step::Select { value: action, .. }, Step::Member(permissions), Step::Select {
             key,
@@ -916,7 +977,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
 }
 
 /// One step of a compiler path such as
-/// `entities[id=person].fields[name].pattern`.
+/// `recordTypes[id=person].fields[name].pattern`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Step {
     /// A mapping member.
@@ -1004,7 +1065,15 @@ impl Resolved {
 
 /// Members that name a list item, in the order an unkeyed selector tries
 /// them.
-const NAMING_MEMBERS: [&str; 7] = ["id", "entity", "field", "name", "effect", "profile", "path"];
+const NAMING_MEMBERS: [&str; 7] = [
+    "id",
+    "recordType",
+    "field",
+    "name",
+    "effect",
+    "profile",
+    "path",
+];
 
 fn resolve(root: &Node, steps: &[Step]) -> Resolved {
     let mut node = root;
@@ -1049,7 +1118,7 @@ fn resolve(root: &Node, steps: &[Step]) -> Resolved {
 fn names(item: &Node, key: Option<&str>, value: &str) -> bool {
     let text = |node: &Node| matches!(&node.value, NodeValue::String(text) if text.text == value);
     match (&item.value, key) {
-        (NodeValue::String(_), None | Some("value")) => text(item),
+        (NodeValue::String(_), None | Some("value" | "field")) => text(item),
         (NodeValue::Mapping(_), Some(key)) => item.get(key).is_some_and(|entry| text(&entry.value)),
         (NodeValue::Mapping(_), None) => NAMING_MEMBERS
             .iter()
@@ -1069,6 +1138,26 @@ mod tests {
     }
 
     #[test]
+    fn named_filter_and_sort_fields_resolve_to_distinct_scalar_elements() {
+        let source = document(
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: test\n  version: 1.0.0\n  canonicalBaseIri: https://example.test\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [list]\n          rowBoundaries: unrestricted\n          filterableFields: [name, category]\n          sortableFields: [name, category]\n",
+        );
+        for member in ["filterableFields", "sortableFields"] {
+            for (index, field) in ["name", "category"].iter().enumerate() {
+                let path = format!(
+                    "accessProfiles[id=reader].permissions.records[recordType=record].{member}[field={field}]"
+                );
+                let resolved = resolve(source.root(), &parse_steps(&path));
+                assert!(resolved.complete, "{path}");
+                assert_eq!(
+                    resolved.pointer,
+                    format!("/accessProfiles/0/permissions/records/0/{member}/{index}")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_missing_requirement_row_boundary_names_the_member_and_the_accepted_form() {
         let action = action_for(
             "breg.access.requirements-row-boundary-missing",
@@ -1082,29 +1171,29 @@ mod tests {
     #[test]
     fn a_compiler_path_resolves_to_the_pointer_of_the_value_it_names() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nentities:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nrecordTypes:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
         );
         let found = resolve(
             project.root(),
-            &parse_steps("entities[id=second].fields[code].type"),
+            &parse_steps("recordTypes[id=second].fields[code].type"),
         );
-        assert_eq!(found.pointer, "/entities/1/fields/0/type");
+        assert_eq!(found.pointer, "/recordTypes/1/fields/0/type");
         assert!(found.complete);
 
         let partial = resolve(
             project.root(),
-            &parse_steps("entities[id=second].fields[absent].pattern"),
+            &parse_steps("recordTypes[id=second].fields[absent].pattern"),
         );
-        assert_eq!(partial.pointer, "/entities/1/fields");
+        assert_eq!(partial.pointer, "/recordTypes/1/fields");
         assert!(!partial.complete);
     }
 
     #[test]
     fn a_selector_value_may_hold_a_dot() {
         assert_eq!(
-            parse_steps("entities[id=a].readPaths[path=address.city]"),
+            parse_steps("recordTypes[id=a].readPaths[path=address.city]"),
             vec![
-                Step::Member("entities".to_owned()),
+                Step::Member("recordTypes".to_owned()),
                 Step::Select {
                     key: Some("id".to_owned()),
                     value: "a".to_owned()
@@ -1117,17 +1206,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            without_values("entities[id=a].readPaths[path=address.city]"),
-            "entities[].readPaths[]"
+            without_values("recordTypes[id=a].readPaths[path=address.city]"),
+            "recordTypes[].readPaths[]"
         );
     }
 
     #[test]
     fn an_entity_access_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - entity: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
         );
-        let steps = parse_steps("entities[id=record].accessProfiles[id=clerk].operations");
+        let steps = parse_steps("recordTypes[id=record].accessProfiles[id=clerk].operations");
         let found = alternatives(&steps)
             .iter()
             .map(|alternative| resolve(project.root(), alternative))
@@ -1135,17 +1224,17 @@ mod tests {
             .expect("the profile's permission names the entity");
         assert_eq!(
             found.pointer,
-            "/accessProfiles/0/permissions/entities/1/operations"
+            "/accessProfiles/0/permissions/records/1/operations"
         );
     }
 
     #[test]
     fn an_action_permission_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {entity: other, rowBoundaries: unrestricted}\n            - {entity: record, rowBoundaries: unrestricted}\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
         );
         let steps = parse_steps(
-            "actions[id=import-record].permissions[profile=steward].targets[entity=record].rowBoundaries",
+            "actions[id=import-record].permissions[profile=steward].targets[recordType=record].rowBoundaries",
         );
         let found = alternatives(&steps)
             .iter()

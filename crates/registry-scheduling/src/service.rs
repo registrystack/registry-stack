@@ -3269,7 +3269,7 @@ mod tests {
             "clientAssertionAudience": base,
             "clientId": "scheduling-status",
             "privateKeyRef": format!("secret:env/{secret_name}"),
-            "caseworkResource": "urn:casework:test"
+            "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
         let registry = TaskGrantStatusRegistry::activate(
@@ -3344,21 +3344,36 @@ mod tests {
             "a grant without signed subjects is refused"
         );
         assert_eq!(
-            task_grant_verdict(
-                Some(&registry),
-                Some(std::collections::BTreeMap::new()),
-                &unbound,
-                now
-            )
-            .await,
-            Err(TaskGrantError::Refused),
-            "a grant with an empty subject set is refused"
-        );
-        assert_eq!(
             status_calls(&server).await,
             0,
             "no refusal above reaches the authority"
         );
+    }
+
+    #[tokio::test]
+    async fn fixed_bounds_with_empty_disclosure_still_need_active_exact_status() {
+        let now = unix_now();
+        let grant = verified_grant(STATUS_SOURCE, now + 3_600, now);
+        let mut active = active_answer(&grant);
+        active["grant"]["subjects"] = json!({});
+        for (response, expected) in [
+            (active, Ok(())),
+            (active_answer(&grant), Err(TaskGrantError::Refused)),
+            (json!({"active":false}), Err(TaskGrantError::Refused)),
+        ] {
+            let (server, registry) =
+                listed_authority(wiremock::ResponseTemplate::new(200).set_body_json(response))
+                    .await;
+            assert_eq!(
+                task_grant_verdict(Some(&registry), Some(Default::default()), &grant, now).await,
+                expected
+            );
+            assert_eq!(
+                status_calls(&server).await,
+                1,
+                "one fresh status observation precedes commitment"
+            );
+        }
     }
 
     #[tokio::test]

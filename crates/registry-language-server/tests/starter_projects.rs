@@ -6,8 +6,8 @@
 //! require of every root.
 //!
 //! The projects here are the shapes those two commands write, held against the server an adopter
-//! runs: `bregctl init` writes the registry project this file reads from the Base Registry Engine
-//! acceptance material, and `evidencectl new --transport sqlite-extract` writes a referenced-form
+//! runs: BReg's canonical minimal registry represents the native standalone source contract,
+//! and `evidencectl new --transport sqlite-extract` writes a referenced-form
 //! project with no description. What the source declares as its transport is not read by the index
 //! at all; the referenced form is what decides whether a description is a prerequisite, so the
 //! fixture below writes the same question shape a SQLite or a fixed-HTTP project writes.
@@ -17,7 +17,9 @@ mod support;
 use std::{fs, path::PathBuf};
 
 use serde_json::Value;
-use support::{lsp::LspSession, without, EvidenceProject, OPENAPI_PATH, QUESTION_PATH};
+use support::lsp::LspSession;
+#[path = "support/normalized.rs"]
+mod normalized;
 
 fn acceptance_project(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -29,7 +31,7 @@ fn acceptance_project(relative: &str) -> PathBuf {
 
 #[tokio::test]
 async fn a_breg_project_root_is_claimed_by_its_own_family() {
-    let root = acceptance_project("breg/acceptance/business");
+    let root = acceptance_project("breg/examples/minimal");
     let registry = root.join("registry.yaml");
     let document = fs::read_to_string(&registry).expect("registry.yaml reads");
     let mut session = LspSession::start();
@@ -56,23 +58,15 @@ async fn a_retired_relay_root_is_not_adopted() {
 }
 
 #[tokio::test]
-async fn an_evidence_project_with_no_description_is_indexed_clean() {
-    let project = EvidenceProject::new(&without(&support::adult_status_project(), OPENAPI_PATH));
-    let question = project.path(QUESTION_PATH);
-    let document = fs::read_to_string(&question).expect("the question reads");
+async fn a_normalized_evidence_project_needs_no_openapi_description() {
+    let project = normalized::Project::new(normalized::SOURCE);
     let mut session = LspSession::start();
-    session.initialize(project.root()).await;
-    session.open(&question, &document, 1).await;
-
+    session.initialize(&project.root).await;
+    session
+        .open(&project.path(normalized::PROJECT), normalized::SOURCE, 1)
+        .await;
     assert_eq!(
-        session.published_diagnostics(&project.path(OPENAPI_PATH)),
-        None,
-        "a project whose questions read named sources declares no OpenAPI transport, so the \
-         description it never wrote is not a file anything reports about"
-    );
-    assert_eq!(
-        session.published_diagnostics(&question),
-        Some(Vec::<Value>::new()),
-        "the question the author is editing is indexed and clean"
+        session.published_diagnostics(&project.path(normalized::PROJECT)),
+        Some(vec![])
     );
 }

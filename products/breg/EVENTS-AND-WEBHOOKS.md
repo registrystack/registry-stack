@@ -50,8 +50,7 @@ hooks:
   new versioned id.
 - `phase` is `after`: an entity hook runs after the triggering transaction
   commits. The compiler refuses `before`, which the runtime cannot run here.
-- `trigger` is one of `created`, `patched`, `tombstoned`, or `request-lifecycle`.
-  Only a change-request entity can declare `request-lifecycle`.
+- `trigger` is one of `created`, `patched`, or `tombstoned` for a Record type hook.
 - `projection` is the complete set of record values that may leave the
   registry. System event metadata does not need to be listed.
 - `when` is optional. For record mutations, use `type: fields`. `changed`,
@@ -60,9 +59,9 @@ hooks:
   required when `when` is present. `created` may use `afterEquals`, `patched`
   may use all three tests, and `tombstoned` may use `beforeEquals`; invalid
   combinations fail compilation.
-- Lifecycle events use `type: request-lifecycle` with at least one nonempty
-  `transitions` or `toStates` list. Each nonempty list must match;
-  field predicates are not available for this trigger.
+- Proposal lifecycle hooks belong to `actions[].execution.proposal.hooks`.
+  They select native transitions and use the dedicated Proposal event schema;
+  they are separate from Record type field projections.
 - `handler` declares either `type: url` with the logical `destinationId`, or
   one of the local kinds: `type: rhai` with a reviewed `script` path, or
   `type: wasm` with a reviewed `module` path. A url handler delivers to a bound
@@ -88,12 +87,8 @@ restate it. A condition can disclose information through whether an event
 fires even when that field is not in the payload. Activation therefore
 requires the runtime destination to permit the full derived classification,
 but the destination can never add to the compiled projection.
-Lifecycle events are at least as classified as their request entity. Events
-whose transition and destination-state filters permit application also have
-an `internal` classification floor, because the system request envelope may
-contain an application reason. An omitted filter permits this outcome.
-Filters that exclude it, such as `transitions: [cancel]` or
-`toStates: [cancelled]`, keep the ordinary derived classification.
+Proposal lifecycle events use a closed value-free binding projection. Consult
+`generated/event-schemas/proposal-lifecycle.schema.json` for the exact fields.
 
 Compilation and mutation planning use the same classification rule. If the
 runtime detects a delivery inventory that differs from the governed source,
@@ -108,12 +103,12 @@ after authorization and validation. A failure creates neither the record
 change nor the event. No user script, network call, or webhook runs inside that
 transaction.
 
-Lifecycle conditions are evaluated against the request transition. Their
-projection contains request fields, not canonical target values, and capture
-commits with the transition. A webhook notification grants no approval or
-application authority.
+Proposal hooks select native lifecycle transitions. Their dedicated closed
+value-free payload binds the Action revision, Proposal, submission version,
+effect digest, and authority. Capture commits with the transition. Delivery
+never grants approval or application authority.
 
-The captured event is immutable and binds its event id, entity, record id,
+The captured event is immutable and binds its event id, Record type or Proposal binding, record id,
 revision, trigger, projected values, package revision, schema fingerprint,
 destination, and delivery policy. A later package activation must not
 reinterpret it. Activation refuses a destination change that would strand a
@@ -125,11 +120,6 @@ envelope rather than reshaping it. That refusal is a failed attempt, not a
 terminal one, so the row retries on the captured schedule and dead-letters
 only once its attempt budget is exhausted.
 
-This contract does not reinterpret delivery history created by the earlier
-experimental webhook shape. The delivery tables are read only as the previous
-release wrote them; Base Registry Engine does not upgrade an older delivery
-schema in place and does not invent CloudEvents metadata for its rows.
-
 ### Wire format
 
 Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
@@ -137,38 +127,43 @@ Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
 - `ce-specversion: 1.0`
 - `ce-id`: the stable event UUID
 - `ce-source`: a stable URN for the Registry instance
-- `ce-type`: the authored event id
+- `ce-type`: the configured record event id or native `proposal.<transition>`
 - `ce-time`: the immutable mutation capture time recorded in the committing
   transaction
-- `ce-dataschema`: a URN containing the Registry id, event id, and generated
-  event-schema fingerprint
+- `ce-dataschema`: the compiled record schema URN or the native Proposal schema URL
 
 The body is one shared hook envelope, the envelope every Registry Stack product
 delivers: `id`, `type`, `source`, `time`, `subject`, `dataschema`, `data`, and
 `causation`, and nothing else. `id`, `type`, `source`, `time`, and `dataschema`
 repeat the CloudEvents attributes above, so a receiver reading only the body
-still knows which event it holds. `subject` carries the hashed record reference
-and the revision the change produced, never the raw record id. `causation`
+still knows which event it holds. For a record event, `subject` carries the
+hashed record reference and the revision the change produced, never the raw
+record id. For a Proposal event, `subject` carries the Proposal's resource path,
+`/v1/proposals/{id}`, and its lifecycle revision. `causation`
 carries `root` and `hop`, plus `parent` once an event is caused by another; a
 captured registry mutation is a root event, so `root` equals `id` and `hop` is
 0. Delivery attributes stay on the transport and never enter the envelope.
 
-`data` contains `entity`, `recordId`, `revision`, `trigger`,
+Record event `data` contains `recordType`, `recordId`, `revision`, `trigger`,
 `packageRevision`, and `values`. `values` contains exactly the declared
 projection. Record identifiers are deliberately kept out of CloudEvents
 headers because infrastructure commonly logs headers.
 
-Lifecycle event data also requires a `request` object containing `proposalVersion`,
-`workflowRevision`, `transition`, `fromState`, `toState`, `effectDigest`,
-`deduplicationKey`, and `reasonPresent`. `effectDigest` may be null.
-For apply transitions, an explanation supplied by the applier appears unchanged
-as the optional `request.reason` string, bounded to 4096 Unicode characters. An absent
-explanation omits `reason` and sets `reasonPresent` to false. The event's
-compiled classification and destination authority govern delivery independently
-of a reader's `readableRequestFields`.
-The deduplication key stays stable across automatic retries and operator replay.
-Request-detail erasure removes retained explanation text from request events
-and webhook payloads while preserving the reason-presence flag.
+Proposal event data uses `actionId`, `actionRevision`, `proposalId`,
+`submissionVersion`, `revision`, `fromState`, `state`, `transition`,
+`effectDigest`, `authorityKind`, `systemApplyGrantRevision`, and `turn`.
+The two digest fields may be null until applicable. `transition` is one of
+`started`, `edited`, `submitted`, `revised`, `rebased`, `retried`, `cancelled`,
+`applied`, `rejected` and `review-returned`. A review result for the current
+submission records `rejected` (the Proposal ends in the terminal `rejected`
+state) or `review-returned` (changes were requested; the Proposal stays
+`submitted`), in the transaction that records the result; its `authorityKind`
+is `review`. Other review outcomes record no lifecycle event. `turn` is
+`party`, `official` or `nobody`, whose move the Proposal waits on after the
+transition, derived as the [Proposals guide](proposals.md#whose-turn-it-is)
+describes. The event never carries the decision's public reason. It contains no editable
+inputs, target values, attachment bytes, or application-reason text. Its schema
+is `https://id.registrystack.org/contracts/breg/proposal-event/v1`.
 
 Registry delivery headers add `Idempotency-Key`,
 `X-Registry-Event-Generation`, `X-Registry-Delivery-Attempt`, and
@@ -211,7 +206,8 @@ handler answer bytes are erased immediately after successful delivery. The
 delivered row retains the answer's digest, its
 proposal disposition, and the bounded value-free summary, never the answer
 itself. Pending and dead-letter payloads have a deployment-selectable
-retention period capped at 30 days. After expiry, replay is impossible.
+retention period, `retention.hookPayloadRetentionDays` in the runtime
+configuration, which defaults to 7 days and is capped at 30. After expiry, replay is impossible.
 Digests and value-free operational metadata follow the normal audit
 retention policy. Audit and operational logs contain no projected values,
 raw record ids, destination URLs, or secrets. Payload erasure commits only
@@ -256,15 +252,14 @@ The first complete journey must be possible without reading Rust code:
   or expired lease using the same optimistic identity. Discard prevents future
   attempts and never reinterprets the work under a replacement binding. It
   does not undo a request the receiver may already have accepted.
-- `products/breg/demo/run.sh --webhook` starts ThunderID, PostgreSQL,
-  Base Registry Engine, and a local HMAC-verifying receiver. Its smoke journey
-  demonstrates automatic retry, dead-letter inspection, operator replay, and
-  eventual authenticated success without printing the token or key.
+- The [durable receiver example](examples/webhook-receiver/README.md) verifies signed deliveries and commits its SQLite inbox before acknowledgement.
+  Its tests cover retry across restart, replay identity, authentication and
+  contract refusals, conflicting duplicates, and storage recovery.
 
 ## Definition of done
 
 Version 1 is done when one configured project can create or patch a record and
-the demo proves the resulting CloudEvent is transactionally captured,
+focused runtime proofs show the resulting CloudEvent is transactionally captured,
 minimized, authenticated, retried, dead-lettered, inspected, and replayed.
 Focused negative tests must prove rollback creates no event, conditions do not
 overmatch, projections cannot cross their classification ceiling, runtime

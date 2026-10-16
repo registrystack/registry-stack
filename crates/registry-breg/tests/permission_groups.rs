@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! How an access profile writes its permissions: one mapping whose members
-//! `entities`, `actions`, and `datasets` each list permissions of one kind
+//! `records`, `proposals`, `actions`, and `datasets` each list permissions of one kind
 //! (CFG-SCHEMA-8). A permission written under another group is refused where
 //! the member that does not belong is written.
+
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use registry_breg::contract::{
     parse_project_json, parse_project_yaml, read_project_yaml, DatasetOperation, Operation,
@@ -19,7 +22,8 @@ project:
   version: \"1\"
   defaultLanguage: en
   canonicalBaseIri: https://access-example.example.test
-entities:
+datasets: [{id: test-dataset}]
+recordTypes:
   - id: entry
     primaryDataset: test-dataset
     route: entries
@@ -104,8 +108,8 @@ fn position(written: &str, needle: &str) -> (usize, usize) {
 }
 
 const GROUPED: &str = "    permissions:
-      entities:
-        - entity: entry
+      records:
+        - recordType: entry
           operations: [get, list]
           readableFields: [code]
           rowBoundaries: unrestricted
@@ -113,7 +117,7 @@ const GROUPED: &str = "    permissions:
         - action: register
           operations: [invoke]
           targets:
-            - entity: entry
+            - recordType: entry
               rowBoundaries: unrestricted
         - action: retire
           operations: [invoke]
@@ -161,12 +165,12 @@ fn the_groups_may_be_written_in_any_order() {
         - action: register
           operations: [invoke]
           targets:
-            - entity: entry
+            - recordType: entry
               rowBoundaries: unrestricted
         - action: retire
           operations: [invoke]
-      entities:
-        - entity: entry
+      records:
+        - recordType: entry
           operations: [get, list]
           readableFields: [code]
           rowBoundaries: unrestricted
@@ -184,10 +188,10 @@ fn a_group_that_is_omitted_or_empty_grants_nothing() {
 
     for written in [
         "    permissions: {}\n",
-        "    permissions:\n      entities: []\n",
+        "    permissions:\n      records: []\n",
         "    permissions:\n      actions: []\n",
         "    permissions:\n      datasets: []\n",
-        "    permissions:\n      entities: []\n      actions: []\n      datasets: []\n",
+        "    permissions:\n      records: []\n      actions: []\n      datasets: []\n",
     ] {
         assert_eq!(read(written), none, "{written}");
     }
@@ -202,8 +206,8 @@ fn a_profile_writes_its_permissions_back_grouped() {
     let project = read(GROUPED);
     let written = serde_json::to_value(&project).expect("the project serializes");
     let permissions = &written["accessProfiles"][0]["permissions"];
-    assert_eq!(permissions["entities"][0]["entity"], "entry");
-    assert_eq!(permissions["entities"][0]["rowBoundaries"], "unrestricted");
+    assert_eq!(permissions["records"][0]["recordType"], "entry");
+    assert_eq!(permissions["records"][0]["rowBoundaries"], "unrestricted");
     assert_eq!(permissions["actions"][0]["action"], "register");
     assert_eq!(
         permissions["actions"][1],
@@ -214,7 +218,7 @@ fn a_profile_writes_its_permissions_back_grouped() {
         permissions["datasets"],
         serde_json::json!([{"dataset": "entries-by-code", "operations": ["read-live"]}])
     );
-    let reread = parse_project_json(&serde_json::to_vec(&written).unwrap())
+    let reread = parse_project_json(&source_bytes::source_bytes(&written))
         .expect("the written project is read again");
     assert_eq!(reread, project);
 
@@ -222,7 +226,7 @@ fn a_profile_writes_its_permissions_back_grouped() {
     let none = serde_json::to_value(read("")).expect("the project serializes");
     assert_eq!(
         none["accessProfiles"][0]["permissions"],
-        serde_json::json!({"entities": [], "actions": [], "datasets": []})
+        serde_json::json!({"records": [], "proposals": [], "actions": [], "datasets": []})
     );
 }
 
@@ -233,7 +237,7 @@ fn one_permissions_list_is_refused_with_the_grouping_named() {
     let lists = [
         (
             "    permissions:
-      - entity: entry
+      - recordType: entry
         operations: [get]
         rowBoundaries: unrestricted
       - action: register
@@ -241,7 +245,7 @@ fn one_permissions_list_is_refused_with_the_grouping_named() {
       - dataset: entries-by-code
         operations: [read-live]
 ",
-            ("- entity:", 0),
+            ("- recordType:", 0),
         ),
         ("    permissions: []\n", ("permissions:", 13)),
         ("    permissions: unrestricted\n", ("permissions:", 13)),
@@ -258,11 +262,11 @@ fn one_permissions_list_is_refused_with_the_grouping_named() {
         );
         assert_eq!(
             refusal.message,
-            "expected a mapping with entities, actions, and datasets"
+            "expected a mapping with records, proposals, actions, and datasets"
         );
         assert_eq!(
             refusal.action,
-            "Group the permissions by what each names: write every permission that names an entity under permissions.entities, every one that names an action under permissions.actions, and every one that names a statistical dataset under permissions.datasets. A profile that grants nothing omits permissions."
+            "Group the permissions by what each names: write Record permissions under permissions.records, Proposal permissions under permissions.proposals, Action permissions under permissions.actions, and statistical dataset permissions under permissions.datasets. A profile that grants nothing omits permissions."
         );
     }
 
@@ -275,7 +279,7 @@ fn one_permissions_list_is_refused_with_the_grouping_named() {
     assert_eq!(diagnostic.code, "config.invalid-value");
     assert_eq!(diagnostic.path, "project.accessProfiles[0].permissions");
     assert!(
-        diagnostic.message.contains("permissions.entities"),
+        diagnostic.message.contains("permissions.records"),
         "{}",
         diagnostic.message
     );
@@ -295,36 +299,36 @@ fn a_permission_written_under_another_group_is_refused_where_it_is_written() {
         Misplaced {
             written: "    permissions:
       actions:
-        - entity: entry
+        - recordType: entry
           operations: [get]
           rowBoundaries: unrestricted
 ",
             group: "actions",
-            unknown: &["entity", "rowBoundaries"],
+            unknown: &["recordType", "rowBoundaries"],
             missing: &["action"],
         },
         Misplaced {
             written: "    permissions:
       datasets:
-        - entity: entry
+        - recordType: entry
           operations: [read-live]
           rowBoundaries: unrestricted
 ",
             group: "datasets",
-            unknown: &["entity", "rowBoundaries"],
+            unknown: &["recordType", "rowBoundaries"],
             missing: &["dataset"],
         },
         Misplaced {
             written: "    permissions:
-      entities:
+      records:
         - action: register
           operations: [invoke]
           targets: []
           rowBoundaries: unrestricted
 ",
-            group: "entities",
+            group: "records",
             unknown: &["action", "targets"],
-            missing: &["entity"],
+            missing: &["recordType"],
         },
         Misplaced {
             written: "    permissions:
@@ -339,14 +343,14 @@ fn a_permission_written_under_another_group_is_refused_where_it_is_written() {
         },
         Misplaced {
             written: "    permissions:
-      entities:
+      records:
         - dataset: entries-by-code
           operations: [get]
           rowBoundaries: unrestricted
 ",
-            group: "entities",
+            group: "records",
             unknown: &["dataset"],
-            missing: &["entity"],
+            missing: &["recordType"],
         },
         Misplaced {
             written: "    permissions:
@@ -462,16 +466,16 @@ fn an_action_permission_carries_no_entity_member() {
 #[test]
 fn an_entity_permission_states_its_row_reach() {
     let written = "    permissions:
-      entities:
-        - entity: entry
+      records:
+        - recordType: entry
           operations: [get]
 ";
     let refusal = refusal(written);
     assert_eq!(refusal.code, "config.invalid-value", "{refusal:?}");
-    assert_eq!(refusal.path, "/accessProfiles/0/permissions/entities/0");
+    assert_eq!(refusal.path, "/accessProfiles/0/permissions/records/0");
     assert_eq!(
         (refusal.line, refusal.column),
-        position(written, "entity: entry")
+        position(written, "recordType: entry")
     );
     assert_eq!(
         refusal.message,
@@ -483,8 +487,8 @@ fn an_entity_permission_states_its_row_reach() {
     );
 
     let empty = "    permissions:
-      entities:
-        - entity: entry
+      records:
+        - recordType: entry
           operations: [get]
           rowBoundaries: []
 ";
@@ -492,7 +496,7 @@ fn an_entity_permission_states_its_row_reach() {
     assert_eq!(refusal.code, "config.invalid-value", "{refusal:?}");
     assert_eq!(
         refusal.path,
-        "/accessProfiles/0/permissions/entities/0/rowBoundaries"
+        "/accessProfiles/0/permissions/records/0/rowBoundaries"
     );
     assert!(
         refusal
@@ -506,20 +510,20 @@ fn an_entity_permission_states_its_row_reach() {
 fn a_group_lists_only_its_own_operations() {
     for (group, subject, operation, rest) in [
         (
-            "entities",
-            "entity: entry",
+            "records",
+            "recordType: entry",
             "read-live",
             "\n          rowBoundaries: unrestricted",
         ),
         (
-            "entities",
-            "entity: entry",
+            "records",
+            "recordType: entry",
             "publish",
             "\n          rowBoundaries: unrestricted",
         ),
         (
-            "entities",
-            "entity: entry",
+            "records",
+            "recordType: entry",
             "read-releases",
             "\n          rowBoundaries: unrestricted",
         ),
@@ -573,8 +577,8 @@ fn a_dataset_permission_lists_at_least_one_operation() {
 fn a_permission_lists_each_operation_once() {
     for (group, subject, operation, rest) in [
         (
-            "entities",
-            "entity: entry",
+            "records",
+            "recordType: entry",
             "get",
             "\n          rowBoundaries: unrestricted",
         ),
@@ -598,10 +602,10 @@ fn a_permission_lists_each_operation_once() {
 }
 
 #[test]
-fn permissions_holds_only_the_three_groups() {
+fn permissions_holds_only_the_four_groups() {
     let written = "    permissions:
       entity:
-        - entity: entry
+        - recordType: entry
           operations: [get]
           rowBoundaries: unrestricted
 ";
@@ -610,7 +614,7 @@ fn permissions_holds_only_the_three_groups() {
     assert_eq!(refusal.path, "/accessProfiles/0/permissions/entity");
     assert_eq!((refusal.line, refusal.column), position(written, "entity:"));
     assert!(
-        refusal.action.contains("entities"),
+        refusal.action.contains("records"),
         "the closest accepted key is offered: {refusal:?}"
     );
 }

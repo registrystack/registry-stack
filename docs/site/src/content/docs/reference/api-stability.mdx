@@ -44,7 +44,7 @@ the reference wins.
 
 | Product | Configuration | HTTP API |
 | --- | --- | --- |
-| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-handler/v1` | [Base Registry Engine API](../breg-api/) |
+| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-plan/v1` | [Base Registry Engine API](../breg-api/) |
 | Evidence Gateway | [Bundle and runtime files](../evidence-configuration/) | [Evidence Gateway API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS, unsigned JSON envelope, SD-JWT VC, and holder-bound issuance envelope response formats |
 | Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
 | Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../configure/discovery/#verify-resolution-and-exact-search) |
@@ -55,7 +55,7 @@ Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/
 `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`.
 
 {/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE;
-    crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V1;
+    crates/registry-breg/src/contract.rs, ACTION_PLAN_ABI_V1;
     products/evidence/contracts/bundle.schema.yaml, the response-formats enum;
     crates/registry-stack-client-node/breg/client.d.ts, statisticsLive and statisticsPublish;
     crates/registry-stack-client/src/lib.rs, TaskGrantBounds and SchedulingTaskPermission. */}
@@ -97,7 +97,7 @@ experimental surface.
 {/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
     crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds;
     crates/registry-breg/src/action_handler.rs, compile_source_for_action;
-    products/breg/IMPLEMENTATION.md, Capability state within W5;
+    products/breg/IMPLEMENTATION.md;
     products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
     products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;
     crates/registry-discovery-profile/src/lib.rs, PROFILE_ID. */}
@@ -195,7 +195,7 @@ operation that names a capability it does not understand. The engine still autho
 at execution time.
 
 {/* Evidence: crates/registry-breg-client/src/metadata.rs,
-    operation_capabilities_are_understood and BRegMetadata::select_immediate_action. */}
+    operation_capabilities_are_understood and BRegMetadata::select_action. */}
 
 Servers stay strict on requests and configuration: an unknown request member or configuration key
 is refused, not ignored. A configuration file that uses a key a later release introduced fails to
@@ -218,7 +218,7 @@ A WASM action handler is promised within the limits the
 states:
 
 - the project keys `handler.type: wasm`, the `module` path, and handler ABI
-  `registry.action-handler/v1`
+  `registry.action-plan/v1`
 - the guest byte ABI: a wasm32 core module with zero imports; the exports `alloc`, `handle`,
   `result_ptr`, `result_len`, and `memory`; the `handle` status codes `0` (success), `1` (malformed
   request), and `2` (internal error); the `{"inputs": ...}` request document; and the one JSON
@@ -236,8 +236,14 @@ and the WASM handler SDK are outside the promise.
 
 ## Upgrades and state
 
-Each release reads the state its immediate predecessor wrote, with two exceptions: `v0.40.0` and
-`v1.0.0`. `v1.0.0` is a fresh install, and no upgrade from a `v0.x` release to it is supported. For
+The native Base Registry Engine (BReg) Record type, Action, and Proposal replacement is a fresh-install
+boundary. It provides no conversion of retired ChangeRequest state. Normal
+package evolution applies within the native model.
+
+For retained state contracts, each release reads the state its immediate
+predecessor wrote, except for the fresh baselines described in this section and
+`v1.0.0`. `v1.0.0` is a fresh install, and no upgrade from a `v0.x` release to it
+is supported. For
 a minor release, the immediate predecessor is the last release of the previous line. For a patch
 release, it is the previous release of its own line; a patch release promises no direct path from a
 release before its line. Upgrade one release at a time, and complete each release's upgrade steps
@@ -247,7 +253,21 @@ before you start the next.
 configuration you carry over, rebuild packages, and apply them to new databases as the
 [upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) describes.
 The forward state path starts at `v0.40.0`; subsequent pre-1.0 releases read the state their
-immediate predecessor wrote.
+immediate predecessor wrote, subject to an explicitly documented product replacement.
+
+Evidence's normalized `v0.42.0` model starts a new baseline. Retired split
+question/source projects and targets with bundled authority have no in-place conversion.
+Retain the previous deployment and audit, author `evidence.yaml`, a target, and complete target
+authority with the current tooling, then package and verify a fresh synthetic assertion before
+cutover. The predecessor rehearsal omits Evidence when the starting release predates `v0.42.0`;
+a focused Evidence request from such a release refuses.
+
+Casework's review-only replacement requires a fresh database. It refuses the retired
+database containing WorkItem tables without converting or deleting its state. Drain or cancel old reviews,
+retain the old deployment and audit journal for reconciliation, and install the current model in
+a fresh database as [the Casework upgrade step](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order)
+describes. The forward-state rehearsal does not claim that this replacement preserves old
+Casework work in place.
 
 Upgrades are forward-only: no release reads state a later release wrote. To roll back, restore the
 backup taken before the upgrade and run the previous release, as
@@ -269,7 +289,9 @@ Base Registry Engine's Beta pilot conditions are under
 
 {/* Evidence: CONTRIBUTING.md, predecessor readability and the v0.40.0 exception;
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR, check_forward_path(),
-    select_from_tag(), and check_floor_is_current(); crates/registry-discovery/Cargo.toml. */}
+    select_from_tag(), check_floor_is_current(), EVIDENCE_FORWARD_PATH_FLOOR, and select_products();
+    products/evidence/CHANGELOG.md, Unreleased; crates/registry-discovery/Cargo.toml;
+    crates/registry-casework/src/store.rs; crates/registry-casework/migrations/0001_reviews.sql. */}
 
 ## Enforcement
 
@@ -283,17 +305,20 @@ The promise is machine-checked where a checker exists:
 - Forward state path: the release upgrade rehearsal workflow runs
   `release/scripts/rehearse-upgrade.py` on every pull request that changes a release manifest, and
   on manual dispatch. It verifies the previous release's binaries against the signed `SHA256SUMS`,
-  writes records, review work, messages, and audit entries with them against disposable PostgreSQL,
-  upgrades with the binaries built from the pull request, and fails when captured domain data or
-  stored revisions change, other captured views differ, retained tables lose rows, or an audit file
-  loses entries. It starts from the newest published release at or below the workspace version, so
-  it rehearses the immediate predecessor, and it refuses to start from a release before `v0.41.0`.
+  writes messages and audit entries for eligible products, using disposable PostgreSQL for
+  Messaging, upgrades with the binaries built from the pull request, and fails when captured
+  views differ, retained tables lose rows, or an audit file loses entries. It starts from the newest
+  published release at or below the workspace version, so it rehearses the immediate predecessor,
+  and it refuses to start from a release before `v0.41.0`.
   While no release from that floor onward is published, the rehearsal uses the binaries under test
   on both sides and reports that it has no published predecessor. This exercises the scenarios with
   the same build; it does not demonstrate compatibility between releases. Once a release on the
-  forward state path is published, the default run downloads it. Scheduling state is not rehearsed.
+  forward state path is published, the default run downloads eligible product binaries from it.
+  Evidence joins from its normalized `v0.42.0` baseline. Default omissions record the unsupported
+  transition; a focused unsupported product request refuses. BReg, Casework, and Scheduling state
+  are not rehearsed. BReg and Casework have separate current-schema operator checks.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version permits it, with the
 deprecation and migration steps this page requires.

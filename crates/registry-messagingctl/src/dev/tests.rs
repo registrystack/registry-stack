@@ -93,6 +93,10 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
 /// exact references the session pulls.
 #[test]
 fn dev_help_names_the_image_references_it_pulls() {
+    assert_eq!(
+        docker::POSTGRES_IMAGE,
+        "docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
+    );
     let cli = <Cli as clap::CommandFactory>::command();
     let help = cli
         .get_subcommands()
@@ -141,7 +145,7 @@ fn a_token_verifies_under_the_session_key_set_with_the_profile_claims() {
     .claims;
     assert_eq!(claims["azp"], "case-system");
     assert_eq!(claims["sub"], "dev-case-system");
-    assert_eq!(claims["registry_scopes"], "messaging:send");
+    assert_eq!(claims["scope"], "messaging:send");
     assert_eq!(claims["registry_actor_kind"], "service");
 
     let operator = config::token(&root, &loaded, "operations-console").unwrap();
@@ -152,7 +156,7 @@ fn a_token_verifies_under_the_session_key_set_with_the_profile_claims() {
     )
     .unwrap()
     .claims;
-    assert_eq!(claims["registry_scopes"], "messaging:operate");
+    assert_eq!(claims["scope"], "messaging:operate");
     assert!(claims.get("registry_actor_kind").is_none());
 }
 

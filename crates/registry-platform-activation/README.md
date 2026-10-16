@@ -23,3 +23,6 @@ migrations and hooks, call `grant_runtime_role`, then observe the effective
 role before appending the ledger row. Runtime startup must compare both the
 configured database identity and verified package digest through
 `check_active_package` before serving requests.
+
+The optional `schema` feature derives descriptions of the public ledger and
+role-observation types for product report generators. It adds no runtime I/O.

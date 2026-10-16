@@ -4,7 +4,7 @@ journeys:
   - id: business-establishment-lifecycle
     steps:
       - id: create-north-head-office
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -31,7 +31,7 @@ journeys:
             operating-status: operating
         capture: north-head-office
       - id: create-production-branch
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -57,7 +57,7 @@ journeys:
             operating-status: operating
         capture: production-branch
       - id: create-central-head-office
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -82,7 +82,7 @@ journeys:
             establishment-kind: production
         capture: central-head-office
       - id: create-central-branch
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -107,7 +107,7 @@ journeys:
             establishment-kind: warehouse
         capture: central-branch
       - id: create-central-depot
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -132,7 +132,7 @@ journeys:
             establishment-kind: production
         capture: central-depot
       - id: create-isolation-head-office
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -157,7 +157,7 @@ journeys:
             establishment-kind: warehouse
         capture: isolation-head-office
       - id: create-isolation-regional-office
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -182,7 +182,7 @@ journeys:
             establishment-kind: production
         capture: isolation-regional-office
       - id: create-isolation-branch
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -207,7 +207,7 @@ journeys:
             establishment-kind: production
         capture: isolation-branch
       - id: create-north-business
-        entity: business
+        recordType: business
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -231,7 +231,7 @@ journeys:
             registered-name: North Quay Engineering Ltd
         capture: north-business
       - id: create-central-business
-        entity: business
+        recordType: business
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -254,7 +254,7 @@ journeys:
             local-registration-number: 1002
         capture: central-business
       - id: create-isolation-business
-        entity: business
+        recordType: business
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -277,7 +277,7 @@ journeys:
             local-registration-number: 1003
         capture: isolation-business
       - id: lookup-north-business
-        entity: business
+        recordType: business
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -297,7 +297,7 @@ journeys:
             business-code: BUSINESS-SYNTH-001
             local-registration-number: 1001
       - id: read-establishments-from-north-business
-        entity: business
+        recordType: business
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -319,7 +319,7 @@ journeys:
           status: 200
           count: 0
       - id: query-establishment-summary
-        entity: business
+        recordType: business
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -343,7 +343,7 @@ journeys:
           status: 200
           count: 3
       - id: refuse-incomplete-assignment
-        entity: operator-assignment
+        recordType: operator-assignment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator
@@ -360,7 +360,7 @@ journeys:
           status: 400
           problemCode: request.invalid
       - id: operator-without-purpose-is-concealed
-        entity: establishment
+        recordType: establishment
         accessProfile: business-operator
         claims:
           principal: synthetic-business-operator

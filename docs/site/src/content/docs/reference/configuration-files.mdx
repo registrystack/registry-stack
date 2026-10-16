@@ -47,6 +47,15 @@ Registry Messaging reads `MessagingRuntimeConfig` through the same reader.
 
 </DocsetProduct>
 
+<DocsetProduct product="registry-coordinator">
+
+Registry Coordinator reads `CoordinatorRuntimeConfig` through the same reader.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs, KIND;
+    products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+
+</DocsetProduct>
+
 The shared reader is the `registry-platform-yaml` library. Every product's check command reads
 its authored files through it, as the runtimes above read their runtime files, so one YAML subset,
 one value table, one header check, and one diagnostic format apply to every file on this page that
@@ -149,7 +158,7 @@ range of the member's type.
 Leaving a key out and writing it with no value are different. An optional key you leave out takes
 its default. A key with nothing after the colon, or with `null` or `~`, is null, and no member
 accepts null. In a Scheduling runtime file, `authentication.oidc.scopeClaim` is optional and
-defaults to `registry_scopes`. With `scopeClaim:` on a line of its own, the reader reports it
+defaults to `scope`. With `scopeClaim:` on a line of its own, the reader reports it
 under `schedulingctl check <project> --runtime-config runtime.yaml`:
 
 ```text

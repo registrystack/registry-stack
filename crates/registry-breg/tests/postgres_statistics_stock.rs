@@ -301,14 +301,14 @@ async fn partial_vocabulary_population_matches_the_authorized_list_count() {
 }
 
 fn partial_text_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "facility"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
             "id":"statistics-partial-text-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-partial-text.example.test"
         },
-        "entities":[{
+        "recordTypes":[{
             "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":[
                 {"id":"permit-type","type":"vocabulary-code","vocabulary":"permit-type","required":true,"classification":"internal"},
@@ -317,8 +317,8 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                "entity":"permit","operations":["list"],
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],
                 "filterableFields":["permit-type","valid-from","administrative-boundary"],
                 "allowCount":true,

@@ -13,7 +13,7 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationPlan, MutationRequest,
+    MutationBody, MutationError, MutationPlan, MutationRequest, MutationTransaction,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
@@ -68,7 +68,7 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         .expect("bounded runtime pool builds");
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x71; 32].into())
         .expect("test owns a strong keyed audit profile");
-    let coordinator = MutationCoordinator::new(
+    let coordinator = MutationTransaction::new(
         RegistryLockKey::derive(PACKAGE_ID).expect("registry lock key is bounded"),
         Duration::from_secs(5),
         identity,
@@ -459,11 +459,11 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only","classification":"public",
             "fields":[{"id":"name","type":"string","maximumLength":64,"required":true,"classification":"public"}]
           },{
@@ -487,7 +487,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"valid-from","type":"timestamp","required":true,"classification":"public"},
               {"id":"valid-to","type":"timestamp","required":false,"classification":"public"}
             ],
-            "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+            "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{
               "type":"temporal-non-overlap","scopeFields":["scope"],
               "startField":"valid-from","endField":"valid-to"
@@ -495,17 +495,17 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
-            "permissions":{"entities":[{
-              "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
+            "permissions":{"records":[{
+              "recordType":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"],
+              "recordType":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"],
+              "recordType":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"period","operations":["create","get"],
+              "recordType":"period","operations":["create","get"],
               "readableFields":["scope","valid-from","valid-to"],
               "writableFields":["scope","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"

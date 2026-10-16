@@ -27,12 +27,14 @@ POLICY_DIGEST = (
 
 class _Handler(BaseHTTPRequestHandler):
     observations: list[dict[str, str]] = []
+    review_feed_responses: list[dict] = []
 
     def do_GET(self) -> None:  # noqa: N802
         self.observations.append({
             "path": self.path,
             "authorization": self.headers.get("authorization", ""),
             "profile": self.headers.get("registry-casework-profile", ""),
+            "review_profile": self.headers.get("registry-review-profile", ""),
             "source_profile": self.headers.get("registry-source-profile", ""),
         })
         if f"cursor={EXPIRED_CURSOR}" in self.path:
@@ -41,6 +43,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "Cursor expired",
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
             )
+            return
+        if self.path.startswith("/tenant/v1/review-results?"):
+            self.respond(self.review_feed_responses.pop(0))
             return
         if self.path == f"/tenant/v1/review-requests/{ITEM_ID}/result":
             self.respond({
@@ -125,7 +130,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "version": "1",
                     "digest": POLICY_DIGEST,
                 },
-                "policySnapshot": {
+                "policyClosure": {
                     "identity": {
                         "id": "registry-correction",
                         "version": "1",
@@ -139,12 +144,17 @@ class _Handler(BaseHTTPRequestHandler):
                         "excludeInitiator": False,
                         "excludePreviousStageReviewers": False,
                     }],
-                    "retention": {"terminalDays": 30, "accountabilityDays": 30},
+                    "retention": {"terminalRetentionDays": 30, "accountabilityRetentionDays": 30},
                     "displaySchema": {
                         "type": "object",
                         "additionalProperties": False,
                         "properties": {},
                     },
+                    "outcomes": [{
+                        "id": "approved", "label": "Approve",
+                        "settlement": "approved", "reasonRequired": False,
+                        "publicReason": "optional",
+                    }],
                 },
                 "context": {
                     "strategy": "source",
@@ -163,70 +173,12 @@ class _Handler(BaseHTTPRequestHandler):
                 },
             })
             return
-        if self.path == f"/tenant/v1/work-items/{ITEM_ID}":
-            self.respond({
-                "itemId": ITEM_ID,
-                "subject": {
-                    "sourceId": "source-one",
-                    "kind": "case",
-                    "id": "case-one",
-                },
-                "occurrenceKind": "review",
-                "binding": {
-                    "sourceRevision": "revision-1",
-                    "version": "version-1",
-                    "generation": "generation-1",
-                },
-                "bindingReference": "binding-one",
-                "state": "claimed",
-                "queueId": "review",
-                "holder": {
-                    "issuer": "https://id.example",
-                    "subject": "officer-one",
-                },
-                "heldSince": "2026-09-11T03:04:05Z",
-                "revision": 2,
-                "firstObservedAt": "2026-09-11T03:00:00Z",
-                "updatedAt": "2026-09-11T03:04:05Z",
-                "actions": [],
-            })
-        elif self.path == f"/tenant/v1/work-items/{ITEM_ID}/clocks":
-            self.respond([{
-                "clockOccurrenceId": CLOCK_OCCURRENCE_ID,
-                "subject": {"sourceId": "source-one", "kind": "case", "id": "case-one"},
-                "clockId": "decision-due",
-                "state": "running",
-                "policyDigest": f"sha256:{'1' * 64}",
-                "calculationGeneration": 1,
-                "recomputeGeneration": 0,
-                "anchorAt": "2026-09-10T00:00:00Z",
-                "startedAt": "2026-09-10T00:00:00Z",
-                "dueAt": "2026-09-14T00:00:00Z",
-                "nextEffect": {
-                    "kind": "reminder",
-                    "id": "at-risk",
-                    "at": "2026-09-12T00:00:00Z",
-                },
-                "upcomingEffects": [{
-                    "kind": "reminder",
-                    "id": "at-risk",
-                    "at": "2026-09-12T00:00:00Z",
-                }, {
-                    "kind": "reassign",
-                    "id": "escalate",
-                    "at": "2026-09-14T00:00:00Z",
-                    "because": "Deadline reached",
-                    "queueId": "appeals",
-                }],
-            }])
-        elif self.path == "/tenant/v1/directory/holidays/statutory/revisions/7":
+        if self.path == "/tenant/v1/directory/holidays/statutory/revisions/7":
             self.respond({
                 "holidaySet": "statutory",
                 "revision": 7,
                 "dates": ["2026-09-11"],
             })
-        elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
-            self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
         elif self.path.startswith(f"/tenant/v1/review-requests/{ITEM_ID}/history?"):
             # Review history pages bind a present cursor to the final
             # returned event, so the fixture serves the entry it names.
@@ -242,15 +194,6 @@ class _Handler(BaseHTTPRequestHandler):
             })
         elif self.path == f"/tenant/v1/review-requests/{ITEM_ID}/clocks":
             self.respond([])
-        elif self.path.startswith("/tenant/v1/holdings?"):
-            self.respond({"items": [], "nextCursor": "next-holdings", "status": "complete"})
-        elif self.path.startswith("/tenant/v1/work-items/next?"):
-            self.respond({
-                "items": [],
-                "nextCursor": "resume-next",
-                "status": "budget-exhausted",
-                "servedQueues": ["review"],
-            })
         elif self.path.startswith("/tenant/v1/directory/targets?"):
             self.respond({
                 "items": [{
@@ -267,18 +210,13 @@ class _Handler(BaseHTTPRequestHandler):
                 "items": [],
                 "nextCursor": "absence-next",
             })
-        elif self.path.startswith("/tenant/v1/work-items"):
-            self.respond({
-                "items": [],
-                "servedQueues": ["appeals", "review"],
-                "status": "complete",
-            })
         else:
             self.respond({
                 "projectId": "fixture",
                 "policyVersion": "v1",
                 "queues": [],
-                "sources": [],
+                "reviewPolicies": [],
+                "contextProviders": [],
                 "calendars": [],
                 "clocks": [],
             })
@@ -300,6 +238,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "Idempotency window expired",
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key.",
             )
+            return
+        if self.headers.get("idempotency-key") == "undeclared-outcome-key":
+            self.respond_outcome_refusal()
             return
         if self.path == "/tenant/v1/directory/holidays":
             self.respond(body["document"], status=201)
@@ -338,18 +279,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "occurredAt": "2026-09-20T00:00:00Z",
             })
             return
-        self.respond({
-            "itemId": ITEM_ID,
-            "requesterReference": body["requesterReference"],
-            "kind": body["kind"],
-            "version": "v1",
-            "display": body["display"],
-            "state": "open",
-            "revision": 1,
-            "kindPolicyDigest": f"sha256:{'0' * 64}",
-            "createdAt": "2026-09-10T00:00:00Z",
-            "updatedAt": "2026-09-10T00:00:00Z",
-        }, status=201)
+        self.respond({}, status=201)
 
     def do_PUT(self) -> None:  # noqa: N802
         length = int(self.headers.get("content-length", "0"))
@@ -380,6 +310,7 @@ class _Handler(BaseHTTPRequestHandler):
         status: int = 200,
         media_type: str = "application/json",
     ) -> None:
+        value = normalized_fixture(value)
         body = json.dumps(value).encode()
         self.send_response(status)
         self.send_header("content-type", media_type)
@@ -402,6 +333,26 @@ class _Handler(BaseHTTPRequestHandler):
             "traceId": TRACE_ID,
         }, status=410, media_type="application/problem+json")
 
+    def respond_outcome_refusal(self) -> None:
+        body = json.dumps({
+            "type": "https://id.registrystack.org/problems/registry-casework/request/invalid",
+            "title": "Invalid request",
+            "status": 400,
+            "detail": "The Casework request is invalid.",
+            "code": "request.invalid",
+            "traceId": TRACE_ID,
+        }).encode()
+        self.send_response(400)
+        self.send_header("content-type", "application/problem+json")
+        self.send_header("cache-control", "no-store")
+        self.send_header("traceparent", TRACEPARENT)
+        self.send_header("registry-casework-validation-path", "$.outcome")
+        self.send_header("registry-casework-validation-reason", "outcome-not-declared")
+        self.send_header("registry-casework-validation-allowed", "approved,approved-with-note")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *args: object) -> None:
         pass
 
@@ -409,6 +360,7 @@ class _Handler(BaseHTTPRequestHandler):
 class NativeRequestTests(unittest.TestCase):
     def setUp(self) -> None:
         _Handler.observations = []
+        _Handler.review_feed_responses = []
         self.server = HTTPServer(("127.0.0.1", 0), _Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -420,56 +372,44 @@ class NativeRequestTests(unittest.TestCase):
         self.thread.join()
         self.server.server_close()
 
-    def test_staff_calls_preserve_explicit_authority(self) -> None:
-        page = self.client.list_work_items(
-            "staff-token",
-            "staff",
-            "source-one",
-            {
-                "view": "mine",
-                "sourceId": "source-one",
-                "subjectKind": "resident-record",
-                "subjectId": "human-reference-42",
-                "limit": 25,
-            },
-        )
-        self.assertEqual(page["value"], {
-            "items": [],
-            "servedQueues": ["appeals", "review"],
-            "status": "complete",
-        })
-        preview = self.client.preview_caseload_move(
-            "supervisor-token",
-            "supervisor",
-            {
-                "from": {"issuer": "issuer", "subject": "person-one"},
-                "to": {"issuer": "issuer", "subject": "person-two"},
-                "reason": "Coverage transfer",
-            },
-            {"limit": 25},
-            "source-one",
-        )
-        self.assertEqual(preview["value"], {"items": [], "status": "complete"})
+    def test_review_result_feed_preserves_distinct_ids_and_refuses_nil_correlations(self) -> None:
+        entry = {
+            "eventId": CLOCK_OCCURRENCE_ID,
+            "requestId": ITEM_ID,
+            "resultId": OTHER_ITEM_ID,
+            "completedAt": "2026-09-19T00:00:00Z",
+        }
+        _Handler.review_feed_responses = [
+            {"items": [entry], "nextCursor": CLOCK_OCCURRENCE_ID},
+            *({
+                "items": [{**entry, field: "00000000-0000-0000-0000-000000000000"}],
+                "nextCursor": CLOCK_OCCURRENCE_ID,
+            } for field in ("requestId", "resultId")),
+        ]
+        query = {"cursor": CLOCK_OCCURRENCE_ID, "limit": 1}
 
-        staff, supervisor = _Handler.observations
-        self.assertEqual(staff["authorization"], "Bearer staff-token")
-        self.assertEqual(staff["profile"], "staff")
-        self.assertEqual(staff["source_profile"], "source-one")
-        self.assertEqual(
-            parse_qs(urlsplit(staff["path"]).query),
-            {
-                "view": ["mine"],
-                "sort": ["due"],
-                "sourceId": ["source-one"],
-                "subjectKind": ["resident-record"],
-                "subjectId": ["human-reference-42"],
-                "limit": ["25"],
-            },
-        )
-        self.assertEqual(supervisor["authorization"], "Bearer supervisor-token")
-        self.assertEqual(supervisor["profile"], "supervisor")
-        self.assertEqual(supervisor["source_profile"], "source-one")
-        self.assertIn('"reason": "Coverage transfer"', supervisor["body"])
+        page = self.client.review_results("requester-token", "requester", query)
+        self.assertEqual(page["value"]["items"], [entry])
+        self.assertEqual(page["value"]["nextCursor"], CLOCK_OCCURRENCE_ID)
+        for field in ("requestId", "resultId"):
+            with self.subTest(field=field):
+                with self.assertRaises(CaseworkClientError) as raised:
+                    self.client.review_results("requester-token", "requester", query)
+                self.assertEqual(raised.exception.kind, "protocol")
+                self.assertEqual(raised.exception.protocol_failure, "body")
+                self.assertEqual(raised.exception.status, 200)
+                self.assertEqual(raised.exception.trace_id, TRACE_ID)
+                self.assertNotIn("requester-token", str(raised.exception))
+                self.assertNotIn("00000000-", str(raised.exception))
+        self.assertEqual(len(_Handler.observations), 3)
+        self.assertEqual(_Handler.review_feed_responses, [])
+        for observation in _Handler.observations:
+            self.assertEqual(
+                observation["path"],
+                f"/tenant/v1/review-results?cursor={CLOCK_OCCURRENCE_ID}&limit=1",
+            )
+            self.assertEqual(observation["review_profile"], "requester")
+
 
     def test_review_task_context_uses_exact_route_and_source_profile(self) -> None:
         context = self.client.review_task_context(
@@ -561,7 +501,8 @@ class NativeRequestTests(unittest.TestCase):
                 "", "staff", ITEM_ID, 1, "delete-key"
             ),
             lambda: self.client.decide_review_task(
-                "", "staff", ITEM_ID, 1, "decision-key", {"type": "approve"}
+                "", "staff", ITEM_ID, 1, "decision-key",
+                {"decision": {"type": "approve", "outcome": "approved"}},
             ),
             lambda: self.client.review_history("", "staff", ITEM_ID),
             lambda: self.client.add_review_note(
@@ -576,6 +517,19 @@ class NativeRequestTests(unittest.TestCase):
                     call()
                 self.assertEqual(error.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
+
+    def test_an_undeclared_outcome_refusal_names_the_declared_outcomes(self) -> None:
+        with self.assertRaises(CaseworkClientError) as error:
+            self.client.decide_review_task(
+                "secret", "staff", ITEM_ID, 1, "undeclared-outcome-key",
+                {"decision": {"type": "approve", "outcome": "accepted"}},
+            )
+        self.assertEqual(error.exception.code, "request.invalid")
+        self.assertEqual(error.exception.validation, {
+            "path": "$.outcome",
+            "reason": "outcome-not-declared",
+            "allowed": ["approved", "approved-with-note"],
+        })
 
     def test_review_responses_enforce_object_results_and_exact_tasks(self) -> None:
         accepted = {
@@ -608,7 +562,7 @@ class NativeRequestTests(unittest.TestCase):
     def test_review_create_refuses_non_object_and_unsafe_constraints_before_http(self) -> None:
         digest = f"sha256:{'a' * 64}"
         request = {
-            "kind": "decision",
+            "policy": {"id":"decision", "version":"1", "digest": f"sha256:{'a' * 64}"},
             "subject": {
                 "source": "standalone",
                 "type": "batch",
@@ -617,7 +571,7 @@ class NativeRequestTests(unittest.TestCase):
                 "digest": digest,
             },
             "requesterReference": "batch-1",
-            "context": {"strategy": "submitted", "snapshot": {"count": 1}},
+            "context": {"mode": "submitted", "snapshot": {"count": 1}},
             "resultConstraints": [],
         }
         with self.assertRaises(CaseworkClientError) as shape_error:
@@ -676,21 +630,7 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(key_error.exception.status, 410)
         self.assertEqual(len(_Handler.observations), 2)
 
-    def test_source_history_forwards_page_query_and_returns_continuation(self) -> None:
-        page = self.client.work_item_history(
-            "staff-token",
-            "staff",
-            "source-one",
-            ITEM_ID,
-            {"cursor": "opaque-cursor", "limit": 25},
-        )
-        self.assertEqual(page["value"]["nextCursor"], "next-cursor")
-        self.assertEqual(
-            _Handler.observations[0]["path"],
-            f"/tenant/v1/work-items/{ITEM_ID}/history?cursor=opaque-cursor&limit=25",
-        )
-        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
-
+    def test_review_history_notes_and_clocks_preserve_authority(self) -> None:
         review_page = self.client.review_history(
             "staff-token",
             "staff",
@@ -700,10 +640,10 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(review_page["value"]["nextCursor"], EXPIRED_CURSOR)
         self.assertEqual(
-            _Handler.observations[1]["path"],
+            _Handler.observations[0]["path"],
             f"/tenant/v1/review-requests/{ITEM_ID}/history?limit=25",
         )
-        self.assertEqual(_Handler.observations[1]["source_profile"], "source-one")
+        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
         note = self.client.add_review_note(
             "staff-token",
@@ -715,11 +655,11 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(note["value"]["kind"], "note")
         self.assertEqual(
-            _Handler.observations[2]["path"],
+            _Handler.observations[1]["path"],
             f"/tenant/v1/review-requests/{ITEM_ID}/notes",
         )
-        self.assertEqual(_Handler.observations[2]["source_profile"], "source-one")
-        self.assertEqual(_Handler.observations[2]["idempotency_key"], "note-1")
+        self.assertEqual(_Handler.observations[1]["source_profile"], "source-one")
+        self.assertEqual(_Handler.observations[1]["idempotency_key"], "note-1")
 
         clocks = self.client.review_clocks(
             "staff-token",
@@ -729,51 +669,13 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(clocks["value"], [])
         self.assertEqual(
-            _Handler.observations[3]["path"],
+            _Handler.observations[2]["path"],
             f"/tenant/v1/review-requests/{ITEM_ID}/clocks",
         )
-        self.assertEqual(_Handler.observations[3]["source_profile"], "source-one")
+        self.assertEqual(_Handler.observations[2]["source_profile"], "source-one")
 
-    def test_holdings_forwards_page_query_and_returns_continuation(self) -> None:
-        page = self.client.holdings(
-            "staff-token",
-            "staff",
-            "source-one",
-            {"cursor": "opaque-holdings", "limit": 25},
-        )
-        self.assertEqual(page["value"]["nextCursor"], "next-holdings")
-        self.assertEqual(
-            _Handler.observations[0]["path"],
-            "/tenant/v1/holdings?cursor=opaque-holdings&limit=25",
-        )
-        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
-    def test_next_work_item_preserves_empty_budget_page_and_cursor(self) -> None:
-        page = self.client.next_work_item(
-            "staff-token",
-            "staff",
-            "source-one",
-            {"queue": "review", "cursor": "opaque-next"},
-        )
-        self.assertEqual(page["value"], {
-            "items": [],
-            "nextCursor": "resume-next",
-            "status": "budget-exhausted",
-            "servedQueues": ["review"],
-        })
-        self.assertEqual(
-            _Handler.observations[0]["path"],
-            "/tenant/v1/work-items/next?queue=review&cursor=opaque-next",
-        )
-        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
-    def test_native_client_preserves_optional_held_timestamp(self) -> None:
-        item = self.client.get_work_item(
-            "staff-token", "staff", "source-one", ITEM_ID
-        )
-
-        self.assertEqual(item["value"]["heldSince"], "2026-09-11T03:04:05Z")
-        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
     def test_directory_targets_preserve_exact_query_without_source_authority(self) -> None:
         page = self.client.directory_targets(
@@ -831,80 +733,6 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(observation["source_profile"], "source-one")
 
-    def test_clock_calls_preserve_source_profile_revision_and_explicit_keys(self) -> None:
-        clocks = self.client.work_item_clocks(
-            "staff-token", "staff", "source-one", ITEM_ID
-        )
-        holiday = self.client.holiday_revision(
-            "administrator-token", "administrator", "statutory", 7
-        )
-        created = self.client.create_holiday_revision(
-            "administrator-token",
-            "administrator",
-            "exact-holiday-key",
-            {
-                "document": {
-                    "holidaySet": "statutory",
-                    "revision": 8,
-                    "dates": ["2026-09-12"],
-                }
-            },
-        )
-        preview = self.client.preview_clock_recompute(
-            "administrator-token",
-            "administrator",
-            {
-                "clockId": "decision-due",
-                "holidaySet": "statutory",
-                "holidayRevision": 8,
-            },
-        )
-        applied = self.client.apply_clock_recompute(
-            "administrator-token",
-            "administrator",
-            "exact-recompute-key",
-            {"previewId": PREVIEW_ID},
-        )
-
-        self.assertEqual(clocks["value"][0]["clockOccurrenceId"], CLOCK_OCCURRENCE_ID)
-        self.assertEqual(clocks["value"][0]["nextEffect"]["id"], "at-risk")
-        self.assertEqual(
-            [effect["id"] for effect in clocks["value"][0]["upcomingEffects"]],
-            ["at-risk", "escalate"],
-        )
-        self.assertEqual(holiday["value"]["revision"], 7)
-        self.assertEqual(created["value"]["revision"], 8)
-        self.assertEqual(preview["value"]["previewId"], PREVIEW_ID)
-        self.assertEqual(applied["value"]["appliedOccurrences"], [CLOCK_OCCURRENCE_ID])
-
-        clock_read, holiday_read, holiday_create, recompute_preview, recompute_apply = (
-            _Handler.observations
-        )
-        self.assertEqual(clock_read["source_profile"], "source-one")
-        self.assertEqual(holiday_read["path"], "/tenant/v1/directory/holidays/statutory/revisions/7")
-        self.assertEqual(holiday_create["idempotency_key"], "exact-holiday-key")
-        self.assertEqual(
-            json.loads(holiday_create["body"]),
-            {
-                "document": {
-                    "dates": ["2026-09-12"],
-                    "holidaySet": "statutory",
-                    "revision": 8,
-                }
-            },
-        )
-        self.assertEqual(recompute_preview["idempotency_key"], "")
-        self.assertEqual(
-            json.loads(recompute_preview["body"]),
-            {
-                "clockId": "decision-due",
-                "holidayRevision": 8,
-                "holidaySet": "statutory",
-            },
-        )
-        self.assertEqual(recompute_apply["idempotency_key"], "exact-recompute-key")
-        self.assertEqual(json.loads(recompute_apply["body"]), {"previewId": PREVIEW_ID})
-        self.assertEqual(len(_Handler.observations), 5)
 
     def test_directory_team_update_preserves_admin_precondition_and_key(self) -> None:
         request = {
@@ -934,6 +762,34 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observation["idempotency_key"], "exact-team-update-key")
         self.assertEqual(json.loads(observation["body"]), request)
 
+
+
+def normalized_fixture(value):
+    if not isinstance(value, dict) or "policyClosure" not in value:
+        return value
+    import hashlib
+    closure = value["policyClosure"]
+    policy = {
+        "id": closure["identity"]["id"], "version": closure["identity"]["version"],
+        "purpose": closure["purpose"],
+        "context": {"mode":"current-source", "provider":"registry", "contract":{"id":"registry-context", "revision":POLICY_DIGEST, "schemaDigest":POLICY_DIGEST}},
+        "stages": closure["stages"], "retention": closure["retention"], "displaySchema": closure["displaySchema"],
+    }
+    if "outcomes" in closure:
+        policy["outcomes"] = closure["outcomes"]
+    dependencies = {"accessProfiles":[],"queues":[],"teams":[],"clocks":[],"calendars":[],"contextProvider":None,"taskTemplates":[],"trustedProducers":[],"inbox":{"defaultPageSize":25,"maximumCandidateScan":100,"maximumSourceReads":25,"maximumConcurrentSourceReads":4,"pageDeadlineMilliseconds":2000}}
+    # Outcome labels are presentation and stay out of the behavioral digest.
+    digested = dict(policy)
+    if "outcomes" in digested:
+        digested["outcomes"] = [{**outcome, "label": ""} for outcome in digested["outcomes"]]
+    canonical = json.dumps({"schema":"registry-casework-review-policy/v1","policy":digested,"dependencies":dependencies},sort_keys=True,separators=(",",":"))
+    digest = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    value["policy"] = {"id":policy.pop("id"),"version":policy.pop("version"),"digest":digest}
+    value["policyClosure"] = {"identity":value["policy"],**policy,"dependencies":dependencies}
+    value["context"]["mode"] = "current-source"
+    value["context"].pop("strategy",None)
+    value["context"]["projection"]["binding"] = value["subject"]
+    return value
 
 if __name__ == "__main__":
     unittest.main()

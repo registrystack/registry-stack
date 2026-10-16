@@ -15,122 +15,64 @@ use zeroize::Zeroizing;
 /// Maximum accepted size of one resolved secret value.
 pub const MAX_SECRET_BYTES: usize = 64 * 1024;
 
-/// Closed set of secret providers supported by [`SecretResolver`].
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum SecretProvider {
-    /// An exact process environment variable.
-    Environment,
-    /// One owner-only file immediately below the configured root.
-    File,
-}
+pub use registry_platform_yaml::SecretProvider;
+use registry_platform_yaml::SecretReference as PureSecretReference;
 
-/// Parsed `secret:...` reference whose debug form never exposes the name.
-#[derive(Clone, Eq, PartialEq)]
-pub struct SecretReference {
-    reference: String,
-    provider: SecretProvider,
-    name_start: usize,
-}
+/// Runtime facade over the pure secret reference parsed by
+/// `registry-platform-yaml`.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SecretReference(PureSecretReference);
 
 impl SecretReference {
     /// Parse one exact `secret:env/NAME` or `secret:file/name` reference.
     pub fn parse(reference: impl Into<String>) -> Result<Self, SecretError> {
-        let reference = reference.into();
-        if let Some(name) = reference.strip_prefix("secret:env/") {
-            if valid_environment_name(name) {
-                return Ok(Self {
-                    reference,
-                    provider: SecretProvider::Environment,
-                    name_start: "secret:env/".len(),
-                });
-            }
-        } else if let Some(name) = reference.strip_prefix("secret:file/") {
-            if valid_file_name(name) {
-                return Ok(Self {
-                    reference,
-                    provider: SecretProvider::File,
-                    name_start: "secret:file/".len(),
-                });
-            }
-        }
-        Err(SecretError::InvalidReference)
+        PureSecretReference::new(reference)
+            .map(Self)
+            .map_err(|_| SecretError::InvalidReference)
     }
 
     #[must_use]
     pub fn provider(&self) -> SecretProvider {
-        self.provider
+        self.0.provider()
     }
 
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.reference[self.name_start..]
+        self.0.name()
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.reference
-    }
-}
-
-impl PartialOrd for SecretReference {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SecretReference {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.reference.cmp(&other.reference)
-    }
-}
-
-impl std::hash::Hash for SecretReference {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.reference.hash(state);
+        self.0.as_str()
     }
 }
 
 impl serde::Serialize for SecretReference {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.reference)
+        self.0.serialize(serializer)
     }
 }
 
 impl<'de> serde::Deserialize<'de> for SecretReference {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        Self::parse(value).map_err(|_| {
-            registry_platform_yaml::Invalid::expected(
-                "an exact secret:env/NAME or secret:file/name reference",
-                "Write the reference as secret:env/NAME or secret:file/name.",
-            )
-            .into_error()
-        })
+        PureSecretReference::deserialize(deserializer).map(Self)
     }
 }
 
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for SecretReference {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        "SecretReference".into()
+        PureSecretReference::schema_name()
     }
 
-    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
-            "type": "string",
-            "pattern": crate::blocks::SECRET_REFERENCE_PATTERN
-        })
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        PureSecretReference::json_schema(generator)
     }
 }
 
 impl fmt::Debug for SecretReference {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SecretReference")
-            .field("provider", &self.provider)
-            .field("name", &"[REDACTED]")
-            .finish()
+        self.0.fmt(formatter)
     }
 }
 
@@ -222,6 +164,19 @@ impl SecretResolver {
         &self,
         reference: &SecretReference,
     ) -> Result<ProtectedSecret, SecretError> {
+        validate_secret(self.resolve_binary_reference(reference)?.0)
+    }
+
+    /// Resolve bounded, opaque secret bytes, including zero bytes in a key file.
+    ///
+    /// Use this explicitly for binary cryptographic material. Textual consumers
+    /// should keep using [`Self::resolve_reference`], which rejects NUL bytes.
+    /// File safety checks, provider allowlists, size limits and zeroization are
+    /// identical for both paths. Environment values cannot contain NUL bytes.
+    pub fn resolve_binary_reference(
+        &self,
+        reference: &SecretReference,
+    ) -> Result<ProtectedSecret, SecretError> {
         if !self.providers.contains(&reference.provider()) {
             return Err(SecretError::ProviderDisabled);
         }
@@ -230,26 +185,8 @@ impl SecretResolver {
             SecretProvider::Environment => read_environment(reference.name())?,
             SecretProvider::File => read_secret_file(&self.file_root, reference.name())?,
         };
-        validate_secret(bytes)
+        validate_binary_secret(bytes)
     }
-}
-
-fn valid_environment_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'A'..=b'Z'))
-        && bytes.len() <= 128
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
-}
-
-fn valid_file_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'a'..=b'z'))
-        && bytes.len() <= 128
-        && bytes[1..].iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
 }
 
 fn read_environment(name: &str) -> Result<Zeroizing<Vec<u8>>, SecretError> {
@@ -326,6 +263,13 @@ fn read_bounded(file: File) -> Result<Zeroizing<Vec<u8>>, SecretError> {
 
 fn validate_secret(bytes: Zeroizing<Vec<u8>>) -> Result<ProtectedSecret, SecretError> {
     if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES || bytes.contains(&0) {
+        return Err(SecretError::InvalidValue);
+    }
+    Ok(ProtectedSecret(bytes))
+}
+
+fn validate_binary_secret(bytes: Zeroizing<Vec<u8>>) -> Result<ProtectedSecret, SecretError> {
+    if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES {
         return Err(SecretError::InvalidValue);
     }
     Ok(ProtectedSecret(bytes))
@@ -485,6 +429,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn binary_values_keep_zero_bytes_within_the_same_bounds() {
+        let secret = validate_binary_secret(Zeroizing::new(b"canary\0value".to_vec()))
+            .expect("binary secret");
+        assert_eq!(secret.expose_secret(), b"canary\0value");
+        for value in [Vec::new(), vec![0; MAX_SECRET_BYTES + 1]] {
+            let error = validate_binary_secret(Zeroizing::new(value)).expect_err("invalid secret");
+            assert_eq!(error, SecretError::InvalidValue);
+            assert_eq!(error.to_string(), "the referenced secret value is invalid");
+        }
+    }
+
     #[cfg(unix)]
     mod unix {
         use super::*;
@@ -521,6 +477,28 @@ mod tests {
                     Err(SecretError::UnsafeFile)
                 ));
             }
+        }
+
+        #[test]
+        fn binary_key_files_preserve_zero_bytes_without_widening_text_secrets() {
+            let root = tempfile::tempdir().expect("temporary root");
+            let resolver =
+                SecretResolver::new([SecretProvider::File], root.path()).expect("resolver builds");
+            let bytes = [0_u8, 0xff, 1, 2, 0, 3];
+            write_secret(root.path(), "binary-key", &bytes, 0o600);
+            let reference = SecretReference::parse("secret:file/binary-key").unwrap();
+            let key = resolver.resolve_binary_reference(&reference).unwrap();
+            assert_eq!(key.expose_secret(), bytes);
+            assert_eq!(format!("{key:?}"), "ProtectedSecret([REDACTED])");
+            assert_eq!(
+                resolver.resolve_reference(&reference).unwrap_err(),
+                SecretError::InvalidValue
+            );
+            write_secret(root.path(), "binary-key", &bytes, 0o644);
+            assert_eq!(
+                resolver.resolve_binary_reference(&reference).unwrap_err(),
+                SecretError::UnsafeFile
+            );
         }
 
         #[test]

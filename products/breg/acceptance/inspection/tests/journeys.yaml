@@ -4,7 +4,7 @@ journeys:
   - id: inspection-and-schema-validation
     steps:
       - id: create-inspection
-        entity: inspection
+        recordType: inspection
         accessProfile: inspection-inspector
         claims:
           principal: synthetic-inspection-inspector
@@ -26,7 +26,7 @@ journeys:
             inspection-authority: synthetic-case-management
         capture: first-inspection
       - id: close-inspection
-        entity: inspection
+        recordType: inspection
         accessProfile: inspection-inspector
         claims:
           principal: synthetic-inspection-inspector
@@ -47,7 +47,7 @@ journeys:
             closed-on: 2026-01-20
         capture: closed-inspection
       - id: get-closed-inspection
-        entity: inspection
+        recordType: inspection
         accessProfile: inspection-inspector
         claims:
           principal: synthetic-inspection-inspector
@@ -62,7 +62,7 @@ journeys:
             inspection-code: INSPECTION-SYNTH-001
             closed-on: 2026-01-20
       - id: list-inspections
-        entity: inspection
+        recordType: inspection
         accessProfile: inspection-inspector
         claims:
           principal: synthetic-inspection-inspector
@@ -74,7 +74,7 @@ journeys:
           status: 200
           count: 1
       - id: refuse-undeclared-observation-metadata
-        entity: inspection-observation
+        recordType: inspection-observation
         accessProfile: inspection-inspector
         claims:
           principal: synthetic-inspection-inspector
@@ -96,7 +96,7 @@ journeys:
           status: 400
           problemCode: request.invalid
       - id: inspector-without-purpose-is-concealed
-        entity: inspection
+        recordType: inspection
         accessProfile: inspection-inspector
         claims:
           principal: synthetic-inspection-inspector

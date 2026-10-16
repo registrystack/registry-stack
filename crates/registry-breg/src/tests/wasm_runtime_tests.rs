@@ -16,7 +16,7 @@ use crate::action_handler::{
 };
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{parse_project_json, ModuleAssetSource};
-use crate::model::{CompiledAction, CompiledActionHandler, CompiledActionHandlerKind};
+use crate::model::{CompiledAction, CompiledPlanFunction, CompiledPlanFunctionKind};
 use crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
 use crate::wasm_runtime::{
     install, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
@@ -141,18 +141,19 @@ fn wasm_person_action(module_bytes: &[u8]) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"wasm-runtime","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"parity"}],"recordTypes":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
-        "actions":[{"id":"register-person","inputs":[
+        "functions":[{"id":"person-plan","runtime":"wasm","source":"handlers/guest.wasm","entrypoint":"handle","abi":"registry.action-plan/v1","capabilities":[]}],
+        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"type":"wasm","module":"handlers/guest.wasm","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
-            {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]}
+        ],"plan":{"type":"function","function":"person-plan","inputs":["given-name","family-name","person"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+            {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -210,7 +211,7 @@ fn wasm_effects_and_refusals_flow_through_the_shared_validator() {
     .expect("the default runtime installs");
     // Accepted effects.
     let document =
-        r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromField":"person"}}}]}"#;
+        r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromInput":"person"}}}]}"#;
     let action = wasm_person_action(&compiled_wat(&outcome_guest(document)));
     let outcome =
         evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap();
@@ -279,7 +280,7 @@ fn action_deadline_maps_to_the_epoch_backstop() {
 
 /// A handler fixture for cache tests: only the fields the cache consults
 /// matter (identity hash and module bytes).
-fn cache_handler_fixture(document: &str) -> CompiledActionHandler {
+fn cache_handler_fixture(document: &str) -> CompiledPlanFunction {
     use sha2::{Digest, Sha256};
     let bytes = compiled_wat(&outcome_guest(document));
     let digest = Sha256::digest(&bytes);
@@ -289,12 +290,16 @@ fn cache_handler_fixture(document: &str) -> CompiledActionHandler {
         hex.push(HEX[(byte >> 4) as usize] as char);
         hex.push(HEX[(byte & 0x0f) as usize] as char);
     }
-    CompiledActionHandler {
-        kind: CompiledActionHandlerKind::Wasm,
+    CompiledPlanFunction {
+        id: "cache-plan".into(),
+        entrypoint: "plan".into(),
+        capabilities: Default::default(),
+        bound_inputs: Default::default(),
+        kind: CompiledPlanFunctionKind::Wasm,
         source_module: None,
         script_path: String::new(),
         module_path: "handlers/guest.wasm".to_owned(),
-        abi: "registry.action-handler/v1".to_owned(),
+        abi: "registry.action-plan/v1".to_owned(),
         rhai_version: None,
         script_sha256: None,
         module_sha256: Some(format!("sha256:{hex}")),

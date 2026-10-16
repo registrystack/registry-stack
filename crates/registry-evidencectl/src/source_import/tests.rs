@@ -12,7 +12,60 @@ impl Fixture {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         fs::create_dir(&project).unwrap();
-        put(&project, "evidence-project.yaml", "version: 1\n");
+        put(
+            &project,
+            "evidence.yaml",
+            r#"apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: import-test
+selectorProfiles:
+  other-reference:
+    maximumAggregateBytes: 64
+    fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
+functions:
+- id: other-extract
+  interface: source-extract/v1
+  source: functions/other-extract.rhai
+- id: other-derive
+  interface: assertion-derive/v1
+  source: functions/other-derive.rhai
+sources:
+  other:
+    type: http-json
+    connection: other
+    acquisitionPosture: record-transformed
+    selectors: [{role: subject, profiles: [other-reference]}]
+    request: {method: GET, path: /other}
+    response: {projection: [/matched], shape: {type: object, properties: {matched: {type: boolean}}}, maximumBytes: 1024}
+    extract: {function: other-extract}
+    facts: {matched: {type: boolean}}
+    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+# This authored boundary comment is outside the collections source import owns.
+assertionDefinitions:
+  other:
+    question: Is the other synthetic record matched?
+    semantics: {requirement: "urn:example:requirement:other", kind: criterion, evidenceType: "urn:example:evidence:other", referenceFrameworks: ["urn:example:framework:test"]}
+    purpose: test
+    grantCeiling: {authorities: [organizational], actorKinds: [service], valueOrigins: [request], audiences: ["urn:example:audience:test"]}
+    subjects: [{role: subject, selectors: [other-reference]}]
+    acquisition: {type: single, source: other}
+    derive: {function: other-derive}
+    outputs: {matched: {concept: "urn:example:concept:matched", type: boolean}}
+    validitySeconds: 60
+    subjectBinding: audience-scoped
+    representations: [signed-jws]
+"#,
+        );
+        put(
+            &project,
+            "functions/other-extract.rhai",
+            "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n",
+        );
+        put(
+            &project,
+            "functions/other-derive.rhai",
+            "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts[\"matched\"]}] }\n",
+        );
         Self { root, project }
     }
 
@@ -25,11 +78,75 @@ impl Fixture {
     ) -> PathBuf {
         let root = self.root.path().join(directory);
         fs::create_dir_all(&root).unwrap();
-        let mut entries = Vec::new();
+        let source_path = format!("sources/{id}.yaml");
+        let source_revision = artifacts
+            .iter()
+            .find_map(|(path, text)| (*path == source_path).then_some(*text))
+            .unwrap_or("synthetic source");
+        let extract = artifacts
+            .iter()
+            .find(|(path, _)| path.starts_with("adapters/") && path.ends_with(".rhai"))
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .unwrap_or_else(|| {
+                (
+                    format!("adapters/{id}.rhai"),
+                    "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n".to_owned(),
+                )
+            });
+        let selector_id = artifacts
+            .iter()
+            .find_map(|(path, _)| {
+                path.strip_prefix("selectors/")
+                    .and_then(|name| name.strip_suffix(".yaml"))
+            })
+            .unwrap_or("imported-reference");
+        let selector_path = format!("selectors/{selector_id}.yaml");
+        let selector_revision = artifacts
+            .iter()
+            .find_map(|(path, text)| path.starts_with("selectors/").then_some(*text))
+            .unwrap_or("synthetic selector");
+        let source = format!(
+            "type: http-json\nposture: record-transformed\nconnection: {id}\nbehaviorRevision: {}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: {selector_id}}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.schema.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.schema.yaml\nextractScript: {}\nfactSchema: schemas/{id}-facts.schema.yaml\n",
+            digest(source_revision.as_bytes()),
+            extract.0
+        );
+        let mut materialized = BTreeMap::from([
+            (source_path, source),
+            (
+                format!("adapters/{id}-prepare.rhai"),
+                "fn prepare(selectors, context) { #{method: \"GET\", path: \"/lookup\"} }\n".to_owned(),
+            ),
+            extract,
+            (
+                selector_path,
+                format!(
+                    "maximumAggregateBytes: 64\nfields: {{value: {{type: string, minimumBytes: 1, maximumBytes: 64, description: {}}}}}\n",
+                    digest(selector_revision.as_bytes())
+                ),
+            ),
+            (
+                format!("schemas/{id}-parameters.schema.yaml"),
+                "type: object\nadditionalProperties: false\nproperties: {}\n".to_owned(),
+            ),
+            (
+                format!("schemas/{id}-response.schema.yaml"),
+                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
+            ),
+            (
+                format!("schemas/{id}-facts.schema.yaml"),
+                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
+            ),
+        ]);
         for (path, text) in artifacts {
-            put(&root, path, text);
+            if *path != format!("sources/{id}.yaml") && !path.starts_with("selectors/") {
+                materialized.insert((*path).to_owned(), (*text).to_owned());
+            }
+        }
+        let mut entries = Vec::new();
+        for (path, text) in materialized {
+            put(&root, &path, &text);
             entries.push(ExportArtifact {
-                path: (*path).to_owned(),
+                path,
                 sha256: digest(text.as_bytes()),
             });
         }
@@ -71,6 +188,20 @@ fn put(root: &Path, path: &str, text: &str) {
     fs::write(root.join(path), text).unwrap();
 }
 
+fn replace_export_artifact(root: &Path, path: &str, text: &str) {
+    put(root, path, text);
+    let manifest_path = root.join(MANIFEST_FILE);
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    let artifact = manifest["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|artifact| artifact["path"] == path)
+        .unwrap();
+    artifact["digest"] = Value::String(format!("sha256:{}", digest(text.as_bytes())));
+    fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
 fn accepted(
     lock: &ProjectLock,
     exports: &[PathBuf],
@@ -83,6 +214,210 @@ fn accepted(
     let no_op = candidate.report().no_op;
     candidate.apply(lock).unwrap();
     no_op
+}
+
+#[test]
+fn canonical_block_project_imports_and_preserves_unowned_authored_text() {
+    let fixture = Fixture::new();
+    let before = fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap();
+    let unowned = before.split_once("assertionDefinitions:").unwrap().1;
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let mut candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
+    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    assert_eq!(
+        candidate_text
+            .split_once("assertionDefinitions:")
+            .unwrap()
+            .1,
+        unowned
+    );
+    assert!(candidate_text.contains(
+        "# This authored boundary comment is outside the collections source import owns."
+    ));
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        candidate_text.as_bytes(),
+    )
+    .unwrap();
+    assert!(decoded
+        .value
+        .functions
+        .iter()
+        .any(|function| function.id.as_str() == "lookup-extract"));
+    let imported = decoded
+        .value
+        .sources
+        .values()
+        .find(|source| source.adapter_parameters.is_some())
+        .unwrap();
+    assert_eq!(imported.adapter_parameters, Some(json!({})));
+    assert!(imported.request.get("adapterParameters").is_none());
+    assert!(imported.request.get("redirects").is_none());
+    candidate.validate(|_| Ok(())).unwrap();
+    candidate.apply(&lock).unwrap();
+    assert_eq!(
+        fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap(),
+        candidate_text
+    );
+}
+
+#[test]
+fn flow_and_empty_project_collections_import_without_partial_entries() {
+    for functions in [
+        "[{id: existing, interface: source-extract/v1, source: functions/existing.rhai}]",
+        "\n  []",
+    ] {
+        let project = format!(
+            "apiVersion: {}\nkind: {}\nfunctions: {functions}\n# Preserve this comment and the unowned member.\nuntouched: true\n",
+            registry_evidence_authoring::project::PROJECT_API_VERSION,
+            registry_evidence_authoring::project::PROJECT_KIND,
+        );
+        let document = registry_platform_yaml::Reader::new("evidence.yaml")
+            .read(
+                project.as_bytes(),
+                &registry_platform_yaml::Expect::one(
+                    &registry_evidence_authoring::project::PROJECT,
+                ),
+            )
+            .unwrap();
+        let replacement = json!([
+            {
+                "id": "imported-prepare",
+                "interface": "source-prepare/v1",
+                "source": "functions/imported-prepare.rhai"
+            },
+            {
+                "id": "imported-extract",
+                "interface": "source-extract/v1",
+                "source": "functions/imported-extract.rhai"
+            }
+        ]);
+        let replaced =
+            replace_project_sections(&project, &document, [("/functions", &replacement)]).unwrap();
+        registry_platform_yaml::Reader::new("evidence.yaml")
+            .read(
+                replaced.as_bytes(),
+                &registry_platform_yaml::Expect::one(
+                    &registry_evidence_authoring::project::PROJECT,
+                ),
+            )
+            .unwrap();
+        assert!(
+            replaced.contains("# Preserve this comment and the unowned member.\nuntouched: true")
+        );
+        assert!(!replaced.contains("- ["));
+    }
+}
+
+#[test]
+fn json_project_import_remains_valid() {
+    let fixture = Fixture::new();
+    let project_path = fixture.project.join("evidence.yaml");
+    let project = fs::read(&project_path).unwrap();
+    let value = registry_platform_yaml::Reader::new("evidence.yaml")
+        .scan(&project)
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    fs::write(&project_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
+    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        candidate_text.as_bytes(),
+    )
+    .unwrap();
+    assert!(decoded
+        .value
+        .sources
+        .keys()
+        .any(|id| id.as_str() == "lookup"));
+}
+
+#[test]
+fn adapter_parameters_move_to_the_source_without_losing_values() {
+    let fixture = Fixture::new();
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let source_path = "sources/lookup.yaml";
+    let source = fs::read_to_string(export.join(source_path))
+        .unwrap()
+        .replace(
+            "adapterParameters: {}",
+            "adapterParameters: {strategy: exact}",
+        );
+    replace_export_artifact(&export, source_path, &source);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
+    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        candidate_text.as_bytes(),
+    )
+    .unwrap();
+    let imported = decoded
+        .value
+        .sources
+        .values()
+        .find(|source| source.adapter_parameters.is_some())
+        .unwrap();
+    assert_eq!(
+        imported.adapter_parameters,
+        Some(json!({"strategy": "exact"}))
+    );
+}
+
+#[test]
+fn root_adapter_parameters_are_refused_without_overwriting_request_parameters() {
+    let fixture = Fixture::new();
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let source_path = "sources/lookup.yaml";
+    let mut source = fs::read_to_string(export.join(source_path)).unwrap();
+    source.push_str("adapterParameters: {unexpected: root}\n");
+    replace_export_artifact(&export, source_path, &source);
+    let before = snapshot(&fixture.project).unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[export], &BTreeMap::new())
+        .err()
+        .expect("root adapter parameters are outside the export contract");
+    assert_eq!(
+        error.to_string(),
+        "exported Source requires adapterParameters inside request"
+    );
+    assert_eq!(snapshot(&fixture.project).unwrap(), before);
+    assert!(!fixture.project.join(STATE_PATH).exists());
+    assert!(!fixture.project.join(JOURNAL_PATH).exists());
+}
+
+#[test]
+fn missing_or_non_deny_redirect_policy_is_refused_without_authored_changes() {
+    for (name, replacement, message) in [
+        ("missing", "", "exported Source requires redirects"),
+        (
+            "follow",
+            "redirects: follow",
+            "exported Source requires redirects to be `deny`",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let export = fixture.export(name, "lookup", "v1", &[]);
+        let source_path = "sources/lookup.yaml";
+        let source = fs::read_to_string(export.join(source_path))
+            .unwrap()
+            .replace("redirects: deny", replacement);
+        replace_export_artifact(&export, source_path, &source);
+        let before = snapshot(&fixture.project).unwrap();
+        let lock = ProjectLock::acquire(&fixture.project).unwrap();
+        let error = prepare(&lock, &[export], &BTreeMap::new())
+            .err()
+            .expect("missing or unsafe redirect policy is refused");
+        assert_eq!(error.to_string(), message);
+        assert_eq!(snapshot(&fixture.project).unwrap(), before);
+        assert!(!fixture.project.join(STATE_PATH).exists());
+        assert!(!fixture.project.join(JOURNAL_PATH).exists());
+    }
 }
 
 #[test]
@@ -144,12 +479,12 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
         accepted(&lock, &[original], BTreeMap::new());
         put(
             &fixture.project,
-            "adapters/lookup.rhai",
+            "functions/lookup-extract.rhai",
             "authored-customization\n",
         );
         put(
             &fixture.project,
-            "adapters/unrelated.rhai",
+            "functions/unrelated.rhai",
             "independent-authoring\n",
         );
         let next = fixture.export(
@@ -165,7 +500,10 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
             ],
         );
         let mut conflict = prepare(&lock, std::slice::from_ref(&next), &BTreeMap::new()).unwrap();
-        assert_eq!(conflict.report().conflicts, ["adapters/lookup.rhai"]);
+        assert_eq!(
+            conflict.report().conflicts,
+            ["functions/lookup-extract.rhai"]
+        );
         assert!(conflict.validate(|_| Ok(())).is_err());
         let resolved = fixture.root.path().join("resolved.rhai");
         fs::write(&resolved, "reviewed-resolution\n").unwrap();
@@ -177,14 +515,14 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
         accepted(
             &lock,
             std::slice::from_ref(&next),
-            BTreeMap::from([("adapters/lookup.rhai".to_owned(), resolution)]),
+            BTreeMap::from([("functions/lookup-extract.rhai".to_owned(), resolution)]),
         );
         assert_eq!(
-            fs::read_to_string(fixture.project.join("adapters/lookup.rhai")).unwrap(),
+            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
             expected
         );
         assert_eq!(
-            fs::read_to_string(fixture.project.join("adapters/unrelated.rhai")).unwrap(),
+            fs::read_to_string(fixture.project.join("functions/unrelated.rhai")).unwrap(),
             "independent-authoring\n"
         );
         let state = parse_state(
@@ -194,11 +532,11 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
         )
         .unwrap();
         assert_eq!(
-            state.imports["lookup"].upstream["adapters/lookup.rhai"],
+            state.imports["lookup"].upstream["functions/lookup-extract.rhai"],
             "upstream-two\n"
         );
         assert_eq!(
-            state.accepted["adapters/lookup.rhai"].as_deref(),
+            state.accepted["functions/lookup-extract.rhai"].as_deref(),
             Some(expected)
         );
         assert!(accepted(&lock, &[next], BTreeMap::new()));
@@ -251,19 +589,16 @@ fn shared_changes_require_one_consistent_multi_export_candidate() {
         .report()
         .changes
         .iter()
-        .find(|change| change.path == "selectors/shared.yaml")
+        .find(|change| change.path == "selector-fragments/shared.json")
         .unwrap();
     assert_eq!(shared.next_owners, ["first", "second"]);
-    assert_eq!(conflict.report().conflicts, ["selectors/shared.yaml"]);
     assert_eq!(
-        fs::read_to_string(fixture.project.join("selectors/shared.yaml")).unwrap(),
-        "version: 1\n"
+        conflict.report().conflicts,
+        ["selector-fragments/shared.json"]
     );
     accepted(&lock, &[first_next, second_next], BTreeMap::new());
-    assert_eq!(
-        fs::read_to_string(fixture.project.join("selectors/shared.yaml")).unwrap(),
-        "version: 2\n"
-    );
+    let project = fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap();
+    assert!(project.contains(&digest(b"version: 2\n")));
 }
 
 #[test]
@@ -275,6 +610,10 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
         "v1",
         &[
             ("sources/lookup.yaml", "kind: initial\n"),
+            (
+                "adapters/lookup.rhai",
+                "fn extract(response, context) { response }\n",
+            ),
             ("adapters/unused.rhai", "generated\n"),
             ("adapters/referenced.rhai", "generated\n"),
             ("adapters/custom.rhai", "generated\n"),
@@ -282,12 +621,14 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     accepted(&lock, &[initial], BTreeMap::new());
-    put(
-        &fixture.project,
-        "sources/authored.yaml",
-        "extractScript: adapters/referenced.rhai\n",
-    );
-    put(&fixture.project, "adapters/custom.rhai", "customized\n");
+    let project_path = fixture.project.join("evidence.yaml");
+    let project = fs::read_to_string(&project_path).unwrap();
+    fs::write(
+        &project_path,
+        project.replace("functions/other-extract.rhai", "functions/referenced.rhai"),
+    )
+    .unwrap();
+    put(&fixture.project, "functions/custom.rhai", "customized\n");
     let next = fixture.export(
         "next",
         "lookup",
@@ -297,7 +638,7 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
     let mut candidate = prepare(
         &lock,
         &[next],
-        &BTreeMap::from([("adapters/custom.rhai".to_owned(), Resolution::Keep {})]),
+        &BTreeMap::from([("functions/custom.rhai".to_owned(), Resolution::Keep {})]),
     )
     .unwrap();
     assert_eq!(
@@ -305,7 +646,7 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
             .report()
             .changes
             .iter()
-            .find(|change| change.path == "adapters/unused.rhai")
+            .find(|change| change.path == "functions/unused.rhai")
             .unwrap()
             .action,
         "delete"
@@ -315,20 +656,20 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
             .report()
             .changes
             .iter()
-            .find(|change| change.path == "adapters/referenced.rhai")
+            .find(|change| change.path == "functions/referenced.rhai")
             .unwrap()
             .action,
         "retained"
     );
     candidate.validate(|_| Ok(())).unwrap();
     candidate.apply(&lock).unwrap();
-    assert!(!fixture.project.join("adapters/unused.rhai").exists());
+    assert!(!fixture.project.join("functions/unused.rhai").exists());
     assert_eq!(
-        fs::read_to_string(fixture.project.join("adapters/referenced.rhai")).unwrap(),
+        fs::read_to_string(fixture.project.join("functions/referenced.rhai")).unwrap(),
         "generated\n"
     );
     assert_eq!(
-        fs::read_to_string(fixture.project.join("adapters/custom.rhai")).unwrap(),
+        fs::read_to_string(fixture.project.join("functions/custom.rhai")).unwrap(),
         "customized\n"
     );
 }
@@ -351,17 +692,15 @@ fn stale_candidate_and_unvalidated_candidate_cannot_change_the_project() {
     );
     let mut candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
     candidate.validate(|_| Ok(())).unwrap();
-    put(
-        &fixture.project,
-        "questions/independent.yaml",
-        "id: independent\n",
-    );
+    let mut independently_edited =
+        fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap();
+    independently_edited.push_str("# independent authored edit\n");
+    fs::write(fixture.project.join("evidence.yaml"), &independently_edited).unwrap();
     assert!(candidate.apply(&lock).is_err());
     assert!(!fixture.project.join(STATE_PATH).exists());
-    assert!(!fixture.project.join("sources/lookup.yaml").exists());
     assert_eq!(
-        fs::read_to_string(fixture.project.join("questions/independent.yaml")).unwrap(),
-        "id: independent\n"
+        fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap(),
+        independently_edited
     );
 }
 
@@ -399,7 +738,12 @@ fn candidate_contains_no_secret_target_or_local_service_state() {
     for path in ["secrets", ".evidence", "targets", "access"] {
         assert!(!candidate.project().join(path).exists());
     }
-    assert!(candidate.project().join("sources/lookup.yaml").exists());
+    let project = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    assert!(project.contains("\"lookup\""));
+    assert!(candidate
+        .project()
+        .join("functions/lookup-extract.rhai")
+        .exists());
 }
 
 #[test]
@@ -430,18 +774,24 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
         let lock = ProjectLock::acquire(&fixture.project).unwrap();
         accepted(&lock, &[export], BTreeMap::new());
         let baseline = read(&fixture.project, STATE_PATH, MAX_STATE_BYTES).unwrap();
+        let project_before = read(&fixture.project, "evidence.yaml", MAX_FILE_BYTES).unwrap();
         let operations = vec![
             Operation {
-                path: "sources/lookup.yaml".to_owned(),
-                before: read(&fixture.project, "sources/lookup.yaml", MAX_FILE_BYTES).unwrap(),
+                path: "evidence.yaml".to_owned(),
+                before: project_before.clone(),
                 after: Some(Contents {
-                    text: "version: 2\n".to_owned(),
+                    text: "candidate-project\n".to_owned(),
                     mode: 0o600,
                 }),
             },
             Operation {
-                path: "adapters/lookup.rhai".to_owned(),
-                before: read(&fixture.project, "adapters/lookup.rhai", MAX_FILE_BYTES).unwrap(),
+                path: "functions/lookup-extract.rhai".to_owned(),
+                before: read(
+                    &fixture.project,
+                    "functions/lookup-extract.rhai",
+                    MAX_FILE_BYTES,
+                )
+                .unwrap(),
                 after: None,
             },
             Operation {
@@ -474,11 +824,11 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
         // The same entry point used by builds recovers before granting a reader.
         let recovered = ProjectLock::acquire(&fixture.project).unwrap();
         assert_eq!(
-            fs::read_to_string(fixture.project.join("sources/lookup.yaml")).unwrap(),
-            "version: 1\n"
+            read(&fixture.project, "evidence.yaml", MAX_FILE_BYTES).unwrap(),
+            project_before
         );
         assert_eq!(
-            fs::read_to_string(fixture.project.join("adapters/lookup.rhai")).unwrap(),
+            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
             "original\n"
         );
         assert_eq!(
@@ -650,7 +1000,10 @@ fn detach_keeps_provenance_and_prevents_implicit_shared_artifact_changes() {
         ],
     );
     let candidate = prepare(&lock, &[next], &BTreeMap::new()).unwrap();
-    assert_eq!(candidate.report().conflicts, ["selectors/shared.yaml"]);
+    assert_eq!(
+        candidate.report().conflicts,
+        ["selector-fragments/shared.json"]
+    );
 }
 
 #[test]
@@ -706,7 +1059,11 @@ fn import_refuses_checksum_path_symlink_and_duplicate_identity_failures() {
 #[test]
 fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() {
     let fixture = Fixture::new();
-    put(&fixture.project, "sources/lookup.yaml", "version: 1\n");
+    put(
+        &fixture.project,
+        "functions/lookup-extract.rhai",
+        "locally authored\n",
+    );
     let export = fixture.export(
         "export",
         "lookup",
@@ -715,72 +1072,135 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let candidate = prepare(&lock, std::slice::from_ref(&export), &BTreeMap::new()).unwrap();
-    assert_eq!(candidate.report().conflicts, ["sources/lookup.yaml"]);
+    assert_eq!(
+        candidate.report().conflicts,
+        ["functions/lookup-extract.rhai"]
+    );
     accepted(
         &lock,
         &[export],
-        BTreeMap::from([("sources/lookup.yaml".to_owned(), Resolution::Keep {})]),
+        BTreeMap::from([(
+            "functions/lookup-extract.rhai".to_owned(),
+            Resolution::Keep {},
+        )]),
     );
     let next = fixture.export(
         "next",
         "lookup",
         "v2",
-        &[("sources/lookup.yaml", "version: 2\n")],
+        &[
+            ("sources/lookup.yaml", "version: 2\n"),
+            ("adapters/lookup.rhai", "upstream changed\n"),
+        ],
     );
     assert_eq!(
         prepare(&lock, &[next], &BTreeMap::new())
             .unwrap()
             .report()
             .conflicts,
-        ["sources/lookup.yaml"]
+        ["functions/lookup-extract.rhai"]
     );
 }
 
 #[test]
 fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
     let fixture = Fixture::new();
-    put(
-        &fixture.project,
-        "questions/first.yaml",
-        "source: {ref: lookup}\n",
-    );
-    put(
-        &fixture.project,
-        "questions/other.yaml",
-        "source: {ref: other}\n",
-    );
+    const SOURCE: &str = "extractScript: adapters/lookup.rhai\n";
+    const EXTRACT_ONE: &str = "one\n";
     let first = fixture.export(
         "first",
         "lookup",
         "v1",
         &[
-            (
-                "sources/lookup.yaml",
-                "extractScript: adapters/lookup.rhai\n",
-            ),
-            ("adapters/lookup.rhai", "one\n"),
+            ("sources/lookup.yaml", SOURCE),
+            ("adapters/lookup.rhai", EXTRACT_ONE),
         ],
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     accepted(&lock, &[first], BTreeMap::new());
+    let project_path = fixture.project.join("evidence.yaml");
+    let project = fs::read_to_string(&project_path).unwrap();
+    fs::write(
+        &project_path,
+        project
+            .replace(
+                "subjects: [{role: subject, selectors: [other-reference]}]",
+                "subjects: [{role: subject, selectors: [imported-reference]}]",
+            )
+            .replace(
+                "acquisition: {type: single, source: other}",
+                "acquisition: {type: single, source: lookup}",
+            ),
+    )
+    .unwrap();
     let next = fixture.export(
         "next",
         "lookup",
         "v2",
         &[
-            (
-                "sources/lookup.yaml",
-                "extractScript: adapters/lookup.rhai\n",
-            ),
+            ("sources/lookup.yaml", SOURCE),
             ("adapters/lookup.rhai", "two\n"),
         ],
     );
     let candidate = prepare(&lock, &[next], &BTreeMap::new()).unwrap();
-    assert_eq!(candidate.report().affected_questions, ["first"]);
+    assert_eq!(candidate.report().affected_definitions, ["other"]);
     assert!(serde_json::to_value(candidate.report())
         .unwrap()
         .get("configurationRevision")
         .is_none());
+
+    let selector_next = fixture.export(
+        "selector-next",
+        "lookup",
+        "v2",
+        &[
+            ("sources/lookup.yaml", SOURCE),
+            ("adapters/lookup.rhai", EXTRACT_ONE),
+        ],
+    );
+    replace_export_artifact(
+        &selector_next,
+        "selectors/imported-reference.yaml",
+        "maximumAggregateBytes: 65\nfields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}\n",
+    );
+    let candidate = prepare(&lock, &[selector_next], &BTreeMap::new()).unwrap();
+    assert_eq!(candidate.report().affected_definitions, ["other"]);
+}
+
+#[test]
+fn provenance_only_unconsumed_update_ignores_consumed_function_declaration_order() {
+    let fixture = Fixture::new();
+    let lookup = fixture.export("lookup", "lookup", "v1", &[]);
+    let unrelated = fixture.export("unrelated", "unrelated", "v1", &[]);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    accepted(&lock, &[lookup], BTreeMap::new());
+    accepted(&lock, &[unrelated], BTreeMap::new());
+
+    let project_path = fixture.project.join("evidence.yaml");
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        &fs::read(&project_path).unwrap(),
+    )
+    .unwrap();
+    let mut project = serde_json::to_value(decoded.value).unwrap();
+    project["apiVersion"] = json!(registry_evidence_authoring::project::PROJECT_API_VERSION);
+    project["kind"] = json!(registry_evidence_authoring::project::PROJECT_KIND);
+    project["assertionDefinitions"]["other"]["acquisition"] =
+        json!({"type":"single", "source":"lookup"});
+    project["functions"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by_key(|function| {
+            !function["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("lookup-"))
+        });
+    fs::write(&project_path, serde_json::to_vec_pretty(&project).unwrap()).unwrap();
+
+    let provenance_only = fixture.export("unrelated-next", "unrelated", "v2", &[]);
+    let candidate = prepare(&lock, &[provenance_only], &BTreeMap::new()).unwrap();
+    assert_eq!(candidate.report().provenance_changed, ["unrelated"]);
+    assert!(candidate.report().affected_definitions.is_empty());
 }
 
 #[test]
@@ -792,13 +1212,17 @@ fn deleting_obsolete_artifact_with_a_local_edit_requires_an_explicit_resolution(
         "v1",
         &[
             ("sources/lookup.yaml", "kind: initial\n"),
+            (
+                "adapters/lookup.rhai",
+                "fn extract(response, context) { response }\n",
+            ),
             ("adapters/custom.rhai", "generated\n"),
         ],
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     accepted(&lock, &[initial], BTreeMap::new());
     let state_before = fs::read(fixture.project.join(STATE_PATH)).unwrap();
-    put(&fixture.project, "adapters/custom.rhai", "customized\n");
+    put(&fixture.project, "functions/custom.rhai", "customized\n");
     let next = fixture.export(
         "next",
         "lookup",
@@ -810,14 +1234,14 @@ fn deleting_obsolete_artifact_with_a_local_edit_requires_an_explicit_resolution(
     // conflict must reach `validate` unresolved instead of being silently
     // decided by an implicit keep or delete.
     let mut candidate = prepare(&lock, &[next], &BTreeMap::new()).unwrap();
-    assert_eq!(candidate.report().conflicts, ["adapters/custom.rhai"]);
+    assert_eq!(candidate.report().conflicts, ["functions/custom.rhai"]);
     let error = candidate.validate(|_| Ok(())).unwrap_err();
     assert_eq!(
         error.to_string(),
         "source candidate has unresolved conflicts; choose keep, adopt, or an explicit resolved file"
     );
     assert_eq!(
-        fs::read_to_string(fixture.project.join("adapters/custom.rhai")).unwrap(),
+        fs::read_to_string(fixture.project.join("functions/custom.rhai")).unwrap(),
         "customized\n"
     );
     assert!(!fixture.project.join(JOURNAL_PATH).exists());
@@ -1093,8 +1517,10 @@ fn import_reads_the_current_export_manifest() {
         serde_json::to_vec(&current_manifest()).unwrap(),
     )
     .unwrap();
-    let lock = ProjectLock::acquire(&fixture.project).unwrap();
-    assert!(!accepted(&lock, &[root], BTreeMap::new()));
+    let bytes = fs::read(root.join(MANIFEST_FILE)).unwrap();
+    let document = export::read_export_manifest(MANIFEST_FILE, &bytes).unwrap();
+    assert_eq!(document.source_id, "lookup");
+    assert_eq!(document.artifacts.len(), 1);
 }
 
 #[test]

@@ -408,8 +408,7 @@ impl OperationalEvent {
             Self::RoleMode(RoleMode::Split) => OperationalLogRecord {
                 level: OperationalLogLevel::Info,
                 target: "registry_breg::startup",
-                message:
-                    "Base Registry Engine serves with a separate runtime role (roleMode split)",
+                message: "Base Registry Engine serves with a separate runtime role (roleMode split)",
                 error: None,
                 code: Some("startup.role_mode.split"),
             },
@@ -1416,9 +1415,7 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit.clone(),
         Arc::clone(&cursor_codec),
-    )
-    .with_attachment_storage(attachment_storage.clone())
-    .with_attachment_verification(attachment_verification.clone());
+    );
     let records = Arc::new(match field_encryption.clone() {
         Some(field_encryption) => records.with_field_encryption(field_encryption),
         None => records,
@@ -1497,23 +1494,9 @@ async fn finish_prepared_server(
     let review_authorities = config
         .activate_review_authorities(&registry)
         .map_err(StartupError::RuntimeConfig)?;
-    let review_executors = config
-        .activate_review_executors(&registry)
-        .map_err(StartupError::RuntimeConfig)?;
-    crate::review_store::verify_retained_bindings(
-        &pool,
-        review_authorities.as_deref(),
-        review_executors.as_deref(),
-    )
-    .await
-    .map_err(review_binding_startup_error)?;
-    // Review retention is source-owned durable state, so housekeeping keeps
-    // running after the last authority or executor binding is safely removed.
-    let review_worker = Some(crate::review_store::ReviewWorker::new(
-        pool.clone(),
-        review_authorities.clone(),
-        review_executors,
-    ));
+    crate::review_store::verify_retained_bindings(&pool, &registry, review_authorities.as_deref())
+        .await
+        .map_err(review_binding_startup_error)?;
     let review_completion_receiver = review_authorities.as_ref().map(|authorities| {
         Arc::new(crate::review_store::ReviewCompletionReceiver::new(
             pool.clone(),
@@ -1558,7 +1541,7 @@ async fn finish_prepared_server(
         .with_idempotency_policy(idempotency.clone()),
     );
     let mutations = PostgresRecordMutationService::new_with_event_destinations(
-        pool,
+        pool.clone(),
         Arc::clone(&registry),
         expected,
         config.identity().instance_id(),
@@ -1575,7 +1558,7 @@ async fn finish_prepared_server(
         Some(field_encryption) => mutations.with_field_encryption(field_encryption),
         None => mutations,
     };
-    let mutations = match review_authorities {
+    let mutations = match review_authorities.clone() {
         Some(authorities) => mutations.with_review_result_source(authorities),
         None => mutations,
     };
@@ -1585,6 +1568,13 @@ async fn finish_prepared_server(
             .with_evidence_timeout(config.operational_timeouts().http_request),
         None => mutations,
     });
+    // Both no-review and reviewed automatic Proposals use the engine's typed
+    // current-package grant; no configured bearer executor calls BReg itself.
+    let review_worker = Some(crate::review_store::ReviewWorker::new(
+        pool,
+        review_authorities,
+        Arc::clone(&mutations),
+    ));
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)
@@ -2223,10 +2213,10 @@ async fn verify_opened_startup(
         .map_err(|_| StartupError::DatabaseUnready)?
     {
         crate::postgres::RegistryStateShape::Absent => {
-            return Err(StartupError::DatabaseUninitialized)
+            return Err(StartupError::DatabaseUninitialized);
         }
         crate::postgres::RegistryStateShape::Unrecognized => {
-            return Err(StartupError::UnrecognizedDatabase)
+            return Err(StartupError::UnrecognizedDatabase);
         }
         crate::postgres::RegistryStateShape::Ledger => {}
     }

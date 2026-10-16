@@ -31,8 +31,8 @@ class StatisticsTests(unittest.TestCase):
         self.requests = []
         requests = self.requests
         self.metadata_document = {
-            "id": "fixture-registry", "version": "1", "metadataVersion": "1",
-            "revision": "sha256:" + "a" * 64, "entities": [], "operations": [],
+            "id": "fixture-registry", "version": "1", "metadataVersion": "2",
+            "revision": "sha256:" + "a" * 64, "recordTypes": [], "operations": [],
         }
         metadata_document = self.metadata_document
 

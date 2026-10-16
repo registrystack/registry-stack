@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 from pathlib import Path
 
 
@@ -22,7 +23,17 @@ EXTRA_PACKAGES = (
 
 
 def package_roots() -> list[Path]:
-    roots = {path.parent for path in EVIDENCE_ROOT.rglob("evidence.yaml")}
+    # Authored projects share the canonical filename with compiled bundles.
+    # Only compiled EvidenceBundle roots carry a package checksum envelope.
+    bundle_header = re.compile(
+        r"(?m)^[ \t]*(?:kind|\"kind\"|'kind')[ \t]*:[ \t]*"
+        r"(?:EvidenceBundle|\"EvidenceBundle\"|'EvidenceBundle')[ \t]*(?:#.*)?$"
+    )
+    roots = {
+        path.parent
+        for path in EVIDENCE_ROOT.rglob("evidence.yaml")
+        if bundle_header.search(path.read_text())
+    }
     roots.update(path for path in EXTRA_PACKAGES if (path / "evidence.yaml").is_file())
     return sorted(roots)
 

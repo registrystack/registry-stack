@@ -1068,7 +1068,7 @@ fn ungrouped_recipient_source() -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_selector() {
     let mut selector = ungrouped_recipient_source();
-    selector["entities"][consent_fixture::CONSENT_RECORD]["selectorProfiles"] =
+    selector["recordTypes"][consent_fixture::CONSENT_RECORD]["selectorProfiles"] =
         json!([{"id": "recipient", "fields": ["recipient"]}]);
     selector["accessProfiles"]
         .as_array_mut()
@@ -1076,8 +1076,8 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
         .push(json!({
             "id": "recipient-lookup", "principalClaim": "principal", "actorKind": "service",
             "requesterClients": [BETA_CLIENT], "requiredScopes": ["consent:read"],
-            "permissions": {"entities": [{
-                "entity": "consent-decision", "operations": ["lookup"],
+            "permissions": {"records": [{
+                "recordType": "consent-decision", "operations": ["lookup"],
                 "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
                 "lookups": [{
                     "selector": "recipient", "valueOrigin": "verified-claim",
@@ -1096,7 +1096,7 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
             .collect::<Vec<_>>(),
         [(
             "breg.consent.feed-claim",
-            "entities[id=consent-decision].accessProfiles[id=recipient-lookup].lookups[selector=recipient].claimMapping"
+            "recordTypes[id=consent-decision].accessProfiles[id=recipient-lookup].lookups[selector=recipient].claimMapping"
         )]
     );
 
@@ -1436,12 +1436,21 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // the compiler-applicable plan removes the complete predecessor policy set
     // before retiring its consent helper.
     let mut gated = consent_fixture::source();
-    gated["accessProfiles"][0]["permissions"]["entities"]
+    // Isolate the read-policy and consent-helper DDL from Action contract
+    // revisions, whose native migration policy requires separate review.
+    gated.as_object_mut().unwrap().remove("actions");
+    for profile in gated["accessProfiles"].as_array_mut().unwrap() {
+        profile["permissions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("actions");
+    }
+    gated["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
-        .retain(|permission| permission["entity"] != "household");
+        .retain(|permission| permission["recordType"] != "household");
     let mut base = gated.clone();
-    for permission in base["accessProfiles"][0]["permissions"]["entities"]
+    for permission in base["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
@@ -1451,7 +1460,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // former id is retired, since codes are append-only.
     let mut removed = gated.clone();
     removed["accessProfiles"][0]["id"] = json!("food-targeting-open");
-    for permission in removed["accessProfiles"][0]["permissions"]["entities"]
+    for permission in removed["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
@@ -1459,7 +1468,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     }
     removed["retiredConsentScopes"] = json!(["food-targeting-2025", "food-targeting"]);
     let mut changed = gated.clone();
-    let record = changed["entities"]
+    let record = changed["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -1596,6 +1605,182 @@ async fn real_postgres_consent_gated_list_latency_budget() {
     h.database.cleanup().await;
 }
 
+/// Current consent applies independently to the subjects in the before and
+/// proposed after snapshots, even while the stored row remains visible.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn frozen_review_changes_require_current_consent_for_each_snapshot_subject() {
+    let mut source = consent_fixture::source();
+    let targets = json!([
+        {"recordType":"enrolment","rowBoundaries":"unrestricted"},
+        {"recordType":"person","rowBoundaries":"unrestricted"}
+    ]);
+    source["actions"].as_array_mut().unwrap().push(json!({
+        "id":"reassign-enrolment",
+        "execution":{"mode":"proposal","proposal":{
+            "review":{"type":"none"},"application":{"mode":"manual"},
+            "retention":{"mode":"retain"},
+            "reviewContext":{"id":"reassignment","fields":{
+                "changes":{"type":"changes","recordType":"enrolment","fields":["programme"]}
+            }}
+        }},
+        "inputs":[
+            {"id":"enrolment","type":"reference","target":"enrolment","required":true,"classification":"restricted"},
+            {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
+        ],
+        "plan":{"type":"fixed","effects":[{
+            "id":"reassignment","target":{"fromInput":"enrolment"},"operation":"patch",
+            "set":{"person":{"fromInput":"person"},"programme":{"value":"proposed-programme-canary"}}
+        }]}
+    }));
+    let profiles = source["accessProfiles"].as_array_mut().unwrap();
+    let steward = profiles
+        .iter_mut()
+        .find(|profile| profile["id"] == "steward")
+        .unwrap();
+    steward["permissions"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "action":"reassign-enrolment","operations":["start"],"targets":targets
+        }));
+    steward["permissions"]["proposals"] = json!([{
+        "action":"reassign-enrolment","operations":["get","submit"],"ownership":"caller","targets":targets
+    }]);
+    let reviewer = profiles
+        .iter_mut()
+        .find(|profile| profile["id"] == SCOPE)
+        .unwrap();
+    reviewer["permissions"]["proposals"] = json!([{
+        "action":"reassign-enrolment","operations":["get-review-context"],
+        "readableContextFields":["changes"],"targets":targets
+    }]);
+    for operation in ["get", "edit", "submit", "apply"] {
+        let mut invalid = source.clone();
+        let reviewer = invalid["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|profile| profile["id"] == SCOPE)
+            .unwrap();
+        reviewer["permissions"]["proposals"][0]["operations"] =
+            json!(["get-review-context", operation]);
+        assert!(
+            consent_fixture::refusal_codes(&invalid)
+                .iter()
+                .any(|code| code == "breg.consent.require-read-only"),
+            "consent disclosure must not admit lifecycle operation {operation}"
+        );
+    }
+    let h = Harness::start_with(&source).await;
+    let alice = h.person("Alice").await;
+    let bob = h.person("Bob").await;
+    let enrolment = h
+        .create(
+            "enrolments",
+            json!({"person":alice,"programme":"stored-programme-canary"}),
+        )
+        .await;
+    let (status, draft, etag) = send_conditioned(
+        &h.app,
+        Method::POST,
+        "/v1/actions/reassign-enrolment/proposals?accessProfile=steward",
+        json!({"input":{"enrolment":enrolment,"person":bob}}),
+        Some("consent-proposal-start"),
+        &h.steward(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (status, submitted, _) = send_conditioned(
+        &h.app,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=steward"),
+        json!({}),
+        Some("consent-proposal-submit"),
+        &h.steward(),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    let path = format!("/v1/proposals/{id}/review-context?accessProfile={SCOPE}");
+    let reader = h.reader(WFP_CLIENT, PURPOSE);
+    h.decide(decision(&alice, "wfp", "given")).await;
+    let record_path = format!("/v1/records/enrolments/{enrolment}?accessProfile={SCOPE}");
+    let (status, row) = send(
+        &h.app,
+        Method::GET,
+        &record_path,
+        Value::Null,
+        None,
+        &reader,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the current subject has consent: {row}"
+    );
+    let (status, hidden) = send(&h.app, Method::GET, &path, Value::Null, None, &reader).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the proposed subject has no consent: {hidden}"
+    );
+    assert!(!hidden.to_string().contains("programme-canary"));
+    h.decide(decision(&bob, "wfp", "given")).await;
+    let (status, shown) = send(&h.app, Method::GET, &path, Value::Null, None, &reader).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "both snapshot subjects have current consent: {shown}"
+    );
+    let changes = &shown["context"]["fields"]["changes"];
+    assert_eq!(
+        changes[0]["before"],
+        json!({"programme":"stored-programme-canary"})
+    );
+    assert_eq!(
+        changes[0]["after"],
+        json!({"programme":"proposed-programme-canary"})
+    );
+    assert_eq!(changes[0]["recordId"], enrolment);
+    assert_eq!(
+        shown["subject"]["version"],
+        submitted["submissionVersion"].to_string()
+    );
+    let mut withdrawal = decision(&bob, "wfp", "withdrawn");
+    withdrawal.from = time::Duration::minutes(-30);
+    h.decide(withdrawal).await;
+    let (status, hidden) = send(&h.app, Method::GET, &path, Value::Null, None, &reader).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "revoked after-subject consent conceals the frozen changes: {hidden}"
+    );
+    assert!(!hidden.to_string().contains("programme-canary"));
+    let (status, row) = send(
+        &h.app,
+        Method::GET,
+        &record_path,
+        Value::Null,
+        None,
+        &reader,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the unchanged current row remains visible: {row}"
+    );
+    assert_eq!(row["data"]["domainData"]["person"], alice);
+    assert_eq!(
+        row["data"]["domainData"]["programme"],
+        "stored-programme-canary"
+    );
+    h.database.cleanup().await;
+}
+
 async fn send(
     app: &axum::Router,
     method: Method,
@@ -1604,6 +1789,20 @@ async fn send(
     idempotency_key: Option<&str>,
     token: &str,
 ) -> (StatusCode, Value) {
+    let (status, body, _) =
+        send_conditioned(app, method, uri, body, idempotency_key, token, None).await;
+    (status, body)
+}
+
+async fn send_conditioned(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+    idempotency_key: Option<&str>,
+    token: &str,
+    condition: Option<&str>,
+) -> (StatusCode, Value, Option<String>) {
     let mut request = Request::builder()
         .method(method)
         .uri(uri)
@@ -1611,6 +1810,9 @@ async fn send(
         .header("authorization", format!("Bearer {token}"));
     if let Some(key) = idempotency_key {
         request = request.header("idempotency-key", key);
+    }
+    if let Some(condition) = condition {
+        request = request.header("if-match", condition);
     }
     let request = request
         .body(if body.is_null() {
@@ -1621,6 +1823,10 @@ async fn send(
         .unwrap();
     let response = app.clone().call(request).await.unwrap();
     let status = response.status();
+    let etag = response
+        .headers()
+        .get("etag")
+        .map(|value| value.to_str().unwrap().to_owned());
     let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
         .await
         .unwrap();
@@ -1629,5 +1835,5 @@ async fn send(
     } else {
         serde_json::from_slice(&bytes).unwrap()
     };
-    (status, body)
+    (status, body, etag)
 }

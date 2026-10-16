@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+# Synthetic local callers. `bregctl dev` creates their keys and short-lived tokens.
+clients:
+  - id: editor
+    accessProfiles: [directory-editor]
+    scopes: [registry:directory:write]
+    claims:
+      registry_principal: synthetic-directory-editor
+      registry_purpose: directory-administration
+      jurisdiction: zone-a
+  - id: foreign-editor
+    accessProfiles: [directory-editor]
+    scopes: [registry:directory:write]
+    claims:
+      registry_principal: synthetic-foreign-editor
+      registry_purpose: directory-administration
+      jurisdiction: zone-b
+    testBindings:
+      - journeyId: directory-contact
+        stepId: conceal-contact-outside-jurisdiction

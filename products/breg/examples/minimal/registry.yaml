@@ -1,67 +1,44 @@
-# The smallest project that sets every member the configuration conformance
-# corpus mutates. `bregctl check` reports no diagnostic on it, so a corpus
-# case's diagnostics are the case's own.
+# Deployment supplies PostgreSQL and authentication through the ordinary target.
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project:
-  id: minimal
-  canonicalBaseIri: https://registry.example.com
+  id: local-directory
+  canonicalBaseIri: https://directory.example.gov
   version: 0.1.0
   defaultLanguage: en
+  display:
+    label: Local directory
+    description: A small registry maintained through generated CRUD.
+
 package:
-  sourceRevision: minimal-example-1
-manifestProjection:
-  accessProfile: record-reader
-  classificationCeiling: internal
-  catalog:
-    baseUrl: https://registry.example.com
-    title: Minimal example
-    description: Metadata for the minimal example registry.
-    publisher: {id: minimal-authority, name: Example institution}
-  publicService: {id: minimal-service, title: Minimal example}
-  datasets:
-    - {id: minimal, title: Minimal records, owner: Example institution, status: active}
-  dataServices:
-    - id: minimal-data-service
-      title: Minimal example
-      endpointUrl: https://registry.example.com
-      servesDatasets: [minimal]
-  distributions: []
-modules:
-  - id: minimal-core
-    version: 0.1.0
-    digest: "sha256:55913ccbdb8c61e85d7d15291cb2040550bb20a9dafa2b736c2089c0ece12ebb"
-entities:
-  - id: record
-    primaryDataset: minimal
-    route: records
+  sourceRevision: local-directory-0.1.0
+
+datasets:
+  - id: directory
+    display: {label: Directory, description: Institutional contact records.}
+
+recordTypes:
+  - id: contact
+    route: contacts
+    primaryDataset: directory
     mutationMode: mutable
-    classification: internal
-    batch:
-      maximumItems: 4
-      maximumBytes: 16384
+    display: {label: Contact, description: A named institutional contact.}
     fields:
-      - {id: code, type: string, required: true, maximumLength: 32, classification: internal}
-      - {id: district, type: string, required: true, maximumLength: 32, classification: internal}
-    indexes:
-      - {id: by-code, fields: [code]}
-      - {id: by-district, fields: [district]}
-    accessRequirements:
-      requiredScopes: [record:read]
-      allowedPurposes: [record-administration]
-      rowBoundaries:
-        - {field: district, claim: assigned_districts, operator: in}
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+
 accessProfiles:
-  - id: record-reader
+  - id: directory-editor
     default: true
     principalClaim: registry_principal
-    requiredScopes: [record:read]
-    requiredPurposes: [record-administration]
+    requiredScopes: ["registry:directory:write"]
+    requiredPurposes: [directory-administration]
     permissions:
-      entities:
-        - entity: record
-          operations: [get, list]
-          readableFields: [code, district]
-          filterableFields: [code, district]
+      records:
+        - recordType: contact
+          operations: [create, get, list, patch]
+          readableFields: [name, email, jurisdiction]
+          writableFields: [name, email, jurisdiction]
           rowBoundaries:
-            - {field: district, claim: assigned_districts, operator: in}
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}

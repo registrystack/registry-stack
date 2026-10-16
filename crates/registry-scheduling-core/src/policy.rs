@@ -577,7 +577,9 @@ pub const APPOINTMENT_CONFIRMED_TRIGGER: &str = "appointment.confirmed";
 pub const APPOINTMENT_RESCHEDULED_TRIGGER: &str = "appointment.rescheduled";
 pub const APPOINTMENT_CANCELLED_TRIGGER: &str = "appointment.cancelled";
 
-const APPOINTMENT_OBSERVER_FIELDS: &[&str] = &[
+/// The closed projection `appointment.confirmed` and `appointment.rescheduled`
+/// publish to an observer, shared by the authoring check and the runtime.
+pub const APPOINTMENT_OBSERVER_FIELDS: &[&str] = &[
     "appointmentId",
     "end",
     "offering",
@@ -586,7 +588,8 @@ const APPOINTMENT_OBSERVER_FIELDS: &[&str] = &[
     "start",
     "state",
 ];
-const CANCELLATION_OBSERVER_FIELDS: &[&str] = &["appointmentId", "revision", "state"];
+/// The closed projection `appointment.cancelled` publishes to an observer.
+pub const CANCELLATION_OBSERVER_FIELDS: &[&str] = &["appointmentId", "revision", "state"];
 
 /// When an observer hook runs. Scheduling runs every hook after the
 /// appointment transaction commits, never inside its capacity transaction.

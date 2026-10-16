@@ -1,0 +1,280 @@
+apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: fhir-record-evidence
+selectorProfiles:
+  patient-by-id:
+    maximumAggregateBytes: 64
+    fields:
+      patient_id:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+  coverage-by-id:
+    maximumAggregateBytes: 64
+    fields:
+      coverage_id:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+  organization-by-id:
+    maximumAggregateBytes: 64
+    fields:
+      organization_id:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+functions:
+- id: extract-coverage
+  interface: source-extract/v1
+  source: functions/extract-coverage.rhai
+- id: derive-coverage-status
+  interface: assertion-derive/v1
+  source: functions/derive-coverage-status.rhai
+- id: extract-organization
+  interface: source-extract/v1
+  source: functions/extract-organization.rhai
+- id: derive-healthcare-establishment
+  interface: assertion-derive/v1
+  source: functions/derive-healthcare-establishment.rhai
+sources:
+  coverage-record:
+    type: http-json
+    connection: fhir-read-through
+    acquisitionPosture: record-transformed
+    selectors:
+    - role: coverage-record
+      profiles:
+      - coverage-by-id
+    request:
+      method: GET
+      path: /Coverage/{coverage_id}
+      pathBindings:
+        coverage_id:
+          selector:
+            role: coverage-record
+            profile: coverage-by-id
+            field: coverage_id
+      fixedHeaders:
+      - name: Accept
+        value: application/json
+    response:
+      projection:
+      - /resourceType
+      - /id
+      - /status
+      - /beneficiary/reference
+      shape:
+        type: object
+        required:
+        - resourceType
+        - id
+        - status
+        - beneficiary
+        properties:
+          resourceType:
+            type: string
+            const: Coverage
+          id:
+            type: string
+            minimumBytes: 1
+            maximumBytes: 64
+          status:
+            type: string
+            values:
+            - active
+            - cancelled
+            - draft
+            - entered-in-error
+          beneficiary:
+            type: object
+            required:
+            - reference
+            properties:
+              reference:
+                type: string
+                minimumBytes: 1
+                maximumBytes: 128
+      maximumBytes: 65536
+    extract:
+      function: extract-coverage
+    facts:
+      status:
+        type: string
+        values:
+        - active
+        - cancelled
+        - draft
+        - entered-in-error
+      beneficiary-reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
+    limits:
+      attemptTimeoutMilliseconds: 30000
+      maximumConcurrency: 8
+  organization-record:
+    type: http-json
+    connection: fhir-read-through
+    acquisitionPosture: record-transformed
+    selectors:
+    - role: organization
+      profiles:
+      - organization-by-id
+    request:
+      method: GET
+      path: /Organization/{organization_id}
+      pathBindings:
+        organization_id:
+          selector:
+            role: organization
+            profile: organization-by-id
+            field: organization_id
+      fixedHeaders:
+      - name: Accept
+        value: application/json
+    response:
+      projection:
+      - /resourceType
+      - /id
+      - /active
+      - /type/*/coding/*/system
+      - /type/*/coding/*/code
+      shape:
+        type: object
+        required:
+        - resourceType
+        - id
+        - active
+        - type
+        properties:
+          resourceType:
+            type: string
+            const: Organization
+          id:
+            type: string
+            minimumBytes: 1
+            maximumBytes: 64
+          active:
+            type: boolean
+          type:
+            type: array
+            minItems: 1
+            maxItems: 4
+            items:
+              type: object
+              required:
+              - coding
+              properties:
+                coding:
+                  type: array
+                  minItems: 1
+                  maxItems: 8
+                  items:
+                    type: object
+                    required:
+                    - system
+                    - code
+                    properties:
+                      system:
+                        type: string
+                        minimumBytes: 1
+                        maximumBytes: 128
+                      code:
+                        type: string
+                        minimumBytes: 1
+                        maximumBytes: 64
+      maximumBytes: 65536
+    extract:
+      function: extract-organization
+    facts:
+      active:
+        type: boolean
+      provider-type:
+        type: boolean
+    limits:
+      attemptTimeoutMilliseconds: 30000
+      maximumConcurrency: 8
+assertionDefinitions:
+  fhir-coverage-status:
+    question: Does this coverage record report active coverage for the selected patient?
+    semantics:
+      kind: criterion
+      requirement: urn:example:requirement:coverage-record:v1
+      referenceFrameworks:
+      - https://hl7.org/fhir/R4/
+      evidenceType: urn:example:evidence-type:coverage-record:v1
+    purpose: coverage-record-verification
+    grantCeiling:
+      actorKinds:
+      - service
+      audiences:
+      - urn:example:audience:fhir-record-evidence
+      authorities:
+      - organizational
+      valueOrigins:
+      - request
+    subjects:
+    - role: patient
+      selectors:
+      - patient-by-id
+    - role: coverage-record
+      selectors:
+      - coverage-by-id
+    acquisition:
+      type: single
+      source: coverage-record
+    derive:
+      function: derive-coverage-status
+      selectorInputs:
+      - role: patient
+        alternatives:
+        - profile: patient-by-id
+          fields:
+          - patient_id
+    outputs:
+      coverage-record-reports-active:
+        concept: urn:example:concept:coverage-record-reports-active:v1
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+    - sd-jwt-vc
+    fixtures: fixtures/coverage-status.yaml
+  fhir-healthcare-establishment:
+    question: Does this organization record report an active healthcare provider?
+    semantics:
+      kind: criterion
+      requirement: urn:example:requirement:organization-record:v1
+      referenceFrameworks:
+      - https://hl7.org/fhir/R4/
+      evidenceType: urn:example:evidence-type:organization-record:v1
+    purpose: healthcare-establishment-verification
+    grantCeiling:
+      actorKinds:
+      - service
+      audiences:
+      - urn:example:audience:fhir-record-evidence
+      authorities:
+      - organizational
+      valueOrigins:
+      - request
+    subjects:
+    - role: organization
+      selectors:
+      - organization-by-id
+    acquisition:
+      type: single
+      source: organization-record
+    derive:
+      function: derive-healthcare-establishment
+    outputs:
+      healthcare-provider-record-active:
+        concept: urn:example:concept:healthcare-provider-record-active:v1
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+    - sd-jwt-vc
+    fixtures: fixtures/healthcare-establishment.yaml

@@ -82,7 +82,7 @@ async fn sdk_action_only_conditions_invocation_and_exact_replay_use_real_postgre
         .unwrap();
     let binding = contract
         .value
-        .select_immediate_action("register-household-contact", "contact-registrar")
+        .select_action("register-household-contact", "contact-registrar")
         .unwrap();
     let condition_request = BRegActionTargetConditionsRequest::new(
         &binding,
@@ -830,32 +830,6 @@ async fn action_written_revisions_are_readable_through_revision_history() {
     let detail = history_read(&app, &person_detail).await;
     assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
 
-    // A request lifecycle revision journaled under an effect identifier is
-    // refused the same way.
-    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
-    database
-        .admin
-        .batch_execute(&format!(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
-             VALUES ('person', '{person_id}', 'owner', 'draft', 1, 1);
-             INSERT INTO registry_internal.registry_request_revision_links
-                 (entity_id, record_id, record_revision, request_entity_id,
-                  request_id, proposal_version, link_kind)
-             VALUES ('person', '{person_id}', 1, 'person', '{person_id}', 1,
-                     'request-lifecycle');"
-        ))
-        .await
-        .expect("administrator marks the fixture revision as request lifecycle");
-    let refused = history_read(&app, &person_detail).await;
-    assert_eq!(
-        refused.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        refused.body
-    );
-    assert_eq!(refused.body["code"], "source.unavailable");
     database.cleanup().await;
 }
 
@@ -3056,176 +3030,756 @@ fn action_claims_for(scope: &str, jurisdiction: &str) -> VerifiedRequestClaims {
 }
 
 const ACTION_PROJECT: &[u8] = br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"immediate-action-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
-            "constraints":[{"type":"unique","fields":["person-code"]}],
-            "fields":[
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "immediate-action-registry",
+    "version": "1",
+    "defaultLanguage": "en",
+    "canonicalBaseIri": "https://authoring.example.test"
+  },
+  "recordTypes": [
+    {
+      "id": "person",
+      "primaryDataset": "test-dataset",
+      "route": "people",
+      "mutationMode": "mutable",
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "person-code"
+          ]
+        }
+      ],
+      "fields": [
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "hooks": [
+        {
+          "phase": "after",
+          "id": "person-created",
+          "trigger": "created",
+          "projection": [
+            "person-code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "household",
+      "primaryDataset": "test-dataset",
+      "route": "households",
+      "mutationMode": "mutable",
+      "fields": [
+        {
+          "id": "household-code",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "contact-person",
+          "apiName": "contactPerson",
+          "type": "reference",
+          "target": "person",
+          "classification": "restricted"
+        },
+        {
+          "id": "status-note",
+          "apiName": "statusNote",
+          "type": "string",
+          "maximumLength": 160,
+          "classification": "restricted"
+        }
+      ],
+      "hooks": [
+        {
+          "phase": "after",
+          "id": "household-patched",
+          "trigger": "patched",
+          "projection": [
+            "contact-person"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "group-membership",
+      "primaryDataset": "test-dataset",
+      "route": "group-memberships",
+      "mutationMode": "mutable",
+      "fields": [
+        {
+          "id": "person",
+          "type": "reference",
+          "target": "person",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "household",
+          "type": "reference",
+          "target": "household",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "hooks": [
+        {
+          "phase": "after",
+          "id": "membership-created",
+          "trigger": "created",
+          "projection": [
+            "person",
+            "household"
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "register-household-contact",
+      "inputs": [
+        {
+          "id": "household",
+          "apiName": "householdId",
+          "type": "reference",
+          "target": "household",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "person",
+            "target": {
+              "recordType": "person"
+            },
+            "operation": "create",
+            "set": {
+              "person-code": {
+                "fromInput": "person-code"
+              },
+              "legal-name": {
+                "fromInput": "legal-name"
+              },
+              "jurisdiction": {
+                "fromInput": "jurisdiction"
+              }
+            }
+          },
+          {
+            "id": "membership",
+            "target": {
+              "recordType": "group-membership"
+            },
+            "operation": "create",
+            "set": {
+              "person": {
+                "fromEffect": "person"
+              },
+              "household": {
+                "fromInput": "household"
+              },
+              "jurisdiction": {
+                "fromInput": "jurisdiction"
+              }
+            }
+          },
+          {
+            "id": "household",
+            "target": {
+              "fromInput": "household"
+            },
+            "operation": "patch",
+            "set": {
+              "contact-person": {
+                "fromEffect": "person"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "rename-household-local",
+      "inputs": [
+        {
+          "id": "household",
+          "apiName": "householdId",
+          "type": "reference",
+          "target": "household",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "household-code",
+          "apiName": "householdCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "status-note",
+          "apiName": "statusNote",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "household-code-update",
+            "target": {
+              "fromInput": "household"
+            },
+            "operation": "patch",
+            "set": {
+              "household-code": {
+                "fromInput": "household-code"
+              }
+            }
+          },
+          {
+            "id": "household-note-update",
+            "target": {
+              "fromInput": "household"
+            },
+            "operation": "patch",
+            "set": {
+              "status-note": {
+                "fromInput": "status-note"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "link-household-member",
+      "inputs": [
+        {
+          "id": "household",
+          "apiName": "householdId",
+          "type": "reference",
+          "target": "household",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "linked-person",
+            "target": {
+              "recordType": "person"
+            },
+            "operation": "create",
+            "set": {
+              "person-code": {
+                "fromInput": "person-code"
+              },
+              "legal-name": {
+                "fromInput": "legal-name"
+              },
+              "jurisdiction": {
+                "fromInput": "jurisdiction"
+              }
+            }
+          },
+          {
+            "id": "linked-membership",
+            "target": {
+              "recordType": "group-membership"
+            },
+            "operation": "create",
+            "set": {
+              "person": {
+                "fromEffect": "linked-person"
+              },
+              "household": {
+                "fromInput": "household"
+              },
+              "jurisdiction": {
+                "fromInput": "jurisdiction"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "create-silent-person",
+      "inputs": [
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "silent-person",
+            "target": {
+              "recordType": "person"
+            },
+            "operation": "create",
+            "set": {
+              "person-code": {
+                "fromInput": "person-code"
+              },
+              "legal-name": {
+                "fromInput": "legal-name"
+              },
+              "jurisdiction": {
+                "fromInput": "jurisdiction"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "create-local-person",
+      "inputs": [
+        {
+          "id": "person-code",
+          "apiName": "personCode",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "legal-name",
+          "apiName": "legalName",
+          "type": "string",
+          "maximumLength": 160,
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "jurisdiction",
+          "apiName": "jurisdiction",
+          "type": "string",
+          "maximumLength": 64,
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "fixed",
+        "effects": [
+          {
+            "id": "person-only",
+            "target": {
+              "recordType": "person"
+            },
+            "operation": "create",
+            "set": {
+              "person-code": {
+                "fromInput": "person-code"
+              },
+              "legal-name": {
+                "fromInput": "legal-name"
+              },
+              "jurisdiction": {
+                "fromInput": "jurisdiction"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "contact-registrar",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "registry:contact:register"
+      ],
+      "requiredPurposes": [
+        "contact-registration"
+      ],
+      "permissions": {
+        "actions": [
+          {
+            "action": "register-household-contact",
+            "operations": [
+              "invoke"
             ],
-            "hooks":[{"phase":"after","id":"person-created","trigger":"created","projection":["person-code"]}]
-          },{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
-            "fields":[
-              {"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"},
-              {"id":"status-note","apiName":"statusNote","type":"string","maximumLength":160,"classification":"restricted"}
+            "targets": [
+              {
+                "recordType": "household",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              },
+              {
+                "recordType": "person",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              },
+              {
+                "recordType": "group-membership",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              }
             ],
-            "hooks":[{"phase":"after","id":"household-patched","trigger":"patched","projection":["contact-person"]}]
-          },{
-            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
-            "fields":[
-              {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
-              {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
-            ],
-            "hooks":[{"phase":"after","id":"membership-created","trigger":"created","projection":["person","household"]}]
-          }],
-          "actions":[{
-            "id":"register-household-contact",
-            "inputs":[
-              {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
-            ],
-            "effects":[
-              {"id":"person","target":{"entity":"person"},"operation":"create",
-                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"membership","target":{"entity":"group-membership"},"operation":"create",
-                "set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"household","target":{"fromField":"household"},"operation":"patch",
-                "set":{"contact-person":{"fromEffect":"person"}}}
+            "results": [
+              "person",
+              "membership",
+              "household"
             ]
-          },{
-            "id":"rename-household-local",
-            "inputs":[
-              {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"status-note","apiName":"statusNote","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
+          },
+          {
+            "action": "rename-household-local",
+            "operations": [
+              "invoke"
             ],
-            "effects":[
-              {"id":"household-code-update","target":{"fromField":"household"},"operation":"patch",
-                "set":{"household-code":{"fromField":"household-code"}}},
-              {"id":"household-note-update","target":{"fromField":"household"},"operation":"patch",
-                "set":{"status-note":{"fromField":"status-note"}}}
-            ]
-          },{
-            "id":"link-household-member",
-            "inputs":[
-              {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
+            "targets": [
+              {
+                "recordType": "household",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              }
             ],
-            "effects":[
-              {"id":"linked-person","target":{"entity":"person"},"operation":"create",
-                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"linked-membership","target":{"entity":"group-membership"},"operation":"create",
-                "set":{"person":{"fromEffect":"linked-person"},"household":{"fromField":"household"},"jurisdiction":{"fromField":"jurisdiction"}}}
+            "results": [
+              "household-code-update",
+              "household-note-update"
             ]
-          },{
-            "id":"create-silent-person",
-            "inputs":[
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
+          },
+          {
+            "action": "link-household-member",
+            "operations": [
+              "invoke"
             ],
-            "effects":[
-              {"id":"silent-person","target":{"entity":"person"},"operation":"create",
-                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}}
-            ]
-          },{
-            "id":"create-local-person",
-            "inputs":[
-              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
+            "targets": [
+              {
+                "recordType": "household",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              },
+              {
+                "recordType": "person",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              },
+              {
+                "recordType": "group-membership",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              }
             ],
-            "effects":[
-              {"id":"person-only","target":{"entity":"person"},"operation":"create",
-                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}}
+            "results": [
+              "linked-person",
+              "linked-membership"
             ]
-          }],
-          "accessProfiles":[{
-            "id":"contact-registrar",
-            "default":true,
-            "principalClaim":"registry_principal",
-            "requiredScopes":["registry:contact:register"],
-            "requiredPurposes":["contact-registration"],
-            "permissions":{"actions":[{
-              "action":"register-household-contact",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
-              ],
-              "results":["person","membership","household"]
-            },{
-              "action":"rename-household-local",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
-              ],
-              "results":["household-code-update","household-note-update"]
-            },{
-              "action":"link-household-member",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
-              ],
-              "results":["linked-person","linked-membership"]
-            },{
-              "action":"create-silent-person",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
-              ],
-              "results":[]
-            },{
-              "action":"create-local-person",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
-              ],
-              "results":["person-only"]
-            }]}
-          },{
-            "id":"contact-shadow",
-            "principalClaim":"registry_principal",
-            "requiredScopes":["registry:contact:shadow"],
-            "requiredPurposes":["contact-registration"],
-            "permissions":{"actions":[{
-              "action":"register-household-contact",
-              "operations":["invoke"],
-              "targets":[
-                {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
-              ],
-              "results":["household"]
-            }]}
-          },{
-            "id":"household-seed-writer",
-            "principalClaim":"registry_principal",
-            "requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-              "entity":"household",
-              "operations":["create"],
-              "readableFields":["household-code","jurisdiction"],
-              "writableFields":["household-code","jurisdiction"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]}
-          }]
-        }"#;
+          },
+          {
+            "action": "create-silent-person",
+            "operations": [
+              "invoke"
+            ],
+            "targets": [
+              {
+                "recordType": "person",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              }
+            ],
+            "results": []
+          },
+          {
+            "action": "create-local-person",
+            "operations": [
+              "invoke"
+            ],
+            "targets": [
+              {
+                "recordType": "person",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              }
+            ],
+            "results": [
+              "person-only"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "contact-shadow",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "registry:contact:shadow"
+      ],
+      "requiredPurposes": [
+        "contact-registration"
+      ],
+      "permissions": {
+        "actions": [
+          {
+            "action": "register-household-contact",
+            "operations": [
+              "invoke"
+            ],
+            "targets": [
+              {
+                "recordType": "household",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              },
+              {
+                "recordType": "person",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              },
+              {
+                "recordType": "group-membership",
+                "rowBoundaries": [
+                  {
+                    "field": "jurisdiction",
+                    "claim": "jurisdiction",
+                    "operator": "equals"
+                  }
+                ]
+              }
+            ],
+            "results": [
+              "household"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "household-seed-writer",
+      "principalClaim": "registry_principal",
+      "requiredScopes": "unrestricted",
+      "permissions": {
+        "records": [
+          {
+            "recordType": "household",
+            "operations": [
+              "create"
+            ],
+            "readableFields": [
+              "household-code",
+              "jurisdiction"
+            ],
+            "writableFields": [
+              "household-code",
+              "jurisdiction"
+            ],
+            "rowBoundaries": [
+              {
+                "field": "jurisdiction",
+                "claim": "jurisdiction",
+                "operator": "equals"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "datasets": [
+    {
+      "id": "test-dataset"
+    }
+  ]
+}"#;
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(ACTION_PROJECT).expect("action project parses");
@@ -3245,13 +3799,13 @@ fn history_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:history:read"],
             "requiredPurposes":["contact-registration"],
-            "permissions":{"entities":[{
-                "entity":"person",
+            "permissions":{"records":[{
+                "recordType":"person",
                 "operations":["revisions","snapshot"],"revisionAccess":true,
                 "readableFields":["person-code"],
                 "rowBoundaries":boundary.clone()
             },{
-                "entity":"household",
+                "recordType":"household",
                 "operations":["revisions","snapshot"],"revisionAccess":true,
                 "readableFields":["household-code","status-note"],
                 "rowBoundaries":boundary

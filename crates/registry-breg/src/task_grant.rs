@@ -11,6 +11,36 @@ mod config;
 pub use config::TaskGrantStatusRegistry;
 pub use registry_platform_config::TaskGrantStatusConfig;
 
+pub(crate) fn required_source_issuers(
+    registry: &crate::CompiledRegistry,
+) -> std::collections::BTreeSet<&str> {
+    let mut issuers = std::collections::BTreeSet::new();
+    for profile in registry
+        .entities()
+        .values()
+        .flat_map(|entity| entity.access_profiles.values())
+    {
+        if let Some(grant) = &profile.task_grant {
+            issuers.insert(grant.source_issuer.as_str());
+        }
+    }
+    for action in &registry.actions().actions {
+        for permission in &action.permissions {
+            if let Some(grant) = &permission.task_grant {
+                issuers.insert(grant.source_issuer.as_str());
+            }
+        }
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            for permission in &proposal.permissions {
+                if let Some(grant) = &permission.task_grant {
+                    issuers.insert(grant.source_issuer.as_str());
+                }
+            }
+        }
+    }
+    issuers
+}
+
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantBinding {

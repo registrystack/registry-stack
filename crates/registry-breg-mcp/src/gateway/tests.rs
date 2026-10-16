@@ -30,6 +30,8 @@ const CITIZEN_B: &str = "synthetic-citizen-b";
 const ADDRESS_A: &str = "c7110c06-8938-4294-bd68-7390de8e752e";
 const ADDRESS_B: &str = "5b0a3c1e-2d4f-4a6b-8c9d-0e1f2a3b4c5d";
 const CANARY: &str = "canary-field-value-7f3a";
+const START_ATTEMPT_A: &str = "53e14a1a-6e19-4b2e-af6e-b9c39a9a3250";
+const START_ATTEMPT_B: &str = "a6878495-b52f-420f-9dc5-220c944de359";
 
 struct Fixture {
     server: TestAuthorizationServer,
@@ -62,8 +64,13 @@ impl Fixture {
         let registry = MockRegistry::start().await;
         registry.add_address(CITIZEN_A, ADDRESS_A, "1 Harbour Road");
         registry.add_address(CITIZEN_B, ADDRESS_B, "4 Mill Street");
-        let (registry_config, exchange) =
-            outbound_sections(&registry.base_url, &server.token_endpoint());
+        let token_endpoint =
+            crate::mock_registry::grant_exchange(server.token_endpoint(), registry.grant_issuer())
+                .await;
+        let (registry_config, mut exchange) =
+            outbound_sections(&registry.base_url, &token_endpoint);
+        exchange.assertion_audience =
+            Some(registry_platform_yaml::ExternalId::new(server.issuer()).unwrap());
         let outbound =
             Outbound::new(&registry_config, &exchange, RESOURCE, key).expect("outbound configures");
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -147,7 +154,8 @@ fn error_code(value: &Value) -> &str {
 }
 
 fn start_arguments() -> Value {
-    json!({"newAddressLine": "2 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-200"})
+    json!({"startAttemptId":START_ATTEMPT_A,"newAddressLine": "2 Quay",
+        "newLocality": "Port Selene", "newPostalCode": "PS-200"})
 }
 
 fn claims(authorization: &str) -> Value {
@@ -272,20 +280,31 @@ async fn no_linked_record_or_more_than_one_creates_nothing() {
 }
 
 #[tokio::test]
-async fn start_writes_the_callers_own_target_and_owner() {
+async fn start_uses_the_callers_own_target_and_source_owned_principal() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
     let value = fixture
         .call(&caller, START_APPLICATION, start_arguments())
         .await;
     assert_eq!(value["isError"], false, "{value}");
-    assert_eq!(value["application"]["status"], "prepared");
+    assert_eq!(value["application"]["status"], "draft");
     assert_eq!(value["application"]["revision"], "1");
     let writes = fixture.writes();
     assert_eq!(writes.len(), 1);
     let body = writes[0].body.as_ref().expect("create body");
-    assert_eq!(body["data"]["address"], ADDRESS_A);
-    assert_eq!(body["data"]["owner"], CITIZEN_A);
+    assert_eq!(body["input"]["address"], ADDRESS_A);
+    assert!(body["input"].get("owner").is_none());
+    assert!(body["input"].get("startAttemptId").is_none());
+    assert_eq!(
+        fixture
+            .registry
+            .applications()
+            .values()
+            .next()
+            .unwrap()
+            .owner,
+        CITIZEN_A
+    );
     assert!(writes[0]
         .idempotency_key
         .as_deref()
@@ -313,7 +332,7 @@ async fn a_smuggled_target_argument_never_reaches_the_registry() {
 async fn a_patch_path_aimed_at_the_target_never_reaches_the_registry() {
     let fixture = Fixture::start().await;
     let application = fixture.registry.add_application(
-        json!({"address": ADDRESS_B, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"address": ADDRESS_B, "owner": CITIZEN_B, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
     let caller = fixture.caller(CITIZEN_B);
@@ -340,7 +359,7 @@ async fn a_draft_naming_another_target_is_neither_changed_nor_shown() {
     let fixture = Fixture::start().await;
     // A draft that names citizen A's address, visible to citizen B.
     let application = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"address": ADDRESS_A, "owner": CITIZEN_B, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
     let caller = fixture.caller(CITIZEN_B);
@@ -372,6 +391,80 @@ async fn a_draft_naming_another_target_is_neither_changed_nor_shown() {
 }
 
 #[tokio::test]
+async fn a_retained_application_is_not_interpreted_under_a_changed_action_revision() {
+    let fixture = Fixture::start().await;
+    let application = fixture.registry.add_application(
+        json!({"address": ADDRESS_A, "newAddressLine": CANARY, "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        draft_request(),
+    );
+    let mut metadata: Value = serde_json::from_slice(crate::mock_registry::METADATA).unwrap();
+    metadata["actions"][0]["revision"] = json!(format!("sha256:{}", "b".repeat(64)));
+    metadata["actions"][0]["inputs"][1]["label"] = json!("Changed input label");
+    fixture.registry.publish_metadata(metadata);
+    let caller = fixture.caller(CITIZEN_A);
+
+    for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW, UPDATE_APPLICATION] {
+        let arguments = if tool == UPDATE_APPLICATION {
+            json!({"applicationId": application.to_string(), "expectedRevision": "1",
+                "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]})
+        } else {
+            json!({"applicationId": application.to_string()})
+        };
+        let value = fixture.call(&caller, tool, arguments).await;
+        assert_eq!(error_code(&value), "stale-application", "{tool}: {value}");
+        assert!(!value.to_string().contains(CANARY), "{tool}: {value}");
+        assert!(
+            !value.to_string().contains("Changed input label"),
+            "{tool}: {value}"
+        );
+        assert!(value.get("reviewUrl").is_none(), "{tool}: {value}");
+    }
+    assert!(fixture.writes().is_empty());
+    assert_eq!(fixture.registry.applications()[&application].revision, 1);
+    assert_eq!(
+        fixture.registry.applications()[&application].data["newLocality"],
+        "Port Selene"
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_action_remains_usable_after_other_registry_metadata_changes() {
+    let fixture = Fixture::start().await;
+    let application = fixture.registry.add_application(
+        json!({"address": ADDRESS_A, "newAddressLine": CANARY, "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        draft_request(),
+    );
+    let mut metadata: Value = serde_json::from_slice(crate::mock_registry::METADATA).unwrap();
+    metadata["revision"] = json!(format!("sha256:{}", "b".repeat(64)));
+    fixture.registry.publish_metadata(metadata);
+    let caller = fixture.caller(CITIZEN_A);
+
+    for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW] {
+        let value = fixture
+            .call(
+                &caller,
+                tool,
+                json!({"applicationId": application.to_string()}),
+            )
+            .await;
+        assert_eq!(value["isError"], false, "{tool}: {value}");
+        if tool == GET_APPLICATION_STATUS {
+            assert!(value.to_string().contains(CANARY));
+        }
+    }
+    let edited = fixture
+        .call(
+            &caller,
+            UPDATE_APPLICATION,
+            json!({"applicationId": application.to_string(), "expectedRevision": "1",
+            "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
+        )
+        .await;
+    assert_eq!(edited["isError"], false, "{edited}");
+    assert_eq!(fixture.registry.applications()[&application].revision, 2);
+}
+
+#[tokio::test]
 async fn an_update_pins_the_target_before_its_edits() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
@@ -391,13 +484,14 @@ async fn an_update_pins_the_target_before_its_edits() {
     assert_eq!(value["application"]["revision"], "2");
     let writes = fixture.writes();
     let patch = writes.last().expect("patch sent");
-    assert_eq!(patch.method, http::Method::PATCH);
+    assert_eq!(patch.method, http::Method::POST);
+    let input = &patch.body.as_ref().unwrap()["input"];
+    assert_eq!(input["address"], ADDRESS_A);
+    assert!(input.get("owner").is_none());
+    assert_eq!(input["newLocality"], "Old Town");
     assert_eq!(
-        patch.body.as_ref().expect("patch body"),
-        &json!([
-            {"op": "test", "path": "/data/address", "value": ADDRESS_A},
-            {"op": "replace", "path": "/data/newLocality", "value": "Old Town"},
-        ])
+        patch.path,
+        format!("/v1/proposals/{}/edit", started_id.as_str().unwrap())
     );
     assert_eq!(
         patch.if_match.as_deref(),
@@ -410,7 +504,7 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
     let draft = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"address": ADDRESS_A, "owner": CITIZEN_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
     let stale = fixture
@@ -423,8 +517,8 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
         .await;
     assert_eq!(error_code(&stale), "stale-application");
     let submitted = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
-        json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
+        json!({"address": ADDRESS_A, "owner": CITIZEN_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"state": "submitted", "editable": false, "submissionVersion": 1,
             "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}),
     );
     let closed = fixture
@@ -444,7 +538,7 @@ async fn registry_problems_map_to_stable_codes_with_a_trace() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
     let draft = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"address": ADDRESS_A, "owner": CITIZEN_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
     let update = || {
@@ -457,72 +551,15 @@ async fn registry_problems_map_to_stable_codes_with_a_trace() {
     };
     fixture
         .registry
-        .fail_next(http::Method::PATCH, BRegProblemCode::IdempotencyConflict);
+        .fail_next(http::Method::POST, BRegProblemCode::IdempotencyConflict);
     let conflict = update().await;
     assert_eq!(error_code(&conflict), "idempotency-conflict");
     assert!(conflict["error"]["traceId"].is_string());
     fixture
         .registry
-        .fail_next(http::Method::PATCH, BRegProblemCode::PreconditionFailed);
+        .fail_next(http::Method::POST, BRegProblemCode::PreconditionFailed);
     let stale = update().await;
     assert_eq!(error_code(&stale), "stale-application");
-}
-
-#[tokio::test]
-async fn a_start_steps_past_a_key_the_registry_will_not_replay() {
-    let (audit, capture) = ToolAuditLog::capture();
-    let fixture = Fixture::start_with_audit(Some(audit)).await;
-    let caller = fixture.caller(CITIZEN_A);
-    fixture
-        .registry
-        .fail_next(http::Method::POST, BRegProblemCode::IdempotencyConflict);
-    let started = fixture
-        .call(&caller, START_APPLICATION, start_arguments())
-        .await;
-    let application = started_identifier(&started);
-    assert_eq!(response_record(&capture)["outcome"], "ok");
-    let keys: Vec<String> = fixture
-        .writes()
-        .into_iter()
-        .map(|seen| seen.idempotency_key.expect("key"))
-        .collect();
-    assert_eq!(keys.len(), 2);
-    assert_ne!(keys[0], keys[1]);
-    assert_eq!(fixture.registry.applications().len(), 1);
-    assert!(fixture.registry.applications().contains_key(&application));
-}
-
-/// Past its receipt horizon a key stays spent but is no longer replayed, so
-/// an identical start steps past it and opens a new draft one position on,
-/// and a retry walks the same chain to that draft.
-#[tokio::test]
-async fn a_start_steps_past_a_key_whose_receipt_expired() {
-    let (audit, capture) = ToolAuditLog::capture();
-    let fixture = Fixture::start_with_audit(Some(audit)).await;
-    let caller = fixture.caller(CITIZEN_A);
-    let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
-    let first = started_identifier(&start().await);
-
-    fixture.registry.expire_receipts();
-    let second = start().await;
-    assert_eq!(second["application"]["status"], "prepared");
-    let second = started_identifier(&second);
-    assert_ne!(second, first);
-    let entries = capture.entries();
-    let last = entries.last().expect("audited");
-    assert_eq!(last["phase"], "response");
-    assert_eq!(last["record"]["outcome"], "ok");
-    let keys: Vec<String> = fixture
-        .writes()
-        .into_iter()
-        .map(|seen| seen.idempotency_key.expect("key"))
-        .collect();
-    assert_eq!(keys.len(), 3);
-    assert_eq!(keys[1], keys[0]);
-    assert_ne!(keys[2], keys[0]);
-
-    assert_eq!(started_identifier(&start().await), second);
-    assert_eq!(fixture.registry.applications().len(), 2);
 }
 
 #[tokio::test]
@@ -560,70 +597,6 @@ fn started_identifier(value: &Value) -> Uuid {
 }
 
 #[tokio::test]
-async fn a_start_after_a_closed_application_opens_a_new_one() {
-    for closed in ["cancelled", "applied"] {
-        let fixture = Fixture::start().await;
-        let caller = fixture.caller(CITIZEN_A);
-        let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
-        let first = started_identifier(&start().await);
-        assert_eq!(started_identifier(&start().await), first, "{closed}");
-        assert_eq!(fixture.registry.applications().len(), 1, "{closed}");
-
-        fixture.registry.set_request(
-            first,
-            json!({"bregState": closed, "editable": false, "proposalVersion": 1}),
-        );
-        let second = start().await;
-        assert_eq!(second["application"]["status"], "prepared", "{closed}");
-        let second = started_identifier(&second);
-        assert_ne!(second, first, "{closed}");
-        assert_eq!(started_identifier(&start().await), second, "{closed}");
-        assert_eq!(fixture.registry.applications().len(), 2, "{closed}");
-    }
-}
-
-#[tokio::test]
-async fn a_submitted_application_whose_review_was_cancelled_stays_open() {
-    let fixture = Fixture::start().await;
-    let caller = fixture.caller(CITIZEN_A);
-    let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
-    let first = started_identifier(&start().await);
-    let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    fixture.registry.set_request(
-        first,
-        json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
-        "effectDigest": digest,
-        "review": {
-            "submission": {"state": "accepted", "authority": "casework",
-                "requestId": "8a1f3c52-6d4e-4b7a-9c0d-1e2f3a4b5c6d", "submissionDigest": digest,
-                "recoveryDeadline": "2026-09-26T01:00:00Z",
-                "policy": {"id": "address-review", "version": "1", "digest": digest}},
-            "result": {"state": "cancelled", "resultId": "2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091",
-                "completedAt": "2026-09-19T01:00:00Z", "availableUntil": "2026-10-19T01:00:00Z"},
-            "delivery": {"state": "received", "eventId": "3c4d5e6f-7081-4923-8b4c-5d6e7f8091a2",
-                "receivedAt": "2026-09-19T01:00:01Z"},
-            "application": {"mode": "manual", "state": "blocked"},
-            "recovery": {"state": "none"},
-        }}),
-    );
-
-    let status = fixture
-        .call(
-            &caller,
-            GET_APPLICATION_STATUS,
-            json!({"applicationId": first.to_string()}),
-        )
-        .await;
-    assert_eq!(status["application"]["status"], "under_review", "{status}");
-
-    // Still open, so an identical start returns it rather than a second draft.
-    let retried = start().await;
-    assert_eq!(started_identifier(&retried), first, "{retried}");
-    assert_eq!(retried["application"]["status"], "under_review");
-    assert_eq!(fixture.registry.applications().len(), 1);
-}
-
-#[tokio::test]
 async fn a_retried_start_answers_with_the_drafts_current_state() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
@@ -634,7 +607,7 @@ async fn a_retried_start_answers_with_the_drafts_current_state() {
     );
     fixture.registry.set_request(
         first,
-        json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
+        json!({"state": "submitted", "editable": false, "submissionVersion": 1,
             "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}),
     );
     let retried = fixture
@@ -646,57 +619,76 @@ async fn a_retried_start_answers_with_the_drafts_current_state() {
 }
 
 #[tokio::test]
-async fn a_start_past_too_many_closed_applications_is_refused() {
-    let fixture = Fixture::start().await;
-    let caller = fixture.caller(CITIZEN_A);
-    let cancelled = json!({"bregState": "cancelled", "editable": false, "proposalVersion": 1});
-    for _ in 0..=MAX_CLOSED_REPEATS {
-        let started = fixture
+async fn terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft() {
+    for state in ["applied", "cancelled", "rejected"] {
+        let fixture = Fixture::start().await;
+        let caller = fixture.caller(CITIZEN_A);
+        let first = started_identifier(
+            &fixture
+                .call(&caller, START_APPLICATION, start_arguments())
+                .await,
+        );
+        let mut closed = json!({"state":state});
+        if state == "applied" {
+            closed["effectDigest"] = json!(format!("sha256:{}", "a".repeat(64)));
+        }
+        fixture.registry.set_request(first, closed);
+        let retry = fixture
             .call(&caller, START_APPLICATION, start_arguments())
             .await;
-        fixture
-            .registry
-            .set_request(started_identifier(&started), cancelled.clone());
+        assert_eq!(started_identifier(&retry), first, "{state}");
+        assert_eq!(retry["application"]["status"], state);
+        assert_eq!(fixture.registry.applications().len(), 1);
+
+        let mut fresh = start_arguments();
+        fresh["startAttemptId"] = json!(START_ATTEMPT_B);
+        let second = fixture
+            .call(&caller, START_APPLICATION, fresh.clone())
+            .await;
+        let second_id = started_identifier(&second);
+        assert_ne!(second_id, first, "{state}");
+        assert_eq!(second["application"]["status"], "draft");
+        assert_eq!(
+            started_identifier(&fixture.call(&caller, START_APPLICATION, fresh).await),
+            second_id
+        );
+        assert_eq!(fixture.registry.applications().len(), 2);
     }
-    let refused = fixture
-        .call(&caller, START_APPLICATION, start_arguments())
-        .await;
-    assert_eq!(error_code(&refused), "not-permitted");
-    assert_eq!(
-        fixture.registry.applications().len(),
-        usize::try_from(MAX_CLOSED_REPEATS + 1).expect("bound fits")
-    );
 }
 
 #[tokio::test]
-async fn a_start_after_a_package_activation_opens_a_new_one() {
-    for closed in [true, false] {
-        let (audit, capture) = ToolAuditLog::capture();
-        let fixture = Fixture::start_with_audit(Some(audit)).await;
-        let caller = fixture.caller(CITIZEN_A);
-        let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
-        let first = started_identifier(&start().await);
-        if closed {
-            fixture.registry.set_request(
-                first,
-                json!({"bregState": "cancelled", "editable": false, "proposalVersion": 1}),
-            );
-        }
+async fn a_changed_request_cannot_reuse_a_start_attempt() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let first = started_identifier(
+        &fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await,
+    );
+    let mut changed = start_arguments();
+    changed["newLocality"] = json!("Old Town");
+    let refused = fixture.call(&caller, START_APPLICATION, changed).await;
+    assert_eq!(error_code(&refused), "idempotency-conflict");
+    assert_eq!(fixture.registry.applications().len(), 1);
+    assert!(fixture.registry.applications().contains_key(&first));
+    let keys: Vec<_> = fixture
+        .writes()
+        .into_iter()
+        .map(|seen| seen.idempotency_key)
+        .collect();
+    assert_eq!(keys[0], keys[1]);
+}
 
-        fixture.registry.activate_package();
-        let second = start().await;
-        assert_eq!(second["application"]["status"], "prepared", "{closed}");
-        let second = started_identifier(&second);
-        assert_ne!(second, first, "{closed}");
-        let entries = capture.entries();
-        let last = entries.last().expect("audited");
-        assert_eq!(last["phase"], "response", "{closed}");
-        assert_eq!(last["record"]["outcome"], "ok", "{closed}");
-
-        // A retry under the same revision lands on the same draft.
-        assert_eq!(started_identifier(&start().await), second, "{closed}");
-        assert_eq!(fixture.registry.applications().len(), 2, "{closed}");
-    }
+#[tokio::test]
+async fn concurrent_retries_of_one_start_attempt_create_one_proposal() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let (first, retry) = tokio::join!(
+        fixture.call(&caller, START_APPLICATION, start_arguments()),
+        fixture.call(&caller, START_APPLICATION, start_arguments()),
+    );
+    assert_eq!(started_identifier(&first), started_identifier(&retry));
+    assert_eq!(fixture.registry.applications().len(), 1);
 }
 
 #[tokio::test]
@@ -720,7 +712,7 @@ async fn prepare_review_links_the_citizens_own_application() {
     assert_eq!(value["isError"], false, "{value}");
     assert_eq!(
         value["reviewUrl"],
-        format!("https://review.example.test/requests/{application}")
+        format!("https://review.example.test/proposals/{application}")
     );
     let status = fixture
         .call(
@@ -729,7 +721,7 @@ async fn prepare_review_links_the_citizens_own_application() {
             json!({"applicationId": application.to_string()}),
         )
         .await;
-    assert_eq!(status["application"]["status"], "prepared", "{status}");
+    assert_eq!(status["application"]["status"], "draft", "{status}");
     assert_eq!(status["notice"], REGISTRY_DATA_NOTICE);
 }
 
@@ -841,59 +833,6 @@ async fn concurrent_calls_keep_distinct_request_response_correlations() {
     }
 }
 
-#[test]
-fn request_state_maps_to_one_citizen_status() {
-    use registry_breg_client::{
-        BRegExternalReviewResultState as Result, BRegExternalReviewSubmissionState as Submission,
-        BRegRequestState as State,
-    };
-    let cases = [
-        (State::Draft, None, "prepared"),
-        (State::Submitted, None, "submitted"),
-        (
-            State::Submitted,
-            Some((Submission::Pending, Result::Pending)),
-            "submitted",
-        ),
-        (
-            State::Submitted,
-            Some((Submission::Accepted, Result::Pending)),
-            "under_review",
-        ),
-        (
-            State::Submitted,
-            Some((Submission::Accepted, Result::ChangesRequested)),
-            "under_review",
-        ),
-        (
-            State::Submitted,
-            Some((Submission::Accepted, Result::Approved)),
-            "approved",
-        ),
-        (
-            State::Submitted,
-            Some((Submission::Accepted, Result::Rejected)),
-            "rejected",
-        ),
-        // A cancelled review leaves the request submitted: BReg still
-        // offers revise, rebase, and cancel on it, so it is not closed.
-        (
-            State::Submitted,
-            Some((Submission::Accepted, Result::Cancelled)),
-            "under_review",
-        ),
-        (State::Cancelled, None, "cancelled"),
-        (State::Applied, None, "applied"),
-    ];
-    for (state, review, expected) in cases {
-        assert_eq!(
-            ApplicationStatus::from_states(state, review).as_str(),
-            expected,
-            "{state:?} {review:?}"
-        );
-    }
-}
-
 fn response_record(capture: &AuditCapture) -> Value {
     let entries = capture.entries();
     assert_eq!(entries.len(), 2, "{entries:?}");
@@ -904,23 +843,25 @@ fn response_record(capture: &AuditCapture) -> Value {
 #[tokio::test]
 async fn a_failed_readback_after_a_committed_start_is_unfinished() {
     for code in [
-        BRegProblemCode::ResourceNotFound,
         BRegProblemCode::AuthenticationRefused,
         BRegProblemCode::ServiceUnavailable,
     ] {
         let (audit, capture) = ToolAuditLog::capture();
         let fixture = Fixture::start_with_audit(Some(audit)).await;
         let caller = fixture.caller(CITIZEN_A);
-        fixture.registry.fail_next_at(
-            http::Method::GET,
-            "/v1/records/address-correction-requests/",
-            code,
-        );
+        let first = fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await;
+        assert_eq!(first["isError"], false, "{first}");
+        fixture
+            .registry
+            .fail_next_at(http::Method::GET, "/v1/proposals/", code);
         let value = fixture
             .call(&caller, START_APPLICATION, start_arguments())
             .await;
         assert_eq!(error_code(&value), "registry-unavailable", "{code:?}");
-        let record = response_record(&capture);
+        let entries = capture.entries();
+        let record = &entries.last().unwrap()["record"];
         assert_eq!(record["outcome"], "unfinished", "{code:?}");
         assert_eq!(record["reason"], "registry-unavailable", "{code:?}");
         assert_eq!(fixture.registry.applications().len(), 1, "{code:?}");
@@ -932,6 +873,48 @@ async fn a_failed_readback_after_a_committed_start_is_unfinished() {
         assert_eq!(retried["isError"], false, "{retried}");
         assert_eq!(fixture.registry.applications().len(), 1, "{code:?}");
     }
+}
+
+#[tokio::test]
+async fn an_unlinked_start_receipt_survives_concealed_get_for_a_new_instance() {
+    let fixture = Fixture::start().await;
+    fixture.registry.add_application(
+        json!({"address":ADDRESS_A,"owner":CITIZEN_A,
+            "newAddressLine":"Old address","newLocality":"Town","newPostalCode":"PS-100"}),
+        draft_request(),
+    );
+    let caller = fixture.caller(CITIZEN_A);
+    let result = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(result["application"]["status"], "draft");
+    let id = started_identifier(&result);
+    assert!(fixture.registry.seen().iter().any(|seen| {
+        seen.method == http::Method::GET && seen.path == format!("/v1/proposals/{id}")
+    }));
+    assert_eq!(fixture.registry.applications().len(), 2);
+}
+
+#[tokio::test]
+async fn a_linked_start_receipt_does_not_hide_a_failed_get() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let first = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(first["isError"], false, "{first}");
+    fixture.registry.promote_created_self_link();
+    fixture.registry.fail_next_at(
+        http::Method::GET,
+        "/v1/proposals/",
+        BRegProblemCode::ResourceNotFound,
+    );
+    let retry = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(error_code(&retry), "registry-unavailable");
+    assert_eq!(fixture.registry.applications().len(), 1);
 }
 
 #[tokio::test]
@@ -975,12 +958,12 @@ async fn a_registry_failure_on_the_update_patch_is_unfinished() {
     let fixture = Fixture::start_with_audit(Some(audit)).await;
     let caller = fixture.caller(CITIZEN_A);
     let draft = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"address": ADDRESS_A, "owner": CITIZEN_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
     fixture
         .registry
-        .fail_next(http::Method::PATCH, BRegProblemCode::ServiceUnavailable);
+        .fail_next(http::Method::POST, BRegProblemCode::ServiceUnavailable);
     let value = fixture
         .call(
             &caller,
@@ -1001,12 +984,12 @@ async fn a_definite_refusal_of_the_update_patch_is_refused() {
     let fixture = Fixture::start_with_audit(Some(audit)).await;
     let caller = fixture.caller(CITIZEN_A);
     let draft = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        json!({"address": ADDRESS_A, "owner": CITIZEN_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
     fixture
         .registry
-        .fail_next(http::Method::PATCH, BRegProblemCode::PreconditionFailed);
+        .fail_next(http::Method::POST, BRegProblemCode::PreconditionFailed);
     let value = fixture
         .call(
             &caller,
@@ -1019,4 +1002,137 @@ async fn a_definite_refusal_of_the_update_patch_is_refused() {
     let record = response_record(&capture);
     assert_eq!(record["outcome"], "refused");
     assert_eq!(record["reason"], "stale-application");
+}
+
+#[tokio::test]
+async fn listing_resumes_only_the_callers_own_target_and_refuses_arbitrary_filters() {
+    let fixture = Fixture::start().await;
+    for (owner, target) in [
+        (CITIZEN_A, ADDRESS_A),
+        (CITIZEN_B, ADDRESS_B),
+        (CITIZEN_A, ADDRESS_B),
+    ] {
+        fixture.registry.add_application(
+            json!({"address":target,"owner":owner,"newLocality":"Port Selene"}),
+            draft_request(),
+        );
+    }
+    let caller = fixture.caller(CITIZEN_A);
+    let listed = fixture.call(&caller, LIST_APPLICATIONS, json!({})).await;
+    assert_eq!(listed["isError"], false, "{listed}");
+    assert_eq!(listed["applications"].as_array().unwrap().len(), 1);
+    let seen = fixture.registry.seen();
+    let request = seen
+        .iter()
+        .find(|seen| seen.path == "/v1/proposals")
+        .unwrap();
+    let query = request.query.as_deref().unwrap();
+    assert!(
+        query.contains("owner=caller") && query.contains("target=") && query.contains("limit=20")
+    );
+    let refused = fixture
+        .call(&caller, LIST_APPLICATIONS, json!({"owner":CITIZEN_B}))
+        .await;
+    assert_eq!(error_code(&refused), "invalid-arguments");
+    assert_eq!(fixture.registry.seen().len(), seen.len());
+}
+#[tokio::test]
+async fn expired_start_receipts_refuse_without_creating_another_proposal() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let first = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(first["isError"], false, "{first}");
+    fixture.registry.expire_receipts();
+    let retry = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert!(retry["isError"] == true);
+    assert_eq!(fixture.registry.applications().len(), 1);
+    let keys: Vec<_> = fixture
+        .writes()
+        .into_iter()
+        .map(|seen| seen.idempotency_key)
+        .collect();
+    assert_eq!(keys[0], keys[1]);
+
+    let mut fresh = start_arguments();
+    fresh["startAttemptId"] = json!(START_ATTEMPT_B);
+    let next = fixture.call(&caller, START_APPLICATION, fresh).await;
+    assert_ne!(started_identifier(&next), started_identifier(&first));
+    assert_eq!(fixture.registry.applications().len(), 2);
+}
+
+#[tokio::test]
+async fn an_edit_only_task_grant_does_not_need_action_start_authority() {
+    let fixture = Fixture::start().await;
+    let id = fixture.registry.add_application(
+        json!({"address":ADDRESS_A,"owner":CITIZEN_A,
+        "newAddressLine":"Old address","newLocality":"Town","newPostalCode":"PS-100"}),
+        draft_request(),
+    );
+    fixture.registry.restrict_operations(&["get", "edit"]);
+    let caller = fixture.caller(CITIZEN_A);
+    let edited = fixture
+        .call(
+            &caller,
+            UPDATE_APPLICATION,
+            json!({"applicationId":id.to_string(),"expectedRevision":"1",
+        "patch":[{"op":"replace","path":"/newLocality","value":"Port Selene"}]}),
+        )
+        .await;
+    assert_eq!(edited["isError"], false, "{edited}");
+    assert_eq!(
+        fixture.registry.applications()[&id].data["newLocality"],
+        "Port Selene"
+    );
+    let listed = fixture.call(&caller, LIST_APPLICATIONS, json!({})).await;
+    assert_eq!(error_code(&listed), "not-permitted");
+    assert!(fixture
+        .registry
+        .seen()
+        .iter()
+        .all(|seen| !seen.path.ends_with("/proposals") || seen.method != http::Method::POST));
+}
+#[tokio::test]
+async fn a_start_only_grant_returns_the_initial_proposal_and_cannot_get_or_list_it() {
+    let fixture = Fixture::start().await;
+    fixture.registry.restrict_operations(&["start"]);
+    let caller = fixture.caller(CITIZEN_A);
+    let started = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(started["isError"], false, "{started}");
+    assert_eq!(started["application"]["status"], "draft");
+    assert!(started.get("registryData").is_none());
+    let retry = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(
+        retry["application"]["applicationId"],
+        started["application"]["applicationId"]
+    );
+    let mut fresh = start_arguments();
+    fresh["startAttemptId"] = json!(START_ATTEMPT_B);
+    let next = fixture.call(&caller, START_APPLICATION, fresh).await;
+    assert_ne!(
+        next["application"]["applicationId"],
+        started["application"]["applicationId"]
+    );
+    assert_eq!(fixture.registry.applications().len(), 2);
+    let id = started["application"]["applicationId"].clone();
+    for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW] {
+        let refused = fixture
+            .call(&caller, tool, json!({"applicationId":id}))
+            .await;
+        assert_eq!(error_code(&refused), "not-permitted");
+    }
+    let refused = fixture.call(&caller, LIST_APPLICATIONS, json!({})).await;
+    assert_eq!(error_code(&refused), "not-permitted");
+    assert!(fixture
+        .registry
+        .seen()
+        .iter()
+        .all(|seen| !seen.path.starts_with("/v1/proposals")));
 }

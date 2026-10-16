@@ -68,6 +68,8 @@ async fn ingestion_run_journey_commits_resumes_and_replays_without_duplicates() 
         .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let run = body_json(created).await["run"].clone();
+    assert_eq!(run["recordType"], "widget");
+    assert!(run.get("entityId").is_none());
     assert_eq!(run["status"], "open");
     assert_eq!(run["complete"], false);
     assert_eq!(run["nextChunkIndex"], 0);
@@ -3814,7 +3816,7 @@ async fn listing_runs_filters_by_the_callers_bound_access_context() {
 
     let cross_context_cursor = harness
         .get_json(
-            &format!("/v1/records/widgets/ingestion-runs?after={run_id}"),
+            &format!("/v1/records/widgets/ingestion-runs?cursor={run_id}"),
             &zone_b,
         )
         .await;
@@ -3822,6 +3824,61 @@ async fn listing_runs_filters_by_the_callers_bound_access_context() {
         cross_context_cursor.status(),
         StatusCode::BAD_REQUEST,
         "a cursor naming another context's run is refused"
+    );
+}
+
+/// A run listing pages with `limit` and `cursor` and answers `nextCursor`; the
+/// former `after` parameter is refused with a problem naming `cursor`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn listing_runs_pages_by_cursor_and_refuses_after_naming_cursor() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let first = harness
+        .create_run(&claims, &plan_chunks(&announce_items("cursor-a", 1), 3))
+        .await;
+    let second = harness
+        .create_run(&claims, &plan_chunks(&announce_items("cursor-b", 1), 3))
+        .await;
+
+    let page = harness
+        .get_json("/v1/records/widgets/ingestion-runs?limit=1", &claims)
+        .await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let page = body_json(page).await;
+    assert_eq!(page["hasMore"], true, "{page}");
+    assert!(page.get("nextAfter").is_none(), "{page}");
+    let cursor = page["nextCursor"].as_str().expect("nextCursor").to_owned();
+    let next = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs?limit=1&cursor={cursor}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(next.status(), StatusCode::OK);
+    let next = body_json(next).await;
+    let mut listed = [
+        page["runs"][0]["runId"].as_str().unwrap().to_owned(),
+        next["runs"][0]["runId"].as_str().unwrap().to_owned(),
+    ];
+    listed.sort();
+    let mut created = [first, second];
+    created.sort();
+    assert_eq!(listed, created);
+    assert_eq!(next["hasMore"], false, "{next}");
+    assert_eq!(next["nextCursor"], Value::Null, "{next}");
+
+    let renamed = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs?after={cursor}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(renamed.status(), StatusCode::BAD_REQUEST);
+    let problem = body_json(renamed).await;
+    assert_eq!(problem["code"], "query.invalid", "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("`cursor`"),
+        "{problem}"
     );
 }
 
@@ -4516,7 +4573,8 @@ const FIXTURE_HEAD: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "entities":[{
+  "datasets":[{"id":"test-dataset"}],
+  "recordTypes":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
@@ -4541,8 +4599,8 @@ const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
-    "permissions":{"entities":[{
-      "entity":"widget","operations":["create","get","patch","batch"],
+    "permissions":{"records":[{
+      "recordType":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -4550,8 +4608,8 @@ const FIXTURE_TAIL: &str = r#"
   },{
     "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management"],
-    "permissions":{"entities":[{
-      "entity":"widget","operations":["create","patch","batch"],
+    "permissions":{"records":[{
+      "recordType":"widget","operations":["create","patch","batch"],
       "readableFields":["label"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -4559,8 +4617,8 @@ const FIXTURE_TAIL: &str = r#"
   },{
     "id":"reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["public-reading"],
-    "permissions":{"entities":[{
-      "entity":"widget","operations":["get","list"],
+    "permissions":{"records":[{
+      "recordType":"widget","operations":["get","list"],
       "readableFields":["label"],
       "rowBoundaries":"unrestricted"
     }]}
@@ -4623,11 +4681,11 @@ fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
 /// permissions on create-only entities, so the immutable entity grants
 /// create and batch and the announced patch is unexecutable either way.
 fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
-    let project = r#"{
+    let project = r#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
         "batch":{"maximumItems":3,"maximumBytes":8192},
         "fields":[
@@ -4647,15 +4705,15 @@ fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
         "id":"patcher","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":{
-          "entities":[
+          "records":[
             {
-              "entity":"widget","operations":["patch","batch"],
+              "recordType":"widget","operations":["patch","batch"],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             },
             {
-              "entity":"asset","operations":["create","batch"],
+              "recordType":"asset","operations":["create","batch"],
               "readableFields":["jurisdiction","label"],
               "writableFields":["jurisdiction","label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

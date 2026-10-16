@@ -1,6 +1,6 @@
 ---
 title: Configure Evidence Gateway
-description: Shape an Evidence Gateway deployment project's runtime file, governed bundle, key material, immutability, and validation with evidence check.
+description: Validate an Evidence Gateway project, its target bindings and complete grants, then create a deployment candidate.
 status: current
 owner: registry-docs
 source_repos:
@@ -10,500 +10,100 @@ doc_type: how-to
 locale: en
 standards_referenced: []
 ---
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
-Configuring Evidence Gateway means assembling one deployment project: a governed `bundle/` of YAML,
-Rhai scripts, schemas, and fixtures, plus a process-local `runtime.yaml` that binds it to a
-listener, a secret root, and audit storage. Both are trusted, startup-only artifacts. Evidence Gateway
-loads them once, compiles and validates them together, and refuses to reload, merge, or
-partially serve a later change. `evidence check` is the gate every edit to the project must pass
-before `evidence serve` runs it.
+If you are preparing an Evidence Gateway deployment, validate the authored project, its environment
+bindings and complete grants together before you create a candidate.
+Use matching `evidence` and `evidencectl` binaries and start from the project you completed in
+[your first assertion](../../tutorials/first-evidence-assertion/).
 
-## The project layout
+## Edit the owning document
 
-`evidencectl init` starts local authoring from an OpenAPI document or from a synthetic SQLite
-starter:
+Keep reusable meaning in `evidence.yaml`: AssertionDefinitions, named Sources and Functions,
+selector profiles, Outputs and package grant ceilings.
+Keep environment bindings in the selected target: service identity, authentication, Source
+connections, signer, secret references, listener, audit destination and operational limits.
+Keep complete access profiles and grants in the target's separate authority document.
+A local client registration names existing access profiles; registration grants no authority by itself.
 
-```sh
-project_dir="<dir>"
-openapi_source="<file-or-url>"
-evidencectl init "$project_dir" --openapi "$openapi_source" --profile local
+Use the [authoring reference](../../products/registry-evidence/authoring-form/) for how these fields
+fit together and the [configuration reference](../../reference/evidence-configuration/) for exact
+keys, variants and constraints.
+Editor diagnostics and `evidencectl` use the same normalized model.
+A schema-valid document still needs reference, interface, grant and runtime validation.
 
-evidencectl init "$project_dir" --transport sqlite-extract --profile local
-```
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs;
+    crates/registry-evidence-authoring/src/target.rs;
+    crates/registry-evidencectl/src/normalized.rs. */}
 
-```text
-<dir>/
-  .gitignore
-  source.openapi.yaml  retained OpenAPI document, for HTTP source authoring
-  selectors/           reusable Version 1 selector-profile objects
-  sources/             reusable Version 1 source objects
-  adapters/            source preparation and extraction scripts
-  schemas/             source parameter, response, and fact schemas
-  queries/             fixed reviewed statements, for SQLite source authoring
-  questions/           question-authoring documents
-  derivations/         derivation scripts
-  fixtures/            synthetic executable cases
-  secrets/             owner-only, unbound disposable local keys
-```
+<ConfigurationFormatChecks product="evidence" />
 
-The OpenAPI path retains the document bytes exactly and creates empty authoring directories.
-`evidencectl source suggest <dir>` then drafts one HTTP source and its editable artifacts.
-The SQLite path creates a neutral synthetic source, statement, question, derivation, schemas, and
-fixture that `evidencectl test <dir>` can evaluate immediately. Neither path
-creates identity-provider configuration, a production target, a real extract, or a deployable bundle. Both
-automatically create disposable local signing and HMAC material. After you add a question to an
-HTTP project, `evidencectl dev start`
-compiles the authoring objects into a private local runtime and delegates validation to the real
-Evidence Gateway loader. Each development session also starts the pinned stock ThunderID issuer
-and scaffolds a disposable P-256 key for the optional SD-JWT VC holder. A project with no explicit
-access policy also gets an implicit caller pair; explicit local clients use their keys under
-`.evidence/clients/`.
+## Check the selected target
 
-A compact question may set `responseFormats: [signed-jws, sd-jwt-vc]` to permit both signed
-serializations during local development. Omission means signed JWS only. Signed JWS is mandatory,
-and `sdJwtVc` on a reviewed structured answer also requires the explicit `sd-jwt-vc` permission.
-Production format authority comes from the deployment target's bundle-wide ceiling and exact
-authority grants, not from this local compiler convenience.
-
-Check an editable project before running its fixtures:
+From your authored project, run:
 
 ```sh
-evidencectl check "<editable-project>"
-evidencectl explain "<editable-project>"
+evidencectl check . --target local-target.yaml --deny-warnings
+evidencectl explain . --target local-target.yaml
 ```
 
-The offline check reports incomplete authoring as field-addressed warnings and can still exit
-successfully. Add `--deny-warnings` when any gap must refuse the command. Explain applies the same
-authoring validation, then reports its status, diagnostics, revision, and inventory of questions,
-sources, selectors, derivations, and local access without reading secrets or contacting a
-dependency.
-
-Select one deployment target explicitly when you need a closure check:
+A target argument may name a YAML file or a directory containing `target.yaml`.
+Explain reports definition revisions, Function interfaces and call sites, resource ceilings and
+effective complete grants without resolving secrets or reading Source values.
+If check names a missing local deployment input, provision the reviewed public key before claiming
+deployment closure.
+For a production or evidence-grade target, require that closure explicitly:
 
 ```sh
-evidencectl check "<editable-project>" \
-  --target "<editable-project>/environments/production/evidence" \
-  --production
+evidencectl check . --target "<production-target>" --production --deny-warnings
 ```
 
-This applies the target's declared production or evidence-grade assurance profile and validates
-its governance, runtime structure, public keys, source connections, and governed package. It does
-not require target-host paths or secrets to exist, run fixtures, or prove live readiness.
+Production check refuses a missing governed public signing key before runtime delegation.
+Offline closure does not prove target-host secret paths or live dependency readiness.
+Correct a refused file or field using its diagnostic, then rerun check.
+Do not weaken an assurance profile or a grant to make validation succeed.
 
-{/* Evidence: crates/registry-evidencectl/src/check.rs, check() and explain();
-    crates/registry-evidencectl/src/lib.rs, CheckArgs and ExplainArgs. */}
+{/* Evidence: crates/registry-evidencectl/src/check.rs;
+    crates/registry-evidencectl/tests/production_build.rs. */}
 
-## The runtime file
+## Run authored fixtures
 
-`runtime.yaml` binds one governed package to one process: where the package lives, what the
-listener binds to, where secrets sit, where audit entries go, and which private CA files a source or the
-access-token issuer may trust. It is process-local operator configuration, not part of the reviewed package, and
-`products/evidence/contracts/runtime.schema.yaml` is its schema of record.
-
-Top-level required fields:
-
-| Field | Binds |
-| --- | --- |
-| `apiVersion` | Fixed at `id.registrystack.org/formats/evidence/runtime/v1alpha1`. |
-| `kind` | Fixed at `EvidenceRuntimeConfig`. |
-| `package` | `root`, the stable absolute path to the governed package directory, plus an optional `expectedDigest` that must match the digest of its verified `SHA256SUMS` file. |
-| `listener` | `bind` as one `host:port` value (loopback, private IPv4, or unique-local IPv6 only; an IPv6 host goes in brackets), `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
-| `secretProviders` | The secret providers the deployment enables, at least one. `file.root` is the owner-only directory every `secret:file/<name>` reference resolves beneath; `environment: {}` enables `secret:env/<NAME>` references to operator-named variables, and any reference in the reviewed bundle may then name any variable in the process environment; prefer the file provider, or give the process a dedicated environment holding only the secrets it needs. A reference to a provider that is not declared is refused. |
-| `audit` | `destination` (`file` by default, or `stdout`); for `file`, the absolute `path` of the active audit file, `rotateBytes` (100 MiB by default), and `retentionDays` (90 by default). |
-| `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source or `authentication` can select through `tlsTrustProfile`. |
-
-An optional `metricsListener` (`bind`) serves `GET /metrics` on a second private
-binding; absent by default, it is documented in `products/evidence/OPERATOR-CONTRACT.md` under
-Metrics reference rather than in the public Evidence Gateway contract.
-
-`runtime.yaml` cannot override anything the package governs. The schema's `ownership` block closes
-the allowed set to the package root and optional expected digest, listener binding and
-process limits, the optional metrics listener binding, the enabled secret providers and file-secret
-root, the audit destination with its path, rotation size, and retention, and logical
-private-CA file bindings. Every other field, including service identity, authentication,
-authority, sources, disclosure, and signing policy, belongs to the package alone.
-
-## The bundle
-
-`bundle/evidence.yaml` is the single governed contract Evidence Gateway compiles and validates as one
-atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-level sections:
-
-| Section | Declares |
-| --- | --- |
-| `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
-| `authentication` | `oidc`, the one trusted OIDC access-token issuer: issuer, the single accepted `audience`, token type, algorithms, `jwksSource` (only `type: uri` with a fixed `uri`), maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. An optional `tlsTrustProfile` names the private CA the key set is served under; see [An issuer behind a private CA](#an-issuer-behind-a-private-ca). |
-| `audit` | Audit pseudonyms: `hashKeyRef`, the secret the pseudonym key is derived from, and `hashKeyVersion`, stamped into every pseudonym. Every audit gate is fail closed. |
-| `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
-| `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
-| `signing` | Fixed ES256 signing, governed active and published public JWK files, revoked service key identifiers, the fixed JWKS path, and assertion validity and clock-skew bounds. |
-| `responseFormats` (optional) | The bundle-wide ceiling on releasable serializations; defaults to signed JWS alone and must always include it. |
-| `selectorProfiles` | Named, bounded scalar field sets a subject role may be looked up by. |
-| `sources` | Named sources: a closed transport tag selects HTTP JSON (base URL, authentication, the fixed request shape) or SQLite extract (extract profile, the fixed statement), plus acquisition posture and the response, extraction, and fact schemas bound to each. |
-| `authorityProfiles` | Named requester-tag gates: which grants (requirement, purpose, audience, subject roles, selector profiles, value origins) a caller carrying those tags holds. |
-| `requirements` | The assertion definitions themselves: id, closed acquisition, purposes, subject roles, reference frameworks, evidence type, validity, derivation script and parameters, output concepts, fixtures, and disclosure-guard family. |
-
-Configure the OpenID Connect (OIDC) issuer to include `registry_actor_kind` on every Evidence
-access token. The claim name defaults to `registry_actor_kind` and can be changed with
-`authentication.oidc.claims.actorKind`. Its value must be exactly `human`, `agent`, or `service`;
-a missing or malformed value causes authentication to fail before Evidence evaluates authority or
-accesses a source.
-
-{/* Evidence: crates/registry-evidence/src/auth.rs, Authenticator::extract_context();
-    crates/registry-platform-oidc/src/authorization_claims.rs, actor_kind();
-    products/evidence/contracts/bundle.schema.yaml. */}
-
-Everything under `bundle/` is mounted read-only and covered by one revision digest computed over
-the exact bundle bytes; there is no partial edit, hot reload, or fallback
-(`bundle.schema.yaml`, `atomic_revision`). Allowed bundle directories are `adapters/`,
-`derivations/`, `schemas/`, `codelists/`, `fixtures/`, and `public-keys/`; symlinks and any file
-outside them fail startup (`bundle.schema.yaml`, `bundle_layout`).
-
-Evidence Gateway's four coequal acceptance definitions are adult status, residence region, professional
-licence status, and legal-parent relationship (`products/evidence/README.md`,
-`products/evidence/OPERATOR-CONTRACT.md`). You shape each as an ordinary `requirements` entry
-with its own acquisition, derivation script, and fixtures. The four are presented as coequal, and none
-of them is a privileged domain type, a Rust built-in operation, or a special route.
-
-Each requirement declares one closed acquisition kind. `single` names one fixed source.
-`search-then-fetch` names a fixed search source and a distinct fixed fetch source:
-
-```yaml
-requirements:
-  - uri: urn:example:requirement:registered-status:v1
-    kind: criterion
-    acquisition:
-      type: search-then-fetch
-      search: subject-search
-      fetch: subject-record
-```
-
-The fetch runs only after the search returns one schema-valid match. Rust passes the validated search
-FactSet to the fetch as transient `prior_facts`; a fetch source may bind one declared scalar fact to a
-complete path segment. Neither a response nor a script can select a source, origin, method, credential,
-or additional call. The requirement's effective acquisition posture is the weaker posture of its two
-sources (`products/evidence/contracts/source-contract.yaml`, invariant `V1-I40`).
-
-### An issuer behind a private CA
-
-When the access-token issuer serves its key set under a certificate authority that is not in the
-system trust store, name a trust profile on `authentication.oidc` and bind it in `runtime.yaml`, exactly
-as a source does:
-
-```yaml
-# bundle (governance.yaml in a production project)
-authentication:
-  oidc:
-    jwksSource:
-      type: uri
-      uri: https://issuer.internal.example/oauth2/jwks
-    tlsTrustProfile: issuer-pki
-```
-
-```yaml
-# runtime.yaml
-outboundTls:
-  systemRoots: true
-  trustProfiles:
-    issuer-pki: {caBundleFile: /etc/registry-evidence/ca/issuer-pki.pem}
-```
-
-The CA file is trusted beside the system roots for the `jwksSource.uri` connection alone; it widens no
-source connection and no other process. Hostname verification stays on, and there is no setting
-that disables verification. The file follows the same rules as a source CA file: an absolute path,
-no write permission for anyone, and a bounded PEM bundle. Changing it requires a restart but does
-not change the package digest. The binding is exact in both directions, so a runtime file that binds the
-profile without the bundle naming it, or the reverse, is refused. A source and the issuer may share
-one profile. A local HTTP `jwksSource.uri` cannot name a profile. `evidence check
---require-runtime-dependencies` fetches the key set through the profile, so a missing or wrong CA
-is reported before the listener binds.
-
-{/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
-    crates/registry-evidence/src/bundle.rs, validate_runtime_bindings();
-    products/evidence/contracts/bundle.schema.yaml, authentication.oidc.tlsTrustProfile. */}
-
-## What Rhai scripts may and may not do
-
-A deployment project supplies three kinds of Rhai script, one per source or requirement, and Rust
-compiles and reviews all of them at startup (`products/evidence/contracts/rhai-abi.yaml`).
-Scripts are trusted, reviewed, immutable bundle artifacts; that trust extends to provider and
-requirement semantics only, and it never grants transport, credential, authorization, signing,
-audit, or evidence-construction authority.
-
-### Preparation, extraction, derivation
-
-| Script | Signature | Owns | Never touches |
-| --- | --- | --- | --- |
-| `prepare` (adapters) | `(source_required_selectors, adapter_context) -> RequestParts` | Rendering an ordered query and a bounded JSON body from already authorized selector values, trusted parameters, and any validated prior facts supplied to a fixed fetch. | Source origin, method, path, headers, credentials, TLS, proxy, timeout, redirects, or request count; those stay Rust-owned. |
-| `extract` (adapters) | `(projected_source_response, adapter_context) -> LookupResult` | Reading one already-projected, schema-validated response and returning `match` with facts, `no_match`, or `ambiguous`. | Choosing a candidate, scoring, counting, or emitting any diagnostic beyond the closed outcome. |
-| `derive` (derivations) | `(facts, declared_authorized_selectors, evaluation_context) -> ConceptValueSet` | Comparing facts against declared authorized selectors and producing at most 16 typed concept values. | Requester, purpose, audience, authority, grant, token, credential, or a logging, audit, or signing handle. |
-
-Every stage runs on fresh invocation state. The exact `adapter_context` contains only `parameters`
-and `prior_facts`. Prior facts are empty for single and search stages; a fetch receives only the
-schema-validated search FactSet. Only final fetch facts reach derivation. Failures map to one closed,
-value-free class per stage (`adapter_input_error`,
-`source_protocol_error`, `derivation_input_error`), and raw Rhai errors never reach a public
-response.
-
-### Capability boundary
-
-Scripts get fresh local variables, bounded same-file helper functions, pure expressions, and
-bounded array, map, and string construction. They cannot reach the filesystem, environment,
-network, process, or a module system; they get no ambient clock, timezone, randomness, UUID,
-logging, or printing; and they cannot define anonymous functions, dispatch dynamically, or index
-an array with a computed negative offset (`products/evidence/contracts/rhai-abi.yaml`,
-`capabilities`).
-
-Everything a script computes with runs through a fixed primitive library: date and instant
-parsing, exact-decimal arithmetic, calendar addition, bucket lookup, codelist lookup, list and set
-membership, and a handful of bounded string and array operations, each pure, deterministic, and
-domain-neutral (`products/evidence/contracts/primitive-library.yaml`). Ordinary floating-point
-values stay usable inside preparation and extraction, but a derived concept value can never be an
-ordinary Rhai float: exact numbers use the declared integer or the Rust-owned `Decimal` type.
-`entity_reference_seed` wraps a source-derived value in a protected type Rhai can construct but
-never read back, print, or serialize; only Rust projects it into an audience-scoped reference
-after output validation.
-
-## Key material
-
-Generate the audit and subject-binding secrets independently and keep the private files inside the
-configured secret root. `evidencectl keygen` writes private material as owner-only files and never
-prints its contents (`crates/registry-evidencectl/src/keygen.rs`):
+Add or update synthetic fixtures for each changed AssertionDefinition, then run:
 
 ```sh
-evidencectl keygen secret --output "<secrets-dir>/audit-hmac-key"
-evidencectl keygen secret --output "<secrets-dir>/subject-binding-hmac-key"
+evidencectl test . --target local-target.yaml --explain
 ```
 
-### Local P-256 signing JWKs
+This delegates evaluation to the actual Evidence fixture kernel.
+A Source suggestion alone is not a complete definition or an authored fixture.
+The SQLite starter supports offline fixture evaluation; local `dev start` refuses SQLite serving.
+Use the same declared Source and complete grants when you bind a published extract for deployment.
 
-For local assurance, Evidence Gateway signs with a P-256 private JSON Web Key (JWK) referenced by
-`signer.privateKeyRef`. The governed public half lives under `bundle/public-keys/`; its service
-`kid` is the RFC 7638 thumbprint that the runtime derives, not an operator-chosen value.
+{/* Evidence: crates/registry-evidencectl/src/fixtures.rs;
+    crates/registry-evidencectl/tests/dev_lifecycle.rs. */}
 
-Generate a disposable local pair with:
+## Create and preflight the candidate
+
+Write a candidate outside the authored project, into a directory that does not exist:
 
 ```sh
-evidencectl keygen signing --output-dir "<owner-only-local-directory>"
+evidencectl package . --target "<deployment-target>" --output ../evidence-candidate
 ```
 
-Do not use this command to provision a production signer.
+The candidate contains the immutable `bundle/`, process-local `runtime.yaml` and
+`compiled-authority.yaml`.
+One captured project snapshot supplies all candidate artifacts, and the runtime validates compiled
+authority even when no fixtures exist.
+Install the bundle at the emitted runtime's package path, provision its referenced secrets, activate
+the compiled authority and run `evidencectl doctor --runtime-config <absolute-file>` before serving.
+The [Evidence Gateway product page](../../products/registry-evidence/) links to the runnable standalone
+project with synthetic data and cleanup.
 
-Production and evidence-grade deployments use a workload-local Vault or OpenBao Transit proxy.
-The runtime names its Unix socket, mount, key name, pinned nonzero version, and bounded timeout.
-The private key stays in Transit. Startup validates the configured public P-256 JWK, pinned version,
-custody controls, and a sign-and-verify operation before the deployment is ready.
-Follow
-[Configure Transit signing for Evidence Gateway](../../tutorials/move-evidence-to-production-signing/)
-for provider key, public JWK, proxy, and policy setup.
+Authority activation has its own revision, digest and durable history.
+Restart the intended process to adopt a successor authority snapshot; ongoing requests keep their
+resolved snapshot and remain subject to live task-grant validity and release-audit checks.
+An assertion proves only its declared claims and bindings, not downstream write or review authority.
 
-### `audit-hmac-key`
-
-Evidence Gateway derives the key for requester and subject pseudonyms in audit entries from this
-random secret, which the bundle's `audit.hashKeyRef` names. It must differ from the subject-binding
-secret. Replacing it without incrementing `audit.hashKeyVersion` silently changes every pseudonym
-under an unchanged version prefix.
-
-### `subject-binding-hmac-key`
-
-Evidence Gateway uses this random secret to derive audience-scoped subject references from authorized
-selector values. The references let an assertion identify its subject without disclosing the
-selector values or creating one identifier that every audience can reuse.
-
-### Client assertion keys
-
-A source obtains its access token with the client-credentials grant and authenticates to the token
-endpoint in one of two ways, each its own `authentication.type`: `oauth2-client-credentials` sends a
-client secret, and `oauth2-private-key-jwt` signs with a private key. The private-key type is RFC
-7523 section 2.2 `private_key_jwt`: Evidence Gateway signs a short-lived assertion with the key that
-`clientAssertionKeyRef` names and sends that assertion in place of a secret, so no shared secret
-reaches the token endpoint. SMART on FHIR Backend Services sources authenticate this way.
-
-Generate the pair with:
-
-```sh
-evidencectl keygen client-assertion --output-dir "<secrets-dir>"
-```
-
-The default writes `client-assertion-p384-private-jwk` and `client-assertion-p384-public.jwk.json`.
-Passing `--algorithm rs384` writes `client-assertion-rsa2048-private-jwk` and
-`client-assertion-rsa2048-public.jwk.json` instead. SMART App Launch v2.2.0 requires a token endpoint
-to validate only one of ES384 and RS384, so the source's authorization server decides which key you
-need. The two pairs use different filenames, so a deployment facing two sources that disagree keeps
-both in one secret root.
-
-A deployment reaching two authorization servers needs a key for each, and both live in the same
-secret root, so name them:
-
-```sh
-evidencectl keygen client-assertion --output-dir "<secrets-dir>" --private-name records-authority-key
-```
-
-`--private-name` names the private file itself, so the name you pass is the one
-`clientAssertionKeyRef` points at, as `secret:file/records-authority-key`. The public half is written
-beside it as `records-authority-key-public.jwk.json`. A name follows the `secret:file/` grammar: a
-lowercase ASCII letter, then lowercase letters, digits, `.`, `_`, or `-`. `evidencectl` refuses
-anything else rather than write key material no bundle could reference.
-
-Point `clientAssertionKeyRef` at the private file and register the public file with the source's
-authorization server. The `kid` is the RFC 7638 thumbprint of the public half, and Evidence Gateway
-sends it in the assertion header so the authorization server selects the registered key without an
-operator-chosen identifier. Each assertion carries a fresh `jti` and expires within five minutes, so
-an authorization server that refuses replays has an identifier to record
-(`crates/registry-platform-authcommon/src/client_assertion.rs`).
-
-Evidence Gateway sets the assertion's `aud` to `tokenEndpoint` exactly as the bundle spells it, which
-is the value SMART App Launch requires. RFC 7523 section 3 asks only that the audience identify the
-authorization server and says the token endpoint URL MAY be used, so a server that expects a
-different identifier states it in `clientAssertionAudience`:
-
-```yaml
-authentication:
-  type: oauth2-private-key-jwt
-  tokenEndpoint: https://gateway.example.gov/oauth2/token
-  clientIdRef: secret:file/source-client-id
-  clientAssertionKeyRef: secret:file/source-client-key
-  clientAssertionAudience: https://auth.example.gov/realms/main
-  maximumCacheSeconds: 300
-```
-
-Two kinds of server need it: one reached through a proxy or load balancer, where the URL Evidence
-Gateway dials is not the one the authorization server knows itself by, and one that expects its
-issuer identifier. RFC 8414 does not require an issuer identifier to share an origin with the token
-endpoint, so Evidence Gateway imposes no relationship between the two. RFC 7523 section 3 has the
-authorization server compare the value by Simple String Comparison, so what you write is signed byte
-for byte: a default port or a trailing slash survives into the claim rather than being normalized
-away. The key is accepted only under `type: oauth2-private-key-jwt`, since a client secret carries
-no assertion to hold the claim, and it changes only who may accept the assertion, never where the
-token request goes. Register one assertion key per authorization server: a key registered at two servers is
-what would let an assertion audienced for one be presented to the other.
-
-## Immutability
-
-Evidence Gateway refuses to start from a deployment input it could write to, and reports a
-non-immutable-input error rather than starting on it (`products/evidence/OPERATOR-CONTRACT.md`).
-Version 1 permits no reload, merge, mutation, governed-field override, or fallback bundle or
-runtime file: a project is either the exact bytes Evidence Gateway loaded at startup, or it is a different
-revision that requires a restart.
-
-Freeze the installed package and deployment target before proving them on the target host or
-serving them:
-
-```sh
-chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
-```
-
-The package directory and every file beneath it carry no write bits, the target's `runtime.yaml`
-is mode `444`,
-and the secret root stays owner-only at mode `0700` with mode `0600` secret files. Evidence Gateway
-Version 1 supports Unix targets only because these invariants rely on owner, mode, no-follow,
-link-count, and open-file-identity checks the platform provides
-(`products/evidence/contracts/runtime.schema.yaml`, `platform`). To edit the project again,
-make the change in the editable project, publish a new package, and freeze the new package before
-the next `evidence check --require-runtime-dependencies`.
-
-## Validating a project
-
-Two offline commands prove a project before it ever binds a port:
-
-```sh
-evidence check --runtime-config "<deployment-target>/runtime.yaml"
-evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
-  --fixture "fixtures/<cases>.yaml"
-```
-
-`evidence check` reads the runtime file, verifies the package its `package.root` names, and
-loads, compiles, and validates the complete bundle and runtime file together: every selector,
-role, profile, authority, and source binding resolves, every script compiles against the frozen
-ABI, and each CA bundle a trust profile names parses. It reads no secret material, opens no audit
-destination, and contacts no source or other network service, so it runs the same on a laptop, in
-CI, and on the target host (`crates/registry-evidence/src/check.rs`). It does not stop at the first
-problem: it reports every problem it finds with its file, line, column, and a three-segment code
-such as `config.unknown-key` or `evidence.bundle.compile-refused`, and never repeats a configured
-value. `--format json` prints the same report as one document for a CI job, and `--deny-warnings`
-refuses a project that only drew warnings. It exits `0` when the project passed, `1` when it was
-refused, `2` on a usage error, and `3` when something it depends on could not be read
-(`crates/registry-evidence/src/main.rs`). `evidence evaluate` replays one fixture file's synthetic
-cases through the reviewed adapter, derivation, and output gate, with no source and no network
-involved.
-
-Whether the deployment can run is a property of the host, not of the configuration. On the target
-host, after freezing the package and the runtime file, add `--require-runtime-dependencies`:
-
-```sh
-evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
-```
-
-The flag also proves what serving needs: the deployment inputs are read-only, the secret material
-is present and owner-only, each bound extract is fresh, the audit destination is writable, the
-configured signer is ready, the source credentials resolve, and every access-token JWKS is
-reachable (`crates/registry-evidence/src/cli.rs`). A dependency the host cannot provide, such as a
-stale extract or an audit destination it cannot write, exits `3`; a deployment input the host
-holds wrongly, such as a writable runtime file, exits `1`. Add
-`--require-audit-under <absolute-directory>` to also prove the audit destination resolves inside
-the directory the deployment declares persistent.
-
-A fixture failure names the contract that broke and nothing else, so it says a case failed but not
-which stage it stopped at. Add `--explain` to print, for every case, the stages it reached and how
-each one ended, and `--explain-format json` to render the same trace as one document for a CI job
-(`crates/registry-evidence/src/trace.rs`). The trace reports member names, counts, and identifiers,
-never a response, fact, derived, or selector value, and each fixture's own
-`diagnostics_exclude` canaries are checked against it before it is printed. The flag is offline
-only: `evidence serve` has no equivalent.
-
-`evidencectl test <editable-project> [--target <deployment-target>]` privately compiles the
-editable project, runs the runtime-owned bundle checks, then evaluates every fixture the
-questions reference and reports `PASS` or `FAIL` per step
-(`crates/registry-evidencectl/src/fixtures.rs`). Add `--explain` to relay each fixture's trace with
-its step, or as that fixture's `trace` field under `--format json`. The incomplete workspace created
-by the OpenAPI form of `evidencectl init` has no fixture cases, so it cannot pass this gate until
-the author adds them. Both `check` and `test` must pass before `evidence serve` runs the revision.
-
-## Build a production candidate
-
-An editable project is not a deployment input. Add complete named targets when the reviewed source,
-questions, and fixtures are ready. Keep them in the deployment-operator Git repository with public
-keys and nonsecret Transit settings, but never private JWKs, audit masters, provider tokens, or live
-identifiers. There are no overlays, environment branches, substitutions, or symlinks:
-
-```text
-environments/
-  local/evidence/{governance.yaml,runtime.yaml,public-keys/}
-  staging/evidence/{governance.yaml,runtime.yaml,public-keys/}
-  production/evidence/{governance.yaml,runtime.yaml,public-keys/}
-```
-
-`governance.yaml` supplies the production-owned bundle fields, including service, issuer,
-authentication, audit, subject binding, rate limits, signing, response formats, and authority
-profiles. It cannot override selectors, sources, or requirements. Each production question adds
-stable concept identifiers and a `governance` block with its requirement, frameworks, Evidence Type,
-validity, observation timezone, fixture, and disclosure families.
-
-`runtime.yaml` remains the ordinary runtime document. It names the final absolute bundle,
-private listener, secret root, audit path, and any private CA files for one target. It is copied
-without transformation.
-
-Build a new candidate directory with explicit target and output paths:
-
-```sh
-evidencectl package "<editable-project>" \
-  --target "<editable-project>/environments/production/evidence" \
-  --output "<new-package-directory>"
-```
-
-The output is one create-only package with `SHA256SUMS` at its root. Runtime configuration stays in
-the target. The package contains no secret values, source responses, local request state, or audit
-records. The compiler validates it with the `evidence` binary and every referenced fixture before publishing.
-It does not contact an identity provider or a source endpoint.
-
-Use [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
-for the full handoff, and [Evidencectl command reference](../../reference/evidencectl/) for the
-command contract.
-
-## Next
-
-- Configure the deployment's OAuth issuer to issue access tokens matching this bundle's
-  authentication and authority profile.
-- [Enable SD-JWT VC in a deployment](../enable-sd-jwt-vc/) to serialize the same assertion as a
-  wallet-usable credential instead of a signed JWS.
-- [Read and ship the Evidence Gateway audit log](../../operate/evidence-audit/) for the audit
-  entries this deployment writes once handed to an operator.
+{/* Evidence: crates/registry-evidencectl/src/build.rs;
+    crates/registry-evidence/src/authority.rs;
+    products/evidence/examples/standalone/README.md. */}

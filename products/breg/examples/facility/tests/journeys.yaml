@@ -1,0 +1,195 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: register-facility
+    steps:
+      - id: create-operator
+        recordType: operator
+        accessProfile: operator-editor
+        claims:
+          principal: synthetic-operator-editor
+          scopes: [registry:operator:write]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data: {operatorCode: OP-001, status: active, jurisdiction: zone-a}
+        expect: {outcome: success, status: 201}
+        capture: operator
+      - id: register
+        action: register-facility
+        accessProfile: facility-registrar
+        claims:
+          principal: synthetic-registrar
+          scopes: [registry:facility:register]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: invoke
+          idempotencyKey: facility-journey-register
+          input:
+            facilityCode: FAC-001
+            name: Example facility
+            addressLine: 1 Example Road
+            city: Example city
+            postalCode: '10200'
+            operatorId: {recordCapture: operator}
+            jurisdiction: zone-a
+        expect: {outcome: success, status: 200}
+        captureResults: {facility: facility, assignment: assignment}
+      - id: read-facility
+        recordType: facility
+        accessProfile: facility-reader
+        claims:
+          principal: synthetic-reader
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: facility}
+        expect: {outcome: success, status: 200, fields: {facilityCode: FAC-001, status: active}}
+      - id: read-assignment
+        recordType: facility-assignment
+        accessProfile: facility-reader
+        claims:
+          principal: synthetic-reader
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: assignment}
+        expect: {outcome: success, status: 200, fields: {jurisdiction: zone-a}}
+      - id: conceal-foreign-facility
+        recordType: facility
+        accessProfile: facility-reader
+        claims:
+          principal: synthetic-foreign-reader
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-b}
+        request: {type: get, recordCapture: facility}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: start-deactivation
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: start, input: {facilityId: {recordCapture: facility}}}
+        expect: {outcome: success, status: 201, fields: {state: draft}}
+        capture: deactivation-draft
+      - id: conceal-other-author-proposal
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-other-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: get, proposalCapture: deactivation-draft}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: edit-deactivation
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: edit, proposalCapture: deactivation-draft, input: {facilityId: {recordCapture: facility}}}
+        expect: {outcome: success, status: 200, fields: {state: draft}}
+        capture: deactivation-edited
+      - id: stale-deactivation-submit
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: submit, proposalCapture: deactivation-edited, etagCapture: deactivation-draft}
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: submit-deactivation
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: submit, proposalCapture: deactivation-edited, idempotencyKey: submit-deactivation}
+        expect: {outcome: success, status: 200, fields: {state: submitted}}
+        capture: deactivation-submitted
+      - id: recover-deactivation-submit
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: submit, proposalCapture: deactivation-edited, idempotencyKey: submit-deactivation}
+        expect: {outcome: success, status: 200, fields: {state: submitted}}
+      - id: inspect-deactivation-for-apply
+        action: deactivate-facility
+        accessProfile: facility-correction-applier
+        claims:
+          principal: synthetic-applier
+          scopes: [registry:facility:correction:apply]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: get, proposalCapture: deactivation-submitted}
+        expect: {outcome: success, status: 200, fields: {state: submitted}}
+        capture: deactivation-for-apply
+      - id: apply-deactivation
+        action: deactivate-facility
+        accessProfile: facility-correction-applier
+        claims:
+          principal: synthetic-applier
+          scopes: [registry:facility:correction:apply]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: apply, proposalCapture: deactivation-for-apply, submissionCapture: deactivation-submitted, idempotencyKey: apply-deactivation}
+        expect: {outcome: success, status: 200, fields: {state: applied}}
+        capture: deactivation-applied
+      - id: recover-deactivation-apply
+        action: deactivate-facility
+        accessProfile: facility-correction-applier
+        claims:
+          principal: synthetic-applier
+          scopes: [registry:facility:correction:apply]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: apply, proposalCapture: deactivation-for-apply, submissionCapture: deactivation-submitted, idempotencyKey: apply-deactivation}
+        expect: {outcome: success, status: 200, fields: {state: applied}}
+      - id: read-inactive-facility
+        recordType: facility
+        accessProfile: facility-reader
+        claims:
+          principal: synthetic-reader
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: facility}
+        expect: {outcome: success, status: 200, fields: {status: inactive}}
+      - id: start-cancelled-deactivation
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: start, input: {facilityId: {recordCapture: facility}}}
+        expect: {outcome: success, status: 201}
+        capture: cancelled-draft
+      - id: cancel-deactivation
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: synthetic-author
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: cancel, proposalCapture: cancelled-draft}
+        expect: {outcome: success, status: 200, fields: {state: cancelled}}

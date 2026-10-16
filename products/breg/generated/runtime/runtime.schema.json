@@ -653,20 +653,6 @@
       ],
       "type": "object"
     },
-    "RawEventDeliveryConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "payloadRetentionDays": {
-          "default": 7,
-          "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
-          "format": "uint32",
-          "maximum": 30,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
     "RawEventDestinationConfig": {
       "additionalProperties": false,
       "properties": {
@@ -849,20 +835,6 @@
           "type": "object"
         }
       ]
-    },
-    "RawIdempotencyConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "receiptRetentionDays": {
-          "default": 7,
-          "description": "Days a held response is kept after its commit. A retry after it is\nrefused as expired and never executed; the key stays spent.",
-          "format": "uint32",
-          "maximum": 365,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "type": "object"
     },
     "RawJwksCacheConfig": {
       "additionalProperties": false,
@@ -1212,6 +1184,28 @@
       ],
       "type": "object"
     },
+    "RawRetentionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hookPayloadRetentionDays": {
+          "default": 7,
+          "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
+          "format": "uint32",
+          "maximum": 30,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "receiptRetentionDays": {
+          "default": 7,
+          "description": "Days a held response is kept after its commit. A retry after it is\nrefused as expired and never executed; the key stays spent.",
+          "format": "uint32",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "RawReviewAuthorityConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1252,34 +1246,6 @@
         "profile",
         "producerId",
         "recoveryDays"
-      ],
-      "type": "object"
-    },
-    "RawReviewExecutorConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "accessProfile": {
-          "type": "string"
-        },
-        "endpoint": {
-          "type": "string"
-        },
-        "privateKeyJwt": {
-          "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig",
-          "description": "A refreshing client-assertion credential for the executing registry.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
-        },
-        "registryId": {
-          "type": "string"
-        },
-        "tokenRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "A static bearer token for the executing registry. Exactly one of\n`tokenRef` and `privateKeyJwt` is written."
-        }
-      },
-      "required": [
-        "endpoint",
-        "registryId",
-        "accessProfile"
       ],
       "type": "object"
     },
@@ -1425,10 +1391,6 @@
           "$ref": "#/$defs/SecretReference",
           "description": "PEM CA bundle for the authority and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
         },
-        "caseworkResource": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
-        },
         "clientAssertionAudience": {
           "$ref": "#/$defs/ExternalId"
         },
@@ -1447,6 +1409,10 @@
           "description": "The status route appended to `baseUrl`'s path. It starts with `/` and\nhas exactly one whole `{grantId}` segment; every other segment uses\nonly letters, digits, `-`, `.`, `_`, and `~`. Omitted,\n`/v1/task-grants/{grantId}/status`.",
           "type": "string"
         },
+        "statusResource": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
+        },
         "statusScope": {
           "$ref": "#/$defs/ExternalId",
           "default": "casework:grants:status",
@@ -1463,7 +1429,7 @@
         "clientAssertionAudience",
         "clientId",
         "privateKeyRef",
-        "caseworkResource"
+        "statusResource"
       ],
       "type": "object"
     },
@@ -1509,13 +1475,6 @@
     "database": {
       "$ref": "#/$defs/RawRegistryDatabase"
     },
-    "eventDelivery": {
-      "$ref": "#/$defs/RawEventDeliveryConfig",
-      "default": {
-        "payloadRetentionDays": 7
-      },
-      "description": "Optional event-delivery tuning. Defaults to the server's bounded retention policy."
-    },
     "eventDestinations": {
       "additionalProperties": {
         "$ref": "#/$defs/RawEventDestinationConfig"
@@ -1540,13 +1499,6 @@
       "$ref": "#/$defs/RawFieldEncryptionConfig",
       "default": {},
       "description": "Optional field-encryption data-key provider. Absent by default, which\nserves unencrypted entities only."
-    },
-    "idempotency": {
-      "$ref": "#/$defs/RawIdempotencyConfig",
-      "default": {
-        "receiptRetentionDays": 7
-      },
-      "description": "Optional idempotency tuning. Defaults to a seven-day receipt horizon."
     },
     "identity": {
       "$ref": "#/$defs/RawDeploymentIdentity"
@@ -1576,19 +1528,17 @@
     "package": {
       "$ref": "#/$defs/RawPackageConfig"
     },
+    "retention": {
+      "$ref": "#/$defs/RawRetentionConfig",
+      "default": {
+        "hookPayloadRetentionDays": 7,
+        "receiptRetentionDays": 7
+      },
+      "description": "Optional retention windows for idempotency receipts and retained\nevent payloads. Defaults to a seven-day receipt horizon and the\nserver's bounded payload retention policy."
+    },
     "reviewAuthorities": {
       "additionalProperties": {
         "$ref": "#/$defs/RawReviewAuthorityConfig"
-      },
-      "default": {},
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
-    },
-    "reviewExecutors": {
-      "additionalProperties": {
-        "$ref": "#/$defs/RawReviewExecutorConfig"
       },
       "default": {},
       "propertyNames": {

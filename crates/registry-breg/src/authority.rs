@@ -31,6 +31,7 @@ pub struct DirectClaimExpectation {
 #[serde(rename_all = "camelCase")]
 pub struct AuthorityClaimUse {
     pub profile_id: String,
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub surface: String,
     pub field_id: String,
@@ -42,7 +43,7 @@ pub struct AuthorityClaimUse {
 pub enum AuthorityInventoryError {
     #[error("a compiled authenticated grant has no principal claim")]
     PrincipalClaimMissing,
-    #[error("a compiled authority target entity does not exist")]
+    #[error("a compiled authority target record type does not exist")]
     TargetEntityNotCompiled,
     #[error("a compiled row boundary field does not exist")]
     BoundaryFieldNotCompiled,
@@ -67,7 +68,7 @@ pub fn authority_inventory(
                 Some(profile.principal_claim.as_str()),
                 &profile.required_purposes,
             )?;
-            let surface = format!("entities/{}/profiles/{}", entity.id, profile.id);
+            let surface = format!("recordTypes/{}/profiles/{}", entity.id, profile.id);
             inventory.boundaries(entity, &profile.id, &surface, &profile.row_boundaries)?;
             for lookup in profile
                 .lookups
@@ -98,35 +99,14 @@ pub fn authority_inventory(
                     )?;
                 }
             }
-            for id in &profile.submitter_targets {
-                let target = target_entity(registry, id)?;
-                let grant = target
-                    .access_profiles
-                    .get(&profile.id)
-                    .ok_or(AuthorityInventoryError::TargetEntityNotCompiled)?;
-                inventory.boundaries(
-                    target,
-                    &profile.id,
-                    &format!("{surface}/submitterTargets/{id}"),
-                    &grant.row_boundaries,
-                )?;
-            }
-            for target in &profile.apply_targets {
-                inventory.boundaries(
-                    target_entity(registry, &target.entity)?,
-                    &profile.id,
-                    &format!("{surface}/applyTargets/{}", target.entity),
-                    &target.row_boundaries,
-                )?;
-            }
-            for presence in &profile.request_presence {
-                inventory.boundaries(
-                    target_entity(registry, &presence.request_type)?,
-                    &profile.id,
-                    &format!("{surface}/requestPresence/{}", presence.request_type),
-                    &presence.row_boundaries,
-                )?;
-            }
+        }
+    }
+    for dataset in registry.statistical_datasets().values() {
+        for profile in dataset.access_profiles.values() {
+            inventory.profile(
+                Some(profile.principal_claim.as_str()),
+                &profile.required_purposes,
+            )?;
         }
     }
     for action in &registry.actions().actions {
@@ -142,6 +122,22 @@ pub fn authority_inventory(
                     ),
                     &target.row_boundaries,
                 )?;
+            }
+        }
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            for grant in &proposal.permissions {
+                inventory.profile(grant.principal_claim.as_deref(), &grant.required_purposes)?;
+                for target in &grant.targets {
+                    inventory.boundaries(
+                        target_entity(registry, &target.entity_id)?,
+                        &grant.profile_id,
+                        &format!(
+                            "actions/{}/proposals/profiles/{}/targets/{}",
+                            action.id, grant.profile_id, target.entity_id
+                        ),
+                        &target.row_boundaries,
+                    )?;
+                }
             }
         }
     }

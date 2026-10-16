@@ -149,9 +149,16 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
 
     def test_load_environment_prepares_one_dev_client_and_preserves_existing_output(self) -> None:
         fixture = REPOSITORY / "products/breg/acceptance/business-establishments"
+        source_registry = (fixture / "registry.yaml").read_text(encoding="utf-8")
+        expected_registry = json.loads(source_registry)
+        expected_registry["package"]["sourceRevision"] = "business-establishments-loadtest-0.1.0"
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"
             loadenv.local_project(fixture, project)
+            self.assertEqual(
+                json.loads((project / "registry.yaml").read_text(encoding="utf-8")),
+                expected_registry,
+            )
             clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
             self.assertIn("id: loadtest-driver", clients)
             self.assertIn("accessProfiles: [business-operator]", clients)
@@ -164,10 +171,31 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.local_project(fixture, project)
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertEqual((fixture / "registry.yaml").read_text(encoding="utf-8"), source_registry)
         self.assertIn(
             "operator-without-purpose-is-concealed",
             (fixture / "tests/journeys.yaml").read_text(encoding="utf-8"),
         )
+
+    def test_load_environment_refuses_symbolic_links(self) -> None:
+        fixture = REPOSITORY / "products/breg/acceptance/business-establishments"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            linked_fixture = root / "linked-fixture"
+            linked_fixture.symlink_to(fixture, target_is_directory=True)
+            linked_output = root / "linked-output"
+            linked_output.symlink_to(root / "missing", target_is_directory=True)
+            for source, output in ((linked_fixture, root / "project"), (fixture, linked_output)):
+                with self.subTest(source=source.name, output=output.name):
+                    with self.assertRaises(loadenv.LoadtestError):
+                        loadenv.local_project(source, output)
+            copied_fixture = root / "fixture"
+            shutil.copytree(fixture, copied_fixture)
+            (copied_fixture / "linked-registry.yaml").symlink_to(fixture / "registry.yaml")
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.local_project(copied_fixture, root / "project")
+            self.assertFalse((root / "project").exists())
+            self.assertTrue(linked_output.is_symlink())
 
     def test_dev_header_must_be_the_owned_private_session_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

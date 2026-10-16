@@ -46,6 +46,86 @@ fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
     );
 }
 
+#[test]
+fn dev_token_requests_each_clients_registered_resource_or_the_default() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = thread::spawn(move || {
+        (0..2)
+            .map(|_| {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its headers");
+                    request.extend_from_slice(&chunk[..read]);
+                    if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                };
+                let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(str::trim)
+                            .map(str::parse::<usize>)
+                    })
+                    .unwrap()
+                    .unwrap();
+                while request.len() < header_end + length {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its body");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let fields = url::form_urlencoded::parse(&request[header_end..header_end + length])
+                    .into_owned()
+                    .collect::<BTreeMap<_, _>>();
+                let body = br#"{"access_token":"e30.e30.signature","token_type":"Bearer","expires_in":300}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+                fields
+            })
+            .collect::<Vec<_>>()
+    });
+    let (_temp, mut state, mut clients, files) = fixture();
+    state.issuer_port = port;
+    let resource = "urn:example:messaging";
+    clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap()
+        .access_profiles
+        .clear();
+    clients.issuer.resources.push(config::IssuerResource {
+        audience: resource.into(),
+        scopes: vec!["registry:evidence:lookup".into()],
+    });
+    clients
+        .issuer
+        .client_resources
+        .insert("source".into(), resource.into());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+
+    token_with_scopes(&state, "source", vec!["registry:evidence:lookup".into()]).unwrap();
+    token_with_scopes(&state, "operator", vec!["registry:generic:operate".into()]).unwrap();
+    let requests = requests.join().unwrap();
+    assert_eq!(requests[0]["resource"], resource);
+    assert_eq!(requests[0]["scope"], "registry:evidence:lookup");
+    assert_eq!(requests[1]["resource"], state.audience());
+    assert_eq!(requests[1]["scope"], "registry:generic:operate");
+}
+
 /// A session whose `source` client is registered for `resource` and whose
 /// `operator` client is not, with its issuer placed on a local listener.
 fn external_resource_session(resource: &str) -> (tempfile::TempDir, State, TcpListener) {
@@ -213,7 +293,12 @@ seed: []
         binaries: BTreeMap::new(),
         failure: None,
     };
-    (temporary, state, clients, crate::init_files())
+    (
+        temporary,
+        state,
+        clients,
+        crate::retained_native_fixture_files(),
+    )
 }
 
 /// Enables a file secret provider rooted at a private directory inside
@@ -434,10 +519,10 @@ fn the_dev_registry_serves_with_one_role_and_its_rehearsal_stays_split() {
     );
 }
 
-fn write_init_project() -> (tempfile::TempDir, PathBuf) {
+fn write_retained_project() -> (tempfile::TempDir, PathBuf) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");
-    for (path, bytes) in crate::init_files() {
+    for (path, bytes) in crate::retained_native_fixture_files() {
         let full = project.join(path);
         fs::create_dir_all(full.parent().unwrap()).unwrap();
         fs::write(full, bytes).unwrap();
@@ -450,9 +535,9 @@ fn local_principal_source(claim: &str) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"generic-local","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://synthetic.example.test"},
         "package":{"sourceRevision":"synthetic-1"},
-        "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"operator","principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}]
+        "accessProfiles":[{"id":"operator","principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}]
     })
 }
 
@@ -553,67 +638,51 @@ fn local_sub_runtime_resolves_only_its_private_captured_journey() {
 }
 
 #[test]
-fn a_fresh_init_project_starts_without_edits() {
-    // `bregctl dev` runs the local session as the registry's one instance and
-    // needs one client per profile the journeys use, so the project `bregctl
-    // init` writes must satisfy both with its own clients file: a reader's
-    // first start needs no edit between the two commands.
-    let (_temporary, project) = write_init_project();
+fn a_fresh_init_project_is_ready_for_the_native_dev_lifecycle() {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let project = fs::canonicalize(temporary.path()).unwrap().join("project");
+    crate::init(&project).unwrap_or_else(|failure| {
+        panic!("init failed: {}", serde_json::to_string(&failure).unwrap())
+    });
     let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
-    let clients =
-        config::clients("dev-clients.yaml", &client_bytes).expect("the initialized clients parse");
-    let captured = capture(&project, &client_bytes).expect("a fresh init project is a dev project");
-    assert_eq!(captured.instance_id, "generic-registry");
+    let clients = config::clients("dev-clients.yaml", &client_bytes).expect("clients parse");
+    let captured = capture(&project, &client_bytes).expect("init writes a complete dev project");
+    assert_eq!(captured.instance_id, "local-directory");
     bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
-        .expect("every journey profile has a client");
-}
-
-#[test]
-fn the_professional_licences_submitter_is_a_person_a_paired_review_can_exclude() {
-    // The paired `professional-review` Casework template excludes a change
-    // request's initiator from its review, and BReg names an initiator only
-    // for a human caller. A service submitter would have its review refused.
-    let client_bytes = fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/starters/professional-licences/core/dev-clients.yaml"),
-    )
-    .expect("the starter's clients");
-    let clients =
-        config::clients("dev-clients.yaml", &client_bytes).expect("the starter's clients parse");
-    let submitter = clients
-        .clients
-        .iter()
-        .find(|client| {
-            client
-                .access_profiles
-                .iter()
-                .any(|profile| profile == "editor")
-        })
-        .expect("the editor profile has a local client");
+        .expect("each allowed and refused journey has an unambiguous client");
     assert_eq!(
-        submitter.claims.get("registry_actor_kind"),
-        Some(&serde_json::json!("human"))
+        journey_client(
+            &clients,
+            "directory-contact",
+            "conceal-contact-outside-jurisdiction",
+            "directory-editor"
+        )
+        .unwrap()
+        .claims["jurisdiction"],
+        "zone-b"
     );
-    assert!(submitter.allow_human_fixture);
 }
 
 #[test]
-fn the_generated_clients_header_names_the_teaching_bindings_section() {
-    // The header explains the one binding it generates and points at the
-    // section that documents the explicit binding it does not generate, so a
-    // reader who needs `testBindings` finds it without reading the source.
-    let header = String::from_utf8_lossy(crate::INIT_DEV_CLIENTS).into_owned();
-    for fact in ["testBindings", "'Explicit teaching clients'", "DEV.md"] {
-        assert!(
-            header.contains(fact),
-            "dev-clients.yaml header omits {fact}"
-        );
+fn every_initialized_template_has_complete_local_clients_and_journeys() {
+    for template in crate::starters::ids() {
+        let temporary = tempfile::tempdir().expect("temporary");
+        let project = fs::canonicalize(temporary.path()).unwrap().join("project");
+        crate::starters::run(&project, template).unwrap_or_else(|failure| {
+            panic!("{template}: {}", serde_json::to_string(&failure).unwrap())
+        });
+        let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+        let clients = config::clients("dev-clients.yaml", &client_bytes).unwrap();
+        let captured = capture(&project, &client_bytes)
+            .unwrap_or_else(|error| panic!("{template}: {error:#}"));
+        bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
+            .unwrap_or_else(|error| panic!("{template}: {error:#}"));
     }
 }
 
 #[test]
 fn a_journey_profile_without_a_client_is_refused_before_any_service_starts() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let client_bytes = br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
 kind: BRegDevClients
 clients:
@@ -1562,7 +1631,7 @@ clients:
 /// binds its profile.
 #[test]
 fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
     let mut clients =
         config::clients("dev-clients.yaml", &client_bytes).expect("the initialized clients parse");
@@ -1603,7 +1672,7 @@ clients:
 seed:
   - id: from-guest
     client: guest
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {}
 "#,
@@ -1647,7 +1716,9 @@ clients:
         .to_string()
         .contains("at most one default"));
 
-    let duplicate_binding = format!("{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n");
+    let duplicate_binding = format!(
+        "{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n"
+    );
     assert!(
         config::clients("dev-clients.yaml", duplicate_binding.as_bytes())
             .unwrap_err()
@@ -1863,14 +1934,43 @@ fn rehearsal_tokens_select_distinct_declared_purposes_on_one_logical_client() {
 }
 
 #[test]
+fn retired_seed_record_type_key_has_rename_diagnostic() {
+    let report = config::decode(
+        "clients.yaml",
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients: []
+seed:
+  - id: seed-record
+    client: reader
+    entity: record
+    accessProfile: reader
+    data: {code: synthetic-record}
+"#,
+    )
+    .unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/seed/0/entity")
+        .expect("the retired Record type key has its own diagnostic");
+    assert_eq!(diagnostic.code, "config.removed-key");
+    assert!(diagnostic.suggested_action.contains("recordType"));
+}
+
+#[test]
 fn seed_operation_defaults_to_create_and_accepts_explicit_import() {
     let create: config::Seed = serde_norway::from_str(
-        "id: create-reference\nclient: operator\nentity: reference\naccessProfile: operator\ndata: {code: AA}\n",
+        "id: create-reference\nclient: operator\nrecordType: reference\naccessProfile: operator\ndata: {code: AA}\n",
     )
     .unwrap();
     assert_eq!(create.operation, config::SeedOperation::Create);
+    assert_eq!(create.record_type, "reference");
+    let serialized = serde_json::to_value(&create).unwrap();
+    assert_eq!(serialized["recordType"], "reference");
+    assert!(serialized.get("entity").is_none());
     let imported: config::Seed = serde_norway::from_str(
-        "id: import-reference\nclient: operator\nentity: reference\naccessProfile: operator\noperation: import\ndata: {code: AA}\n",
+        "id: import-reference\nclient: operator\nrecordType: reference\naccessProfile: operator\noperation: import\ndata: {code: AA}\n",
     )
     .unwrap();
     assert_eq!(imported.operation, config::SeedOperation::Import);
@@ -2085,7 +2185,7 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
         "Name": format!("/{}", state.container_name()),
         "Config": { "Labels": { (LABEL): state.owner }, "Image": IMAGE },
     });
-    for image in [CANONICAL_IMAGE, IMAGE] {
+    for image in [CANONICAL_IMAGE, IMAGE, LEGACY_ECR_IMAGE] {
         let mut owned = container.clone();
         owned["Config"]["Image"] = json!(image);
         verified_container(&state, &owned).unwrap();
@@ -2105,6 +2205,10 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
     for image in [
         IMAGE.replace("67f41722", "07f41722"),
         CANONICAL_IMAGE.replace("67f41722", "07f41722"),
+        LEGACY_ECR_IMAGE.replace("67f41722", "07f41722"),
+        IMAGE.replace(":17.11@", ":17.10@"),
+        CANONICAL_IMAGE.replace(":17.11@", ":17.10@"),
+        LEGACY_ECR_IMAGE.replace(":17.11@", ":17.10@"),
         format!("untrusted.example/{CANONICAL_IMAGE}"),
         "postgres:17.11".to_owned(),
         "public.ecr.aws/docker/library/postgres:17.11".to_owned(),
@@ -2117,7 +2221,7 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
     let mut spatial = container.clone();
     spatial["Config"]["Image"] = json!(SPATIAL_IMAGE);
     verified_container(&state, &spatial).unwrap();
-    for image in [CANONICAL_IMAGE, IMAGE] {
+    for image in [CANONICAL_IMAGE, IMAGE, LEGACY_ECR_IMAGE] {
         spatial["Config"]["Image"] = json!(image);
         assert!(verified_container(&state, &spatial).is_err());
     }
@@ -2384,7 +2488,7 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
 
     // A start resolves the prerequisites and compares them before it inspects
     // a container or launches the supervisor.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let prerequisites = project.join("prerequisites");
     fs::create_dir(&prerequisites).unwrap();
     for (name, reported) in [
@@ -2686,8 +2790,7 @@ fn schema_test_refusal(message: &str) -> Vec<u8> {
 
 #[test]
 fn a_refused_native_command_names_its_first_failing_check_within_a_bound() {
-    let message =
-        "the fixture logical reference was refused: the request names a capture no earlier step declares";
+    let message = "the fixture logical reference was refused: the request names a capture no earlier step declares";
     let named =
         refused_check(&schema_test_refusal(message)).expect("the report names its first check");
     assert!(named.contains("test.step.failed"), "{named}");
@@ -3065,7 +3168,7 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
 
 #[test]
 fn a_first_start_reads_the_projects_dev_clients_without_a_flag() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let expected = fs::canonicalize(project.join("dev-clients.yaml")).unwrap();
     assert_eq!(clients_file(None, None, &project).unwrap(), expected);
 
@@ -3117,7 +3220,7 @@ fn append_comment(path: &Path, comment: &str) {
 
 #[test]
 fn the_source_pin_follows_the_compiled_meaning_not_the_authored_bytes() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let pin = |client_bytes: &[u8]| capture(&project, client_bytes).unwrap().digest;
     let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let original = pin(&client_bytes);
@@ -3176,24 +3279,23 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
     // The compiled registry carries the digest of the exact script bytes it
     // runs, so the pin treats any script edit, a comment included, as a
     // change of what the session would ship.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     edit_authored(
         &project.join("registry.yaml"),
-        "    permissions:\n      entities:\n        - entity: record-group\n          \
+        "    permissions:\n      records:\n        - recordType: record-group\n          \
          rowBoundaries: unrestricted\n          operations: [create, get, list]\n",
         "    permissions:\n      actions:\n        - action: create-record-group\n          \
          operations: [invoke]\n          \
-         targets: [{entity: record-group, rowBoundaries: unrestricted}]\n          \
-         results: [group]\n      entities:\n        - entity: record-group\n          \
+         targets: [{recordType: record-group, rowBoundaries: unrestricted}]\n          \
+         results: [group]\n      records:\n        - recordType: record-group\n          \
          rowBoundaries: unrestricted\n          operations: [create, get, list]\n",
     );
     append_comment(
         &project.join("registry.yaml"),
-        "\nactions:\n  - id: create-record-group\n    inputs:\n      \
+        "\nfunctions:\n  - id: create-record-group-plan\n    runtime: rhai\n    source: scripts/create-record-group.rhai\n    entrypoint: handle\n    abi: registry.action-plan/v1\nactions:\n  - id: create-record-group\n    inputs:\n      \
          - {id: code, type: string, required: true, maximumLength: 64, classification: public}\n    \
-         handler:\n      type: rhai\n      script: scripts/create-record-group.rhai\n      \
-         abi: registry.action-handler/v1\n      writes:\n        - id: group\n          \
-         target: {entity: record-group}\n          operation: create\n          \
+         execution: {mode: immediate}\n    plan:\n      type: function\n      function: create-record-group-plan\n      inputs: [code]\n      writes:\n        - id: group\n          \
+         target: {recordType: record-group}\n          operation: create\n          \
          fields: [code, label]\n",
     );
     fs::create_dir_all(project.join("scripts")).unwrap();
@@ -3216,7 +3318,7 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
 
 #[test]
 fn changed_inputs_are_refused_while_the_session_holds_records() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let state = retained_session(&project, Some("c".repeat(64)));
     edit_authored(
         &project.join("registry.yaml"),
@@ -3242,7 +3344,7 @@ fn changed_inputs_are_refused_while_the_session_holds_records() {
 fn a_byte_only_edit_keeps_the_session_that_holds_records() {
     // A comment changes no compiled meaning, so the retained session and its
     // records stay; the start goes on to look for the breg binary.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let state = retained_session(&project, Some("c".repeat(64)));
     append_comment(
         &project.join("registry.yaml"),
@@ -3277,7 +3379,7 @@ fn a_byte_only_edit_keeps_the_session_that_holds_records() {
 fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     // After `dev stop --remove` nothing remains for the source pin to protect,
     // so an edited project starts a fresh session on the retained ports.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let mut state = retained_session(&project, None);
     let ports = unused_ports();
     state.breg_port = ports[0];
@@ -3423,6 +3525,17 @@ fn export_client_reports_the_registered_external_resource() {
     assert_eq!(report["resource"], resource);
     assert_eq!(report["audience"], resource);
     assert_eq!(report["clientAssertionAudience"], state.issuer_origin());
+    assert_eq!(report["issuer"], state.issuer_origin());
+    assert_eq!(
+        report["subject"],
+        registry_thunderid_tooling::local::agent_id(&state.instance_id, "source")
+    );
+    let issuer_agent: Value =
+        serde_norway::from_slice(&fs::read(source_agent_path(&state)).unwrap()).unwrap();
+    assert_eq!(
+        report["subject"], issuer_agent["id"],
+        "the export names the actual issuer-provisioned subject"
+    );
     assert_ne!(report["resource"], state.audience());
     assert!(!report.to_string().contains("\"d\""));
 }
@@ -3514,39 +3627,6 @@ fn export_client_refuses_unsafe_destinations_and_source_links() {
 }
 
 #[test]
-fn plain_init_source_client_has_only_the_explicit_lookup_profile_and_a_distinct_key() {
-    let (_temp, mut state, _, files) = fixture();
-    let clients = config::clients("dev-clients.yaml", crate::INIT_DEV_CLIENTS).unwrap();
-    let source = clients
-        .clients
-        .iter()
-        .find(|client| client.id == "source")
-        .unwrap();
-    assert_eq!(source.access_profiles, ["evidence-source"]);
-    assert_eq!(source.scopes, ["registry:evidence:lookup"]);
-    assert_eq!(source.claims["registry_purpose"], "evidence-source-read");
-    assert_eq!(
-        source.claims["registry_principal"],
-        "generic-registry-source"
-    );
-    assert!(source.assertion_key_ref.is_none());
-    state.status = Status::Stopped;
-    initialize(&state.root(), &state, &clients, &files).unwrap();
-    let key = fs::read(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
-    for other in ["operator", "reader"] {
-        assert_ne!(
-            key,
-            fs::read(
-                state
-                    .root()
-                    .join(format!("credentials/{other}/assertion-key.jwk"))
-            )
-            .unwrap()
-        );
-    }
-}
-
-#[test]
 fn export_client_reuses_readable_nonexecutable_credentials_only() {
     for mode in [0o400, 0o600, 0o700] {
         let (_temp, state, clients, files) = fixture();
@@ -3582,7 +3662,7 @@ fn export_client_reuses_readable_nonexecutable_credentials_only() {
 
 #[test]
 fn removed_successor_database_is_refused_before_any_prerequisite_or_recreation() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let mut state = retained_session(&project, Some("a".repeat(64)));
     state.sequence = 2;
     state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
@@ -3690,36 +3770,12 @@ fn prepare_source_stays_runnable_while_dev_help_omits_it() {
     assert!(error.contains("local state path is missing"), "{error}");
 }
 
-/// Every published starter is a project a first `bregctl dev` starts with no
-/// clients flag, so each one carries the file name that start reads.
-#[test]
-fn every_published_starter_carries_the_clients_file_a_first_start_reads() {
-    let starters = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/starters");
-    let mut covered = 0;
-    for entry in fs::read_dir(&starters).expect("the published starters") {
-        let project = entry.expect("starter entry").path().join("core");
-        if !project.is_dir() {
-            continue;
-        }
-        let resolved = clients_file(None, None, &project).expect("a first start reads the file");
-        assert_eq!(
-            resolved,
-            fs::canonicalize(project.join("dev-clients.yaml")).unwrap()
-        );
-        config::clients("dev-clients.yaml", &fs::read(&resolved).unwrap())
-            .expect("starter clients parse");
-        covered += 1;
-    }
-    // Naming the starters here would hold their subjects in shipped source.
-    assert_eq!(covered, 4, "every published starter is covered");
-}
-
 #[test]
 fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let module = project.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
-    let entity = source["entities"]
+    let entity = source["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -3777,10 +3833,10 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
 
 #[test]
 fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let module = project.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
-    let entity = source["entities"]
+    let entity = source["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -3828,7 +3884,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
 
 #[test]
 fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
@@ -3867,7 +3923,7 @@ fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
 
 #[test]
 fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
@@ -3937,7 +3993,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
 
 #[test]
 fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
@@ -4322,223 +4378,6 @@ fn local_review_authorities_are_closed_and_bounded() {
 }
 
 #[test]
-fn local_review_executors_require_one_declared_service_client_and_profile() {
-    let (_temp, _state, mut clients, _files) = fixture();
-    clients.review_executors.insert(
-        "automatic-applier".into(),
-        config::LocalReviewExecutor {
-            access_profile: "operator".into(),
-            client: "operator".into(),
-        },
-    );
-    config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&clients).unwrap().into_bytes(),
-    )
-    .unwrap();
-
-    let mut invalid = clients.clone();
-    invalid
-        .review_executors
-        .get_mut("automatic-applier")
-        .unwrap()
-        .client = "undeclared".into();
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&invalid).unwrap().into_bytes()
-    )
-    .is_err());
-
-    let mut invalid = clients.clone();
-    invalid
-        .review_executors
-        .get_mut("automatic-applier")
-        .unwrap()
-        .access_profile = "other-profile".into();
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&invalid).unwrap().into_bytes()
-    )
-    .is_err());
-
-    let mut invalid = clients.clone();
-    invalid
-        .clients
-        .iter_mut()
-        .find(|client| client.id == "operator")
-        .unwrap()
-        .claims
-        .insert("registry_actor_kind".into(), json!("agent"));
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&invalid).unwrap().into_bytes()
-    )
-    .is_err());
-
-    let binding = clients.review_executors["automatic-applier"].clone();
-    for index in 0..9 {
-        clients
-            .review_executors
-            .insert(format!("automatic-applier-{index}"), binding.clone());
-    }
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&clients).unwrap().into_bytes()
-    )
-    .is_err());
-}
-
-#[test]
-fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
-    let (_project_temp, project) = write_init_project();
-    let project_file = project.join("registry.yaml");
-    let mut definition: Value =
-        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    definition["entities"].as_array_mut().unwrap().push(json!({
-        "id": "automatic-record",
-        "primaryDataset": "generic-registry",
-        "route": "automatic-records",
-        "mutationMode": "mutable",
-        "classification": "internal",
-        "changeControl": {"requiredFor":["create"]},
-        "fields": [
-            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
-        ]
-    }));
-    definition["entities"].as_array_mut().unwrap().push(json!({
-        "id": "record-change",
-        "primaryDataset": "generic-registry",
-        "route": "record-changes",
-        "mutationMode": "mutable",
-        "classification": "internal",
-        "fields": [
-            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
-        ],
-        "changeRequest": {
-            "effects": [{
-                "id": "created-record",
-                "target": {"entity":"automatic-record"},
-                "operation": "create",
-                "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
-            }],
-            "review": {"type": "required", "authority":"casework", "policyId":"record-approval"},
-            "onApproved": {"mode":"automatic", "executor":"automatic-applier"},
-            "retention": {"mode":"operator-erase"}
-        }
-    }));
-    let operator = definition["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "operator")
-        .unwrap();
-    operator["permissions"]["entities"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "entity":"record-change",
-            "operations":["create", "get", "patch", "submit-request"],
-            "readableFields":["code", "label"],
-            "writableFields":["code", "label"],
-            "requestVisibility":"owner",
-            "rowBoundaries":"unrestricted"
-        }));
-    definition["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id":"automatic-applier",
-            "actorKind":"service",
-            "requesterClients":["automatic-applier"],
-            "principalClaim":"registry_principal",
-            "requiredScopes":["registry:generic:apply"],
-            "requiredPurposes":["registry-application"],
-            "permissions":{"entities":[{
-                "entity":"record-change",
-                "operations":["get", "apply-request"],
-                "readableFields":["code", "label"],
-                "rowBoundaries":"unrestricted",
-            "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
-                "readableRequestFields":["review-state"]
-            }]}
-        }));
-    fs::write(&project_file, serde_norway::to_string(&definition).unwrap()).unwrap();
-
-    let clients_file = project.join("dev-clients.yaml");
-    let mut client_source: Value =
-        serde_norway::from_slice(&fs::read(&clients_file).unwrap()).unwrap();
-    client_source["clients"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id":"automatic-applier",
-            "accessProfiles":["automatic-applier"],
-            "scopes":["registry:generic:apply", "registry:unused"],
-            "claims":{
-                "registry_principal":"automatic-applier",
-                "registry_purpose":"registry-application"
-            }
-        }));
-    client_source["reviewExecutors"] = json!({
-        "automatic-applier": {
-            "accessProfile":"automatic-applier",
-            "client":"automatic-applier"
-        }
-    });
-    let client_bytes = serde_norway::to_string(&client_source)
-        .unwrap()
-        .into_bytes();
-    fs::write(&clients_file, &client_bytes).unwrap();
-    let clients = config::clients("dev-clients.yaml", &client_bytes).unwrap();
-    let captured = capture(&project, &client_bytes).unwrap();
-    let (_state_temp, mut state, _, _) = fixture();
-    state.instance_id = captured.instance_id;
-    initialize(&state.root(), &state, &clients, &captured.files).unwrap();
-
-    let root = state.root();
-    let runtime_bytes = fs::read(root.join("runtime-test.yaml")).unwrap();
-    let runtime: Value = serde_norway::from_slice(&runtime_bytes).unwrap();
-    let executor = &runtime["reviewExecutors"]["automatic-applier"];
-    assert_eq!(executor["endpoint"], state.breg_origin());
-    assert_eq!(executor["registryId"], "generic-registry");
-    assert_eq!(executor["accessProfile"], "automatic-applier");
-    assert!(executor.get("tokenRef").is_none());
-    let oauth = &executor["privateKeyJwt"];
-    assert_eq!(oauth["tokenEndpoint"], "http://127.0.0.1:8095/oauth2/token");
-    assert_eq!(oauth["assertionAudience"], "http://127.0.0.1:8095");
-    assert_eq!(oauth["resource"], state.audience());
-    assert_eq!(oauth["scopes"], json!(["registry:generic:apply"]));
-    assert_eq!(
-        oauth["clientIdRef"],
-        "secret:file/review-executor-automatic-applier-client-id"
-    );
-    assert_eq!(
-        oauth["clientAssertionKeyRef"],
-        "secret:file/review-executor-automatic-applier-client-assertion-key"
-    );
-    assert_eq!(
-        fs::read(root.join("secrets/review-executor-automatic-applier-client-id")).unwrap(),
-        fs::read(root.join("credentials/automatic-applier/client-id")).unwrap()
-    );
-    assert_eq!(
-        fs::read(root.join("secrets/review-executor-automatic-applier-client-assertion-key"))
-            .unwrap(),
-        fs::read(root.join("credentials/automatic-applier/assertion-key.jwk")).unwrap()
-    );
-    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
-        .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
-    registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml"))
-        .unwrap()
-        .activate_review_executors(&compiled)
-        .expect("the authored automatic executor activates");
-    assert!(!String::from_utf8(runtime_bytes)
-        .unwrap()
-        .contains("PRIVATE KEY"));
-}
-
-#[test]
 fn local_evidence_provider_ids_follow_the_governed_evidence_grammar() {
     // The map key names a provider the registry project declares, and the
     // governed Evidence identifier grammar admits an underscore. A key this
@@ -4893,7 +4732,7 @@ fn local_task_grant_status_uses_only_the_registered_status_client_and_resource()
             );
             assert_eq!(status["clientAssertionAudience"], "http://127.0.0.1:8095");
             assert_eq!(
-                status["caseworkResource"],
+                status["statusResource"],
                 external_resource
                     .map(str::to_owned)
                     .unwrap_or_else(|| state.audience())
@@ -5448,4 +5287,12 @@ fn the_grant_report_carries_the_diagnostics_member_every_report_has() {
             "diagnostics": []
         })
     );
+}
+
+#[test]
+fn external_review_executor_credentials_are_not_a_dev_client_contract() {
+    let (_, _, clients, _) = fixture();
+    let mut value = serde_json::to_value(&clients).unwrap();
+    value["reviewExecutors"] = json!({"legacy":{"accessProfile":"operator","client":"operator"}});
+    assert!(config::clients("dev-clients.yaml", &serde_json::to_vec(&value).unwrap()).is_err());
 }

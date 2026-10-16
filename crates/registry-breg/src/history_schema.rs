@@ -801,6 +801,8 @@ mod tests {
                 (
                     field.logical.id.clone(),
                     crate::model::CompiledField {
+                        display: Default::default(),
+                        relationship: None,
                         pattern: None,
                         id: field.logical.id.clone(),
                         field_type: field.logical.field_type.clone(),
@@ -814,7 +816,11 @@ mod tests {
             })
             .collect();
         CompiledEntity {
-            attachments: Default::default(),
+            api_name: "Membership".to_owned(),
+            display: Default::default(),
+            definition_revision:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            relationships: Default::default(),
             primary_dataset: None,
             id: "membership".to_owned(),
             source_module: None,
@@ -823,7 +829,6 @@ mod tests {
             tombstone: true,
             batch: None,
             change_control: None,
-            change_request: None,
             classification: Classification::Restricted,
             access_requirements: None,
             access_log: None,
@@ -901,6 +906,8 @@ mod tests {
         entity.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "note".to_owned(),
                 field_type: note.logical.field_type.clone(),
@@ -997,6 +1004,8 @@ mod tests {
         active.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "note".to_owned(),
                 field_type: extra.logical.field_type.clone(),
@@ -1116,6 +1125,8 @@ mod tests {
         entity.fields.insert(
             "status".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "status".to_owned(),
                 field_type: status.logical.field_type.clone(),
@@ -1136,6 +1147,8 @@ mod tests {
         entity.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "note".to_owned(),
                 field_type: note.logical.field_type.clone(),

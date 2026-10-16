@@ -841,11 +841,11 @@ fn json_from_bytes(bytes: &[u8]) -> Value {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
             "classification":"restricted",
             "fields":[
@@ -857,8 +857,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
@@ -866,8 +866,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"provenance","principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],

@@ -111,46 +111,30 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "source suggest failed: {}",
         stderr_of(&output)
     );
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains(&project.join("evidence.yaml").display().to_string()));
+    assert!(!stdout.contains("sources/source-b.yaml"), "{stdout}");
+    assert!(stdout.contains("evidencectl check"), "{stdout}");
+    assert!(stdout.contains("authored fixtures"), "{stdout}");
+    assert!(stdout.contains("evidencectl test"), "{stdout}");
 
-    let schema_path = project.join("schemas/source-b-response.schema.yaml");
-    let script_path = project.join("adapters/source-b-extract.rhai");
-    let facts_path = project.join("schemas/source-b-facts.schema.yaml");
-    let source_path = project.join("sources/source-b.yaml");
-    let prepare_path = project.join("adapters/source-b-prepare.rhai");
-    let parameters_path = project.join("schemas/source-b-parameters.schema.yaml");
-    for path in [
-        &schema_path,
-        &script_path,
-        &facts_path,
-        &prepare_path,
-        &parameters_path,
-    ] {
+    let prepare_path = project.join("functions/source-b-prepare.rhai");
+    let script_path = project.join("functions/source-b-extract.rhai");
+    for path in [&prepare_path, &script_path, &project.join("evidence.yaml")] {
         assert!(path.is_file(), "expected {} to be written", path.display());
     }
-    assert!(
-        source_path.is_file(),
-        "the V1 source object must be editable in place"
-    );
-    let source: Value =
-        serde_norway::from_str(&std::fs::read_to_string(&source_path).expect("read source object"))
-            .expect("source object parses");
-    assert_eq!(
-        source["apiVersion"],
-        "id.registrystack.org/formats/evidence/source/v1alpha1"
-    );
-    assert_eq!(source["kind"], "EvidenceSource");
+    let project_document: Value = serde_norway::from_str(
+        &std::fs::read_to_string(project.join("evidence.yaml")).expect("read EvidenceProject"),
+    )
+    .expect("EvidenceProject parses");
+    let source = &project_document["sources"]["source-b"];
     assert_eq!(source["type"], "http-json");
-    assert!(
-        source.get("sources").is_none(),
-        "source file has no wrapper"
-    );
-    assert_eq!(source["authentication"]["type"], "review-required");
+    assert_eq!(source["connection"], "source-b");
+    assert_eq!(source["acquisitionPosture"], "record-transformed");
 
-    // The response schema parses as YAML and carries the sample-derived
-    // bounds, widened by the narrowing policy rather than copied.
-    let schema: Value =
-        serde_norway::from_str(&std::fs::read_to_string(&schema_path).expect("read schema"))
-            .expect("the drafted response schema parses as YAML");
+    // The normalized Source response shape carries the sample-derived bounds,
+    // widened by the narrowing policy rather than copied.
+    let schema = &source["response"]["shape"];
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["additionalProperties"], Value::Bool(false));
     assert_eq!(schema["properties"]["total"]["minimum"], 0);
@@ -221,7 +205,7 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "a second run must not overwrite the first draft"
     );
     assert!(
-        stderr_of(&repeat).contains("refusing to overwrite"),
+        stderr_of(&repeat).contains("EvidenceProject already defines Source `source-b`"),
         "unexpected refusal message: {}",
         stderr_of(&repeat)
     );
@@ -281,9 +265,9 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
 
     let stdout = stdout_of(&output);
     for block in [
-        "--- schemas/source-c-response.schema.yaml ---",
-        "--- adapters/source-c-extract.rhai ---",
-        "--- schemas/source-c-facts.schema.yaml ---",
+        "--- functions/source-c-prepare.rhai ---",
+        "--- functions/source-c-extract.rhai ---",
+        "--- the block to merge at the document root in evidence.yaml ---",
     ] {
         assert!(
             stdout.contains(block),
@@ -470,8 +454,48 @@ fn evidencectl(arguments: &[String]) -> Output {
 fn scaffold(root: &Path, openapi: &str) -> PathBuf {
     let project = root.join("project");
     std::fs::create_dir(&project).expect("project directory");
-    for directory in ["sources", "adapters", "schemas"] {
-        std::fs::create_dir(project.join(directory)).expect("authoring directory");
+    std::fs::create_dir(project.join("functions")).expect("Function directory");
+    let document = serde_json::json!({
+        "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
+        "kind":"EvidenceProject",
+        "id":"suggest-e2e",
+        "selectorProfiles":{"subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}}},
+        "functions":[
+            {"id":"baseline-prepare","interface":"source-prepare/v1","source":"functions/baseline-prepare.rhai"},
+            {"id":"baseline-extract","interface":"source-extract/v1","source":"functions/baseline-extract.rhai"},
+            {"id":"baseline-derive","interface":"assertion-derive/v1","source":"functions/baseline-derive.rhai"}
+        ],
+        "sources":{"baseline":{
+            "type":"http-json","connection":"baseline","acquisitionPosture":"field-projected",
+            "selectors":[{"role":"subject","profiles":["subject-reference-v1"]}],
+            "request":{"method":"POST","path":"/v1/facts","fixedHeaders":[]},
+            "prepare":{"function":"baseline-prepare"},"extract":{"function":"baseline-extract"},
+            "response":{"projection":["/allowed"],"shape":{"type":"object","required":["allowed"],"properties":{"allowed":{"type":"boolean"}}},"maximumBytes":4096},
+            "facts":{"allowed":{"type":"boolean"}},
+            "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":1}
+        }},
+        "assertionDefinitions":{"baseline":{
+            "question":"Is the baseline condition satisfied?",
+            "semantics":{"requirement":"urn:example:requirements:baseline:v1","kind":"criterion","evidenceType":"urn:example:evidence-types:baseline:v1","referenceFrameworks":["urn:example:frameworks:baseline:v1"]},
+            "purpose":"testing","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audiences:test"]},
+            "subjects":[{"role":"subject","selectors":["subject-reference-v1"]}],
+            "acquisition":{"type":"single","source":"baseline"},"derive":{"function":"baseline-derive"},
+            "outputs":{"allowed":{"concept":"urn:example:concepts:allowed","type":"boolean"}},
+            "validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]
+        }}
+    });
+    std::fs::write(
+        project.join("evidence.yaml"),
+        serde_json::to_vec_pretty(&document).expect("EvidenceProject JSON"),
+    )
+    .expect("EvidenceProject");
+    for (name, script) in [
+        ("baseline-prepare", "fn prepare(selectors, context) { #{query: [], body: ()} }\n"),
+        ("baseline-extract", "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n"),
+        ("baseline-derive", "fn derive(facts, selectors, context) { [#{output: \"allowed\", value: facts[\"allowed\"]}] }\n"),
+    ] {
+        std::fs::write(project.join(format!("functions/{name}.rhai")), script)
+            .expect("Function script");
     }
     std::fs::write(project.join("source.openapi.yaml"), openapi).expect("retained OpenAPI");
     project
@@ -721,14 +745,15 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
     assert_eq!(report["status"], "complete");
     assert_eq!(report["sourceId"], "source-b");
     let files = report["files"].as_array().expect("written files");
-    assert_eq!(files.len(), 6, "the source object plus five artifacts");
+    assert_eq!(
+        files.len(),
+        3,
+        "two Functions plus the updated EvidenceProject"
+    );
     for relative in [
-        "sources/source-b.yaml",
-        "adapters/source-b-prepare.rhai",
-        "schemas/source-b-parameters.schema.yaml",
-        "schemas/source-b-response.schema.yaml",
-        "adapters/source-b-extract.rhai",
-        "schemas/source-b-facts.schema.yaml",
+        "functions/source-b-prepare.rhai",
+        "functions/source-b-extract.rhai",
+        "evidence.yaml",
     ] {
         assert!(
             files.contains(&serde_json::json!(project
@@ -756,7 +781,7 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
         report["equivalentCommand"]
     );
     assert!(
-        !stdout_of(&output).contains("--- schemas/source-b-response.schema.yaml ---"),
+        !stdout_of(&output).contains("--- functions/source-b-prepare.rhai ---"),
         "the draft blocks stay off JSON stdout"
     );
 

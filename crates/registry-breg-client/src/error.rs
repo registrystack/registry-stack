@@ -6,81 +6,6 @@ use crate::{BRegMetadataError, BRegMetadataErrorKind};
 
 pub use registry_platform_httputil::client::TransportKind;
 
-/// One closed kind of change-request plan refusal named by Base Registry Engine.
-///
-/// The kind is the whole reason the service discloses: it never carries planner
-/// script text, request values, or target data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BRegPlanRefusal {
-    Source,
-    Entrypoint,
-    Execution,
-    Result,
-    Ceiling,
-    Disposition,
-    Resource,
-}
-
-impl BRegPlanRefusal {
-    /// Every refusal kind a submission may be refused for.
-    pub const ALL: [Self; 7] = [
-        Self::Source,
-        Self::Entrypoint,
-        Self::Execution,
-        Self::Result,
-        Self::Ceiling,
-        Self::Disposition,
-        Self::Resource,
-    ];
-
-    /// Returns the exact term Base Registry Engine names this refusal by.
-    #[must_use]
-    pub const fn kind(self) -> &'static str {
-        match self {
-            Self::Source => "change_request.planner.source",
-            Self::Entrypoint => "change_request.planner.entrypoint",
-            Self::Execution => "change_request.planner.execution",
-            Self::Result => "change_request.planner.result",
-            Self::Ceiling => "change_request.planner.ceiling",
-            Self::Disposition => "change_request.planner.disposition",
-            Self::Resource => "change_request.planner.resource",
-        }
-    }
-
-    pub(crate) const fn detail(self) -> &'static str {
-        match self {
-            Self::Source => {
-                "The change-request planner refused the submission: change_request.planner.source."
-            }
-            Self::Entrypoint => {
-                "The change-request planner refused the submission: change_request.planner.entrypoint."
-            }
-            Self::Execution => {
-                "The change-request planner refused the submission: change_request.planner.execution."
-            }
-            Self::Result => {
-                "The change-request planner refused the submission: change_request.planner.result."
-            }
-            Self::Ceiling => {
-                "The change-request planner refused the submission: change_request.planner.ceiling."
-            }
-            Self::Disposition => {
-                "The change-request planner refused the submission: change_request.planner.disposition."
-            }
-            Self::Resource => {
-                "The change-request planner refused the submission: change_request.planner.resource."
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for BRegPlanRefusal {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.kind())
-    }
-}
-
 /// One bounded machine-readable Problem detail code.
 ///
 /// Immediate actions use package-declared refusal codes. Statistical release
@@ -155,10 +80,11 @@ pub enum BRegProblemCode {
     MutationConflict,
     PreconditionFailed,
     PreconditionRequired,
+    ProposalRejected,
+    ProposalSubmissionExpired,
     QueryCursorInvalid,
     QueryInvalid,
     RequestInvalid,
-    RequestPlanRefused(BRegPlanRefusal),
     RequestTimeout,
     ResourceNotFound,
     RuntimeFieldEncryptionUnavailable,
@@ -173,7 +99,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 31] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
@@ -189,16 +115,11 @@ impl BRegProblemCode {
         Self::MutationConflict,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
+        Self::ProposalRejected,
+        Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
-        Self::RequestPlanRefused(BRegPlanRefusal::Source),
-        Self::RequestPlanRefused(BRegPlanRefusal::Entrypoint),
-        Self::RequestPlanRefused(BRegPlanRefusal::Execution),
-        Self::RequestPlanRefused(BRegPlanRefusal::Result),
-        Self::RequestPlanRefused(BRegPlanRefusal::Ceiling),
-        Self::RequestPlanRefused(BRegPlanRefusal::Disposition),
-        Self::RequestPlanRefused(BRegPlanRefusal::Resource),
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeFieldEncryptionUnavailable,
@@ -230,10 +151,11 @@ impl BRegProblemCode {
             Self::MutationConflict => "mutation.conflict",
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
+            Self::ProposalRejected => "proposal.rejected",
+            Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
-            Self::RequestPlanRefused(_) => "request.plan_refused",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
             Self::RuntimeFieldEncryptionUnavailable => "runtime.field_encryption.unavailable",
@@ -251,10 +173,7 @@ impl BRegProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid
-            | Self::QueryInvalid
-            | Self::RequestInvalid
-            | Self::RequestPlanRefused(_) => 400,
+            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
             Self::ActionEvidenceFailed => 503,
             Self::ActionHandlerFailed => 500,
             Self::AuthenticationRefused => 401,
@@ -265,9 +184,11 @@ impl BRegProblemCode {
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
             | Self::MutationConflict
+            | Self::ProposalRejected
             | Self::StatisticalDatasetVersionConflict => 409,
             Self::IdempotencyExpired
             | Self::IngestionReceiptErased
+            | Self::ProposalSubmissionExpired
             | Self::StatisticalDatasetVersionWithdrawn => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
@@ -339,10 +260,15 @@ impl BRegProblemCode {
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",
             Self::PreconditionRequired => "The mutation precondition is required.",
+            Self::ProposalRejected => {
+                "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."
+            }
+            Self::ProposalSubmissionExpired => {
+                "The review result and application receipt of the submission are no longer retained."
+            }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
-            Self::RequestPlanRefused(refusal) => refusal.detail(),
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
             Self::RuntimeFieldEncryptionUnavailable => {
@@ -679,34 +605,8 @@ impl BaseRegistryClientError {
 
 #[cfg(test)]
 mod tests {
-    use super::{BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, TokenError, TransportKind};
+    use super::{BRegProblemCode, BRegProtocolFailure, TokenError, TransportKind};
     use super::{BaseRegistryClientError, TraceId};
-
-    #[test]
-    fn every_planner_refusal_detail_resolves_to_its_kind() {
-        for refusal in BRegPlanRefusal::ALL {
-            let resolved: Vec<_> = BRegProblemCode::ALL
-                .into_iter()
-                .filter(|code| code.detail() == refusal.detail())
-                .collect();
-            assert_eq!(resolved, vec![BRegProblemCode::RequestPlanRefused(refusal)]);
-            assert!(refusal.detail().ends_with(&format!("{}.", refusal.kind())));
-        }
-    }
-
-    #[test]
-    fn a_refused_plan_carries_one_code_under_one_status() {
-        for refusal in BRegPlanRefusal::ALL {
-            let code = BRegProblemCode::RequestPlanRefused(refusal);
-            assert_eq!(code.code(), "request.plan_refused");
-            assert_eq!(code.status(), 400);
-            assert_eq!(code.title(), "Bad Request");
-            assert_eq!(
-                code.type_uri(),
-                "https://id.registrystack.org/problems/registry-breg/request/plan_refused"
-            );
-        }
-    }
 
     /// The client resolves a problem type the same way the service builds it,
     /// on the shared Registry Stack identifier host, with each dot in the code

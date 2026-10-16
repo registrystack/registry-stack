@@ -1,6 +1,6 @@
 ---
 title: Build a production candidate
-description: Read what the production profile finds in your registry project, run its journeys against a PostgreSQL you start, then package the result and verify it the way the runtime reads it.
+description: Test and package one exact native Base Registry Engine project, then verify its deployment binding before operator activation.
 status: current
 owner: registry-docs
 source_repos:
@@ -18,631 +18,109 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you finished [Extend a registry with a module](../extend-a-registry-with-a-module/), you have `bregctl`
-installed and a `tutorial-work` directory. This tutorial builds from a fresh project of its own,
-`tutorial-work/candidate-project`, because the module tutorial edits its project and every edit
-changes the digests. In this tutorial you read what the production profile finds in the new project,
-run its journeys against a PostgreSQL you start yourself, and turn the result into a package that
-`bregctl verify` checks the way the runtime checks its files at startup. You then promote that one
-package through two local databases, staging and production, the way a release moves between
-environments: you plan and apply it in each, and confirm that both serve the same registry revision.
-[Deploy a registry](../../operate/breg/) takes the same steps to a PostgreSQL you run for real.
+If you are preparing a Base Registry Engine (BReg) deployment, test one exact
+project against an isolated schema-test database, package the successful
+candidate, and verify its deployment binding before promotion.
 
 <QuickstartMeta
-  outcome="A package built from your project, accepted by bregctl verify, and activated in a staging and a production database that serve the same registry revision."
-  time="About 45 minutes"
-  level="Production build with synthetic data and a local issuer key"
-  prerequisites={['The bregctl and breg pair from one release', 'Docker', 'OpenSSL 3', 'curl and jq']}
+  outcome="A tested package with its receipt and digest, ready for independent review and activation."
+  time="About 30 minutes after database and issuer provisioning"
+  level="Deployment preparation"
+  prerequisites={['Matching breg and bregctl binaries', 'An isolated TLS PostgreSQL schema-test database', 'Separate migration and runtime roles', 'An operated issuer and short-lived test credentials', 'A shell and an editor']}
 />
 
-## Before you start
-
-This tutorial runs both `bregctl` and `breg`. The installer from
-[Create and query your first registry](../first-breg/) installs the two together from one release;
-[Obtain the runtime](../../operate/breg/#obtain-the-runtime) shows how to pin that release.
-
-Open a terminal in the directory that holds `tutorial-work`, or in any directory you want to work
-in. Create the project this tutorial builds from:
+## Prepare the project and deployment inputs
 
 ```sh
 mkdir -p tutorial-work
 bregctl init tutorial-work/candidate-project
+bregctl check tutorial-work/candidate-project --production
 ```
 
-The project names no environment, instance, or database. The runtime configuration you write later
-names all three, so the package you build here is the same package whichever deployment reads it.
+The default project is the complete `minimal-directory`. Read its README and
+replace its project identity, canonical base IRI, dataset, jurisdiction grants,
+and local synthetic values with your reviewed model. Keep the project and its
+journeys together. Repeat the production check after edits.
 
-Confirm the tools. The token steps need an OpenSSL that signs with Ed25519; the LibreSSL that macOS
-ships as `/usr/bin/openssl` does not, so install OpenSSL 3 and put it first on `PATH`.
+Copy its runtime example to a separate deployment directory. Follow
+[Deploy a registry](../../operate/breg/#write-the-runtime-configuration) to bind
+TLS PostgreSQL, migration/runtime roles, issuer, accepted clients, audit, cursor
+secret, package location, and environment identity. Store secrets in owner-only
+files and keep references in configuration. Local `dev` credentials and its
+unsigned loopback setup are evaluation inputs.
 
-```sh
-bregctl --version
-docker --version
-openssl version
+Prepare a schema-test credentials document binding each protected journey step
+to a short-lived real token. The two canonical clients have distinct jurisdiction
+claims; preserve both permitted and concealed behavior in your replacement
+credentials. Use `bregctl test --help` and
+[Test with journeys](../../configure/breg-journeys/) for its credential contract.
+Keep this document outside the authored package and version control.
+
+## Run the exact journeys
+
+The paths in these commands are absolute. Supply your trusted PostgreSQL CA,
+runtime configuration, and credential binding:
+
+```sh test-skip="requires operator-provisioned TLS PostgreSQL, issuer, and exact journey credentials"
+SSL_CERT_FILE=/path/to/postgres-ca.pem bregctl test tutorial-work/candidate-project \
+  --runtime-config /path/to/runtime-test.yaml \
+  --credentials /path/to/credentials.yaml \
+  --output /path/to/test-receipt.json
 ```
 
-Set an owner-only file mode for this shell, so every key, password, and token the commands create is
-readable by you alone:
+A successful result writes the canonical receipt for the exact sources, journey,
+migration plan, and measured schema fingerprint. If a step fails, repair the
+named input or authority and rerun into a fresh receipt path. Compilation alone
+cannot substitute for this database and HTTP proof. The schema-test database is
+isolated from the serving registry.
 
-```sh
-umask 077
-```
+## Package the successful candidate
 
-Every other file this tutorial creates sits under `tutorial-work/candidate`. The digests shown on this
-page come from the unchanged `bregctl init` project; if you edit anything in `candidate-project`,
-yours differ, and that is expected.
-
-## Read the production findings
-
-`check --production` compiles the project the way `test` and `package` do. It refuses what the
-production profile forbids and reports findings as warnings, which are decisions it wants a person to
-review rather than errors:
-
-```sh
-bregctl check --production tutorial-work/candidate-project
-```
-
-```text
-Production check passed; registry revision sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
-  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
-  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 4 files
-```
-
-The generated project ships both warnings on purpose: the `operator` profile lists every record because
-one operations team runs the whole registry, and the `evidence-source` profile looks a record up by its
-code for any record in the registry. The comment that introduces each profile in `registry.yaml` says
-how to close it (a `rowBoundaries` entry, or removing `list` from the operator's grant).
-Closing them would also change the journeys, so treat them as reviewed and see what a stricter gate does
-with them:
-
-```sh
-bregctl check --production --deny-warnings tutorial-work/candidate-project
-```
-
-```text
-bregctl check refused the project: --deny-warnings refuses a warning.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
-  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
-  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 4 files
-```
-
-The command exits with status 1. That is the gate for a pipeline that must never build a candidate
-with an unreviewed warning; the rest of this tutorial runs without it.
-
-{/* Evidence: crates/registry-breg/src/access.rs, access_findings; crates/registry-bregctl/src/lib.rs, CheckArgs; crates/registry-bregctl/src/check.rs, deny_warnings. */}
-
-## Create the issuer key
-
-One Ed25519 key stands in for your identity provider: it signs the access tokens the journeys send,
-and its public half is the static JWKS the runtime reads.
-
-```sh
-mkdir -p tutorial-work/candidate/secrets tutorial-work/candidate/postgres
-openssl genpkey -algorithm ED25519 -out tutorial-work/candidate/issuer.pem
-issuer_x=$(openssl pkey -in tutorial-work/candidate/issuer.pem -pubout -outform DER | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
-printf '{"keys":[{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"candidate-issuer","x":"%s"}]}' "$issuer_x" > tutorial-work/candidate/secrets/issuer-jwks
-```
-
-:::caution[The private key stays private]
-Anyone holding the issuer's private key can mint tokens the runtime accepts. Never copy it into the
-project, a package, or a repository. It exists for this exercise and is deleted in the cleanup step.
-:::
-
-## Start PostgreSQL
-
-The runtime connects to PostgreSQL over TLS only, and the schema test uses the same connection code,
-so the container needs a server certificate. Create a small certificate authority and a certificate
-for `localhost`, then start a PostgreSQL 17 container on port 5433 so it
-stays clear of a PostgreSQL you may already run:
-
-```sh
-openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 2 -subj '/CN=Candidate tutorial CA' -keyout tutorial-work/candidate/postgres/ca.key -out tutorial-work/candidate/postgres/ca.pem
-openssl req -new -nodes -newkey rsa:2048 -subj '/CN=localhost' -keyout tutorial-work/candidate/postgres/server.key -out tutorial-work/candidate/postgres/server.csr
-printf 'subjectAltName=DNS:localhost\n' > tutorial-work/candidate/postgres/server.ext
-openssl x509 -req -sha256 -days 2 -in tutorial-work/candidate/postgres/server.csr -CA tutorial-work/candidate/postgres/ca.pem -CAkey tutorial-work/candidate/postgres/ca.key -CAcreateserial -extfile tutorial-work/candidate/postgres/server.ext -out tutorial-work/candidate/postgres/server.crt
-printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > tutorial-work/candidate/postgres/postgres.env
-docker run --detach --name breg-candidate-postgres --env-file tutorial-work/candidate/postgres/postgres.env --publish 127.0.0.1:5433:5432 public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-until docker exec breg-candidate-postgres pg_isready -h localhost -U postgres >/dev/null; do sleep 1; done
-docker cp tutorial-work/candidate/postgres/server.crt breg-candidate-postgres:/var/lib/postgresql/data/server.crt
-docker cp tutorial-work/candidate/postgres/server.key breg-candidate-postgres:/var/lib/postgresql/data/server.key
-docker exec breg-candidate-postgres sh -c 'chown postgres:postgres /var/lib/postgresql/data/server.* && chmod 600 /var/lib/postgresql/data/server.key'
-docker exec breg-candidate-postgres psql -U postgres -c 'ALTER SYSTEM SET ssl = on' -c 'SELECT pg_reload_conf()'
-```
-
-The last command prints `ALTER SYSTEM` and a one-row `pg_reload_conf` result of `t`.
-
-{/* Evidence: crates/registry-breg/src/postgres/config.rs, require_tls_config; crates/registry-bregctl/src/dev/mod.rs, IMAGE. */}
-
-## Prepare the disposable database
-
-`bregctl test` needs two ordinary roles and one database it may fill. The migration role owns the
-five managed schemas and installs the compiled schema; the runtime role runs the journeys and must
-own nothing. Neither may be a superuser, create databases or roles, or bypass row-level security,
-which is what the `CREATE ROLE` options spell out. The test refuses a database whose managed schemas
-already hold objects, so the database serves one run: drop and recreate it before every rerun.
-
-```sh
-mp=$(openssl rand -hex 16)
-rp=$(openssl rand -hex 16)
-docker exec -i breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres <<SQL
-CREATE ROLE registry_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '$mp';
-CREATE ROLE registry_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '$rp';
-SQL
-printf 'postgresql://registry_migration:%s@localhost:5433/registry_candidate_test' "$mp" > tutorial-work/candidate/secrets/migration-database-url
-printf 'postgresql://registry_runtime:%s@localhost:5433/registry_candidate_test' "$rp" > tutorial-work/candidate/secrets/runtime-database-url
-openssl rand -hex 32 > tutorial-work/candidate/secrets/audit-key
-openssl rand -hex 32 > tutorial-work/candidate/secrets/cursor-key
-```
-
-The secrets directory now holds the two connection URLs, the audit hash key, the cursor key, and the
-JWKS, one owner-only file per secret, which is what the runtime's file secret provider requires: it
-refuses a secret that is not a plain file you own with mode `0400` or `0600`. Now the database, in
-the block you rerun after every test. The block drops the database before creating it, so a rerun
-starts from nothing and everything the previous run wrote is gone:
-
-```sh
-docker exec breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres -c 'DROP DATABASE IF EXISTS registry_candidate_test' -c 'CREATE DATABASE registry_candidate_test'
-docker exec -i breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres -d registry_candidate_test <<'SQL'
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-REVOKE ALL ON DATABASE registry_candidate_test FROM PUBLIC;
-GRANT CONNECT ON DATABASE registry_candidate_test TO registry_migration, registry_runtime;
-CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
-REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC;
-SQL
-```
-
-{/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_migration_role; crates/registry-breg/src/postgres/schema.rs, refuse_existing_managed_objects, verify_schema_test_runtime_role; crates/registry-platform-config/src/secrets.rs, MAX_SECRET_BYTES, validate_file_metadata. */}
-
-## Bind the runtime and the credentials
-
-`bregctl test` reads the runtime configuration document the runtime itself reads at startup.
-`identity` names the environment, instance, and database this deployment is, and its `environment`
-and `databaseInitializationEnvironment` must be the same value. `package.root` names an empty
-directory because no package exists yet, `listener.bind` is never opened because the journeys are
-driven in-process, and every path must be absolute, which the unquoted heredoc arranges by expanding
-`$PWD`:
-
-```sh
-mkdir -p tutorial-work/candidate/empty-package
-cat > tutorial-work/candidate/runtime-test.yaml <<EOF
-apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
-kind: BRegRuntimeConfig
-listener:
-  bind: 127.0.0.1:8080
-identity:
-  environment: development
-  instanceId: generic-registry-1
-  databaseId: generic-registry-db-1
-  databaseInitializationEnvironment: development
-secretProviders:
-  file:
-    root: $PWD/tutorial-work/candidate/secrets
-database:
-  runtimeUrlRef: secret:file/runtime-database-url
-  migrationUrlRef: secret:file/migration-database-url
-  pool:
-    maximumConnections: 4
-  roles:
-    migration: registry_migration
-    runtime: registry_runtime
-package:
-  root: $PWD/tutorial-work/candidate/empty-package
-authentication:
-  oidc:
-    issuer: https://issuer.example.invalid
-    audience: generic-registry
-    allowedAlgorithm: EdDSA
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients:
-      - generic-registry-client
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 30000
-    jwksSource:
-      type: static
-      documentRef: secret:file/issuer-jwks
-  authorityClaims:
-    principal: registry_principal
-    purpose: registry_purpose
-audit:
-  hashKeyRef: secret:file/audit-key
-  destination: file
-  path: $PWD/tutorial-work/candidate/audit/breg.jsonl
-cursor:
-  secretRef: secret:file/cursor-key
-EOF
-```
-
-The journeys authenticate with bearer tokens. This script issues one, signed by the issuer key, that
-carries the claims a step declares: the principal, the actor kind, the scope, the purpose, and for
-the reader the `registry_record_status` claim its row boundary compares. Base Registry Engine (BReg)
-refuses a token whose `registry_actor_kind` claim is missing or is not exactly `human`, `agent`, or
-`service`; these tokens
-authenticate automated journeys, so the script marks both of them `service`. Then it issues the
-operator's and the reader's tokens:
-
-```sh
-cat > tutorial-work/candidate/issue-token.sh <<'EOF'
-#!/usr/bin/env bash
-# issue-token.sh <principal> <scope> <purpose> <output-file> [<extra-claims-json>]
-set -euo pipefail
-b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-now=$(date +%s)
-header=$(printf '{"alg":"EdDSA","kid":"candidate-issuer","typ":"at+jwt"}' | b64url)
-claims=$(printf '{"iss":"https://issuer.example.invalid","aud":"generic-registry","client_id":"generic-registry-client","sub":"%s","registry_principal":"%s","registry_actor_kind":"service","scope":"%s","registry_purpose":"%s","iat":%s,"exp":%s%s}' \
-  "$1" "$1" "$2" "$3" "$now" "$((now + 3600))" "${5:+,$5}" | b64url)
-signing_input=$(mktemp)
-printf '%s.%s' "$header" "$claims" > "$signing_input"
-signature=$(openssl pkeyutl -sign -rawin -inkey "$(dirname "$0")/issuer.pem" -in "$signing_input" | b64url)
-rm -f "$signing_input"
-umask 077
-printf '%s.%s.%s' "$header" "$claims" "$signature" > "$4"
-EOF
-chmod 700 tutorial-work/candidate/issue-token.sh
-tutorial-work/candidate/issue-token.sh generic-registry-operator registry:generic:operate registry-operations tutorial-work/candidate/secrets/operator-token
-tutorial-work/candidate/issue-token.sh generic-registry-reader registry:generic:read registry-reporting tutorial-work/candidate/secrets/reader-token '"registry_record_status":"active"'
-```
-
-The credentials file binds one token to every journey step. A token whose claims differ from the
-step's declared claims fails the run; the test compares them exactly rather than trusting the label
-on the binding.
-
-```sh
-cat > tutorial-work/candidate/credentials.yaml <<'EOF'
-apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
-kind: BRegSchemaTestCredentials
-bindings:
-  - journeyId: record-lifecycle
-    stepId: create-record-group
-    credential:
-      type: bearer
-      tokenRef: secret:file/operator-token
-  - journeyId: record-lifecycle
-    stepId: create-record
-    credential:
-      type: bearer
-      tokenRef: secret:file/operator-token
-  - journeyId: record-lifecycle
-    stepId: get-record
-    credential:
-      type: bearer
-      tokenRef: secret:file/operator-token
-  - journeyId: record-lifecycle
-    stepId: read-record-within-the-claim
-    credential:
-      type: bearer
-      tokenRef: secret:file/reader-token
-  - journeyId: record-lifecycle
-    stepId: retire-record
-    credential:
-      type: bearer
-      tokenRef: secret:file/operator-token
-  - journeyId: record-lifecycle
-    stepId: read-record-outside-the-claim
-    credential:
-      type: bearer
-      tokenRef: secret:file/reader-token
-  - journeyId: record-lifecycle
-    stepId: list-records
-    credential:
-      type: bearer
-      tokenRef: secret:file/operator-token
-EOF
-```
-
-{/* Evidence: crates/registry-breg/src/fixtures.rs, authenticate_exact; crates/registry-breg/src/runtime_config.rs, EnvironmentIdentityConflict. */}
-
-## Run the journeys
-
-```sh
-SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem" bregctl test tutorial-work/candidate-project \
-  --runtime-config "$PWD/tutorial-work/candidate/runtime-test.yaml" \
-  --credentials "$PWD/tutorial-work/candidate/credentials.yaml" \
-  --output "$PWD/tutorial-work/candidate/test-receipt.json"
-```
-
-```text
-Fixture run passed. 1 journey.
-  profile              production
-  registry revision    sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
-  schema fingerprint   sha256:c35b248e14c5fa4b234538625fbe2caf558ff14e4ca36f4dce62af7099ab0295
-  successful journeys  record-lifecycle
-  receipt sha256       1dff5f948882b9ac0f497030959305c7e7f953c5073dcd5d3c0d5d8e3df8a40e
-  receipt bytes        752
-```
-
-`SSL_CERT_FILE` points the TLS client at your certificate authority, and the URL host `localhost`
-must match the certificate's name. The receipt records the registry revision, the schema fingerprint
-the run measured, digests of the project sources, migration plan, and journey file, and the journey
-that passed. It names no environment, instance, or database. `package` requires this receipt.
-
-## Package
-
-Build into a new directory. `package` publishes into it once; after that it refuses the directory
-with `package.output.refused`, so the next candidate needs a `build-2` of its own.
-
-```sh
+```sh test-skip="consumes the operator-provisioned rehearsal receipt"
 bregctl package tutorial-work/candidate-project \
-  --test-receipt "$PWD/tutorial-work/candidate/test-receipt.json" \
-  --output "$PWD/tutorial-work/candidate/build-1"
+  --test-receipt /path/to/test-receipt.json \
+  --output /path/to/build-1
 ```
 
-```text
-Sealed and published a deployment package.
-  profile            production
-  package digest     sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
-  registry revision  sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
-  package files      19
+The command reproduces the tested candidate and publishes `package/` and its
+checksums in a new build directory. Record its package digest and source identity
+for review. A changed source or mismatched receipt requires a new test; an existing
+output directory is refused. Preserve the whole package instead of editing its
+compiled contents.
+
+## Verify the deployment binding
+
+Set the deployment runtime file's `package.root` to that package directory and
+pin the reviewed digest where your deployment uses `package.expectedDigest`.
+Verify it before applying:
+
+```sh test-skip="requires the completed deployment runtime binding"
+bregctl verify --runtime-config /path/to/runtime.yaml
 ```
 
-The package is in `tutorial-work/candidate/build-1/package`, beside a copy of the receipt: the
-effective model, the DDL and migration plan, the OpenAPI document and JSON Schemas, the inventories,
-the manifest projection, the journeys, and the project source it was built from. `SHA256SUMS` lists
-the SHA-256 of every file, and the package digest is the SHA-256 of `SHA256SUMS`, so changing any
-file changes the digest. The runtime configuration names the package next.
+Review the package, checksums, external signing policy, runtime identity, issuer,
+secrets, and separate database roles. The same tested package is promoted across
+environments; environment-specific connection and identity values stay in each
+runtime file. An operator with migration authority performs Plan and Apply.
+Authoring and testing do not confer that credential.
 
-{/* Evidence: crates/registry-platform-config/src/package.rs, write_sum_file, verify_package; crates/registry-bregctl/src/lib.rs, PackageArgs. */}
+For a successor, both Test and Package take `--baseline-package` naming the active
+package and the same `--reviewed-migrations` when required. Resolve incompatible
+open Proposals deliberately; activation cannot silently reinterpret frozen work.
 
-## Verify the package
+## Retain evidence and clean up
 
-Copy `runtime-test.yaml` to `runtime.yaml`:
+Keep the exact source, receipt, package digest, and review with your private
+operational evidence. Expire test tokens and remove only the disposable
+schema-test resources you provisioned. This procedure starts no serving process.
+Do not delete a serving registry to repeat a failed test.
 
-```sh
-cp tutorial-work/candidate/runtime-test.yaml tutorial-work/candidate/runtime.yaml
-```
-
-Change one value in the copy: `package.root` becomes the published package directory.
-
-```yaml
-package:
-  root: <working-directory>/tutorial-work/candidate/build-1/package
-```
-
-```sh
-bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
-```
-
-```text
-Verified the package against the runtime it is bound to.
-  assurance            runtime-bound
-  package digest       sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
-  registry id          generic-registry
-  registry version     0.1.0
-  registry revision    sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
-  modules              1
-  entities             2
-  routes               8
-  access entries       8
-  queries              4
-  event deliveries     0
-  DDL statements       25
-  generated artifacts  14
-```
-
-`runtime-bound` means the check read the runtime configuration the runtime reads at startup,
-recomputed every file digest against `SHA256SUMS`, and re-derived every generated artifact from the
-package's own source. It opens no database: reading the database is what `plan` does, in the next
-section.
-
-To pin the exact package, add `package.expectedDigest` with the digest `package` printed. `verify`
-and the runtime then refuse any other package at `package.root`, naming both digests. Once a
-database has activated a package, the runtime also refuses to serve any package its activation
-ledger does not name as active, pin or no pin.
-
-{/* Evidence: crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package; crates/registry-breg/src/package.rs, inspect_package_integrity_with_verified_envelope, rederive; crates/registry-platform-config/src/blocks.rs, verify_digest; crates/registry-breg/src/startup.rs, verify_package_envelope. */}
-
-## Promote the package to staging and production
-
-You built and tested the package once. Each environment now plans and applies that same package
-directory against its own database; nothing is rebuilt between them.
-
-### Create one database per environment
-
-In the same shell, so `umask 077` still applies, create `registry_staging` and
-`registry_production` the way you created the test database, and write each one's connection URLs
-beside the others. The roles and their passwords are the ones you already made:
-
-```sh
-for env in staging production; do
-  docker exec breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres -c "CREATE DATABASE registry_$env"
-  docker exec -i breg-candidate-postgres psql -v ON_ERROR_STOP=1 -U postgres -d "registry_$env" <<SQL
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-REVOKE ALL ON DATABASE registry_$env FROM PUBLIC;
-GRANT CONNECT ON DATABASE registry_$env TO registry_migration, registry_runtime;
-CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
-REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC;
-SQL
-  sed "s#/registry_candidate_test\$#/registry_$env#" tutorial-work/candidate/secrets/migration-database-url > "tutorial-work/candidate/secrets/$env-migration-url"
-  sed "s#/registry_candidate_test\$#/registry_$env#" tutorial-work/candidate/secrets/runtime-database-url > "tutorial-work/candidate/secrets/$env-runtime-url"
-done
-```
-
-### Write one runtime file per environment
-
-Derive `staging.yaml` and `production.yaml` from `runtime.yaml`. Both keep `package.root` on
-`build-1/package`; each gets its own identity, connection URLs, listener port, and audit file:
-
-```sh
-port=8081
-for env in staging production; do
-  mkdir -p "tutorial-work/candidate/audit-$env"
-  sed -e "s#bind: 127.0.0.1:8080#bind: 127.0.0.1:$port#" \
-    -e "s#: development\$#: $env#" \
-    -e "s#instanceId: generic-registry-1#instanceId: generic-registry-$env#" \
-    -e "s#databaseId: generic-registry-db-1#databaseId: generic-registry-$env-db#" \
-    -e "s#secret:file/runtime-database-url#secret:file/$env-runtime-url#" \
-    -e "s#secret:file/migration-database-url#secret:file/$env-migration-url#" \
-    -e "s#/audit/breg.jsonl#/audit-$env/breg.jsonl#" \
-    tutorial-work/candidate/runtime.yaml > "tutorial-work/candidate/$env.yaml"
-  port=$((port + 1))
-done
-diff tutorial-work/candidate/staging.yaml tutorial-work/candidate/production.yaml
-```
-
-`diff` lists the listener, the four `identity` values, the two URL references, and the audit path,
-and nothing else. The first `apply` records `databaseId` in its database, and every later `plan`,
-`apply`, and startup refuses a runtime file that names another.
-
-### Plan and apply in each environment
-
-`plan` makes the checks `apply` makes, under the same lock, and rolls them back, so it changes
-nothing. Run it for both environments first:
-
-```sh
-export SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem"
-for env in staging production; do
-  bregctl plan --runtime-config "$PWD/tutorial-work/candidate/$env.yaml" \
-    --package "$PWD/tutorial-work/candidate/build-1/package"
-done
-```
-
-Each plan reports `activation` `initial` and the package digest `package` printed. Apply the
-package, then read what each database recorded:
-
-```sh
-for env in staging production; do
-  bregctl apply --initial --runtime-config "$PWD/tutorial-work/candidate/$env.yaml" \
-    --package "$PWD/tutorial-work/candidate/build-1/package"
-  bregctl status --runtime-config "$PWD/tutorial-work/candidate/$env.yaml"
-done
-```
-
-`--initial` activates the first package in a database that has never activated one; every later
-`apply` omits it. `status` reads the activation
-ledger: both databases report the same active package digest, maintenance status `ready`, and one
-ledger entry with plan kind `initial` and outcome `applied`. Their activation ids differ, because
-each database records its own activation.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, PlanArgs, ApplyArgs, StatusArgs, PlanSuccessReport, StatusSuccessReport; crates/registry-breg/src/migration.rs, rehearse_begin(); products/breg/scripts/test-promotion.sh, render_runtime_config(). */}
-
-### Serve both and compare
-
-Start one runtime per environment, wait until both are ready, and ask each for its registry
-metadata with the operator token. The header file keeps the token off the command line:
-
-```sh
-breg --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" > tutorial-work/candidate/staging.log 2>&1 &
-staging_pid=$!
-breg --runtime-config "$PWD/tutorial-work/candidate/production.yaml" > tutorial-work/candidate/production.log 2>&1 &
-production_pid=$!
-until curl -fsS http://127.0.0.1:8081/ready >/dev/null && curl -fsS http://127.0.0.1:8082/ready >/dev/null; do sleep 1; done
-printf 'Authorization: Bearer %s\n' "$(cat tutorial-work/candidate/secrets/operator-token)" > tutorial-work/candidate/secrets/operator-header
-for port in 8081 8082; do
-  curl -fsS -H @tutorial-work/candidate/secrets/operator-header "http://127.0.0.1:$port/v1/registry?accessProfile=operator" | jq -r .revision
-done
-kill "$staging_pid" "$production_pid"
-```
-
-Both lines print the registry revision `package` printed. Staging and production serve the same
-registry because they run the same package, which is the point of promoting the artifact rather
-than rebuilding it.
-
-### See what apply refuses
-
-The ledger decides what each database accepts. Apply the active package to staging again, then
-point a copy of the staging file at the production database and plan against it:
-
-```sh
-bregctl apply --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" \
-  --package "$PWD/tutorial-work/candidate/build-1/package"
-sed 's#secret:file/staging-#secret:file/production-#' tutorial-work/candidate/staging.yaml > tutorial-work/candidate/staging-on-production.yaml
-bregctl plan --runtime-config "$PWD/tutorial-work/candidate/staging-on-production.yaml" \
-  --package "$PWD/tutorial-work/candidate/build-1/package"
-```
-
-Both exit with status 1 and change nothing. The first reports `apply.package.already-active`: the
-package is already active, so a deploy job runs `plan` and applies only when it reports `pending`
-`true`. The second reports `apply.database.identity-mismatch`: the production database recorded
-`generic-registry-production-db`, and the file names `generic-registry-staging-db`. Two more refusals
-hold once you promote a successor: an older package, or one that does not name the active package as
-its predecessor, is refused with `apply.package.refused`, and a backup binding recorded for another
-database is refused with `apply.backup-evidence.refused`.
-
-{/* Evidence: crates/registry-breg/src/migration.rs, verify_successor_package_binding(), AlreadyActive, DatabaseMismatch; crates/registry-bregctl/src/lib.rs, apply.package.already-active, apply.database.identity-mismatch, apply.backup-evidence.refused. */}
-
-### Promote a reviewed successor
-
-This project has no successor yet. When a later build changes the schema, it is packaged once and
-promoted the same way, and a destructive change requires one backup per environment. Each
-environment takes its own backup and writes its own binding, which names its `database`, so the
-production apply never accepts the staging backup. For a successor whose reviewed migration names
-`modules/core/migrations/retire-legacy-field/backup.json`, the per-environment step is:
-
-```sh
-bregctl plan --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" \
-  --package "$PWD/tutorial-work/candidate/build-2/package" \
-  --backup "modules/core/migrations/retire-legacy-field/backup.json=$PWD/tutorial-work/candidate/backups/staging-binding.json"
-bregctl apply --runtime-config "$PWD/tutorial-work/candidate/staging.yaml" \
-  --package "$PWD/tutorial-work/candidate/build-2/package" \
-  --backup "modules/core/migrations/retire-legacy-field/backup.json=$PWD/tutorial-work/candidate/backups/staging-binding.json"
-```
-
-Production repeats it with `production.yaml` and its own binding. `apply` reports `activation`
-`successor`, and `status` then lists two ledger entries, `initial` and `successor`, the second
-naming the first package as its predecessor. [Change a live registry](../../operate/breg-changes/)
-covers writing the reviewed migration and the binding.
-
-## Clean up
-
-```sh
-docker rm -f breg-candidate-postgres
-rm -f tutorial-work/candidate/issuer.pem tutorial-work/candidate/postgres/postgres.env
-rm -rf tutorial-work/candidate/secrets
-```
-
-:::caution[Removal is final]
-`docker rm -f` deletes the container and the test, staging, and production databases inside it,
-which is what disposable databases are for. Keep `build-1` and `runtime.yaml` if you continue with
-Deploy a registry.
-:::
-
-## What you built
-
-A project reviewed under the production profile; a schema-test receipt from its journeys, run against
-PostgreSQL 17 over TLS with tokens from a static JWKS; and a package whose digest covers every file
-it holds, which `bregctl verify` accepts with `runtime-bound` assurance under the runtime
-configuration you wrote. You then promoted that one package to a staging and a production
-database: `plan` checked each before `apply` changed it, `status` read what each activation
-ledger recorded, and both runtimes served the same registry revision. The databases were
-disposable, and the successor step is the one you repeat for every later build.
-
-## Troubleshooting
-
-| Symptom | Cause and next move |
-| --- | --- |
-| `bregctl test` reports `test.database.unavailable` | The database already holds managed objects from an earlier run, or the TLS connection failed; the message is the same for both. Rerun the database block, and confirm that `SSL_CERT_FILE` names `ca.pem` and that the URLs use `localhost`, the name on the certificate. |
-| `bregctl test` reports `test.output.refused` | A receipt already exists at `--output`. The command never overwrites one, so delete `test-receipt.json` or name a new file before the rerun. |
-| `bregctl test` reports `test.step.failed` and `the fixture authority reference was refused` | The token bound to that step does not carry the claims the step declares, or it has expired. The message names the step by index, `journeys[0].steps[3]`. Check the binding in `credentials.yaml`, and reissue both tokens with `issue-token.sh` if the run started more than an hour after you issued them. |
-| `bregctl package` reports `package.output.refused` | `--output` already holds a build. `package` never publishes into a used directory, so name a new one, such as `build-2`. |
-| `bregctl verify` reports `breg.runtime.environment-identity-conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
-| `verify.package.integrity-refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
-| `verify.package.integrity-refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
-| The readiness loop never ends | A runtime refused to start. Read `staging.log` or `production.log` for the refusal code, stop the other runtime with `kill`, and rerun the block once the cause is fixed. |
-| `breg` logs `startup.package.not-active` | `package.root` in that runtime file names a package the database has not activated. Point it at `build-1/package`, or plan and apply the package it names. |
-| `curl` fails with `401` | The operator token expired an hour after you issued it. Reissue it with `issue-token.sh`, rewrite `operator-header`, and query again. |
-| `openssl` rejects `-rawin` or `-algorithm ED25519` | The `openssl` on `PATH` is LibreSSL. Install OpenSSL 3 and put it first on `PATH`. |
+{/* Evidence: crates/registry-bregctl/src/lib.rs, TestArgs and PackageArgs;
+    crates/registry-bregctl/src/starters.rs; crates/registry-breg/src/package.rs;
+    products/breg/examples/minimal/tests/journeys.yaml. */}
 
 ## Next
 
-- [Deploy a registry](../../operate/breg/): provision PostgreSQL for real, write each environment's runtime configuration, check and activate the package with `plan`, `apply`, and `status`, and serve it with `breg`.
-- [Change a live registry](../../operate/breg-changes/) when the next build changes the schema.
-- [Test with journeys](../../configure/breg-journeys/) to extend the journeys before the next candidate.
-- [Control access per profile](../../configure/breg-access/) to close the finding with a row boundary.
+- [Deploy a registry](../../operate/breg/)
+- [Change and recover a registry](../../operate/breg-changes/)
+- [Retain, erase, and audit](../../operate/breg-retention/)

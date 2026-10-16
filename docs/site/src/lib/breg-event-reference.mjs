@@ -1,11 +1,16 @@
-// Select from the same generated schema fields as the full configuration reference.
+// Select native record and Proposal hooks from the generated authoring schemas.
 export function eventConfiguration(reference) {
-  const module = reference.contracts.find((contract) => contract.id === 'module');
-  if (!module) throw new Error('BReg module configuration is missing');
-  const prefix = 'entities[].hooks[].';
-  const fields = module.fields
-    .filter((field) => field.key_path.startsWith(prefix))
-    .map((field) => ({ ...field, key_path: field.key_path.slice(prefix.length) }));
-  if (fields.length === 0) throw new Error('BReg event configuration is empty');
-  return [{ ...module, id: 'event', title: 'hooks[]', field_count: fields.length, fields }];
+  const select = (contractId, prefix, id, title) => {
+    const contract = reference.contracts.find((entry) => entry.id === contractId);
+    if (!contract) throw new Error(`BReg ${contractId} configuration is missing`);
+    const fields = contract.fields
+      .filter((field) => field.key_path.startsWith(prefix))
+      .map((field) => ({ ...field, key_path: field.key_path.slice(prefix.length) }));
+    if (fields.length === 0) throw new Error(`BReg ${id} configuration is empty`);
+    return { ...contract, id, title, field_count: fields.length, fields };
+  };
+  return [
+    select('module', 'recordTypes[].hooks[].', 'record-event', 'Record type hooks[]'),
+    select('project', 'actions[].execution.proposal.hooks[].', 'proposal-event', 'Proposal hooks[]'),
+  ];
 }

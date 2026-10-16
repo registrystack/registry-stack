@@ -55,7 +55,7 @@ impl fmt::Display for ReviewProblemCode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ReviewValidationReason {
-    KindNotAllowed,
+    PolicyNotAllowed,
     ReferenceInvalid,
     ObjectRequired,
     MaximumBytesExceeded,
@@ -74,7 +74,7 @@ pub enum ReviewValidationReason {
 impl ReviewValidationReason {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         Some(match value {
-            "kind-not-allowed" => Self::KindNotAllowed,
+            "policy-not-allowed" => Self::PolicyNotAllowed,
             "reference-invalid" => Self::ReferenceInvalid,
             "object-required" => Self::ObjectRequired,
             "maximum-bytes-exceeded" => Self::MaximumBytesExceeded,
@@ -181,11 +181,14 @@ mod tests {
     use super::ReviewValidationReason;
 
     /// The client reads the validation reason header in the spelling the
-    /// Casework runtime writes; the previous spelling is an unknown word.
+    /// review provider writes; the previous spelling is an unknown word.
     #[test]
     fn every_validation_reason_is_read_in_kebab_case_only() {
         let reasons = [
-            ("kind-not-allowed", ReviewValidationReason::KindNotAllowed),
+            (
+                "policy-not-allowed",
+                ReviewValidationReason::PolicyNotAllowed,
+            ),
             (
                 "reference-invalid",
                 ReviewValidationReason::ReferenceInvalid,

@@ -6,15 +6,15 @@ as a standalone PyPI project.
 
 The public import is `registry_client.breg`. Fetch `registry_contract(profile)`
 before a write and select the operation from that caller-filtered contract. The
-returned create, patch, action, Tombstone, Batch, lifecycle, and attachment
-objects are opaque authority values tied to the client source and registry
-revision.
+returned create, patch, Action, Tombstone, and Batch bindings are opaque authority
+values tied to the client source and registry revision. Standalone Proposals
+promote their own transition and attachment links under current caller authority.
 
 Each item in `contract.operations` includes a snake-case `request` projection.
 Its optional `allow_create` and `allow_patch` values are `True`, `False`, or
-`None`; an explicit `False` is preserved. The descriptor's
-`readable_request_fields` reports which retained request values the selected
-profile may read.
+`None`; an explicit `False` is preserved. `contract.proposal_actions` describes
+the selected profile's Proposal operations and readable inputs for each Action.
+These descriptions support interface choices; select a binding before execution.
 
 ## Reads
 
@@ -43,16 +43,33 @@ related = client.list_relationship_records(
 
 Use `get_record_revision` for one strict-decoded historical envelope and
 `record_revisions` when the revisions resource itself must remain exact inert
-bytes. `get_record(..., request_history_after_proposal_version=version)` asks
-for proposal history after a known version.
+bytes. Standalone Proposals use `get_proposal` or one explicit `list_proposals`
+page. Application result references grant no target read authority. Read the
+target through an ordinary authorized `get_record`; the retained result revision
+records application provenance, not a current ETag or write precondition.
 
-`request_history(record)` is a pure projection over one already loaded record.
-It returns a strict `BRegRetainedRequestHistoryPage`, or `None` when history was
-not returned. A loaded proposal with an empty `result_references` list means only
-that no results were visible in that observation. Pass the page cursor to a
-later explicit `get_record`; the helper does not page, fetch targets, retry, or
-widen authority. Result references grant no read authority, and their target
-revision is applied provenance rather than a current ETag or write precondition.
+## Webhook verification
+
+`verify_webhook_delivery(method=..., path=..., headers=..., body=..., key=...)`
+authenticates one exact Base Registry Engine Version 1 delivery with the shared
+Rust verifier. Arguments are keyword-only. `path` is the request target the
+receiver was called on, `headers` is a `dict` of string names to string values
+(names match without regard to ASCII case, and a name repeated under another
+case is refused), and `body` and `key` are `bytes`. The result is a `dict` with
+`id`, `source`, `type`, `time`, `dataschema`, `generation`, `attempt`,
+`delivery_time`, `idempotency_key`, and the exact `body`. Generation and attempt
+remain decimal strings, as signed.
+
+The helper does not apply clock-skew or deduplication policy. Bound the returned
+`delivery_time` against the receiver clock. `idempotency_key` collapses automatic
+retries within one delivery generation; an effect that must remain once-only
+across operator replay uses a durable apply-once operation keyed by authenticated
+`source` plus `id`, or by an application business key, before acting on `body`.
+
+Refusal raises `BaseRegistryClientError` with kind `webhook-verification` and a
+`code` from `missing-header`, `malformed-signature`, `signature-mismatch`, or
+`unsupported-version`; an argument of the wrong type raises kind
+`invalid-request`. The message never includes a header value, body, or key.
 
 ## Direct and atomic mutations
 
@@ -62,7 +79,7 @@ action and the same target inputs.
 
 ```python
 contract = client.registry_contract(profile)
-action = contract.select_immediate_action("rename-company", profile)
+action = contract.select_action("rename-company", profile)
 conditions = client.action_target_conditions(action, {"targetId": record_id})
 receipt = client.invoke_action(
     action,
@@ -72,7 +89,7 @@ receipt = client.invoke_action(
 )
 ```
 
-Tombstone and Batch are selected by entity. Batch items are ordered mappings
+Tombstone and Batch are selected by Record type. Batch items are ordered mappings
 with `operation: "create"` plus `data`, or `operation: "patch"` plus
 `record_identifier`, `etag`, and JSON Patch `operations`. The optional shared
 change context uses snake-case Python keys and is encoded to the wire contract.
@@ -97,8 +114,8 @@ client.batch_records(
 All action inputs, conditions, batch fields, item counts, correction context,
 and byte limits are validated by the Rust client before network I/O.
 
-A keyed mutation (create, patch, attachment upload or delete, lifecycle
-action, immediate action, batch, tombstone, statistics publish or withdraw)
+A keyed mutation (create, patch, attachment upload or delete, Proposal
+transition, immediate action, batch, tombstone, statistics publish or withdraw)
 whose outcome is unknown is resent identically under the same key up to
 `max_mutation_retries` times, a `BaseRegistryClient` keyword: 0 to 2, default
 2, and 0 sends it once. The outcome is unknown after a timeout or broken
@@ -116,8 +133,8 @@ before choosing a new key.
 
 ## Recovering interrupted mutations
 
-`prepare_create` and `prepare_lifecycle_action` return opaque evidence that can
-be persisted with `to_bytes()` and restored with the matching `from_bytes()`.
+`prepare_create` returns opaque evidence that can be persisted with `to_bytes()`
+and restored with `BRegPreparedCreate.from_bytes()`.
 Recovery is pure and does not send a request. Fetch a fresh contract, select
 fresh authority, recover, then execute explicitly:
 
@@ -148,7 +165,7 @@ prepared = client.prepare_action(binding, inputs, "rename-company-1", conditions
 saved = prepared.to_bytes()
 
 fresh = client.registry_contract(profile)
-binding = fresh.select_immediate_action("rename-company", profile)
+binding = fresh.select_action("rename-company", profile)
 restored = BRegPreparedAction.from_bytes(saved)
 recovered = client.recover_action(binding, restored, inputs, "rename-company-1")
 result = client.execute_recovered_action(binding, recovered)
@@ -160,48 +177,90 @@ ones. `execute_recovered_action` is the explicit send under the original key.
 The saved bytes contain input values and must be treated as private
 application state.
 
-Use `action.with_reason(text)` on a promoted `apply-request` action to add an
-optional application explanation. It returns a copy and
-validates before network effects. The original action omits the reason. Text
-is preserved exactly, allows an empty string, and is limited to 4096 Unicode
-characters with NUL refused. Reuse the same action and idempotency key for an
-explicit retry.
+## Standalone Proposals
 
-## Request attachments
+Select a Proposal-mode Action, start a draft, then use its promoted transitions:
 
-Governed binary slots are engine-owned. They are never set through create,
-JSON Patch, or request effects. Select them from a caller-filtered contract,
-then use the three exchanges the engine advertises.
+```python
+from registry_client.breg import BRegPreparedProposal
+
+contract = client.registry_contract(profile)
+action = contract.select_action("correct-address", profile)
+draft = client.start_proposal(action, inputs, "correction-start-1")
+submit = client.prepare_proposal(draft, "submit", {}, "correction-submit-1")
+saved = submit.to_bytes()  # Persist in owner-protected storage before dispatch.
+submitted = client.execute_proposal(submit)
+```
+
+Transitions are `edit`, `submit`, `revise`, `rebase`, `retry`, `cancel`, and
+`apply`, subject to current availability and caller authority. Apply's body
+binds `submissionVersion` and `effectDigest`; optional `reason` text is limited
+to 4096 Unicode characters with NUL refused. Proposal conditions are distinct
+from Record ETags. `proposal.document` exposes the validated wire document.
+Read review status or context explicitly through `read_proposal_review_status`
+or `read_proposal_review_context` when their links are promoted. A Proposal
+document carries a derived `turn` (`party`, `official` or `nobody`) and, once a
+review has decided, a `decision` with its status, `decidedAt` and optional
+`publicReason`. `read_proposal_submission(proposal, version)` reads one
+retained submission version, its review, application receipt and decision,
+with the Proposal Get authority; an expired version is the
+`proposal.submission_expired` problem.
+
+After an uncertain response or restart, fetch the current authorized Proposal
+before recovering the original attempt:
+
+```python
+fresh = client.registry_contract(profile)
+current = client.get_proposal(fresh.select_proposal_get(profile), proposal_id)
+attempt = BRegPreparedProposal.from_bytes(saved)
+recovered = client.recover_proposal(current, attempt)
+result = client.execute_proposal(recovered)
+```
+
+Recovery retains the original condition, body and key and requires a matching
+current transition or receipt-only recovery link. The Get flow above needs a
+current `get` grant; an authorized List item can also supply the fresh Proposal
+observation. Losing all such read access, including access to a current target
+row, prevents recovery by that caller. Preserve the original attempt for an
+authorized operator; do not infer failure or send it under a new key. A status
+read alone does not recover an uncertain command.
+
+To retain a Start attempt, call `prepare_action` before `start_proposal`, then
+use `recover_action` and `execute_recovered_proposal_start` with fresh Action
+authority and the original inputs and key. Protect saved bytes as private
+application state.
+
+## Proposal attachments
+
+Governed binary slots are engine-owned and advertised on an authorized Proposal.
+They are never set through Record creation or JSON Patch. Use the Proposal's
+promoted slot links through the dedicated methods:
 
 ```python
 contract = client.registry_contract(profile)
-slot, = contract.select_attachments("company", profile)
-upload = slot.prepare_upload("application/pdf", data)
-client.upload_attachment(slot, record_id, etag, upload, "upload-supporting-file-1")
-stored = client.download_attachment(slot, record_id, proposal_version)
-client.delete_attachment(slot, record_id, next_etag, "remove-supporting-file-1")
+proposal = client.get_proposal(contract.select_proposal_get(profile), proposal_id)
+proposal = client.upload_proposal_attachment(
+    proposal, "supporting-document", "application/pdf", data, "upload-supporting-file-1"
+)
+stored = client.download_proposal_attachment(proposal, "supporting-document")
+proposal = client.delete_proposal_attachment(
+    proposal, "supporting-document", "remove-supporting-file-1"
+)
 ```
 
-`slot` carries the served policy: `slot_identifier`, `required_for_submit`,
-`maximum_bytes`, `content_types`, `classification`,
-`accepts_content_type(value)`, and the `can_download`, `can_upload`, and
-`can_remove` routes the caller's profile was granted. `prepare_upload` refuses
-an empty body, a body larger than `maximum_bytes`, and any content type outside
-`content_types` before a request is built, so a refused upload never leaves the
-process. Uploads and removals need the record's current ETag and a caller-chosen
-idempotency key, exactly like `patch_record`.
+`proposal.document` retains the disclosed slot policy and value. Uploads refuse
+an empty body, a body larger than `maximumBytes`, and a content type outside
+`contentTypes` before I/O. Uploads and removals use the promoted slot condition
+and caller-chosen idempotency key and return a new Proposal. Downloads check the
+frozen value's size, content type and SHA-256 before returning bytes. Keep the
+returned Proposal for subsequent operations; do not substitute a Record ETag
+or construct an attachment route.
 
-`slot.value_in(record)` reads the engine-owned projection of the slot out of one
-record mapping: a `kind` of `not-selected`, `empty`, or `filled`, with a `value`
-holding `proposal_version`, `byte_size`, `sha256`, `content_type`,
-`uploaded_at`, `uploaded_by`, `erased`, and `verification_status` when the slot
-is filled.
-
-A download requires the proposal version and returns the stored bytes with their
-stored content type. A retained older value may carry a content type the current
-policy no longer accepts. The response is bounded by both the slot capacity and
-the client's `max_response_bytes`, so raise `max_response_bytes` when a slot may
-hold more than the default bound.
+A review-only caller can select `select_proposal_review_context(profile, action)`,
+read with `read_proposal_review_by_id(binding, proposal_id)`, then call
+`download_proposal_review_document(binding, context, field)` for a disclosed
+document field. This does not require or grant ordinary Proposal Get authority.
+The server rechecks the full context's current disclosure before releasing bytes.
 
 ## Explicit OAuth token exchange
 

@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 169))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 179) if index not in {61, 62})
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -40,7 +40,7 @@ ACCEPTANCE_FIXTURES = {
     "BREG-J06": ("business", "acceptance/business"),
     "BREG-J18": ("asset-registration-actions", "fixtures/asset-registration-actions"),
     "BREG-J19": ("household-contact-actions", "fixtures/household-contact-actions"),
-    "BREG-J20": ("request-attachments", "acceptance/request-attachments"),
+    "BREG-J20": ("native-proposal-attachments", "examples/facility"),
     "BREG-J22": ("consent-person-registry", "fixtures/consent-person-registry"),
     "BREG-J23": ("consent-land-registry", "fixtures/consent-land-registry"),
     "BREG-J24": ("facility", "acceptance/facility"),
@@ -117,14 +117,11 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_activation",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_outbox",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_delivery",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_hook_proposals",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_hook_changes",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_requirements",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_registry_extensibility",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_consent_access",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_consent_examples",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_citizen_address_correction",
-    "cargo test --locked -p registry-breg-review --features postgres-test --test postgres_breg",
-    "cargo test --locked -p registry-breg-mcp --features postgres-test --test postgres_gateway",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_membership_access",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_action_handlers",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_action_evidence",
@@ -138,17 +135,19 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_ingestion_contract",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_ingestion_receipts",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_import_authority",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_change_requests",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_task_grants",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_request_receipts",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_request_upgrade_retention",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_request_events",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_request_queries",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_request_read_retention",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_review_executor",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_request_activation",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_refactor",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_native_retention",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_human_recovery",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_reviewed_change_example",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_hooks",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_review_delivery",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_security",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_s3",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_facility_proposal",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_action_task_grants",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_generated_console",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_pilot_acceptance",
-    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_rhai_planner",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_tombstone_revision",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_field_encryption",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_package",
@@ -674,7 +673,8 @@ def validate_fixture(errors: list[str]) -> None:
             "package",
             "manifestProjection",
             "modules",
-            "entities",
+            "recordTypes",
+            "datasets",
             "accessProfiles",
             "vocabularies",
         },
@@ -706,7 +706,7 @@ def validate_fixture(errors: list[str]) -> None:
     }
     if package != expected_package:
         errors.append("asset fixture.package: must equal the committed acceptance package identity")
-    entities = as_list(document.get("entities"), "asset fixture.entities", errors)
+    entities = as_list(document.get("recordTypes"), "asset fixture.recordTypes", errors)
     entity_ids = {item.get("id") for item in entities if isinstance(item, dict)}
     required_entities = {"asset-item", "asset-site", "asset-placement", "inspection-event"}
     if entity_ids != required_entities:
@@ -742,7 +742,13 @@ def validate_fixture(errors: list[str]) -> None:
         errors.append("asset fixture: data service membership must resolve to the governed dataset")
     placement = next((item for item in entities if isinstance(item, dict) and item.get("id") == "asset-placement"), {})
     temporal = placement.get("temporal") if isinstance(placement, dict) else None
-    if not isinstance(temporal, dict) or temporal.get("scopeFields") != ["asset"]:
+    if (
+        temporal != {"startField": "valid-from", "endField": "valid-to"}
+        or not any(
+            constraint == {"type": "temporal-non-overlap", "scopeFields": ["asset"], "startField": "valid-from", "endField": "valid-to"}
+            for constraint in placement.get("constraints", [])
+        )
+    ):
         errors.append("asset fixture: placement must declare scoped valid-time")
     profiles = as_list(document.get("accessProfiles"), "asset fixture.accessProfiles", errors)
     if [profile.get("id") for profile in profiles if isinstance(profile, dict)] != [

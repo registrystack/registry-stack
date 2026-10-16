@@ -3,6 +3,7 @@
 //! This module does not load runtimes, resolve secrets, or contact services.
 
 mod catalog;
+mod catalog_coordinator;
 mod catalog_extra;
 mod file_candidates;
 mod spec;
@@ -149,7 +150,10 @@ pub(crate) fn declares_root(root: &Path, product: ProductKind) -> bool {
                 .value
                 .get_scalar(rules.discriminator)
                 .is_some_and(|value| {
-                    if product == ProductKind::Manifest || product == ProductKind::Breg {
+                    if matches!(
+                        product,
+                        ProductKind::Manifest | ProductKind::Breg | ProductKind::Coordinator
+                    ) {
                         value.value == rules.version_prefix
                     } else {
                         value.value.starts_with(rules.version_prefix)
@@ -205,11 +209,6 @@ fn document_rules(
         .filter(|rules| {
             if rules.pattern == "@document" {
                 path == entry
-            } else if rules.pattern == "@source-description" {
-                path != entry
-                    && relative != "runtime.yaml"
-                    && relative != "dev-clients.yaml"
-                    && !relative.starts_with("fixtures/")
             } else {
                 matches_pattern(rules.pattern, relative)
             }
@@ -228,15 +227,14 @@ pub(crate) fn is_project_document(
     };
     is_authoring_document(path)
         && is_safe_authored_file(root, path)
-        && (documents.contains_key(path)
-            || document_rules(root, path, &entry, product)
-                .iter()
-                .any(|rules| rules.pattern != "@source-description"))
+        && (documents.contains_key(path) || !document_rules(root, path, &entry, product).is_empty())
 }
 
 struct Match<'a> {
     scalar: &'a YamlScalar,
     parents: Vec<&'a YamlValue>,
+    /// The mapping keys a `*` visited on the way here, innermost first.
+    keys: Vec<&'a str>,
 }
 
 fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
@@ -244,6 +242,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
         value: &'a YamlValue,
         parts: &[&str],
         parents: &mut Vec<&'a YamlValue>,
+        keys: &mut Vec<&'a str>,
         output: &mut Vec<Match<'a>>,
     ) {
         if parts.is_empty() {
@@ -251,6 +250,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
                 output.push(Match {
                     scalar,
                     parents: parents.iter().rev().copied().collect(),
+                    keys: keys.iter().rev().copied().collect(),
                 });
             }
             return;
@@ -263,6 +263,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
                         output.push(Match {
                             scalar: &pair.key,
                             parents: parents.iter().rev().copied().collect(),
+                            keys: keys.iter().rev().copied().collect(),
                         });
                     }
                 }
@@ -270,19 +271,21 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
             "*" => match value {
                 YamlValue::Sequence(items) => {
                     for item in items {
-                        walk(item, &parts[1..], parents, output);
+                        walk(item, &parts[1..], parents, keys, output);
                     }
                 }
                 YamlValue::Mapping(items) => {
                     for item in items {
-                        walk(&item.value, &parts[1..], parents, output);
+                        keys.push(item.key.value.as_str());
+                        walk(&item.value, &parts[1..], parents, keys, output);
+                        keys.pop();
                     }
                 }
                 _ => {}
             },
             key => {
                 if let Some(child) = value.get(key) {
-                    walk(child, &parts[1..], parents, output);
+                    walk(child, &parts[1..], parents, keys, output);
                 }
             }
         }
@@ -292,6 +295,7 @@ fn at_path<'a>(value: &'a YamlValue, path: &str) -> Vec<Match<'a>> {
     walk(
         value,
         &path.split('/').collect::<Vec<_>>(),
+        &mut Vec::new(),
         &mut Vec::new(),
         &mut output,
     );
@@ -309,10 +313,32 @@ fn ancestor_field(found: &Match<'_>, skip: usize, field: &str) -> Option<String>
 }
 
 fn scope(found: &Match<'_>, rule: Scope, path: &Path) -> Option<Option<String>> {
+    fn action<'a>(found: &Match<'a>) -> Option<&'a YamlValue> {
+        found.parents.iter().copied().find(|parent| {
+            parent.get("id").is_some()
+                && (parent.get("plan").is_some() || parent.get("execution").is_some())
+        })
+    }
+    fn input_target(found: &Match<'_>, input: &str) -> Option<String> {
+        at_path(action(found)?, "inputs/*/target")
+            .into_iter()
+            .find(|target| ancestor_field(target, 0, "id").as_deref() == Some(input))
+            .map(|target| target.scalar.value.clone())
+    }
     match rule {
         Scope::Global => Some(None),
+        Scope::BregAction => Some(Some(action(found)?.get_scalar("id")?.value.clone())),
+        Scope::BregTarget => Some(Some(
+            ancestor_field(found, 0, "target.recordType")
+                .or_else(|| input_target(found, &ancestor_field(found, 0, "target.fromInput")?))?,
+        )),
+        Scope::BregInputTarget(field) => Some(Some(input_target(
+            found,
+            &ancestor_field(found, 0, field)?,
+        )?)),
         Scope::Document => Some(Some(path.to_string_lossy().into_owned())),
         Scope::Ancestor { skip, field } => Some(Some(ancestor_field(found, skip, field)?)),
+        Scope::EnclosingKey => Some(Some((*found.keys.first()?).to_owned())),
         Scope::Composite(fields) => {
             let values = fields
                 .iter()
@@ -596,9 +622,9 @@ pub(crate) fn build_index(
             messaging_template_files(root, path, &document.value, &mut output);
         }
         if product == ProductKind::Breg {
-            for entity in at_path(&document.value, "entities/*/id") {
+            for entity in at_path(&document.value, "recordTypes/*/id") {
                 let kind = SymbolKind::Product(product, "BReg field");
-                if !at_path(&document.value, "entities/*/fields/*/id")
+                if !at_path(&document.value, "recordTypes/*/fields/*/id")
                     .iter()
                     .any(|field| {
                         field.scalar.value == "id"
@@ -749,7 +775,7 @@ pub(crate) fn build_index(
                             path: path.clone(),
                             range: found.scalar.range,
                         },
-                        reports_unresolved: product != ProductKind::Casework,
+                        reports_unresolved: true,
                         style: found.scalar.style,
                         offers: None,
                     });
@@ -851,7 +877,7 @@ mod tests {
         for path in [
             "casework.yaml",
             "mappings/other.yml",
-            "imports/source-description.json",
+            "imports/descriptor.json",
             ".registry-stack-editor/project.json",
         ] {
             assert!(is_authoring_document(Path::new(path)));
@@ -910,31 +936,28 @@ mod tests {
     }
 
     #[test]
-    fn casework_follows_only_authoring_source_descriptions() {
-        for (description, followed) in [
-            ("keys/signing.key", false),
-            ("keys/signing.pem", false),
-            ("imports/source-description", false),
-            ("imports/source-description.yaml", true),
-            ("imports/source-description.yml", true),
-            ("imports/source-description.json", true),
-        ] {
-            let directory = project(&[
-                (
-                    "casework.yaml",
-                    &format!(
-                        "kind: CaseworkProject\n\
-                         sources: [{{id: regional, description: {description}}}]\n"
-                    ),
-                ),
-                (description, "sourceId: regional\n"),
-            ]);
-            assert_eq!(
-                loaded(&directory, ProductKind::Casework).contains(description),
-                followed,
-                "{description}"
-            );
-        }
+    fn casework_loads_only_current_authored_document_patterns() {
+        let directory = project(&[
+            ("casework.yaml", "kind: CaseworkProject\n"),
+            ("runtime.yaml", "kind: CaseworkRuntimeConfig\n"),
+            ("dev-clients.yaml", "kind: CaseworkDevClients\n"),
+            ("fixtures/review.yml", "kind: CaseworkFixture\n"),
+            (
+                "holiday-sets/office.yaml",
+                "kind: CaseworkHolidaySet\nholidaySet: office\n",
+            ),
+            ("imports/retired.json", "{\"sourceId\":\"retired\"}"),
+        ]);
+        assert_eq!(
+            loaded(&directory, ProductKind::Casework),
+            BTreeSet::from([
+                "casework.yaml".to_owned(),
+                "dev-clients.yaml".to_owned(),
+                "fixtures/review.yml".to_owned(),
+                "holiday-sets/office.yaml".to_owned(),
+                "runtime.yaml".to_owned(),
+            ])
+        );
     }
 
     #[test]

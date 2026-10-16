@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 169)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 179) if index not in {61, 62}],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -217,19 +217,11 @@ class BRegProductCatalogTests(unittest.TestCase):
         VALIDATOR.validate_postgres_entrypoint(errors)
         self.assertEqual([], errors)
 
-    def test_postgres_rhai_planner_follows_the_existing_pilot_acceptance_gate(
-        self,
-    ) -> None:
+    def test_native_proposal_targets_replace_retired_request_targets(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        pilot = (
-            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
-            "--test postgres_pilot_acceptance"
-        )
-        rhai = (
-            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
-            "--test postgres_rhai_planner"
-        )
-        self.assertEqual(commands.index(pilot) + 1, commands.index(rhai))
+        for target in ("postgres_refactor", "postgres_proposal", "postgres_proposal_security", "postgres_proposal_s3", "postgres_native_retention", "postgres_facility_proposal", "postgres_action_task_grants", "postgres_generated_console"):
+            self.assertIn("cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test " + target, commands)
+        self.assertFalse(any("--test postgres_request_" in command or "--test postgres_change_requests" in command or "--test postgres_rhai_planner" in command for command in commands))
 
     def test_postgres_constraint_races_follow_partial_unique_in_the_owned_gate(
         self,
@@ -666,7 +658,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 path.name == "registry.yaml"
                 and path.parent.name == "asset-site-placement"
             ):
-                value["entities"].append({"id": "business", "route": "businesses"})
+                value["recordTypes"].append({"id": "business", "route": "businesses"})
             return value
 
         errors: list[str] = []

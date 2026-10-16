@@ -182,7 +182,6 @@ export interface RecordProjectionOptions {
 }
 
 export interface RecordOptions extends RecordProjectionOptions {
-  requestHistoryAfterProposalVersion?: SafeInteger | null
 }
 
 export interface ListOptions extends RecordProjectionOptions {
@@ -246,89 +245,7 @@ export interface RegistryRecord {
   recordIdentifier: string
   revisionIdentifier: string
   domainData: Readonly<Record<string, JsonValue>>
-  request?: BRegRequestMetadata
   readonly [member: string]: JsonValue | undefined
-}
-
-export type BRegRequestResultReferenceData = JsonObject & {
-  readonly targetEntityId: string
-  readonly targetRecordId: string
-  /** Revision written by the application, not a current ETag or precondition. */
-  readonly targetRevision: SafeInteger
-}
-export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied'
-export type BRegRequestReviewRequirement =
-  | Readonly<{ type: 'none' }>
-  | Readonly<{ type: 'required'; authority: string; policyId: string }>
-export type BRegExternalReviewStatus = Readonly<{
-  submission: Readonly<{
-    state: 'pending' | 'accepted' | 'uncertain' | 'cancelling' | 'cancelled' | 'failed'
-    authority: string
-    requestId?: string
-    submissionDigest?: string
-    /** Fixed recovery deadline for the durable submission. */
-    recoveryDeadline?: string
-    policy?: Readonly<{ id: string; version: string; digest: string }>
-  }>
-  result: Readonly<{
-    state: 'pending' | 'approved' | 'rejected' | 'changesRequested' | 'answered' | 'cancelled' | 'superseded'
-    resultId?: string
-    completedAt?: string
-    availableUntil?: string
-  }>
-  delivery: Readonly<{
-    state: 'polling' | 'received' | 'reconciled' | 'unmatched' | 'exhausted'
-    eventId?: string
-    receivedAt?: string
-  }>
-  application: Readonly<{
-    mode: 'manual' | 'automatic'
-    state: 'awaitingReview' | 'ready' | 'queued' | 'applying' | 'applied' | 'blocked' | 'expired'
-    executor?: string
-    applicationId?: string
-    /** Durable automatic-application attempts, from 0 through 1000. */
-    attempts?: SafeInteger
-    /** Present only while an automatic application is queued or applying. */
-    nextAttemptAt?: string
-    /** Present when the applied receipt was recovered from already-applied source state. */
-    receiptRecovered?: true
-  }>
-  recovery: Readonly<{
-    state: 'none' | 'operatorAttention'
-    code?: string
-  }>
-}>
-export type BRegRetainedRequestProposal = JsonObject & {
-  readonly requestEntityId: string
-  readonly requestId: string
-  readonly proposalVersion: SafeInteger
-  readonly bregState: BRegRequestState
-  readonly current: boolean
-  readonly contractFingerprint: string
-  readonly detailErased: boolean
-  readonly applicationId: string | null
-  readonly resultLinkCount: SafeInteger
-  readonly resultLinks: ReadonlyArray<BRegRequestResultReferenceData>
-  readonly effectDigest?: string
-  readonly proposal?: Readonly<{ review: BRegRequestReviewRequirement }>
-}
-export type BRegRetainedRequestHistory = JsonObject & {
-  readonly proposals: ReadonlyArray<BRegRetainedRequestProposal>
-  readonly nextAfterProposalVersion: SafeInteger | null
-}
-export type BRegRequestMetadata = JsonObject & {
-  readonly bregState: BRegRequestState
-  readonly proposalVersion: SafeInteger
-  readonly effectDigest?: string | null
-  readonly proposal?: Readonly<{ review: BRegRequestReviewRequirement }> | null
-  readonly editable: boolean
-  readonly detailErased?: true
-  readonly actions?: ReadonlyArray<JsonObject>
-  readonly application?: JsonObject | null
-  readonly history?: BRegRetainedRequestHistory | null
-  readonly review?: BRegExternalReviewStatus
-  readonly submitterReference?: string
-  readonly applierReference?: string
 }
 
 export interface RecordMetadata {
@@ -405,22 +322,6 @@ export interface RemovePatchOperation {
   field: string
 }
 
-export type LifecycleReceipt = JsonObject & {
-  readonly id: string
-  readonly revision: SafeInteger
-  readonly snapshot: string
-  readonly actorReference?: string
-  readonly request: BRegLifecycleReceiptRequest
-}
-
-export type BRegLifecycleReceiptRequest = JsonObject & {
-  readonly bregState: BRegRequestState
-  readonly proposalVersion: SafeInteger | null
-  readonly effectDigest: string | null
-  readonly proposal?: JsonObject | null
-  readonly application: JsonObject | null
-}
-
 /** Exact validated JSON text, serialized before conversion to JavaScript numbers.
  * Decode with a lossless JSON library if inspecting values outside the safe integer range.
  * Decimal fields remain fixed-scale JSON strings. */
@@ -465,15 +366,18 @@ export interface BRegFieldDescriptor {
   readonly nullable: boolean
   readonly readOnly: boolean
   readonly removable: boolean
-  readonly referenceTargetEntity: string | null
+  readonly referenceTargetRecordType: string | null
   readonly codeLabels: Readonly<Record<string, string>>
   readonly storageValidation: {
     readonly kind: string
     readonly pattern: string
   } | null
   readonly reference: {
+    readonly name: string | null
+    readonly cardinality: 'one' | 'optional-one' | 'many' | null
+    readonly inverseName: string | null
     readonly manualEntry: boolean
-    readonly targetEntity: string | null
+    readonly targetRecordType: string | null
     readonly operations: ReadonlyArray<{
       readonly operationId: string
       readonly accessProfile: string
@@ -528,15 +432,14 @@ export interface BRegOperationDescriptor {
   readonly method: string
   readonly path: string
   readonly kind: string
-  readonly sourceEntity: string
-  readonly responseEntity: string
+  readonly sourceRecordType: string
+  readonly responseRecordType: string
   readonly accessProfile: string
-  readonly entityLabel: string
+  readonly recordTypeLabel: string
   readonly titleFields: ReadonlyArray<string>
   readonly requiredCapabilities: ReadonlyArray<string>
   readonly fields: ReadonlyArray<BRegFieldDescriptor>
   readonly readableFields: ReadonlyArray<string>
-  readonly readableRequestFields: ReadonlyArray<string>
   readonly createWritableFields: ReadonlyArray<string>
   readonly patchWritableFields: ReadonlyArray<string>
   readonly query: BRegQueryDescriptor | null
@@ -561,15 +464,36 @@ export interface BRegOperationDescriptor {
   }
 }
 
-export interface BRegImmediateActionDescriptor {
+export interface BRegProposalActionDescriptor {
+  readonly actionId: string
+  readonly accessProfile: string
+  readonly operations: ReadonlyArray<string>
+  readonly readableInputs: ReadonlyArray<string>
+}
+
+export interface BRegActionAttachmentDescriptor {
   readonly id: string
-  readonly contractFingerprint: string
+  readonly required: boolean
+  readonly contentTypes: ReadonlyArray<string>
+  readonly maximumBytes: SafeInteger
+}
+
+export interface BRegActionDescriptor {
+  readonly attachments: ReadonlyArray<BRegActionAttachmentDescriptor>
+  readonly apiName: string
+  readonly revision: string
+  readonly display: Readonly<{label?: string; description?: string}>
+  readonly mode: 'immediate' | 'proposal'
+  readonly id: string
   readonly inputMode: string | null
   readonly maximumInputStringBytes: SafeInteger | null
   readonly inputs: ReadonlyArray<{
     readonly id: string
     readonly apiName: string
     readonly fieldTypeJson: string
+    readonly label: string
+    readonly description: string | null
+    readonly schemaJson: string
     readonly required: boolean
     readonly nullable: boolean | null
     readonly classification: string
@@ -577,16 +501,16 @@ export interface BRegImmediateActionDescriptor {
   readonly referenceInputs: ReadonlyArray<{
     readonly input: string
     readonly apiName: string
-    readonly targetEntity: string
+    readonly targetRecordType: string
   }>
   readonly requiredConditionKeys: ReadonlyArray<string>
   readonly resultEffects: ReadonlyArray<{
     readonly effect: string
-    readonly entity: string
+    readonly recordType: string
     readonly operation: string
   }>
   readonly accessProfile: string
-  readonly invokePath: string
+  readonly invokePath: string | null
   readonly targetConditionsPath: string | null
   readonly bounds: {
     readonly maximumTargets: SafeInteger
@@ -599,7 +523,7 @@ export interface BRegActionReceipt {
   readonly action: string
   readonly applicationId: string
   readonly results: Readonly<Record<string, {
-    readonly entity: string
+    readonly recordType: string
     readonly recordId: string
     readonly revision: SafeInteger
   }>>
@@ -674,7 +598,7 @@ export interface BRegIngestionRunInput {
 export interface BRegIngestionRunListInput {
   accessProfile?: string | null
   limit?: SafeInteger | null
-  after?: string | null
+  cursor?: string | null
   status?: BRegIngestionRunStatus | null
   inputDigest?: string | null
 }
@@ -689,7 +613,7 @@ export interface BRegIngestionRun {
   readonly runId: string
   readonly status: BRegIngestionRunStatus
   readonly blockedReason: string | null
-  readonly entityId: string
+  readonly recordType: string
   readonly operation: BRegIngestionOperation
   readonly profileId: string
   readonly packageRevision: string
@@ -713,7 +637,7 @@ export interface BRegIngestionRun {
 export interface BRegIngestionRunPage {
   readonly runs: ReadonlyArray<BRegIngestionRun>
   readonly hasMore: boolean
-  readonly nextAfter: string | null
+  readonly nextCursor: string | null
 }
 
 export interface BRegIngestionReceiptBatch {
@@ -770,121 +694,6 @@ export declare function encodeIngestionChunk(
   prefixDigest: string,
 ): BRegIngestionChunk
 
-/**
- * Where a change-request target or value comes from, present only when the
- * caller may read it: a request-entity field, or the record another effect
- * of the same request creates.
- */
-export type BRegChangeRequestBinding =
-  | { readonly fromField: string; readonly fromEffect?: never }
-  | { readonly fromEffect: string; readonly fromField?: never }
-  | { readonly fromField?: never; readonly fromEffect?: never }
-
-export type BRegChangeRequestTarget = { readonly entity: string } & BRegChangeRequestBinding
-
-/**
- * One declared change-request effect on an entity the caller may read. Only
- * target fields the caller may read are named; the value is descriptive and
- * cannot create target-write authority.
- */
-export interface BRegChangeRequestEffect {
-  readonly id: string
-  readonly operation: 'create' | 'patch'
-  readonly target: BRegChangeRequestTarget
-  readonly set: ReadonlyArray<{ readonly field: string } & BRegChangeRequestBinding>
-  readonly clear: ReadonlyArray<string>
-}
-
-/** One declared planner write, filtered to fields the caller may read. */
-export interface BRegChangeRequestPlannerWrite {
-  /** A planner write targets a stored record, never another effect. */
-  readonly target: { readonly entity: string; readonly fromField?: string; readonly fromEffect?: never }
-  readonly operation: 'create' | 'patch'
-  readonly fields: ReadonlyArray<string>
-}
-
-export interface BRegChangeRequestCapability {
-  readonly planner: {
-    readonly kind: 'declarative' | 'rhai'
-    readonly abi: string | null
-    readonly limits: {
-      readonly maximumTargets: SafeInteger
-      readonly maximumFieldMutations: SafeInteger
-      readonly maximumSnapshotBytes: SafeInteger
-      readonly maximumSourceBytes: SafeInteger
-      readonly maximumOperations: SafeInteger
-      readonly maximumCallDepth: SafeInteger
-      readonly maximumExpressionDepth: SafeInteger
-      readonly maximumStringBytes: SafeInteger
-      readonly maximumArrayItems: SafeInteger
-      readonly maximumMapEntries: SafeInteger
-      readonly maximumModules: SafeInteger
-    } | null
-    readonly possibleWriteCount: SafeInteger | null
-    readonly possibleWriteOperations: ReadonlyArray<string>
-    readonly writes: ReadonlyArray<BRegChangeRequestPlannerWrite>
-  }
-  readonly effects: ReadonlyArray<BRegChangeRequestEffect>
-  readonly review: BRegRequestReviewRequirement
-  readonly onApproved: {
-    readonly mode: 'manual' | 'automatic'
-    readonly executor: string | null
-  }
-  readonly application: {
-    readonly preconditions: JsonValue | null
-  }
-}
-
-export type BRegAttachmentVerificationStatus = 'notRequired' | 'pending' | 'approved' | 'rejected'
-
-export type BRegAttachmentClassification = 'public' | 'internal' | 'restricted'
-
-/** Engine-owned state of one filled slot, read from a record's domain data. */
-export interface BRegAttachmentState {
-  readonly slotIdentifier: string
-  readonly proposalVersion: SafeInteger
-  readonly erased: boolean
-  readonly byteSize: SafeInteger
-  readonly sha256: string
-  readonly contentType: string | null
-  readonly uploadedAt: string | null
-  readonly uploadedBy: string | null
-  readonly verificationStatus: BRegAttachmentVerificationStatus | null
-}
-
-/** What one record projection says about one slot. */
-export type BRegAttachmentSlotValue =
-  | { readonly kind: 'not-selected'; readonly value: null }
-  | { readonly kind: 'empty'; readonly value: null }
-  | { readonly kind: 'filled'; readonly value: BRegAttachmentState }
-
-/** Opaque bytes already accepted by one slot's served upload policy. */
-export declare class BRegAttachmentUpload {
-  private constructor()
-  private readonly __opaque: void
-  readonly contentType: string
-  readonly byteSize: SafeInteger
-}
-
-/** Opaque governed attachment slot selected from metadata fetched by this client source. */
-export declare class BRegAttachmentSlot {
-  private constructor()
-  private readonly __opaque: void
-  readonly slotIdentifier: string
-  readonly entityIdentifier: string
-  readonly accessProfile: string
-  readonly requiredForSubmit: boolean
-  readonly maximumBytes: SafeInteger
-  readonly contentTypes: ReadonlyArray<string>
-  readonly classification: BRegAttachmentClassification
-  readonly canDownload: boolean
-  readonly canUpload: boolean
-  readonly canRemove: boolean
-  acceptsContentType(contentType: string): boolean
-  prepareUpload(contentType: string, body: Buffer): BRegAttachmentUpload
-  valueIn(record: RecordEnvelope, format?: RecordFormat | null): BRegAttachmentSlotValue
-}
-
 /** Opaque write authority selected from metadata fetched by this client source. */
 export declare class BRegCreateBinding {
   private constructor()
@@ -896,7 +705,7 @@ export declare class BRegPatchBinding {
   private readonly __opaque: void
 }
 /** Opaque authority for one metadata-selected immediate action. */
-export declare class BRegImmediateActionBinding {
+export declare class BRegActionBinding {
   private constructor()
   private readonly __opaque: void
 }
@@ -917,61 +726,6 @@ export declare class BRegTombstoneBinding {
 export declare class BRegBatchBinding {
   private constructor()
   private readonly __opaque: void
-}
-/** Opaque lifecycle authority selected from metadata fetched by this client source. */
-export declare class BRegLifecycleAuthority {
-  private constructor()
-  private readonly __opaque: void
-}
-
-/** Inert caller-visible target provenance. It grants no read authority. */
-export declare class BRegRequestResultReference {
-  private constructor()
-  private readonly __opaque: void
-  readonly targetEntityIdentifier: string
-  readonly targetRecordIdentifier: string
-  /** Revision written by the application, not a current ETag or precondition. */
-  readonly targetRevision: SafeInteger
-  toString(): string
-}
-
-/** One exact retained proposal from an explicitly loaded history page. */
-export declare class BRegRetainedRequestProposalView {
-  private constructor()
-  private readonly __opaque: void
-  readonly requestEntityIdentifier: string
-  readonly requestIdentifier: string
-  readonly proposalVersion: SafeInteger
-  readonly bregState: BRegRequestState
-  readonly current: boolean
-  readonly detailErased: boolean
-  readonly applicationIdentifier: string | null
-  /** Caller-visible count, never an undisclosed application total. */
-  readonly resultLinkCount: SafeInteger
-  readonly resultReferences: ReadonlyArray<BRegRequestResultReference>
-  toString(): string
-}
-
-/** One page only. Call getRecord with its cursor to load another page. */
-export declare class BRegRetainedRequestHistoryPage {
-  private constructor()
-  private readonly __opaque: void
-  readonly proposals: ReadonlyArray<BRegRetainedRequestProposalView>
-  readonly nextAfterProposalVersion: SafeInteger | null
-  findProposal(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: SafeInteger): BRegRetainedRequestProposalView | null
-  findApplication(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: SafeInteger, applicationIdentifier: string): BRegRetainedRequestProposalView | null
-  toString(): string
-}
-
-/** Opaque executable action promoted from a metadata authority and one record. */
-export declare class BRegLifecycleAction {
-  withReason(reason: string): BRegLifecycleAction
-  private constructor()
-  private readonly __opaque: void
-  readonly operation: string
-  readonly href: string
-  readonly bodyJson: string
-  readonly body: JsonObject
 }
 
 /**
@@ -994,14 +748,6 @@ export declare class BRegPreparedCreate {
   toBytes(): Buffer
 }
 
-/** Inert bounded lifecycle evidence. Persist these bytes with owner-only access. */
-export declare class BRegPreparedLifecycle {
-  private constructor()
-  private readonly __opaque: void
-  static fromBytes(bytes: Buffer): BRegPreparedLifecycle
-  toBytes(): Buffer
-}
-
 /** Revalidated action invocation and key. It still requires fresh metadata authority to send. */
 export declare class BRegRecoveredAction {
   private constructor()
@@ -1014,18 +760,17 @@ export declare class BRegRecoveredCreate {
   private readonly __opaque: void
 }
 
-/** Revalidated lifecycle action. It remains inert until explicitly sent. */
-export declare class BRegRecoveredLifecycle {
-  private constructor()
-  private readonly __opaque: void
-}
-
 /** Caller-filtered metadata bound to the exact client source that fetched it. */
 export declare class BRegMetadata {
+  selectProposals(profile: string): BRegProposalCollection
+  selectProposalGet(profile: string): BRegProposalGetBinding
+  selectProposalReviewContext(profile: string, action: string): BRegProposalReviewBinding
+  selectProposalReviewStatus(profile: string, action: string): BRegProposalReviewBinding
   private constructor()
   private readonly __opaque: void
   readonly operations: ReadonlyArray<BRegOperationDescriptor>
-  readonly immediateActions: ReadonlyArray<BRegImmediateActionDescriptor>
+  readonly proposalActions: ReadonlyArray<BRegProposalActionDescriptor>
+  readonly actions: ReadonlyArray<BRegActionDescriptor>
   readonly actionsJson: string | null
   /** Validated caller-filtered inert descriptions. They never grant entity authority. */
   readonly statisticalDatasets: ReadonlyArray<BRegStatisticalDatasetDescriptor> | null
@@ -1034,20 +779,16 @@ export declare class BRegMetadata {
   readonly registryRevision: string
   readonly traceId: string
   readonly etag: string | null
-  changeRequestCapability(entityIdentifier: string): BRegChangeRequestCapability | null
   selectCreate(operationIdentifier: string, expectedProfile: string): BRegCreateBinding
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
-  selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
-  selectAttachments(entityIdentifier: string, expectedProfile: string): ReadonlyArray<BRegAttachmentSlot>
-  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegImmediateActionBinding
-  selectTombstone(entityIdentifier: string, expectedProfile: string): BRegTombstoneBinding
-  selectBatch(entityIdentifier: string, expectedProfile: string): BRegBatchBinding
+  selectAction(actionIdentifier: string, expectedProfile: string): BRegActionBinding
+  selectTombstone(recordTypeIdentifier: string, expectedProfile: string): BRegTombstoneBinding
+  selectBatch(recordTypeIdentifier: string, expectedProfile: string): BRegBatchBinding
 }
 
 export interface BaseRegistryClientFailure extends Error {
   readonly kind: string
   readonly code?: string
-  readonly planRefusal?: string
   readonly refusalCode?: string
   readonly reasonCode?: string
   readonly fieldPath?: string
@@ -1074,7 +815,6 @@ export interface BaseRegistryClientFailure extends Error {
 export declare class BaseRegistryClientError extends Error implements BaseRegistryClientFailure {
   readonly kind: string
   readonly code?: string
-  readonly planRefusal?: string
   readonly refusalCode?: string
   readonly reasonCode?: string
   readonly fieldPath?: string
@@ -1099,6 +839,15 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
 }
 
 export declare class BaseRegistryClient {
+  startProposal(binding: BRegActionBinding, inputsJson: string, key: string): Promise<BRegProposal>
+  getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
+  readProposal(proposal: BRegProposal): Promise<BRegProposal>
+  /** Read one retained submission version under the access profile of the Proposal's self link. */
+  readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome<BRegProposalSubmission>>
+  listProposals(collection: BRegProposalCollection, queryJson: string): Promise<BRegProposalPage>
+  prepareProposal(proposal: BRegProposal, operation: BRegProposalTransition, bodyJson: string, key: string): BRegPreparedProposal
+  recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
+  executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   constructor(config: BaseRegistryClientConfig)
   health(): Promise<CompleteOutcome<ProbeStatus>>
   ready(): Promise<CompleteOutcome<ProbeStatus>>
@@ -1112,7 +861,7 @@ export declare class BaseRegistryClient {
   statisticsPublish(dataset: string, period: string, status: StatisticsReleaseStatus, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: SafeInteger, reason: StatisticsWithdrawalReason, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | null): Promise<BRegMetadata>
-  entitySchema(entityIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
+  entitySchema(recordTypeIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
   recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
   getRecordRevision(entityRoute: string, recordIdentifier: string, revision: SafeInteger, options?: RecordProjectionOptions | null): Promise<RawOutcome>
   getRecord(entityRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
@@ -1130,18 +879,26 @@ export declare class BaseRegistryClient {
   listRelationshipRecords(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: CollectionOptions | null): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
   continueRelationshipList(continuation: RelationshipListContinuation): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
   lookupRecord(entityRoute: string, selector: string, values?: JsonObject | null, options?: RecordProjectionOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
-  actionTargetConditions(binding: BRegImmediateActionBinding, inputs: JsonObject): Promise<BRegActionTargetConditions>
-  actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
-  invokeAction(binding: BRegImmediateActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<CompleteOutcome<BRegActionReceipt>>
-  invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<JsonOutcome>
+  actionTargetConditions(binding: BRegActionBinding, inputs: JsonObject): Promise<BRegActionTargetConditions>
+  actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  invokeAction(binding: BRegActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<CompleteOutcome<BRegActionReceipt>>
+  invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<JsonOutcome>
   /** Validate and retain one invocation before any I/O, for recovery after a lost response. */
-  prepareAction(binding: BRegImmediateActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
-  prepareActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
+  prepareAction(binding: BRegActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
+  prepareActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
   /** Revalidate saved evidence against fresh authority and the original inputs and key. Performs no I/O. */
-  recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: JsonObject, idempotencyKey: string): BRegRecoveredAction
-  recoverActionJson(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
-  executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome<BRegActionReceipt>>
-  executeRecoveredActionJson(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
+  recoverAction(binding: BRegActionBinding, prepared: BRegPreparedAction, inputs: JsonObject, idempotencyKey: string): BRegRecoveredAction
+  recoverActionJson(binding: BRegActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
+  executeRecoveredAction(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome<BRegActionReceipt>>
+  executeRecoveredProposalStart(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<BRegProposal>
+  downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
+  readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
+  readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
+  readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome<BRegProposalReviewDocument>>
+  downloadProposalReviewDocument(binding: BRegProposalReviewBinding, context: BRegProposalReviewDocument, field: string): Promise<RawOutcome>
+  uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
+  deleteProposalAttachment(proposal: BRegProposal, slot: string, key: string): Promise<BRegProposal>
+  executeRecoveredActionJson(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
   createRecord(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   prepareCreate(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedCreate
   prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedCreate
@@ -1159,17 +916,6 @@ export declare class BaseRegistryClient {
   ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: SafeInteger, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkReceipt>>
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
-  lifecycleActions(authority: BRegLifecycleAuthority, record: RecordEnvelope, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
-  /** Pure typed projection of one already loaded page. Performs no I/O. */
-  requestHistory(record: RecordEnvelope, format?: RecordFormat | null): BRegRetainedRequestHistoryPage | null
-  prepareLifecycleAction(authority: BRegLifecycleAuthority, record: RecordEnvelope, action: BRegLifecycleAction, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedLifecycle
-  prepareLifecycleActionJson(authority: BRegLifecycleAuthority, recordJson: string, action: BRegLifecycleAction, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedLifecycle
-  recoverLifecycleAction(authority: BRegLifecycleAuthority, prepared: BRegPreparedLifecycle): BRegRecoveredLifecycle
-  executeRecoveredLifecycleAction(recovered: BRegRecoveredLifecycle): Promise<CompleteOutcome<LifecycleReceipt>>
-  executeRecoveredLifecycleActionJson(recovered: BRegRecoveredLifecycle): Promise<JsonOutcome>
-  uploadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
-  downloadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, proposalVersion: SafeInteger): Promise<RawOutcome>
-  deleteAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   getRecordJson(entityRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<JsonOutcome>
   listRecordsJson(entityRoute: string, options?: ListOptions | null): Promise<JsonOutcome>
   continueListJson(continuation: ListContinuation): Promise<JsonOutcome>
@@ -1187,9 +933,70 @@ export declare class BaseRegistryClient {
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | null, options?: RecordProjectionOptions | null): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
-  uploadAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
-  deleteAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
-  lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
-  executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
-  executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome<LifecycleReceipt>>
 }
+
+export type BRegProposalTransition = 'edit' | 'submit' | 'revise' | 'rebase' | 'retry' | 'cancel' | 'apply'
+export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied'
+export type BRegRecoveryHint = 'refresh' | 'revise' | 'retry' | 'correct-input' | 'receipt-only'
+export type BRegAvailability =
+  | { readonly available: true; readonly observedRevision: number }
+  | { readonly available: false; readonly observedRevision: number; readonly reason: BRegAvailabilityReason; readonly recovery: BRegRecoveryHint }
+export interface BRegProposalLink { readonly method: 'GET' | 'POST'; readonly path: string; readonly accessProfile: string; readonly operation: string; readonly ifMatch?: string; readonly availability?: BRegAvailability }
+export interface BRegProposalAttachment {
+  readonly id: string; readonly required: boolean; readonly maximumBytes: number
+  readonly contentTypes: ReadonlyArray<string>; readonly classification: 'public' | 'internal' | 'restricted'
+  readonly links: Readonly<Partial<Record<'download' | 'upload' | 'remove', Omit<BRegProposalLink, 'method'> & {readonly method: 'GET' | 'PATCH' | 'DELETE'}>>>
+  readonly value?: {readonly submissionVersion: number; readonly sha256: string; readonly contentType: string; readonly byteSize: number; readonly uploadedAt?: string; readonly verificationStatus: 'notRequired' | 'pending' | 'approved' | 'rejected'}
+}
+export interface BRegProposalApplication {
+  readonly applicationId: string; readonly submissionVersion: number; readonly effectDigest: string
+  readonly resultLinks: ReadonlyArray<{readonly recordType: string; readonly recordId: string; readonly revision: number}>
+}
+export interface BRegProposalApplicationStatus {
+  readonly state: 'awaiting-review' | 'pending' | 'applying' | 'blocked' | 'applied' | 'cancelled' | 'rejected'
+  readonly mode: 'automatic' | 'manual'
+  readonly reason?: 'contract-changed' | 'dependency-outage' | 'lease-expired' | 'application-refused' | 'attempts-exhausted'
+  readonly recovery?: 'retry' | 'correct-input'
+  readonly automaticRetry?: {readonly scheduled: boolean; readonly attempts: number; readonly maximumAttempts: number}
+}
+export interface BRegProposalReviewDocument {
+  readonly id: string; readonly actionId: string; readonly actionRevision: string
+  readonly submissionVersion: number; readonly revision: number; readonly effectDigest: string; readonly reviewable: boolean
+  readonly subject: {readonly source: string; readonly subjectType: 'proposal'; readonly id: string; readonly version: string; readonly digest: string}
+  readonly context: {readonly reference: string; readonly contract?: {readonly id: string; readonly revision: string; readonly schemaDigest: string}; readonly fields?: Readonly<Record<string, JsonValue>>}
+  readonly requestId?: string
+  readonly authority?: string; readonly policy?: {readonly id: string; readonly version: string; readonly digest: string}
+  readonly result?: {readonly state: 'pending' | 'approved' | 'rejected' | 'changes-requested' | 'answered' | 'cancelled' | 'superseded' | 'expired'; readonly resultId?: string; readonly completedAt?: string; readonly availableUntil?: string}
+}
+/** Who is expected to act next, derived by BReg. */
+export type BRegProposalTurn = 'party' | 'official' | 'nobody'
+/** The review decision on one submission. The public reason is the only reviewer text BReg serves. */
+export interface BRegProposalDecision { readonly status: 'approved' | 'rejected' | 'changes-requested' | 'answered'; readonly decidedAt: string; readonly publicReason?: string }
+export interface BRegProposalSubmission {
+  readonly id: string; readonly actionId: string; readonly submissionVersion: number; readonly current: boolean; readonly effectDigest: string
+  readonly review: NonNullable<BRegProposalReviewDocument['result']> | null
+  readonly application: (Omit<BRegProposalApplicationStatus, 'mode'> & {readonly mode?: BRegProposalApplicationStatus['mode']; readonly applicationId?: string}) | null
+  readonly decision?: BRegProposalDecision
+}
+export interface BRegProposalDocument { readonly id: string; readonly actionId: string; readonly actionRevision: string; readonly submissionVersion: number; readonly revision: number; readonly state: 'draft' | 'submitted' | 'cancelled' | 'applied' | 'rejected'; readonly turn?: BRegProposalTurn; readonly decision?: BRegProposalDecision; readonly title?: string; readonly input?: JsonObject; readonly blockedReason?: 'package-changed'; readonly effectDigest?: string; readonly application?: BRegProposalApplication; readonly applicationStatus?: BRegProposalApplicationStatus; readonly links: Readonly<Partial<Record<BRegProposalTransition | 'self' | 'reviewContext' | 'reviewStatus', BRegProposalLink>>>; readonly attachments?: Readonly<Record<string, BRegProposalAttachment>> }
+export declare class BRegProposal { private constructor(); private readonly __opaque: void; readonly identifier: string; readonly actionIdentifier: string; readonly documentJson: string; readonly inputJson?: string | null }
+export declare class BRegProposalGetBinding { private constructor(); private readonly __opaque: void }
+export declare class BRegProposalReviewBinding { private constructor(); private readonly __opaque: void }
+
+/** Inert document value projected by an authored Review context field. */
+export interface BRegProposalReviewAttachment {
+  readonly type: 'document'
+  readonly slotId: string
+  readonly sha256: string
+  readonly contentType: string
+  readonly byteSize: number
+  readonly download: {
+    readonly method: 'GET'
+    readonly operation: 'get-review-context'
+    readonly accessProfile: string
+    readonly path: string
+  }
+}
+export declare class BRegProposalCollection { private constructor(); private readonly __opaque: void }
+export interface BRegProposalPage { readonly items: ReadonlyArray<BRegProposal>; readonly nextCursor?: string }
+export declare class BRegPreparedProposal { private constructor(); private readonly __opaque: void; static fromBytes(bytes: Buffer): BRegPreparedProposal; toBytes(): Buffer }

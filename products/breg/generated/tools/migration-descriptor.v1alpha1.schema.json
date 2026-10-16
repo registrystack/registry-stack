@@ -44,7 +44,6 @@
         "entity-access-log-changed",
         "entity-geo-json-changed",
         "entity-temporal-changed",
-        "change-request-contract-changed",
         "field-added-optional",
         "field-added-required",
         "field-removed",
@@ -83,8 +82,6 @@
         "action-added",
         "action-removed",
         "action-changed",
-        "action-vocabulary-codes-added",
-        "action-target-fields-widened",
         "consent-record-changed",
         "recipient-organization-added",
         "recipient-organization-removed",
@@ -120,7 +117,6 @@
       "enum": [
         "registry",
         "entity",
-        "change-request",
         "field",
         "derived-relation",
         "constraint",
@@ -192,10 +188,6 @@
     "ReviewedMigrationObject": {
       "additionalProperties": false,
       "properties": {
-        "entity": {
-          "description": "The document member `entity`.",
-          "type": "string"
-        },
         "kind": {
           "$ref": "#/$defs/ReviewedMigrationObjectKind"
         },
@@ -204,6 +196,10 @@
           "type": "string"
         },
         "physicalName": {
+          "type": "string"
+        },
+        "recordType": {
+          "description": "The document member `recordType`.",
           "type": "string"
         },
         "schema": {
@@ -216,7 +212,7 @@
       "required": [
         "schema",
         "table",
-        "entity",
+        "recordType",
         "kind",
         "physicalName"
       ],
@@ -284,10 +280,6 @@
             "cursor": {
               "$ref": "#/$defs/ChunkCursorProtocol"
             },
-            "entity": {
-              "description": "The document member `entity`.",
-              "type": "string"
-            },
             "exactAffectedRows": {
               "type": "boolean"
             },
@@ -314,6 +306,10 @@
               },
               "type": "array"
             },
+            "recordType": {
+              "description": "The document member `recordType`.",
+              "type": "string"
+            },
             "sqlPath": {
               "type": "string"
             },
@@ -332,7 +328,7 @@
           "required": [
             "type",
             "id",
-            "entity",
+            "recordType",
             "sqlPath",
             "objects",
             "cursor",
@@ -357,10 +353,6 @@
             "cursor": {
               "$ref": "#/$defs/ChunkCursorProtocol"
             },
-            "entity": {
-              "description": "The document member `entity`.",
-              "type": "string"
-            },
             "id": {
               "$ref": "#/$defs/LocalId"
             },
@@ -384,6 +376,10 @@
               },
               "type": "array"
             },
+            "recordType": {
+              "description": "The document member `recordType`.",
+              "type": "string"
+            },
             "statementTimeoutMilliseconds": {
               "description": "The document member `statementTimeoutMilliseconds`.",
               "format": "uint64",
@@ -399,7 +395,7 @@
           "required": [
             "type",
             "id",
-            "entity",
+            "recordType",
             "objects",
             "cursor",
             "chunkSize",

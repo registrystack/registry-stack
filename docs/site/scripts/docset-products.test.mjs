@@ -25,6 +25,8 @@ const withMessaging = { products: { 'registry-messaging': { ref: 'HEAD' } } };
 const withoutMessaging = { products: { 'registry-casework': { ref: 'HEAD' } } };
 const withBregServices = { products: { 'registry-breg-services': { ref: 'HEAD' } } };
 const withoutBregServices = withoutMessaging;
+const withCoordinator = { products: { 'registry-coordinator': { ref: 'HEAD' } } };
+const withoutCoordinator = withoutMessaging;
 
 // Registry Messaging, breg-mcp, and breg-review first ship in v0.38.0
 // (release_roster.MESSAGING_FIRST_RELEASE and BREG_SERVICES_FIRST_RELEASE).
@@ -44,6 +46,29 @@ test('the latest docset publishes Registry Messaging and the BReg citizen servic
   assert.equal(selectedDocset(manifest, { DOCS_DOCSET: 'latest' }), latest);
   assert.equal(selectedDocset(manifest, {}).id, manifest.current);
   assert.throws(() => selectedDocset(manifest, { DOCS_DOCSET: 'missing' }), /"missing" not found/);
+});
+
+// Registry Coordinator first ships in v0.41.0, so the latest docset names it
+// and no docset archived before v0.41.0 does.
+test('the latest docset publishes Registry Coordinator', () => {
+  const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  const latest = manifest.docsets.find((docset) => docset.id === 'latest');
+  assert.deepEqual(
+    latest.products?.['registry-coordinator'],
+    { version: 'main source (unreleased)', ref: 'HEAD' },
+  );
+});
+
+test('no docset archived before v0.41.0 publishes Registry Coordinator', () => {
+  const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  const earlier = manifest.docsets.filter((docset) => {
+    const match = /^v0\.(\d+)\.\d+$/.exec(docset.id);
+    return match !== null && Number(match[1]) < 41;
+  });
+  assert.ok(earlier.length > 0, 'docsets.yaml must keep archived docsets');
+  for (const docset of earlier) {
+    assert.equal(docset.products?.['registry-coordinator'], undefined, docset.id);
+  }
 });
 
 test('no docset archived before v0.38.0 publishes Registry Messaging or the BReg citizen services', () => {
@@ -86,6 +111,13 @@ test('every gated page exists and maps to its route', () => {
     '/configure/breg-mcp/',
     '/operate/breg-mcp/',
   ]);
+  assert.deepEqual(productRoutes('registry-coordinator'), [
+    '/start/coordinator/',
+    '/configure/coordinator/',
+    '/operate/coordinator/',
+    '/reference/coordinator-configuration/',
+    '/reference/apis/registry-coordinator/',
+  ]);
   assert.deepEqual(productRoutes('registry-unknown'), []);
 });
 
@@ -110,8 +142,10 @@ test('drops a gated product\'s pages and CLI references from the docs collection
   ]) {
     assert.equal(isEntryGatedOut(id, withoutMessaging), false, id);
   }
-  assert.deepEqual(omittedCliBinaries(withoutMessaging), ['breg-mcp', 'breg-review', 'messaging', 'messagingctl']);
-  assert.deepEqual(omittedCliBinaries(withMessaging), ['breg-mcp', 'breg-review']);
+  assert.deepEqual(omittedCliBinaries(withoutMessaging), [
+    'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+  ]);
+  assert.deepEqual(omittedCliBinaries(withMessaging), ['breg-mcp', 'breg-review', 'coordinator', 'coordinatorctl']);
 });
 
 test('drops the citizen services\' pages and CLI references from the docs collection', () => {
@@ -134,7 +168,23 @@ test('drops the citizen services\' pages and CLI references from the docs collec
   ]) {
     assert.equal(isEntryGatedOut(id, withoutBregServices), false, id);
   }
-  assert.deepEqual(omittedCliBinaries(withBregServices), ['messaging', 'messagingctl']);
+  assert.deepEqual(omittedCliBinaries(withBregServices), ['messaging', 'messagingctl', 'coordinator', 'coordinatorctl']);
+});
+
+test('drops Registry Coordinator\'s pages and CLI references from the docs collection', () => {
+  for (const id of [
+    ...PRODUCT_PAGES['registry-coordinator'],
+    'reference/cli/coordinator',
+    'reference/cli/coordinatorctl',
+    'reference/cli/coordinatorctl/start',
+  ]) {
+    assert.equal(isEntryGatedOut(id, withoutCoordinator), true, id);
+    assert.equal(isEntryGatedOut(id, withCoordinator), false, id);
+  }
+  for (const id of ['index', 'reference/apis', 'reference/configuration-files', 'reference/cli/coordinatorx']) {
+    assert.equal(isEntryGatedOut(id, withoutCoordinator), false, id);
+  }
+  assert.deepEqual(omittedCliBinaries(withCoordinator), ['breg-mcp', 'breg-review', 'messaging', 'messagingctl']);
 });
 
 function region(type, children, { absent = false, product = 'registry-messaging' } = {}) {
@@ -270,10 +320,26 @@ for (const page of [
 ]) {
   test(`${page} mentions the citizen services only inside DocsetProduct regions`, () => {
     const source = readFileSync(resolve(docsRoot, page), 'utf8');
-    assert.match(source, /<DocsetProduct product="registry-breg-services">/);
+    // Native authoring no longer describes the separately deployed citizen services.
+    if (page !== 'configure/breg.mdx') {
+      assert.match(source, /<DocsetProduct product="registry-breg-services">/);
+    }
     const resolved = resolveDocsetProductRegions(source, withoutBregServices);
     assert.doesNotMatch(resolved, /DocsetProduct/, 'every region must be closed and unnested');
     assert.doesNotMatch(resolved, /breg-mcp|breg-review|first-citizen-mcp|citizen chat assistant|citizen gateway|review page/i);
     assert.doesNotMatch(resolveDocsetProductRegions(source, withBregServices), /DocsetProduct/);
+  });
+}
+
+// A docset that does not publish Registry Coordinator keeps no link to its
+// pages and no description of it on the shared pages.
+for (const page of ['index.mdx', 'reference/apis/index.mdx', 'reference/configuration-files.mdx']) {
+  test(`${page} mentions Registry Coordinator only inside DocsetProduct regions`, () => {
+    const source = readFileSync(resolve(docsRoot, page), 'utf8');
+    assert.match(source, /<DocsetProduct product="registry-coordinator">/);
+    const resolved = resolveDocsetProductRegions(source, withoutCoordinator);
+    assert.doesNotMatch(resolved, /DocsetProduct product="registry-coordinator"/, 'every region must be closed and unnested');
+    assert.doesNotMatch(resolved, /coordinator/i);
+    assert.doesNotMatch(resolveDocsetProductRegions(source, withCoordinator), /DocsetProduct product="registry-coordinator"/);
   });
 }

@@ -19,7 +19,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::artifacts::{restore_effective_model_planner_origins, REGISTRY_METADATA_ARTIFACT_PATH};
+use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
     parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
@@ -65,8 +65,7 @@ pub const RETIRED_PACKAGE_API_VERSION: &str = "registry.registrystack.org/packag
 pub const COMPILER_ID: &str = "breg";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
-pub const MAX_RHAI_PLANNER_SOURCE_BYTES: u64 =
-    crate::change_request::MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES as u64;
+pub const MAX_RHAI_PLANNER_SOURCE_BYTES: u64 = crate::plan::MAX_PLAN_SOURCE_BYTES as u64;
 pub const MAX_RHAI_PLANNER_PATH_BYTES: usize = 256;
 
 const MANIFEST_PATH: &str = "package.json";
@@ -92,7 +91,6 @@ pub struct PackageEnvelope {
 pub struct PackageManifest {
     pub package_id: String,
     pub compiler: CompilerIdentity,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub engine_features: BTreeSet<PackageEngineFeature>,
     pub schema_fingerprint: String,
     pub sources: CapturedSources,
@@ -101,8 +99,8 @@ pub struct PackageManifest {
 }
 
 /// Engine-owned catalog capabilities installed by the package's compiler.
-/// The set is hash-covered package identity and defaults empty only for
-/// predecessor packages produced before capability declarations existed.
+/// The exact current set is mandatory hash-covered identity for every package
+/// reader, including read-only predecessor planning.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageEngineFeature {
@@ -117,6 +115,13 @@ fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
         PackageEngineFeature::StatisticalReleaseStore,
         PackageEngineFeature::CallerScopedIdempotency,
     ])
+}
+
+fn validate_engine_features(manifest: &PackageManifest) -> Result<()> {
+    if manifest.engine_features != current_engine_features() {
+        return Err(PackageError::Derivation);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -184,6 +189,8 @@ pub enum PackageFileRole {
     GeneratedOpenapi,
     EntityJsonSchema,
     ActionJsonSchema,
+    ReviewContextSchemaIndex,
+    ReviewContextJsonSchema,
     LossyManifestProjection,
     DcatCatalogProjection,
     ReviewedMigrationDescriptor,
@@ -304,7 +311,6 @@ pub enum CompiledRegistryChangeCode {
     EntityAccessLogChanged,
     EntityGeoJsonChanged,
     EntityTemporalChanged,
-    ChangeRequestContractChanged,
     FieldAddedOptional,
     FieldAddedRequired,
     FieldRemoved,
@@ -343,8 +349,6 @@ pub enum CompiledRegistryChangeCode {
     ActionAdded,
     ActionRemoved,
     ActionChanged,
-    ActionVocabularyCodesAdded,
-    ActionTargetFieldsWidened,
     ConsentRecordChanged,
     RecipientOrganizationAdded,
     RecipientOrganizationRemoved,
@@ -374,7 +378,6 @@ pub struct CompiledRegistryChangeTarget {
 pub enum CompiledRegistryChangeTargetKind {
     Registry,
     Entity,
-    ChangeRequest,
     Field,
     DerivedRelation,
     Constraint,
@@ -655,13 +658,6 @@ impl VerifiedPredecessorPackage {
     /// runtime access, SQL execution, or successor activation.
     pub fn history_schema_descriptor(&self) -> HistorySchemaDescriptor {
         self.history_schema_descriptor.clone()
-    }
-
-    /// The engine-owned capabilities this predecessor's hash-covered manifest
-    /// declares. A successor declaring one this set lacks has apply work even
-    /// when its authored model is unchanged.
-    pub fn engine_features(&self) -> &BTreeSet<PackageEngineFeature> {
-        &self.manifest.engine_features
     }
 }
 
@@ -1234,26 +1230,6 @@ fn compare_entities(
                 ),
             );
         }
-        if previous_entity
-            .change_request
-            .as_ref()
-            .map(|request| request.contract_fingerprint.as_str())
-            != candidate_entity
-                .change_request
-                .as_ref()
-                .map(|request| request.contract_fingerprint.as_str())
-        {
-            push_change(
-                changes,
-                CompiledRegistryChangeClass::AccessOrDisclosureChange,
-                CompiledRegistryChangeCode::ChangeRequestContractChanged,
-                target(
-                    CompiledRegistryChangeTargetKind::ChangeRequest,
-                    Some(entity_id.as_str()),
-                    None,
-                ),
-            );
-        }
         compare_fields(entity_id, previous_entity, candidate_entity, changes);
         compare_derived_relations(entity_id, previous_entity, candidate_entity, changes);
         compare_map(
@@ -1707,38 +1683,11 @@ fn compare_actions(
         .collect::<BTreeMap<_, _>>();
     for (id, before) in &previous_actions {
         let (class, code) = match candidate_actions.get(id) {
-            Some(after) if before.contract_fingerprint == after.contract_fingerprint => continue,
-            // Every request the previous contract accepted keeps its meaning;
-            // the action only accepts codes new to its vocabularies.
             Some(after)
-                if crate::immediate_actions::contract_only_widens(
-                    (before, &previous.actions.input_vocabularies),
-                    &previous.entities,
-                    (after, &candidate.actions.input_vocabularies),
-                    &candidate.entities,
-                    FieldTypeSource::keeps_vocabulary_codes_of,
-                ) =>
+                if serde_json::to_value(before).expect("compiled Action serializes")
+                    == serde_json::to_value(after).expect("compiled Action serializes") =>
             {
-                (
-                    CompiledRegistryChangeClass::CompatibleAdditive,
-                    CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-                )
-            }
-            // A target field also raised its `text` length limit, which every
-            // stored and requested value already meets.
-            Some(after)
-                if crate::immediate_actions::contract_only_widens(
-                    (before, &previous.actions.input_vocabularies),
-                    &previous.entities,
-                    (after, &candidate.actions.input_vocabularies),
-                    &candidate.entities,
-                    FieldTypeSource::admits_every_value_of,
-                ) =>
-            {
-                (
-                    CompiledRegistryChangeClass::CompatibleAdditive,
-                    CompiledRegistryChangeCode::ActionTargetFieldsWidened,
-                )
+                continue;
             }
             Some(_) => (
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
@@ -2702,9 +2651,7 @@ fn reviewed_successor_created_policies(table: &DdlTable) -> BTreeMap<&str, &DdlP
         .filter(|policy| {
             policy.name.starts_with("registry_action_rls_")
                 || policy.name.starts_with("registry_action_link_rls_")
-                || policy.name.starts_with("registry_cr_rls_")
-                || policy.name.starts_with("registry_cr_presence_rls_")
-                || policy.name.starts_with("registry_cr_action_rls_")
+                || policy.name.starts_with("registry_proposal_")
         })
         .map(|policy| (policy.name.as_str(), policy))
         .collect()
@@ -3134,13 +3081,6 @@ fn package_compiler_assets(
     Ok(assets)
 }
 
-/// The owned asset path a handler declares: its script for Rhai, its module
-/// for WASM. None means the handler declares no owned asset, a kind the
-/// compiler refuses before this package is rederived.
-fn handler_source_path(handler: &crate::contract::ActionHandlerSource) -> Option<&str> {
-    handler.script().or_else(|| handler.module())
-}
-
 /// The owned asset path a local hook handler declares: its script for `rhai`,
 /// its module for `wasm`. A `url` handler holds no program and so owns no
 /// asset.
@@ -3159,21 +3099,9 @@ fn validate_declared_package_assets(
     module_sources: &[PackageModuleSource],
 ) -> Result<()> {
     let declared_project = project
-        .entities
+        .functions
         .iter()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.as_str())
-        })
-        .chain(
-            project
-                .actions
-                .iter()
-                .filter_map(|action| action.handler.as_ref().and_then(handler_source_path)),
-        )
+        .map(|function| function.source.as_str())
         .chain(
             project
                 .evidence_providers
@@ -3186,6 +3114,10 @@ fn validate_declared_package_assets(
                 .iter()
                 .flat_map(|entity| entity.hooks.iter())
                 .filter_map(hook_handler_source_path),
+        )
+        .chain(
+            crate::proposal_hooks::source_hooks(&project.actions)
+                .filter_map(|(_, hook)| crate::proposal_hooks::handler_source_path(&hook.handler)),
         )
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
@@ -3205,33 +3137,21 @@ fn validate_declared_package_assets(
             .get(module.id.as_str())
             .ok_or(PackageError::Derivation)?;
         let mut declared = module
-            .actions
+            .functions
             .iter()
-            .filter_map(|action| action.handler.as_ref().and_then(handler_source_path))
+            .map(|function| function.source.as_str())
             .collect::<BTreeSet<_>>();
+        declared.extend(
+            crate::proposal_hooks::source_hooks(&module.actions)
+                .filter_map(|(_, hook)| crate::proposal_hooks::handler_source_path(&hook.handler)),
+        );
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
             declared.extend(entity.hooks.iter().filter_map(hook_handler_source_path));
-            if let Some(script) = entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.as_str())
-            {
-                declared.insert(script);
-            }
         }
         for extension in &module.extend_entities {
             declared.extend(extension.derived.iter().map(|derived| derived.sql.as_str()));
             declared.extend(extension.hooks.iter().filter_map(hook_handler_source_path));
-            if let Some(script) = extension
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.as_str())
-            {
-                declared.insert(script);
-            }
         }
         let supplied = source
             .assets
@@ -3446,6 +3366,10 @@ fn add_compiled_artifacts(
         _ => return Err(PackageError::Derivation),
     }
     for (path, artifact) in compiled.artifacts().entries() {
+        if path.starts_with("generated/review-context-schemas/") {
+            insert_generated(files, path, artifact.bytes.clone())?;
+            continue;
+        }
         if let Some(schema_name) = path.strip_prefix("generated/action-schemas/") {
             insert_generated(
                 files,
@@ -3555,6 +3479,12 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
         }
         path if path.starts_with("action-schemas/") && path.ends_with(".schema.json") => {
             PackageFileRole::ActionJsonSchema
+        }
+        "generated/review-context-schemas/index.json" => PackageFileRole::ReviewContextSchemaIndex,
+        path if path.starts_with("generated/review-context-schemas/")
+            && path.ends_with(".schema.json") =>
+        {
+            PackageFileRole::ReviewContextJsonSchema
         }
         "manifest/registry-manifest.json" => PackageFileRole::LossyManifestProjection,
         "manifest/dcat.jsonld" => PackageFileRole::DcatCatalogProjection,
@@ -3905,6 +3835,7 @@ fn load_predecessor_closure(
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     let production = context.database_initialization_environment != "local";
     let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    validate_engine_features(&manifest)?;
     validate_source_inventory(&manifest)?;
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
@@ -4130,11 +4061,10 @@ fn package_predecessor_governed_model(
 
     let registry_id = required_str(&value, "registryId")?.to_owned();
     let version = required_str(&value, "version")?.to_owned();
-    let mut entities = value
-        .get("entities")
+    let entities = value
+        .get("recordTypes")
         .cloned()
         .ok_or(PackageError::Derivation)?;
-    restore_effective_model_planner_origins(&mut entities).ok_or(PackageError::Derivation)?;
     let entities: BTreeMap<String, CompiledEntity> =
         serde_json::from_value(entities).map_err(|_| PackageError::Derivation)?;
     let statistical_datasets: BTreeMap<String, CompiledStatisticalDataset> = value
@@ -4436,9 +4366,7 @@ fn rederive(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
-    if manifest.engine_features != current_engine_features() {
-        return Err(PackageError::Derivation);
-    }
+    validate_engine_features(manifest)?;
     let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest

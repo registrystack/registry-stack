@@ -106,7 +106,7 @@ CFG-SCHEMA-3).
 **CFG-ENV-2 (MUST). `apiVersion` is
 `id.registrystack.org/formats/<product>/<format>/<version>`.** `<product>` is
 the product token (CFG-ENV-3). `kind` matches
-`^(BReg|Casework|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
+`^(BReg|Casework|Coordinator|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
 with acronyms written as words (`Mcp`, `Oid4vci`). `<format>` derives from
 `kind`: remove the product prefix; remove a trailing `Config`; split the rest
 before each uppercase letter; lowercase each word and join with `-`. The
@@ -137,6 +137,7 @@ prefix, and is unique across the stack.**
 |---|---|
 | `BReg` | `breg` |
 | `Casework` | `casework` |
+| `Coordinator` | `coordinator` |
 | `Scheduling` | `scheduling` |
 | `Messaging` | `messaging` |
 | `Discovery` | `discovery` |
@@ -400,12 +401,19 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Time allowed to drain on shutdown | `shutdownGraceMilliseconds` | `shutdownTimeoutSeconds` |
 | Longest accepted token lifetime | `maximumTokenLifetimeSeconds` | `maxTokenLifetimeSeconds` |
 | How long records of a kind are kept | `retentionDays`, or `<thing>RetentionDays` where one block keeps several kinds | `retainDays`, `retention.<thing>Days` |
+| How long an idempotency receipt stays replayable, from 1 through 365 days | `receiptRetentionDays` | `attemptReceiptRetentionDays`, `submissionReceiptRetentionDays` |
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all
 schemas; no key in the refused column).
+
+Retention windows other than the audit journal's live in a top-level
+`retention` block (`retention.receiptRetentionDays`,
+`retention.hookPayloadRetentionDays`); the audit journal keeps
+`audit.retentionDays`.
+*Enforced by:* review.
 
 **CFG-NAME-6 (SHOULD). Booleans are named so `true` turns the behavior on**
 (`enabled`), never `disableX` or `noX`.
@@ -516,6 +524,13 @@ value outside them with `config.out-of-range`, naming the bounds. An implicit
 `minimum: 0` for an unsigned type does not state a bound: a `minimum: 0` beside
 a maximum below the unsigned format's own ceiling, as the bounded types emit
 it, does.
+
+An output format registered with `reader: none` may state its writer's native
+integer range. The schema must declare both bounds explicitly from the actual
+serialized type, rather than rely on `format` alone. An observed count or
+sequence does not configure resource use, so it needs no invented operational
+cap. This distinction changes no input limit, output closedness, or other
+schema requirement.
 *Enforced by:* the convention lint (every `integer` property declares
 `minimum` and `maximum`); the conformance corpus boundary sweep (each integer
 in each format's example whose registered schema states both bounds, set one
@@ -697,7 +712,7 @@ A path longer than 120 characters is shown as its first and last 60 joined by
 
 **CFG-DIAG-3 (MUST). Codes are dotted, lowercase, each segment kebab-case.**
 A product code is `<product>.<area>.<condition>` with the product token
-(`breg`, `casework`, `scheduling`, `messaging`, `discovery`, `render`,
+(`breg`, `casework`, `coordinator`, `scheduling`, `messaging`, `discovery`, `render`,
 `evidence`, `manifest`, `platform`); a shared reader code is
 `<namespace>.<condition>`, with `yaml` for syntax and `config` for envelope,
 key, and type problems. A code is never reused for a different condition.

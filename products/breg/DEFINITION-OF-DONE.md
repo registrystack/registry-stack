@@ -1,101 +1,27 @@
 # Definition of Done
 
-Base Registry Engine is not complete because one entity can be stored or because a
-generated OpenAPI document exists. Completion requires the machine-readable
-requirements in `contracts/definition-of-done.yaml` to pass on the same
-revision using real PostgreSQL.
+`contracts/definition-of-done.yaml` owns the exact BReg delivery requirements and
+proof references. `contracts/security-invariant-matrix.yaml` and
+`contracts/security-test-traceability.yaml` own security invariants and resolving
+negative tests. A planned row, mock database, skipped test, or generated document
+alone does not establish completion.
 
-The delivery states are deliberately separate:
+The maintained public model consists of Record types, generated CRUD, immediate
+atomic Actions, and durable Proposals. Canonical inputs live in `acceptance/`,
+`fixtures/`, and `examples/`; tests load those inputs directly. The
+[acceptance guide](ACCEPTANCE-JOURNEYS.md) maps their purpose without duplicating
+fixture trees or claiming an old starter catalogue remains supported.
 
-- **Architecture proof** proves the compiler, real router, PostgreSQL role and
-  RLS boundary, atomic record transaction, audit ordering, and activation
-  interlock. It is not a shippable partial writable API.
-- **Pilot** adds the approved governed model, package and migration recovery,
-  bounded REST and operational tooling, and all five coequal domain fixtures.
-- **Release** uses the normal Registry Stack release process after the pilot
-  surface is complete.
+Runtime completion requires real PostgreSQL proof of authorization, concealment,
+concurrency, history, atomic receipt/outbox behavior, and the changed operation's
+retention boundary. Proposal proof includes exact frozen effects, independent
+review, restricted default automatic application, explicit manual mode, current
+guards, safely blocked work, and exact-command recovery. Optional dependencies
+must fail closed only for operations that need them.
 
-No required row may be satisfied by a mock database, disabled test, placeholder
-artifact, or manual action claimed to be automated. A planned security row is
-not implementation evidence. At the exit for its wave, it must be enforced and
-have exactly one resolving negative executable test.
-
-The pilot catalog is now enforced. Its closing proof combines the
-real-PostgreSQL five-domain acceptance test with a clean public-binary lifecycle
-that exercises production checking, isolated schema tests, packaging,
-operator apply, authenticated serving, compatible additive upgrade, durable
-failed maintenance, exact fix-forward recovery, and restart with unchanged
-server bytes. A second migration recovery path, `migration reconcile`, assesses
-and resolves a pinned migration without building a new package; it is proven
-by its own CLI-authority test, not by this closing proof. The business pilot
-fixture also exercises configured selector,
-derived-field, and relationship read-path surfaces without making business or
-establishment a runtime type. This is a pilot exit claim, not a claim that a release
-has been published.
-
-The pilot catalog also carries the governed surfaces that are added over the
-same binaries as configuration. Action handlers under
-`registry.action-handler/v1`, acceptance-time target requirements, native
-persisted field patterns, current membership read boundaries, and
-change-request submitter targets are enforced rows, and each one names the
-real-PostgreSQL test that proves its refusals as well as its success path.
-Adopter tooling rows carry the same rule:
-`bregctl init --from publicschema`, the four published starters with
-`bregctl examples`, and `bregctl dev` reading a project's `dev-clients.yaml`
-are enforced by tests that write and compile a derived project, run every
-starter's authored journey and security journey through the real router, and
-start a session without a flag.
-
-Two rows are deliberately not complete. An action's `evidence` declaration
-with its `evidence::resolve` helper is a trial in `immediate-actions.md` and
-`EVIDENCE.md`, and so is the retained evidence-use scope that
-`bregctl evidence-retention erase-expired` deletes. Their implementations and
-negative tests pass, but their authoring contract is not frozen for Version 1.
-The contract grammar has no trial state, so both rows are `partial` and their
-`gap` names the trial. A trial row is not a Version 1 completion claim, and no
-release claim rests on one.
-
-A third row, `BREG-V1-INGESTION-RUNS`, records the durable ingestion-run API as
-`enforced`: the surface is contracted in `INGESTION-RUNS.md` and the published
-API reference, with journey `BREG-J21` and invariants `BREG-SEC-75` through
-`BREG-SEC-82` carrying the same threats, proven by the real-PostgreSQL
-journeys and negative tests in `crates/registry-breg/tests/postgres_ingestion_runs.rs`.
-
-`BREG-V1-CONSENT` records consent-gated reads as `enforced`: the surface is
-contracted in `consent.md`, with journeys `BREG-J22` and `BREG-J23` generated
-by `bregctl module add consent`, and invariants `BREG-SEC-86` through
-`BREG-SEC-101` carrying its threats. The real-PostgreSQL suites in
-`crates/registry-breg/tests/postgres_consent_access.rs` and
-`crates/registry-breg/tests/postgres_consent_examples.rs` prove every gated
-read operation, decision ordering and expiry, recipient matching, probe
-isolation, and successor migrations; the compiler refusals are proven in
-`crates/registry-breg/tests/consent_access.rs`.
-
-Ingestion run transitions and operator maintenance write their audit request
-entry before their first protected read or write: invariants `BREG-SEC-102`
-through `BREG-SEC-108` cover run creation, run cancellation and the blocked
-and replayed chunk transitions, standalone history erasure, history
-rebaseline, request-detail erasure, migration reconciliation, and the
-field-encryption erase-history lifecycle. Each negative test refuses the audit
-writer before the request entry and proves the operation changed nothing.
-A response entry the writer refuses after one of these operations commits is
-not replayed. Run creation takes no idempotency key and returns no run id in
-that case, so the caller finds the run by listing its open runs for the input
-digest, as `INGESTION-RUNS.md` describes. An operator rerun of an erasure,
-rebaseline, or reconciliation finds the state the first run committed rather
-than replaying its terminal entry. Both recoveries are operational, not a
-second audit mechanism.
-
-The pairing of a request entry with its response is a property of a running
-process. A request whose operation is abandoned is answered `unfinished`, and
-so is an ingestion transition whose commit returned an error, since that error
-does not prove a rollback. A process that is killed, exits, or shuts its
-runtime down while a write is in flight may leave a request without its
-response, and `BREG-V1-27` claims no more than that.
-
-The HTTP record contract is also explicit: caller-filtered and generated
-OpenAPI artifacts assign every record-related route to the shared single or
-collection Registry Record profile, or to a named BReg-specific shape.
-Real-router PostgreSQL tests prove the exact JSON and JSON-LD bytes, structural
-identifier disclosure after authorization, concealment before I/O, lookup
-cardinality collapse, audit-gated release, and representation-bound replay.
+Adopter completion requires the smallest authoring, local development, package,
+activation, and permitted/refused request journey for the changed surface.
+Compiler success proves configuration, not successful execution. Use the documented
+checks in [agent guidance](AGENTS.md), preserve the exact candidate identity, and
+report unexecuted runtime or integration checks as limits. Release completion
+follows the maintained Registry Stack release procedure.

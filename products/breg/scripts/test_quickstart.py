@@ -6,12 +6,13 @@ import contextlib
 import importlib.util
 import io
 import json
-import re
 import subprocess
 import tempfile
 import unittest
 import unittest.mock as mock
 from pathlib import Path
+
+import yaml
 
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
@@ -31,9 +32,13 @@ def prepare_request_root(root: Path) -> None:
     root.chmod(0o700)
     (root / "headers").mkdir(mode=0o700)
     (root / "breg-origin").write_text("http://127.0.0.1:1\n", encoding="ascii")
-    token_path = root / "headers/operator.header"
+    token_path = root / "headers/editor.header"
     token_path.write_text("Authorization: Bearer header.payload.signature\n", encoding="ascii")
     token_path.chmod(0o600)
+    for client in ("foreign-editor", "operator"):
+        token = root / "headers" / f"{client}.header"
+        token.write_text(f"Authorization: Bearer {client}.payload.signature\n", encoding="ascii")
+        token.chmod(0o600)
     map_token_path = root / "headers/installation-map-reader.header"
     map_token_path.write_text("Authorization: Bearer header.payload.signature\n", encoding="ascii")
     map_token_path.chmod(0o600)
@@ -66,50 +71,24 @@ class BRegQuickstartTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("self-test passed", result.stdout)
 
-    def test_readme_keeps_local_and_production_paths_separate(self) -> None:
-        readme = (QUICKSTART / "README.md").read_text(encoding="utf-8")
-        unwrapped = " ".join(readme.split())
-        self.assertIn("bregctl dev", readme)
-        self.assertIn("pinned stock ThunderID issuer", readme)
-        self.assertIn("private-key JWT clients", readme)
-        self.assertIn(".run/headers/operator.header", readme)
-        self.assertIn("does not put the bearer token on the command line", unwrapped)
-        self.assertIn("Production deployments require", readme)
-
-
-    def test_spatial_project_uses_explicit_private_key_clients(self) -> None:
-        helper = load_helper()
-        with tempfile.TemporaryDirectory() as spatial_dir:
-            spatial_root = Path(spatial_dir)
-            helper.prepare_spatial(SPATIAL_FIXTURE, spatial_root / "project")
-            spatial_registry = (spatial_root / "project/registry.yaml").read_text(encoding="utf-8")
-            clients = (spatial_root / "project/dev-clients.yaml").read_text(encoding="utf-8")
-            self.assertIn("package:\n  sourceRevision: ", spatial_registry)
-            self.assertNotIn("instanceId:", spatial_registry)
-            self.assertIn("manifestProjection:", spatial_registry)
-            self.assertIn("id: operator", clients)
-            self.assertIn("id: installation-map-reader", clients)
-            self.assertIn("service_zones: central", clients)
-            self.assertNotIn("clientAuthentication:", clients)
-
-    def test_spatial_project_gives_every_journey_profile_one_local_client(self) -> None:
+    def test_spatial_project_has_a_package_and_clients_for_its_journeys(self) -> None:
         helper = load_helper()
         with tempfile.TemporaryDirectory() as spatial_dir:
             project = Path(spatial_dir) / "project"
             helper.prepare_spatial(SPATIAL_FIXTURE, project)
-            registry = (project / "registry.yaml").read_text(encoding="utf-8")
-            journeys = (project / "tests/journeys.yaml").read_text(encoding="utf-8")
-            clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
-        profiles = set(re.findall(r"^\s+accessProfile: (\S+)$", journeys, re.MULTILINE))
+            registry = yaml.safe_load((project / "registry.yaml").read_text())
+            journeys = yaml.safe_load((project / "tests/journeys.yaml").read_text())
+            clients = yaml.safe_load((project / "dev-clients.yaml").read_text())["clients"]
+        self.assertTrue(registry["package"]["sourceRevision"])
+        self.assertNotIn("instanceId", registry["package"])
+        profiles = {step["accessProfile"] for journey in journeys["journeys"] for step in journey["steps"]}
         self.assertIn("map-reader", profiles)
         self.assertIn("directory-reader", profiles)
-        bound = re.findall(r"accessProfiles: \[([^\]]+)\]", clients)
-        for profile in sorted(profiles):
-            self.assertEqual(bound.count(profile), 1, profile)
-        # The local issuer's scopes are written with colons, in all three files.
-        for text in (registry, journeys, clients):
-            self.assertNotRegex(text, r"service-sites:[a-z]+\.[a-z]+")
-        self.assertIn("scopes: [service-sites:public:read]", clients)
+        for profile in profiles:
+            self.assertEqual(sum(profile in client["accessProfiles"] for client in clients), 1, profile)
+        map_client = next(client for client in clients if client["id"] == "installation-map-reader")
+        self.assertEqual(map_client["claims"]["service_zones"], "central")
+        self.assertEqual(map_client["scopes"], ["service-sites:map:read"])
 
     def test_create_record_reads_record_identifier_from_registry_record_envelope(self) -> None:
         helper = load_helper()
@@ -121,23 +100,29 @@ class BRegQuickstartTests(unittest.TestCase):
                     "data": {
                         "recordIdentifier": "11111111-1111-1111-1111-111111111111",
                         "revisionIdentifier": "1",
-                        "domainData": {"code": "QS-001", "label": "Quickstart example record"},
+                        "domainData": {"name": "Example contact", "email": "contact@example.test", "jurisdiction": "zone-a"},
                     },
                     "meta": {
-                        "registryIdentifier": "generic-registry-local-db",
-                        "datasetIdentifier": "records",
-                        "entityTypeIdentifier": "record",
+                        "registryIdentifier": "local-directory-db",
+                        "datasetIdentifier": "directory",
+                        "entityTypeIdentifier": "contact",
                     },
                 }
             ).encode()
 
-            def fake_urlopen(request: object, timeout: float = 10) -> _FakeHttpResponse:
+            def fake_urlopen(request, timeout: float = 10) -> _FakeHttpResponse:
+                self.assertEqual(request.method, "POST")
+                self.assertEqual(request.full_url, "http://127.0.0.1:1/v1/records/contacts?accessProfile=directory-editor")
+                self.assertEqual(json.loads(request.data), {"data": {
+                    "name": "Example contact", "email": "contact@example.test", "jurisdiction": "zone-a"
+                }})
+                self.assertTrue(request.get_header("Idempotency-key").startswith("quickstart-"))
                 return _FakeHttpResponse(201, envelope)
 
             captured = io.StringIO()
             with mock.patch("urllib.request.urlopen", fake_urlopen):
                 with contextlib.redirect_stdout(captured):
-                    helper.generic(root, "create", "QS-001", "Quickstart example record", None)
+                    helper.directory(root, "create", "Example contact", "contact@example.test", None)
             self.assertEqual(captured.getvalue().strip(), "11111111-1111-1111-1111-111111111111")
 
     def test_spatial_smoke_reads_rows_from_items_and_rejects_legacy_records_key(self) -> None:
@@ -186,14 +171,33 @@ class BRegQuickstartTests(unittest.TestCase):
         self.assertIn("spatial-smoke", run_source)
         self.assertIn("Base Registry Engine quickstart is ready", run_source)
 
-    def test_spatial_helper_keeps_secret_file_private_and_runtime_clients_explicit(self) -> None:
-        helper_source = (QUICKSTART / "support/quickstart.py").read_text(encoding="utf-8")
-        self.assertIn("id: installation-map-reader", helper_source)
-        self.assertIn("accessProfiles: [installation-map-reader]", helper_source)
-        self.assertIn("service-sites:map:read", helper_source)
-        self.assertIn("synthetic-qgis-installation", helper_source)
-        self.assertIn("service_zones: central", helper_source)
-        self.assertNotIn("clientAuthentication:", helper_source)
+    def test_spatial_preparation_preserves_the_authored_project_without_rewriting_it(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as root_dir:
+            project = Path(root_dir) / "project"
+            helper.prepare_spatial(SPATIAL_FIXTURE, project)
+            expected = {p.relative_to(SPATIAL_FIXTURE): p.read_bytes() for p in SPATIAL_FIXTURE.rglob("*") if p.is_file()}
+            actual = {p.relative_to(project): p.read_bytes() for p in project.rglob("*") if p.is_file()}
+            self.assertEqual(actual, expected)
+
+    def test_directory_refusal_uses_the_foreign_client_and_requires_concealment(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as root_dir:
+            root = Path(root_dir)
+            prepare_request_root(root)
+            def reply(status, document):
+                def fake_urlopen(request, timeout=30):
+                    self.assertEqual(request.method, "GET")
+                    self.assertEqual(request.get_header("Authorization"), "Bearer foreign-editor.payload.signature")
+                    self.assertIn("/contacts/contact-id?accessProfile=directory-editor", request.full_url)
+                    return _FakeHttpResponse(status, json.dumps(document).encode())
+                return fake_urlopen
+            with mock.patch("urllib.request.urlopen", reply(404, {"code": "resource.not_found"})):
+                helper.directory(root, "refusal", record_id="contact-id")
+            for status, body in ((200, {"data": {}}), (404, {"code": "wrong"}), (404, {"code": "resource.not_found", "data": {}})):
+                with mock.patch("urllib.request.urlopen", reply(status, body)):
+                    with self.assertRaises(helper.QuickstartError):
+                        helper.directory(root, "refusal", record_id="contact-id")
 
 
 if __name__ == "__main__":

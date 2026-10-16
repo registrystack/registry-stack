@@ -3,20 +3,6 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
-fixtures=(
-  acceptance/asset-site-placement
-  acceptance/business-establishments
-  acceptance/facility
-  acceptance/asset-site-placement-change-requests
-  acceptance/publicschema-household-change-requests
-  acceptance/person-name-change-rhai
-  acceptance/person-registration-rhai
-  acceptance/request-attachments
-  fixtures/asset-registration-actions
-  fixtures/household-contact-actions
-  fixtures/consent-person-registry
-  fixtures/consent-land-registry
-)
 authoring_baseline="$repository_root/products/breg/generated/authoring"
 runtime_baseline="$repository_root/products/breg/generated/runtime"
 temporary_root=""
@@ -55,23 +41,13 @@ mkdir "$runtime_candidate"
   cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
     -p registry-breg --features runtime,schema --example runtime-schema -- \
     --output "$runtime_candidate"
-  for fixture_path in "${fixtures[@]}"; do
-    fixture_name=${fixture_path##*/}
-    candidate="$temporary_root/$fixture_name"
-    mkdir "$candidate"
-    fixture="$repository_root/products/breg/$fixture_path"
-    selectors=(openapi schemas manifest metadata sql)
-    if [[ "$fixture_path" == fixtures/* || "$fixture_name" == person-registration-rhai ]]; then
-      selectors+=(actions)
-    fi
-    for selector in "${selectors[@]}"; do
-      selector_candidate="$temporary_root/selector-$fixture_name-$selector"
-      selector_output="./selector-$fixture_name-$selector"
-      cargo run --manifest-path "$repository_root/Cargo.toml" --locked -p registry-bregctl -- \
-        generate "$selector" "$fixture" --output "$selector_output"
-      cp -R "$selector_candidate/." "$candidate"
-    done
-  done
+  cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-breg --example example-artifacts -- --output "$temporary_root/facility"
+  cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-breg --example example-artifacts -- --output "$temporary_root/minimal" --project minimal
+  cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-breg --example proposal-event-schema -- \
+    --output "$temporary_root/proposal-lifecycle.schema.json"
 )
 
 if ! diff -ru "$authoring_baseline" "$authoring_candidate"; then
@@ -88,9 +64,13 @@ if ! diff -ru "$runtime_baseline" "$runtime_candidate"; then
   exit 1
 fi
 
-for fixture_path in "${fixtures[@]}"; do
-  fixture_name=${fixture_path##*/}
-  python3 "$script_dir/compare-generated-tree.py" \
-    "$repository_root/products/breg/generated/$fixture_name" \
-    "$temporary_root/$fixture_name"
-done
+if ! cmp "$repository_root/products/breg/generated/event-schemas/proposal-lifecycle.schema.json" \
+  "$temporary_root/proposal-lifecycle.schema.json"; then
+  printf '%s\n' 'Base Registry Engine Proposal event schema differs from the canonical packaged bytes.' >&2
+  exit 1
+fi
+
+python3 "$script_dir/compare-generated-tree.py" \
+  "$repository_root/products/breg/generated/facility" "$temporary_root/facility"
+python3 "$script_dir/compare-generated-tree.py" \
+  "$repository_root/products/breg/generated/minimal" "$temporary_root/minimal"

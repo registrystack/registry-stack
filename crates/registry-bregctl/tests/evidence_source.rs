@@ -22,7 +22,7 @@ fn export(output: &Path, fields: &str) -> Output {
         .args([
             "--access-profile",
             "evidence-source",
-            "--entity",
+            "--record-type",
             "record",
             "--selector",
             "by-code",
@@ -102,20 +102,17 @@ fn native_export_refuses_unreadable_facts_without_publishing_partial_files() {
 }
 
 #[test]
-fn an_initialized_project_exports_an_evidence_source_without_edits() {
+fn an_explicit_lookup_project_exports_an_evidence_source_without_edits() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let project = root.join("registry");
-    let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .args(["--format", "json", "init"])
-        .arg(&project)
-        .output()
-        .unwrap();
-    assert!(
-        initialized.status.success(),
-        "{}",
-        String::from_utf8_lossy(&initialized.stdout)
-    );
+    fs::create_dir(&project).unwrap();
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/evidence/registry/registry.yaml"),
+        project.join("registry.yaml"),
+    )
+    .unwrap();
 
     let destination = root.join("export");
     let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
@@ -124,7 +121,7 @@ fn an_initialized_project_exports_an_evidence_source_without_edits() {
         .args([
             "--access-profile",
             "evidence-source",
-            "--entity",
+            "--record-type",
             "record",
             "--selector",
             "by-code",
@@ -161,7 +158,7 @@ fn an_initialized_project_exports_an_evidence_source_without_edits() {
 ///
 /// ```text
 /// bregctl generate evidence-source products/breg/evidence/registry \
-///   --access-profile evidence-source --entity record \
+///   --access-profile evidence-source --record-type record \
 ///   --selector by-code --selector by-registration-number --fields status \
 ///   --source-id registry-status --connection registry --output "$export"
 /// cp "$export/source-export.json" products/breg/examples/formats/

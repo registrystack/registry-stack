@@ -1,83 +1,167 @@
 use super::*;
-use registry_platform_config::{SecretProvider, SecretResolver};
+use axum::http::StatusCode;
 
 #[tokio::test]
-async fn template_versions_are_immutable_and_retirement_cannot_revive_existing_grants() {
-    let base = std::env::var("CASEWORK_ASSIGNMENT_TEST_DATABASE_URL")
-        .expect("CASEWORK_ASSIGNMENT_TEST_DATABASE_URL must name a disposable database");
-    let schema = format!("task_templates_{}", Uuid::new_v4().simple());
-    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+async fn template_versions_are_immutable_labels_preserve_grants_and_retirement_cannot_revive_them()
+{
+    let mut fixture = super::http_tests::fixture(900).await;
+    let original = fixture.project.task_templates[0].clone();
+    let human = super::http_tests::token("human", "human-client", "human", "casework:staff");
+    let (status, approved) = super::http_tests::request(
+        &fixture,
+        "POST",
+        &format!("/v1/review-tasks/{}/task-grants", fixture.review_task),
+        &human,
+        true,
+        Some(json!({"templateId":original.id,"templateVersion":original.version})),
+        Some("label-proof"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    let id: Uuid = approved["id"].as_str().unwrap().parse().unwrap();
+    let digest = template_digest(&original).unwrap();
+    let mut relabeled = original.clone();
+    relabeled.label = "Prepare a private summary".into();
+    assert_eq!(
+        template_digest(&relabeled).unwrap(),
+        digest,
+        "presentation cannot change authority"
+    );
+    let mut templates = fixture.project.task_templates.clone();
+    templates[0] = relabeled.clone();
+    fixture
+        .store
+        .activate_task_templates(&templates)
         .await
         .unwrap();
-    tokio::spawn(async move { connection.await.unwrap() });
-    admin
-        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+    assert!(
+        !fixture
+            .store
+            .review_task_grant(id)
+            .await
+            .unwrap()
+            .invalidated,
+        "label changes cannot revoke admitted authority"
+    );
+    let mut configured = fixture.project.clone();
+    configured.task_templates = templates.clone();
+    fixture.app = super::http_tests::test_app(
+        &fixture.store,
+        &configured,
+        fixture.mode.clone(),
+        fixture.read_started.clone(),
+        fixture.read_continue.clone(),
+    );
+    let agent =
+        super::http_tests::token("agent", "agent-client", "agent", "casework:grants:assert");
+    let (status, _) = super::http_tests::request(
+        &fixture,
+        "POST",
+        &format!("/v1/task-grants/{id}/assertion"),
+        &agent,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a presentation-only activation preserves live assertion authority"
+    );
+    let mut mutated = relabeled;
+    mutated.purpose = "different-purpose".into();
+    templates[0] = mutated;
+    assert!(
+        matches!(
+            fixture.store.activate_task_templates(&templates).await,
+            Err(StoreError::Configuration)
+        ),
+        "behavior cannot change under an active immutable version"
+    );
+    assert!(
+        !fixture
+            .store
+            .review_task_grant(id)
+            .await
+            .unwrap()
+            .invalidated,
+        "a refused activation changes nothing"
+    );
+    fixture.store.activate_task_templates(&[]).await.unwrap();
+    assert!(
+        fixture
+            .store
+            .review_task_grant(id)
+            .await
+            .unwrap()
+            .invalidated
+    );
+    fixture
+        .store
+        .activate_task_templates(&fixture.project.task_templates)
         .await
         .unwrap();
-    let separator = if base.contains('?') { '&' } else { '?' };
-    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
-    let secret = format!("CASEWORK_TEMPLATE_TEST_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-    std::env::set_var(&secret, &scoped);
-    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp").unwrap();
-    let config = crate::DatabaseConfig {
-        runtime_url_ref: format!("secret:env/{secret}"),
-        migration_url_ref: format!("secret:env/{secret}"),
-        trusted_root_certificate_ref: None,
-        test_only_plaintext: true,
-    };
-    let store = PostgresStore::connect_migration(&config, &secrets)
-        .unwrap()
-        .with_audit(crate::CaseworkAudit::capture().0);
-    store.migrate().await.unwrap();
-    std::env::remove_var(secret);
-    let template: TaskTemplate = serde_json::from_value(json!({
-        "id":"summary", "version":"1", "label":"Prepare summary", "eligibleTeams":["team"], "eligibleProfiles":["staff"],
-        "source":"source", "itemKinds":["request"], "itemStates":["claimed"],
-        "agent":{"issuer":"https://issuer.test","subject":"agent"}, "client":"agent-client", "resource":"urn:test:breg",
-        "purpose":"prepare-summary","scopes":["records:get"], "bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},
-        "subjects":{"person_reference":"person-reference"}, "lifetimeSeconds":900
-    })).unwrap();
-    store
-        .activate_task_templates(std::slice::from_ref(&template))
+    assert!(
+        fixture
+            .store
+            .review_task_grant(id)
+            .await
+            .unwrap()
+            .invalidated,
+        "reactivation permits only fresh approvals"
+    );
+    fixture
+        .admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", fixture.schema))
         .await
         .unwrap();
-    store
-        .activate_task_templates(std::slice::from_ref(&template))
+}
+
+#[tokio::test]
+async fn a_new_active_template_cannot_replace_the_template_in_an_admitted_policy_closure() {
+    let mut fixture = super::http_tests::fixture(900).await;
+    let mut configured = fixture.project.clone();
+    configured.task_templates[0].version = "2".into();
+    configured.task_templates[0].purpose = "different-purpose".into();
+    fixture
+        .store
+        .activate_task_templates(&configured.task_templates)
         .await
         .unwrap();
-    let mut changed = template.clone();
-    changed.purpose = "different-purpose".into();
-    assert!(matches!(
-        store.activate_task_templates(&[changed]).await,
-        Err(StoreError::Configuration)
-    ));
-    let db = store.client().await.unwrap();
-    let item = Uuid::new_v4();
-    let grant = Uuid::new_v4();
-    db.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,revision,first_observed_at,updated_at) VALUES($1,'source','request','request-1','review','review-1',$2,'claimed','review',1,now(),now())", &[&item,&json!({"sourceRevision":"1","version":"1","generation":"1"})]).await.unwrap();
-    db.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,'https://issuer.test','human','staff','staff','key','hash',$3,now(),now()+interval '900 seconds')", &[&grant,&item,&json!({"template":template})]).await.unwrap();
-    store.activate_task_templates(&[]).await.unwrap();
-    let invalidated: bool = db
+    fixture.app = super::http_tests::test_app(
+        &fixture.store,
+        &configured,
+        fixture.mode.clone(),
+        fixture.read_started.clone(),
+        fixture.read_continue.clone(),
+    );
+    let human = super::http_tests::token("human", "human-client", "human", "casework:staff");
+    let (status, body) = super::http_tests::request(
+        &fixture,
+        "POST",
+        &format!("/v1/review-tasks/{}/task-grants", fixture.review_task),
+        &human,
+        true,
+        Some(json!({"templateId":"summary","templateVersion":"2"})),
+        Some("substitution-proof"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "operation.not-authorized");
+    let db = fixture.store.client().await.unwrap();
+    let count: i64 = db
         .query_one(
-            "SELECT invalidated_at IS NOT NULL FROM casework_task_grants WHERE grant_id=$1",
-            &[&grant],
+            "SELECT count(*) FROM casework_review_task_grants WHERE task_id=$1",
+            &[&fixture.review_task],
         )
         .await
         .unwrap()
         .get(0);
-    assert!(invalidated);
-    store.activate_task_templates(&[template]).await.unwrap();
-    let invalidated: bool = db
-        .query_one(
-            "SELECT invalidated_at IS NOT NULL FROM casework_task_grants WHERE grant_id=$1",
-            &[&grant],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert!(invalidated, "reactivation only permits new approvals");
-    admin
-        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+    assert_eq!(count, 0, "an unpinned template creates no authority");
+    fixture
+        .admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", fixture.schema))
         .await
         .unwrap();
 }

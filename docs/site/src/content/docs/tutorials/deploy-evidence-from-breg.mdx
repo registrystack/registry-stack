@@ -78,35 +78,33 @@ Keep the reviewed Evidence project and complete environment targets in your
 deployment repository. Copy the local settings to a separate file for editing:
 
 ```sh
-cp ./evidence/targets/local/settings.yaml ./production-settings.yaml
+evidencectl target new ./production-settings \
+  --settings ./evidence/targets/local/target.yaml
 ```
 
-The settings document opens with `apiVersion` and `kind: EvidenceTargetSettings`, then holds the
-complete `governance` and `runtime` documents and a `publicKeys` map. This is a packaging format for the
-existing configuration, not an overlay. Review every environment-dependent field:
+The copied `target.yaml` is an `EvidenceTarget`; its `authority` field names the separate
+`EvidenceTargetAuthority`. Set the target ID and the authority's `target` to `production`, and keep
+both `project` fields equal to the EvidenceProject ID. Review the service identity, authentication,
+complete grants, source connections, signer and process bindings before packaging.
 
-| Area | Operated value and owner |
-| --- | --- |
-| Assurance, service and issuer | Set production assurance and the institution's provider ID, trust domain, Evidence issuer ID and HTTPS public origin. |
-| Caller authentication | The identity administrator supplies the HTTPS issuer and JWKS endpoint, Evidence resource audiences, accepted algorithms and claim mapping. |
-| Caller authority | The authority owner approves requester tags, requirement, purpose, audience rule, exact selector alternatives and response formats. Remove the teaching grants. |
-| Question governance | The requirement owner approves requirement, concept, framework, Evidence Type and disclosure-family identifiers. Replace example identifiers consistently when using institutional meaning. |
-| Source connection | The registry administrator supplies the HTTPS BReg origin, token endpoint, source scope, applicable resource audience and dedicated credential references. |
-| Signing | The signing operator supplies the public JWK and exact non-exportable Transit key version and workload-local proxy binding. |
-| Runtime | The deployment operator supplies the absolute installed package, secret and audit paths, private listener, HTTPS reverse proxy and any private CA files. |
+The identity administrator supplies the HTTPS issuer, JWKS endpoint, resource audiences and claim
+mapping. The authority owner approves complete grants within the definition ceilings. The registry
+administrator supplies the protected source origin and dedicated credential references. The signing
+operator supplies the public JWK and exact Transit version; the deployment operator owns the
+installed bundle, secret and audit paths, private listener and any private CA files.
 
 Use a compatible OpenID Connect issuer for an operated deployment. Its source registration and Evidence caller
 registration have different audiences and grants. A source credential must not
 carry BReg operator privileges.
 
-Set the source connection under `governance` using the approved values. This
+Set the source connection in `production-settings/target.yaml` using the approved values. This
 example includes optional fields for an issuer that requires both audience
 parameters; omit those fields when its registration does not require them:
 
 ```yaml
-sourceConnections:
+connections:
   registry:
-    baseUrl: https://registry.example.invalid
+    origin: https://registry.example.invalid
     authentication:
       type: oauth2-private-key-jwt
       tokenEndpoint: https://registry-identity.example.invalid/token
@@ -126,7 +124,7 @@ client assertion. `audience` is the resource-audience form parameter requested
 for the access token. Neither is the Evidence caller's audience.
 
 If the source or token endpoint uses a private CA, name `tlsTrustProfile` on the
-connection and bind that name to `runtime.outboundTls.trustProfiles` with an
+connection and bind that name to `outboundTls.trustProfiles` with an
 absolute `caBundleFile`. Keep system roots enabled. There is no certificate
 verification bypass. The [configuration reference](../../reference/evidence-configuration/)
 defines the complete authentication union and runtime bindings.
@@ -146,18 +144,15 @@ cannot be returned to it: the only recovery is a new key, a new public JWK, and 
 fresh distribution to every verifier that pinned the old one.
 :::
 
-Set `governance.assuranceProfile` to `production`. Keep ES256 signing and leave
-`publicKeys: {}` when supplying only the active public key with the
-`--signing-public-key` flag on `evidencectl target new`.
-The copied settings omit `activePublicJwkFile`; the command fills that path from
-the supplied public key's thumbprint. If you edited settings that already name an
-active key, it must match the supplied key.
-
-Replace the local signer under `runtime` with the actual proxy and key binding:
+Set `assuranceProfile` to `production`. Place the public JWK under
+`production-settings/public-keys/<thumbprint>.jwk.json`, then replace the local signer in
+`production-settings/target.yaml` with the matching public-key reference and proxy binding:
 
 ```yaml
 signer:
   type: transit
+  algorithm: ES256
+  publicJwkFile: public-keys/<thumbprint>.jwk.json
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
@@ -166,20 +161,19 @@ signer:
 ```
 
 Use the operator's exact selected version, which may differ from this example.
-Set `runtime.package.root` to the final deployment location, such as
-`/srv/evidence/packages/operated-001`. The local package output may live
+Set `package.root` to the final deployment location, such as
+`/srv/evidence/packages/operated-001/bundle`. The local package output may live
 elsewhere before transport. Bind production secret and audit paths separately.
 
 ```sh
 evidencectl target new ./evidence/targets/production \
-  --settings ./production-settings.yaml \
-  --signing-public-key ./evidence-signing-public.jwk.json
+  --settings ./production-settings/target.yaml
 evidencectl target explain ./evidence/targets/production ./evidence --json
 evidencectl test ./evidence --target ./evidence/targets/production
 ```
 
-The explanation compiles the project and reports its fixture and public-key files
-and logical secret references. Review the target documents themselves for exact
+The explanation reads the project and target authority, compiles its complete grants and reports
+the target's connection names. Review the target documents themselves for exact
 origins, authority and signing configuration. It does not resolve or print secret
 values. Creation is refused when the target directory already exists; edit its
 ordinary files or choose another directory.
@@ -191,7 +185,7 @@ ordinary files or choose another directory.
 ```sh
 evidencectl package ./evidence --target ./evidence/targets/production \
   --output ./candidate-operated-001
-evidence check --runtime-config ./evidence/targets/production/runtime.yaml
+evidence check --runtime-config ./candidate-operated-001/runtime.yaml
 ```
 
 Package uses the matching Evidence runtime to validate the generated package and required
@@ -206,9 +200,10 @@ Neither command
 contacts the source, caller issuer or Transit service.
 
 Hand over the authored revision, operated source-export baseline, complete target,
-exact package digest and package, the separate target runtime, required secret references, and
-the approved synthetic verification case. The package contains `SHA256SUMS` and governed Evidence
-artifacts. It contains no `runtime.yaml`.
+exact bundle digest and candidate, the emitted runtime and compiled authority, required secret references, and
+the approved synthetic verification case. The candidate contains immutable `bundle/` with `SHA256SUMS` and governed Evidence artifacts, plus
+separate `runtime.yaml` and `compiled-authority.yaml`. Install `bundle/` at the emitted runtime's
+`package.root`; retain the handoff documents separately.
 Development services, credentials, tokens and live responses stay outside it.
 
 Named connections share an HTTP client, eligible OAuth token cache and bounded
@@ -241,9 +236,11 @@ as disclosed and replaced through the operator's own provisioning.
 Under the intended service identity, after those dependencies exist:
 
 ```sh
-evidencectl doctor --runtime-config '<deployment-target>/runtime.yaml'
-evidence check --runtime-config '<deployment-target>/runtime.yaml' --require-runtime-dependencies
-evidence serve --runtime-config '<deployment-target>/runtime.yaml'
+evidence authority activate --runtime-config '<candidate>/runtime.yaml' \
+  --document '<candidate>/compiled-authority.yaml'
+evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
+evidence check --runtime-config '<candidate>/runtime.yaml' --require-runtime-dependencies
+evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
 Use your configured deployment target. `evidencectl doctor` reports every artifact

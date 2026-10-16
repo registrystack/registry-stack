@@ -5,10 +5,9 @@ import { test } from 'node:test';
 
 import YAML from 'yaml';
 
-// The tutorials hand-copy the embedded PublicSchema snapshot pin (#1400). `sync-snapshot.sh`
-// rewrites PIN.yaml; these checks fail until the tutorial copies follow it. A sync must also move
-// products/breg/evidence/organization-selection.yaml, which registry-bregctl tests hold to the
-// pin, and that path selects the docs job in CI.
+// The PublicSchema tutorial quotes the embedded snapshot pin. The optional
+// products/breg/evidence/organization-selection.yaml also follows it, but the
+// Evidence composition tutorial uses an explicit authored registry instead.
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const repoRoot = resolve(siteRoot, '../..');
@@ -24,20 +23,18 @@ test('the embedded PublicSchema pin names a commit and a version', () => {
   assert.match(pin.version, /^\d+\.\d+\.\d+$/);
 });
 
-test('the Evidence tutorial selection is the shipped selection at the embedded revision', () => {
-  const page = readRepo('docs/site/src/content/docs/tutorials/evidence-from-breg.mdx');
-  const shipped = readRepo('products/breg/evidence/organization-selection.yaml');
-
-  const intro = page.indexOf('save this selection as `organization-selection.yaml`');
-  assert.notEqual(intro, -1, 'the tutorial must still introduce organization-selection.yaml');
-  const block = page.slice(intro).match(/^```yaml\n([\s\S]*?)^```$/m);
-  assert.ok(block, 'organization-selection.yaml must follow as a yaml code block');
-  const snippet = block[1];
-
-  const selection = YAML.parse(snippet);
+test('the shipped optional PublicSchema selection tracks the embedded revision', () => {
+  const selection = YAML.parse(readRepo('products/breg/evidence/organization-selection.yaml'));
   assert.equal(selection.modelRevision, pin.commit, 'modelRevision must equal PIN.yaml commit');
   assert.equal(selection.modelVersion, pin.version, 'modelVersion must equal PIN.yaml version');
-  assert.equal(snippet, shipped, 'the snippet must match products/breg/evidence/organization-selection.yaml');
+});
+
+test('the Evidence composition tutorial uses the explicit authored source registry', () => {
+  const page = readRepo('docs/site/src/content/docs/tutorials/evidence-from-breg.mdx');
+  assert.match(page, /cp -R teaching-inputs\/registry \.\/registry/);
+  assert.match(page, /bregctl check \.\/registry/);
+  assert.match(page, /bregctl generate evidence-source \.\/registry/);
+  assert.doesNotMatch(page, /bregctl init[^\n]*--model|save this selection as `organization-selection.yaml`/);
 });
 
 // Hand-written current pages; generated trees and dated records are not restated versions.

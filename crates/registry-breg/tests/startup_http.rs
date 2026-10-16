@@ -63,7 +63,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: public-record
     primaryDataset: test-dataset
     route: public-records
@@ -72,14 +72,17 @@ entities:
     classification: public
     fields:
       - {id: label, type: string, required: true, maximumLength: 80, classification: public}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: public-record
+      records:
+        - recordType: public-record
           rowBoundaries: unrestricted
           operations: [list]
           readableFields: [label]

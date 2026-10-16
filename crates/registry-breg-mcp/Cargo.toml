@@ -16,14 +16,6 @@ path = "src/main.rs"
 workspace = true
 
 [features]
-# Runs the gateway against a real Base Registry Engine on PostgreSQL. The
-# engine is a dev-dependency only: this feature enables its test features and
-# never places the runtime in the gateway's normal dependency graph.
-postgres-test = [
-    "registry-breg/postgres-test",
-    "registry-breg/runtime",
-    "registry-breg/tooling",
-]
 # Derives the runtime configuration JSON Schema the generator below writes.
 schema = [
     "dep:schemars",
@@ -32,18 +24,6 @@ schema = [
     "registry-platform-yaml/schema",
 ]
 
-[[test]]
-name = "postgres_gateway"
-path = "tests/postgres_gateway.rs"
-required-features = ["postgres-test"]
-
-# The scripted local run of the citizen journey against the `breg-mcp` and
-# `breg-review` binaries, driven by
-# products/breg/acceptance/citizen-address-correction/run-local.sh.
-[[example]]
-name = "citizen_local_run"
-path = "examples/citizen_local_run.rs"
-required-features = ["postgres-test"]
 
 # Writes the runtime configuration JSON Schema committed under
 # products/breg/generated/mcp-runtime.
@@ -84,9 +64,11 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
+serde_norway.workspace = true
+tokio-postgres.workspace = true
 base64.workspace = true
 jsonschema.workspace = true
-registry-breg.workspace = true
 # The composed journey test serves the citizen review page beside the gateway;
 # the gateway itself never links the page.
 registry-breg-review.workspace = true
@@ -97,4 +79,3 @@ reqwest.workspace = true
 # workspace's ring one, and rustls then refuses to pick either at runtime.
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 tempfile.workspace = true
-tokio-postgres.workspace = true

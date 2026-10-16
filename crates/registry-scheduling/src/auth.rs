@@ -40,6 +40,7 @@ pub struct SchedulingAuthenticator {
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     audience: String,
+    scope_claim: String,
     reads_scope: String,
     explain_scope: String,
     /// Whether the deployment declared any assertion authority at all.
@@ -59,6 +60,7 @@ impl SchedulingAuthenticator {
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             audience: oidc.provider.audience.clone(),
+            scope_claim: oidc.scope_claim.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
             binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
@@ -69,22 +71,40 @@ impl SchedulingAuthenticator {
     /// demands: the caller holds the configured reads scope.
     pub async fn authenticate_read(&self, token: &str) -> Result<Caller, AuthenticationError> {
         let (caller, scopes) = self.verified_caller(token).await?;
-        scopes
-            .iter()
-            .any(|scope| scope == &self.reads_scope)
-            .then_some(caller)
-            .ok_or(AuthenticationError::Profile)
+        self.require_scope(caller, &scopes, &self.reads_scope, "readsScope")
     }
 
     /// The profile the separately authorized explain path demands: the caller
     /// holds the explain scope, which is never the reads scope.
     pub async fn authenticate_explain(&self, token: &str) -> Result<Caller, AuthenticationError> {
         let (caller, scopes) = self.verified_caller(token).await?;
-        scopes
-            .iter()
-            .any(|scope| scope == &self.explain_scope)
-            .then_some(caller)
-            .ok_or(AuthenticationError::Profile)
+        self.require_scope(caller, &scopes, &self.explain_scope, "explainScope")
+    }
+
+    /// Admit a verified caller holding `required`, or refuse it as a profile
+    /// miss. The refusal tells the operator which claim was read and which
+    /// scope was expected, and which keys select them, because a deployment
+    /// whose issuer emits a different claim or scope spelling sees nothing
+    /// but this refusal. The caller's own scopes are never logged.
+    fn require_scope(
+        &self,
+        caller: Caller,
+        scopes: &[String],
+        required: &str,
+        key: &str,
+    ) -> Result<Caller, AuthenticationError> {
+        if scopes.iter().any(|scope| scope == required) {
+            return Ok(caller);
+        }
+        tracing::info!(
+            "{}",
+            MissingScope {
+                claim: &self.scope_claim,
+                scope: required,
+                key,
+            }
+        );
+        Err(AuthenticationError::Profile)
     }
 
     /// The profile the commitments demand: no product scope, because the
@@ -128,8 +148,8 @@ impl SchedulingAuthenticator {
                 .verify_context(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::Profile)?;
         }
-        // Casework exchanges preserve approved subjects in the signed
-        // `identity` object. Keep only an object-shaped value. The shared
+        // A task-grant exchange preserves the subjects its source authority
+        // approved in the signed `identity` object. Keep only an object-shaped value. The shared
         // binding validates its field and value bounds before any use. The
         // offline path that `unchecked-final-fifteen-minutes` selects does not
         // require this member, so absence or an older shape remains a
@@ -172,6 +192,24 @@ impl SchedulingAuthenticator {
             },
             verified.scopes,
         ))
+    }
+}
+
+/// The operator sentence a scope refusal logs: the claim read, the scope
+/// expected, and the two keys that select them.
+struct MissingScope<'a> {
+    claim: &'a str,
+    scope: &'a str,
+    key: &'a str,
+}
+
+impl std::fmt::Display for MissingScope<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a Scheduling request was refused because the token's `{}` claim does not carry the `{}` scope the route requires; issue that scope to the client, or set authentication.oidc.scopeClaim and authentication.oidc.{} to what the issuer emits",
+            self.claim, self.scope, self.key
+        )
     }
 }
 
@@ -426,6 +464,30 @@ mod tests {
             .authenticate_mutate(&credential)
             .await
             .expect("a caller without the reads scope still reaches a mutation");
+    }
+
+    #[test]
+    fn a_scope_refusal_names_the_expected_claim_scope_and_keys() {
+        let read = MissingScope {
+            claim: "registry_scopes",
+            scope: "scheduling-read",
+            key: "readsScope",
+        }
+        .to_string();
+        assert!(read.contains("`registry_scopes` claim"), "{read}");
+        assert!(read.contains("`scheduling-read` scope"), "{read}");
+        assert!(read.contains("authentication.oidc.scopeClaim"), "{read}");
+        assert!(read.contains("authentication.oidc.readsScope"), "{read}");
+        let explain = MissingScope {
+            claim: "scope",
+            scope: "scheduling-explain",
+            key: "explainScope",
+        }
+        .to_string();
+        assert!(
+            explain.contains("authentication.oidc.explainScope"),
+            "{explain}"
+        );
     }
 
     #[tokio::test]

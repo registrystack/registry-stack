@@ -162,115 +162,23 @@ fn write(path: &Path, bytes: &[u8]) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-fn author_automatic_review_executor(project: &Path, authority_port: u16) {
-    let project_file = project.join("registry.yaml");
-    let mut definition: Value =
-        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    definition["entities"].as_array_mut().unwrap().push(json!({
-        "id": "automatic-record",
-        "primaryDataset": "generic-registry",
-        "route": "automatic-records",
-        "mutationMode": "mutable",
-        "classification": "internal",
-        "changeControl": {"requiredFor":["create"]},
-        "fields": [
-            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
-        ]
-    }));
-    definition["entities"].as_array_mut().unwrap().push(json!({
-        "id": "record-change",
-        "primaryDataset": "generic-registry",
-        "route": "record-changes",
-        "mutationMode": "mutable",
-        "classification": "internal",
-        "fields": [
-            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
-        ],
-        "changeRequest": {
-            "effects": [{
-                "id": "created-record",
-                "target": {"entity":"automatic-record"},
-                "operation": "create",
-                "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
-            }],
-            "review": {"type": "required", "authority":"casework", "policyId":"record-approval"},
-            "onApproved": {"mode":"automatic", "executor":"automatic-applier"},
-            "retention": {"mode":"operator-erase"}
-        }
-    }));
-    let operator = definition["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "operator")
-        .unwrap();
-    operator["permissions"]["entities"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "entity":"record-change",
-            "operations":["create", "get", "patch", "submit-request"],
-            "readableFields":["code", "label"],
-            "writableFields":["code", "label"],
-            "requestVisibility":"owner",
-            "rowBoundaries":"unrestricted"
-        }));
-    definition["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id":"automatic-applier",
-            "actorKind":"service",
-            "requesterClients":["automatic-applier"],
-            "principalClaim":"registry_principal",
-            "requiredScopes":["registry:generic:apply"],
-            "requiredPurposes":["registry-application"],
-            "permissions":{"entities":[{
-                "entity":"record-change",
-                "operations":["get", "apply-request"],
-                "readableFields":["code", "label"],
-                "rowBoundaries":"unrestricted",
-                "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
-                "readableRequestFields":["review-state"]
-            }]}
-        }));
-    write(
-        &project_file,
-        serde_norway::to_string(&definition).unwrap().as_bytes(),
-    );
-
-    let clients_file = project.join("dev-clients.yaml");
-    let mut clients: Value = serde_norway::from_slice(&fs::read(&clients_file).unwrap()).unwrap();
-    clients["clients"].as_array_mut().unwrap().push(json!({
-        "id":"automatic-applier",
-        "accessProfiles":["automatic-applier"],
-        "scopes":["registry:generic:apply"],
-        "claims":{
-            "registry_principal":"automatic-applier",
-            "registry_purpose":"registry-application"
-        }
-    }));
-    clients["reviewAuthorities"] = json!({
-        "casework": {
-            "endpoint":format!("http://127.0.0.1:{authority_port}"),
-            "profile":"operator",
-            "producerId":"generic-registry",
-            "recoveryDays":7,
-            "client":"operator"
-        }
-    });
-    clients["reviewExecutors"] = json!({
-        "automatic-applier": {
-            "accessProfile":"automatic-applier",
-            "client":"automatic-applier"
-        }
-    });
-    write(
-        &clients_file,
-        serde_norway::to_string(&clients).unwrap().as_bytes(),
-    );
+/// The operator lifecycle exercises the maintained generic workflow fixture;
+/// the public `init` default has its own smaller directory model and callers.
+fn operator_project(session: &Session) {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/fixtures/generic-operator-workflows");
+    for relative in [
+        "registry.yaml",
+        "runtime.example.yaml",
+        "dev-clients.yaml",
+        "tests/journeys.yaml",
+        "modules/record-notes/module.yaml",
+    ] {
+        let target = session.project.join(relative);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        write(&target, &fs::read(fixture.join(relative)).unwrap());
+    }
+    session.success(&["project", "lock", session.project.to_str().unwrap()]);
 }
 
 fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) -> Value {
@@ -285,491 +193,6 @@ fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) 
             "local event lifecycle did not reach the expected state"
         );
         std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-}
-
-#[test]
-#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
-fn installed_dev_starts_an_automatic_review_executor_without_lending_its_authority() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
-    let temporary = tempfile::Builder::new()
-        .prefix("breg-native-review-executor-test-")
-        .tempdir_in(binary.parent().unwrap())
-        .unwrap();
-    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let parent = fs::canonicalize(temporary.keep()).unwrap();
-    let project = parent.join("registry");
-    let session = Session {
-        project: project.clone(),
-        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
-        docker: installed("docker"),
-    };
-    session.success(&["init", project.to_str().unwrap()]);
-    let authority_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let authority_port = authority_listener.local_addr().unwrap().port();
-    author_automatic_review_executor(&project, authority_port);
-
-    let [database_port, breg_port, issuer_port] = free_ports();
-    drop(authority_listener);
-    let started = session.report(session.dev(&[
-        "start",
-        "--database-port",
-        &database_port.to_string(),
-        "--breg-port",
-        &breg_port.to_string(),
-        "--issuer-port",
-        &issuer_port.to_string(),
-    ]));
-    assert_eq!(started["status"], "ready");
-    let runtime: Value =
-        serde_norway::from_slice(&fs::read(project.join(".breg/dev/runtime.yaml")).unwrap())
-            .unwrap();
-    let executor = &runtime["reviewExecutors"]["automatic-applier"];
-    assert_eq!(
-        executor["endpoint"],
-        format!("http://127.0.0.1:{breg_port}")
-    );
-    assert_eq!(executor["registryId"], "generic-registry");
-    assert_eq!(executor["accessProfile"], "automatic-applier");
-    assert_eq!(
-        executor["privateKeyJwt"]["scopes"],
-        json!(["registry:generic:apply"])
-    );
-
-    let origin = format!("http://127.0.0.1:{breg_port}");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let operator =
-            fs::read_to_string(project.join(".breg/dev/secrets/operator-token")).unwrap();
-        let applier =
-            fs::read_to_string(project.join(".breg/dev/secrets/automatic-applier-token")).unwrap();
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let created = client
-            .post(format!(
-                "{origin}/v1/records/record-changes?accessProfile=operator"
-            ))
-            .bearer_auth(&operator)
-            .header("Idempotency-Key", "native-automatic-request-create")
-            .json(&json!({"data":{"code":"automatic", "label":"Automatic review"}}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(created.status().as_u16(), 201);
-        let created: Value = created.json().await.unwrap();
-        let request_id = created["data"]["recordIdentifier"].as_str().unwrap();
-        let endpoint = format!(
-            "{origin}/v1/records/record-changes/{request_id}?accessProfile=automatic-applier"
-        );
-
-        let refused = client
-            .get(&endpoint)
-            .bearer_auth(&operator)
-            .send()
-            .await
-            .unwrap();
-        // Record reads conceal rows from a caller that cannot select the
-        // service-only profile, instead of disclosing that the draft exists.
-        assert_eq!(refused.status().as_u16(), 404);
-        let admitted = client
-            .get(&endpoint)
-            .bearer_auth(&applier)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(admitted.status().as_u16(), 200);
-    });
-}
-
-#[test]
-#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
-fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
-    let temporary = tempfile::Builder::new()
-        .prefix("breg-native-request-events-test-")
-        .tempdir_in(binary.parent().unwrap())
-        .unwrap();
-    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let parent = fs::canonicalize(temporary.keep()).unwrap();
-    let project = parent.join("registry");
-    let session = Session {
-        project: project.clone(),
-        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
-        docker: installed("docker"),
-    };
-    session.success(&["init", project.to_str().unwrap()]);
-
-    // These two ordinary authored request types pin both lifecycle-only
-    // classification floors. The first projects an internal field from a
-    // restricted request. The second is otherwise wholly public, but its
-    // unfiltered lifecycle hook can carry an internal application reason.
-    let project_file = project.join("registry.yaml");
-    let mut definition: Value =
-        serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    for entity in definition["entities"].as_array_mut().unwrap() {
-        if matches!(entity["id"].as_str(), Some("record" | "record-group")) {
-            entity["changeControl"] = json!({"requiredFor":["create"]});
-        }
-    }
-    definition["entities"].as_array_mut().unwrap().extend([
-        json!({
-            "id": "restricted-change",
-            "primaryDataset": "generic-registry",
-            "route": "restricted-changes",
-            "mutationMode": "mutable",
-            "classification": "restricted",
-            "fields": [
-                {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
-                {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"},
-                {"id":"note", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
-            ],
-            "hooks": [{
-                "phase": "after",
-                "id": "restricted-change-submitted",
-                "trigger": "request-lifecycle",
-                "projection": ["note"],
-                "when": {"type":"request-lifecycle", "transitions":["submit"], "toStates":["submitted"]},
-                "handler": {"type":"url", "destinationId":"lifecycle-events"}
-            }],
-            "changeRequest": {
-                "effects": [{
-                    "id": "created-record",
-                    "target": {"entity":"record"},
-                    "operation": "create",
-                    "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
-                }],
-                "review": {"type":"none"},
-                "onApproved": {"mode":"manual"},
-                "retention": {"mode":"operator-erase"}
-            }
-        }),
-        json!({
-            "id": "public-change",
-            "primaryDataset": "generic-registry",
-            "route": "public-changes",
-            "mutationMode": "mutable",
-            "classification": "public",
-            "fields": [
-                {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"public"},
-                {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"public"}
-            ],
-            "hooks": [{
-                "phase": "after",
-                "id": "public-change-lifecycle",
-                "trigger": "request-lifecycle",
-                "projection": ["label"],
-                "handler": {"type":"url", "destinationId":"lifecycle-events"}
-            }],
-            "changeRequest": {
-                "effects": [{
-                    "id": "created-group",
-                    "target": {"entity":"record-group"},
-                    "operation": "create",
-                    "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
-                }],
-                "review": {"type":"none"},
-                "onApproved": {"mode":"manual"},
-                "retention": {"mode":"operator-erase"}
-            }
-        }),
-    ]);
-    let operator = definition["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "operator")
-        .unwrap();
-    for permission in operator["permissions"]["entities"].as_array_mut().unwrap() {
-        if matches!(
-            permission["entity"].as_str(),
-            Some("record" | "record-group")
-        ) {
-            permission["operations"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|operation| operation.as_str() != Some("create"));
-        }
-    }
-    operator["permissions"]["entities"]
-        .as_array_mut()
-        .unwrap()
-        .extend([
-            json!({
-                "entity": "restricted-change",
-                "rowBoundaries": "unrestricted",
-                "operations": ["create", "get", "patch", "submit-request", "apply-request"],
-                "readableFields": ["code", "label", "note"],
-                "writableFields": ["code", "label", "note"],
-                "applyTargets": [{"entity":"record", "rowBoundaries":"unrestricted"}]
-            }),
-            json!({
-                "entity": "public-change",
-                "rowBoundaries": "unrestricted",
-                "operations": ["create", "get", "patch", "submit-request", "apply-request"],
-                "readableFields": ["code", "label"],
-                "writableFields": ["code", "label"],
-                "applyTargets": [{"entity":"record-group", "rowBoundaries":"unrestricted"}]
-            }),
-        ]);
-    write(
-        &project_file,
-        serde_norway::to_string(&definition).unwrap().as_bytes(),
-    );
-    write(
-        &project.join("tests/journeys.yaml"),
-        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: request-lifecycle-delivery-ceilings
-    steps:
-      - id: create-restricted-request
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: create
-          data: {code: restricted-result, label: Restricted result, note: Internal projected note}
-        expect: {outcome: success, status: 201}
-        capture: restricted-request
-      - id: patch-restricted-draft
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: patch
-          recordCapture: restricted-request
-          etagCapture: restricted-request
-          changes: [{field: note, value: Updated internal projected note}]
-        expect: {outcome: success, status: 200}
-        capture: restricted-edited
-      - id: stale-restricted-draft-etag-is-refused
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: patch
-          recordCapture: restricted-request
-          etagCapture: restricted-request
-          changes: [{field: note, value: Must not be stored}]
-        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
-      - id: get-restricted-before-submit
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: get, recordCapture: restricted-edited}
-        expect: {outcome: success, status: 200}
-        capture: restricted-before-submit
-      - id: submit-restricted-request
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: submit-request, recordCapture: restricted-before-submit, etagCapture: restricted-before-submit}
-        expect: {outcome: success, status: 200}
-      - id: get-restricted-before-apply
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: get, recordCapture: restricted-request}
-        expect: {outcome: success, status: 200}
-        capture: restricted-before-apply
-      - id: apply-restricted-request
-        entity: restricted-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: apply-request
-          recordCapture: restricted-before-apply
-          etagCapture: restricted-before-apply
-          proposalVersionCapture: restricted-before-apply
-          effectDigestCapture: restricted-before-apply
-        expect: {outcome: success, status: 200}
-      - id: create-public-request
-        entity: public-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: create
-          data: {code: public-result, label: Public result}
-        expect: {outcome: success, status: 201}
-        capture: public-request
-      - id: patch-public-draft
-        entity: public-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: patch
-          recordCapture: public-request
-          etagCapture: public-request
-          changes: [{field: label, value: Updated public result}]
-        expect: {outcome: success, status: 200}
-        capture: public-edited
-      - id: get-public-before-submit
-        entity: public-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: get, recordCapture: public-edited}
-        expect: {outcome: success, status: 200}
-        capture: public-before-submit
-      - id: submit-public-request
-        entity: public-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: submit-request, recordCapture: public-before-submit, etagCapture: public-before-submit}
-        expect: {outcome: success, status: 200}
-      - id: get-public-before-apply
-        entity: public-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: get, recordCapture: public-request}
-        expect: {outcome: success, status: 200}
-        capture: public-before-apply
-      - id: apply-public-request
-        entity: public-change
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: apply-request
-          recordCapture: public-before-apply
-          etagCapture: public-before-apply
-          proposalVersionCapture: public-before-apply
-          effectDigestCapture: public-before-apply
-        expect: {outcome: success, status: 200}
-"#,
-    );
-
-    let checked = session.success(&["check", project.to_str().unwrap(), "--production"]);
-    assert_eq!(checked["profile"], "production");
-    let [database_port, breg_port, issuer_port] = free_ports();
-    let started = session.report(session.dev(&[
-        "start",
-        "--database-port",
-        &database_port.to_string(),
-        "--breg-port",
-        &breg_port.to_string(),
-        "--issuer-port",
-        &issuer_port.to_string(),
-    ]));
-    assert_eq!(started["status"], "ready");
-    assert!(project.join(".breg/dev/schema-test-receipt.json").is_file());
-
-    // Drive one served transition too, so the proof observes the public
-    // hook's real lifecycle delivery rather than stopping at package startup.
-    let origin = format!("http://127.0.0.1:{breg_port}");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let token = fs::read_to_string(project.join(".breg/dev/secrets/operator-token")).unwrap();
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let created = client
-            .post(format!(
-                "{origin}/v1/records/public-changes?accessProfile=operator"
-            ))
-            .bearer_auth(&token)
-            .header("Idempotency-Key", "native-public-request-create")
-            .json(&json!({"data":{"code":"served-public-result", "label":"Served public result"}}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(created.status().as_u16(), 201);
-        let created: Value = created.json().await.unwrap();
-        let request_id = created["data"]["recordIdentifier"].as_str().unwrap();
-        let read: Value = client
-            .get(format!(
-                "{origin}/v1/records/public-changes/{request_id}?accessProfile=operator"
-            ))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let submit = read["data"]["request"]["actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|action| action["operation"] == "submit-request")
-            .expect("draft exposes its governed submit action");
-        let submitted = client
-            .post(format!("{origin}{}", submit["href"].as_str().unwrap()))
-            .bearer_auth(&token)
-            .header("If-Match", submit["ifMatch"].as_str().unwrap())
-            .header("Idempotency-Key", "native-public-request-submit")
-            .json(&json!({}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(submitted.status().as_u16(), 200);
-    });
-
-    let events = || session.success(&["dev", "events", project.to_str().unwrap()]);
-    let received = poll_report(events, |report| {
-        report["deliveries"].as_array().unwrap().len() == 1
-    });
-    let receipts = received["deliveries"].as_array().unwrap();
-    for receipt in receipts {
-        uuid::Uuid::parse_str(receipt["eventId"].as_str().unwrap()).unwrap();
-        assert_eq!(receipt["eventType"], "public-change-lifecycle");
-        assert_eq!(receipt["entity"], "public-change");
-        assert_eq!(receipt["trigger"], "request-lifecycle");
-        assert_eq!(
-            receipt["deliveryId"],
-            "events.public-change.public-change-lifecycle.webhook"
-        );
-        assert_eq!(receipt["destinationId"], "lifecycle-events");
-        assert_eq!(receipt["status"], "received");
-    }
-    let payloads = session.success(&[
-        "dev",
-        "events",
-        project.to_str().unwrap(),
-        "--include-payload",
-    ]);
-    for receipt in payloads["deliveries"].as_array().unwrap() {
-        assert_eq!(receipt["payload"], json!({"label":"Served public result"}));
     }
 }
 
@@ -792,10 +215,10 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let mut registry: Value =
         serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
-    let record = registry["entities"]
+    let record = registry["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -839,7 +262,7 @@ clients:
 seed:
   - id: event-seed
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {code: synthetic-event-seed, label: Synthetic event seed, status: active}
 "#,
@@ -938,7 +361,7 @@ seed:
             "record-created-b" => "receiver-b",
             _ => panic!("receipt did not name an authored event"),
         };
-        assert_eq!(receipt["entity"], "record");
+        assert_eq!(receipt["recordType"], "record");
         assert_eq!(receipt["trigger"], "created");
         assert_eq!(
             receipt["deliveryId"],
@@ -1152,11 +575,11 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let project_file = project.join("registry.yaml");
     let mut definition: Value =
         serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    for entity in definition["entities"].as_array_mut().unwrap() {
+    for entity in definition["recordTypes"].as_array_mut().unwrap() {
         if entity["id"] == "record-group" {
             entity["batch"] = json!({"maximumItems": 4, "maximumBytes": 16384});
         }
@@ -1169,7 +592,7 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
         if profile["id"] == "operator" {
             // No direct-create permission can satisfy either the journey's
             // reference setup or the served database's reference seed.
-            profile["permissions"]["entities"][0]["operations"] = json!(["import", "get", "list"]);
+            profile["permissions"]["records"][0]["operations"] = json!(["import", "get", "list"]);
         }
     }
     write(
@@ -1184,7 +607,7 @@ journeys:
   - id: purpose-and-import
     steps:
       - id: import-reference
-        entity: record-group
+        recordType: record-group
         accessProfile: operator
         claims:
           principal: fixture-officer
@@ -1197,7 +620,7 @@ journeys:
           items: [{code: journey-group, label: Journey reference}]
         expect: {outcome: success, status: 200}
       - id: list-reference
-        entity: record-group
+        recordType: record-group
         accessProfile: operator
         claims:
           principal: fixture-officer
@@ -1208,7 +631,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: create-record
-        entity: record
+        recordType: record
         accessProfile: operator
         claims:
           principal: fixture-officer
@@ -1221,7 +644,7 @@ journeys:
           data: {code: journey-record, label: Journey record, status: active}
         expect: {outcome: success, status: 201, fields: {code: journey-record, status: active}}
       - id: read-as-same-client
-        entity: record
+        recordType: record
         accessProfile: record-reader
         claims:
           principal: fixture-officer
@@ -1252,7 +675,7 @@ clients:
 seed:
   - id: reference-seed
     client: officer
-    entity: record-group
+    recordType: record-group
     accessProfile: operator
     operation: import
     data: {code: seed-group, label: Served reference}
@@ -1419,7 +842,7 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let clients = parent.join("clients.yaml");
     write(
         &clients,
@@ -1448,7 +871,7 @@ clients:
 seed:
   - id: first-record
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {code: synthetic-dev-record, label: Synthetic local record, status: active}
 "#,
@@ -1711,7 +1134,7 @@ seed:
         project.to_str().unwrap(),
         "--access-profile",
         "evidence-source",
-        "--entity",
+        "--record-type",
         "record",
         "--selector",
         "by-code",
@@ -2001,7 +1424,7 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
         docker: installed("docker"),
     };
-    session.success(&["init", project.to_str().unwrap()]);
+    operator_project(&session);
     let client_file = project.join("dev-clients.yaml");
     let mut clients = fs::read(&client_file).unwrap();
     clients.extend_from_slice(
@@ -2009,7 +1432,7 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
 seed:
   - id: source-successor-seed
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data: {code: synthetic-source-successor, label: Synthetic source successor, status: active}
 "#,
@@ -2033,7 +1456,7 @@ seed:
         "dev",
         "prepare-source",
         project.to_str().unwrap(),
-        "--entity",
+        "--record-type",
         "record",
         "--selector-field",
         "code",
@@ -2077,7 +1500,7 @@ seed:
         project.to_str().unwrap(),
         "--access-profile",
         "source-reader",
-        "--entity",
+        "--record-type",
         "record",
         "--selector",
         "by-code-source-reader",
@@ -2145,8 +1568,6 @@ fn plain_bregctl(binary: &Path, json: bool, args: &[&str]) -> std::process::Outp
 fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::tempdir().expect("a temporary directory");
-    // `init` refuses a destination behind a symbolic link, and a platform's
-    // temporary root often is one.
     let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
     let project = parent.join("registry");
     let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
@@ -2290,13 +1711,10 @@ clients:
 fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::tempdir().expect("a temporary directory");
-    // `init` refuses a destination behind a symbolic link, and a platform's
-    // temporary root often is one.
     let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
     let project = parent.join("registry");
     let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
     assert!(initialized.status.success(), "{initialized:?}");
-    fs::create_dir(project.join("examples")).expect("an examples directory");
     let catalogue = project.join("examples/scenarios.json");
     let list = ["examples", "list", project.to_str().unwrap()];
     // A catalogue an earlier bregctl read, and one whose invoke step names
@@ -2321,7 +1739,7 @@ fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
       "description": "Register configured entries",
       "input": "examples/inputs.json",
       "steps": [
-        {"id": "register", "operation": "invoke", "entity": "entry", "client": "writer", "accessProfile": "writer", "input": "register", "capture": "entry"}
+        {"id": "register", "operation": "invoke", "recordType": "entry", "client": "writer", "accessProfile": "writer", "input": "register", "capture": "entry"}
       ]
     }
   ]

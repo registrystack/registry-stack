@@ -28,6 +28,8 @@ export const expectedBinaries = [
   'bregctl',
   'casework',
   'caseworkctl',
+  'coordinator',
+  'coordinatorctl',
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
@@ -60,6 +62,7 @@ const groups = [
     binaries: ['breg-mcp', 'breg-review'],
     product: 'registry-breg-services',
   },
+  { title: 'Registry Coordinator', binaries: ['coordinator', 'coordinatorctl'], product: 'registry-coordinator' },
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
@@ -261,8 +264,28 @@ function validCalendarDate(value) {
     && date.getUTCDate() === day;
 }
 
-export function validateReviewMetadata(metadata) {
-  exactKeys(metadata, new Set(['status', 'last_reviewed']), 'CLI reference review metadata');
+// New binary trees named here stay draft and out of the published index until
+// a human reviews their catalog diff. The catalog, when given, refuses names it
+// does not carry.
+function validateUnreviewedBinaries(excluded, catalog) {
+  stringArray(excluded, 'CLI reference review metadata.unreviewed_binaries');
+  if (new Set(excluded).size !== excluded.length) {
+    throw new Error('CLI reference review metadata.unreviewed_binaries contains duplicates');
+  }
+  if (catalog) {
+    const known = new Set(catalog.binaries.map((binary) => binary.name));
+    if (excluded.some((name) => !known.has(name))) {
+      throw new Error('CLI reference review metadata.unreviewed_binaries contains an unknown binary');
+    }
+  }
+}
+
+export function validateReviewMetadata(metadata, catalog = null) {
+  const optional = metadata && typeof metadata === 'object' && Object.hasOwn(metadata, 'unreviewed_binaries')
+    ? ['unreviewed_binaries']
+    : [];
+  exactKeys(metadata, new Set(['status', 'last_reviewed', ...optional]), 'CLI reference review metadata');
+  if (optional.length > 0) validateUnreviewedBinaries(metadata.unreviewed_binaries, catalog);
   if (!['draft', 'current'].includes(metadata.status)) {
     throw new Error('CLI reference review metadata.status must be draft or current');
   }
@@ -529,9 +552,11 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
     `The pages in this section are generated from the public Clap command trees for Registry Stack source version ${inlineCode(catalog.source_version)} and catalog SHA-256 ${inlineCode(sourceDigest)}. Hidden implementation commands are omitted.`,
   ];
   for (const group of groups) {
+    const published = group.binaries.filter((name) => !(reviewMetadata.unreviewed_binaries ?? []).includes(name));
+    if (published.length === 0) continue;
     if (group.product) lines.push('', `<DocsetProduct product="${group.product}">`);
     lines.push('', `## ${group.title}`, '', '| Binary | Description |', '| --- | --- |');
-    for (const name of group.binaries) {
+    for (const name of published) {
       const binary = binaries.get(name);
       lines.push(`| [${inlineCode(name)}](./${name}/) | ${tableText(binary.about)} |`);
     }
@@ -550,13 +575,18 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
 export function renderCatalog(catalog, reviewMetadata) {
   validateCatalog(catalog);
   const sourceDigest = catalogDigest(catalog);
-  validateReviewMetadata(reviewMetadata);
+  validateReviewMetadata(reviewMetadata, catalog);
   const files = new Map([['index.mdx', renderIndex(catalog, reviewMetadata, sourceDigest)]]);
-  const add = (command) => {
-    files.set(commandPath(command), renderCommand(command, catalog, reviewMetadata, sourceDigest));
-    command.subcommands.forEach(add);
-  };
-  catalog.binaries.forEach(add);
+  for (const binary of catalog.binaries) {
+    const metadata = (reviewMetadata.unreviewed_binaries ?? []).includes(binary.name)
+      ? { ...reviewMetadata, status: 'draft', last_reviewed: 'unreviewed' }
+      : reviewMetadata;
+    const addBinary = (command) => {
+      files.set(commandPath(command), renderCommand(command, catalog, metadata, sourceDigest));
+      command.subcommands.forEach(addBinary);
+    };
+    addBinary(binary);
+  }
   return files;
 }
 

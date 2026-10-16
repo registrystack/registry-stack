@@ -22,10 +22,10 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(br#"{
+    let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",
         "batch":{"maximumItems":4,"maximumBytes":16384},
         "fields":[
@@ -34,7 +34,7 @@ fn registry() -> registry_breg::CompiledRegistry {
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
           {"id":"valid-to","type":"date","classification":"internal"}
         ],
-        "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
+        "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       },{
         "id":"timestamp-entry","primaryDataset":"test-dataset","route":"timestamp-entries","mutationMode":"mutable","classification":"internal",
@@ -43,16 +43,16 @@ fn registry() -> registry_breg::CompiledRegistry {
           {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
           {"id":"valid-to","type":"timestamp","classification":"internal"}
         ],
-        "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
+        "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
-        "permissions":{"entities":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
+        "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
           "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":"unrestricted"
-        },{"entity":"timestamp-entry","operations":["snapshot"],
+        },{"recordType":"timestamp-entry","operations":["snapshot"],
           "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":"unrestricted"
         }]}
       }]

@@ -28,7 +28,7 @@ inside a `{"kind": "complete", "value": ..., "trace_id": ...}` envelope.
 Requester review operations omit a source profile. Officer task reads, claims,
 assignment, delegation, drafts, decisions, history, notes, and review clocks
 accept an optional source profile when resolving source context. Accountability
-and kind discovery remain Casework-owned authorization paths.
+and policy discovery remain Casework-owned authorization paths.
 Supervisory discovery returns only bounded task and accountability references,
 with a holder-free string state.
 Its query accepts `{"requestId": canonical_request_uuid, "limit": 25}` to find
@@ -49,15 +49,15 @@ remain required. Prior holding is not authorship. Keep the caller, profiles,
 queue and own-decisions view unchanged when following `nextCursor`; refetch
 without a cursor after `410 review.result-expired`.
 
-Receipts carry the optional decision-time pinned `outcomeLabel`, which cannot
-follow current policy edits. Approval has no outcome or label. The explicit
+Every receipt names the `outcome` its decision selected and carries the
+optional decision-time pinned `outcomeLabel`, which cannot follow current
+policy edits. The explicit
 audited Supervisor `review_accountability` read includes that receipt through
 its independent accountability retention, including after result erasure.
-Legacy non-approval selections already erased at upgrade omit the receipt.
 Own discovery and single-task receipts end at result expiry or erasure.
 
 `CaseworkClientError` preserves problem codes, status, trace context, validation
-details, and original attempt identifiers. Callers can therefore handle cursor
+details, and closed validation reasons. Callers can therefore handle cursor
 or idempotency expiry explicitly; the binding never replaces a key.
 
 A keyed mutation whose outcome is unknown (a timeout or broken exchange after
@@ -71,18 +71,18 @@ again under the same key, because a new key could apply it twice.
 never established, and every 4xx refusal. It is false for
 `410 idempotency.expired` too, but there an earlier attempt under the key
 committed and only its stored response was erased by retention: reconcile the
-original operation, by reading the item, review request, or directory, before
+original operation, by reading the task, review request, or directory, before
 choosing a new key.
 
 This crate is private and does not publish a standalone Python distribution.
 
-Task delegation uses the current human profile for template previews, grant
+Task grants use the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
-version, with the item revision and a caller-owned idempotency key. The preview
+version, with the task revision and a caller-owned idempotency key. The preview
 contains the exact destination, purpose, immutable bounds, derived subjects,
 and lifetime; the grant list omits stored subjects. Agent assertion and grant
 status calls take only a bearer token and grant ID, without human or source
-profile headers. Neither binding retains credentials or resends a mutation
+profile headers. The binding retains no credentials and resends no mutation
 beyond the bounded same-key retry above.
 
 Previews and grant views include `authorizationMode: "deferred"` for a deferred
@@ -92,3 +92,50 @@ and business operation's idempotency key across a delay or restart. Acquire a
 fresh assertion when executing; its short credential lifetime does not extend
 the approved deadline. See the [task-grant lifecycle](../../products/casework/TASK_GRANTS.md)
 for expiry, revocation, and changes that require another approval.
+
+`review_policies` and `review_policy` return compiled policy closures. Admission
+supplies the exact `{id, version, digest}` binding in `policy`. Use a
+binding from the reviewed project or explicitly accept a discovered closure;
+keep that binding, complete request, and idempotency key unchanged during
+recovery.
+
+This producer function uses the standalone decision policy. The host supplies
+its declared trusted-producer ID, real immutable subject binding, and retained
+idempotency key. `submission_digest` validates and hashes locally through the
+same Rust implementation as admission, without network or token work.
+
+```python
+from registry_client import casework
+
+client = casework.CaseworkClient("https://casework.example.invalid/")
+
+
+def submit_review(token, producer_id, policy_binding, subject, key):
+    request = {
+        "policy": policy_binding,
+        "subject": subject,
+        "requesterReference": subject["id"],
+        "context": {
+            "mode": "submitted",
+            "snapshot": {"summary": "Confirm the prepared batch", "reference": subject["id"]},
+        },
+    }
+    digest = casework.submission_digest(producer_id, subject["source"], request)
+    return client.create_or_recover_review_request(
+        token, "requester", key, request, digest,
+    )["value"]
+```
+
+Persist the accepted binding and use `review_result` or the authenticated
+`review_results` feed. A `ReviewResult` records a human outcome and grants no
+external apply or write authority; the producer independently authorizes any
+later business mutation. A policy mismatch requires reviewing the changed
+policy, not replacing the expected digest during a retry.
+
+`ReviewStaffingQuery` accepts all five subject selectors together, a visible
+reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
+`next_review_task` returns one due-ordered task or None;
+`review_task_holdings` returns a bounded page. Caseload and clock preview/apply
+calls apply only the revision-fenced preview ID. Keep filters and caller
+profiles unchanged across snapshot cursors; after `410 review.result-expired`,
+start again without one.

@@ -84,8 +84,8 @@ class MintTokenTest(unittest.TestCase):
 
 class CallerClaimsTest(unittest.TestCase):
     def test_a_reader_carries_scopes_and_no_grant(self):
-        claims = demo.caller_claims("demo-reader", "reader-subject", scopes=["scheduling-read"])
-        self.assertEqual(claims["registry_scopes"], ["scheduling-read"])
+        claims = demo.caller_claims("demo-reader", "reader-subject", scopes=["scheduling:read"])
+        self.assertEqual(claims["scope"], "scheduling:read")
         self.assertEqual(claims["registry_actor_kind"], "service")
         self.assertNotIn("registry_grant_bounds", claims)
 

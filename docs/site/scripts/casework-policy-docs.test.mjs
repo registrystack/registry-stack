@@ -38,25 +38,29 @@ test('the documented local Casework callers form a complete valid directory seed
   }
 });
 
-test('the documented review kind and producer parse as a complete policy', () => {
-  const example = fencedYamlUnder('### Review kinds and producers', '');
-  const kind = example.reviewKinds[0];
+test('the documented review policy and producer use the owning schema grammar', () => {
+  const example = fencedYamlUnder('### Review policies and producers', '');
+  const kind = Object.values(example.reviewPolicies)[0];
 
   for (const key of [
-    'id',
     'version',
     'purpose',
-    'contextStrategy',
+    'context',
     'stages',
     'retention',
     'displaySchema',
     'resultSchema',
     'outcomes',
   ]) {
-    assert.ok(Object.hasOwn(kind, key), `review kind is missing ${key}`);
+    assert.ok(Object.hasOwn(kind, key), `review policy is missing ${key}`);
   }
-  assert.equal(kind.retention.terminalDays, 90);
-  assert.equal(kind.retention.accountabilityDays, 365);
+  assert.deepEqual(kind.context, { mode: 'submitted' });
+  const schema = JSON.parse(readFileSync(resolve(here, '../../../products/casework/generated/project/project.schema.json'), 'utf8'));
+  for (const key of Object.keys(kind)) {
+    assert.ok(Object.hasOwn(schema.properties.reviewPolicies.additionalProperties.properties, key), `unknown policy key ${key}`);
+  }
+  assert.equal(kind.retention.terminalRetentionDays, 90);
+  assert.equal(kind.retention.accountabilityRetentionDays, 365);
   for (const schema of [kind.displaySchema, kind.resultSchema]) {
     assert.equal(schema.type, 'object');
     assert.equal(schema.additionalProperties, false, 'both schemas stay closed');
@@ -66,17 +70,37 @@ test('the documented review kind and producer parse as a complete policy', () =>
     assert.equal(typeof property.type, 'string', 'result fields declare one inline type');
   }
   assert.deepEqual(
-    new Set(kind.outcomes.flatMap((outcome) => Object.keys(outcome))),
-    new Set(['id', 'label', 'settlement', 'reasonRequired', 'resultRequired']),
+    new Set(Object.values(kind.outcomes).flatMap((outcome) => Object.keys(outcome))),
+    new Set(['label', 'settlement', 'reasonRequired', 'publicReason', 'resultRequired']),
     'outcome keys stay within the policy grammar',
   );
-  const confirmed = kind.outcomes.find((outcome) => outcome.id === 'confirmed');
+  for (const [id, outcome] of Object.entries(kind.outcomes)) {
+    assert.ok(
+      ['required', 'optional', 'none'].includes(outcome.publicReason),
+      `outcome ${id} states whether a public reason is given`,
+    );
+  }
+  const confirmed = kind.outcomes.confirmed;
   assert.equal(confirmed.resultRequired, true);
   assert.equal(confirmed.settlement, 'answered');
   assert.equal(kind.stages[0].requiredApprovals, 1);
 
-  const producer = example.reviewProducers[0];
+  const producer = example.trustedProducers.requester;
+  for (const key of Object.keys(producer)) {
+    assert.ok(Object.hasOwn(schema.properties.trustedProducers.additionalProperties.properties, key), `unknown producer key ${key}`);
+  }
   assert.equal(producer.profile, 'requester');
-  assert.deepEqual(producer.kinds, ['decision']);
+  assert.deepEqual(producer.retention, { receiptRetentionDays: 30 });
+  assert.deepEqual(producer.reviewPolicies, ['decision']);
   assert.deepEqual(producer.sourceNamespaces, ['standalone']);
+});
+
+
+test('the current-source fragment preserves the exact exported contract fields', () => {
+  const example = fencedYamlUnder('Choose context custody');
+  const schema = JSON.parse(readFileSync(resolve(here, '../../../products/casework/generated/project/project.schema.json'), 'utf8'));
+  assert.equal(example.context.mode, 'current-source');
+  assert.equal(example.context.provider, 'facility-proposal-context');
+  assert.deepEqual(Object.keys(example.context.contract).sort(), schema.$defs.ReviewContextContract.required.toSorted());
+  assert.deepEqual(example.displaySchema, { $ref: 'schemas/correct-address.schema.json' });
 });

@@ -1,304 +1,134 @@
 # `bregctl explain` wire contract
 
-`bregctl --format json explain <subject> <project>` returns a `SuccessReport`
-whose `explanation` field carries an envelope plus a subject-specific payload:
+`bregctl --format json explain <subject> <project>` writes a
+`BRegCtlReport` whose `explanation` member is a separately versioned document.
+`explain_envelope` in `crates/registry-bregctl/src/lib.rs` inserts the
+subject's `apiVersion` and `kind` after serialization. The report keeps its
+own `breg/ctl-report/v1alpha1` version.
 
-```json
-{
-  "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
-  "kind": "BRegCtlReport",
-  "ok": true,
-  "command": "explain",
-  "profile": "authoring",
-  "revision": "...",
-  "findings": [],
-  "explanation": {
-    "apiVersion": "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
-    "kind": "BRegRoutesExplanation",
-    "routes": [ "..." ]
-  }
-}
+| Subject | Format | Current version | Schema |
+|---|---|---|---|
+| `model` | `BRegModelExplanation` | `v1alpha5` | `ModelExplanation.schema.json` |
+| `access` | `BRegAccessExplanation` | `v1alpha5` | `AccessExplanation.schema.json` |
+| `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
+| `actions` | `BRegActionsExplanation` | `v1alpha5` | `ActionsExplanation.schema.json` |
+| `proposals` | `BRegProposalsExplanation` | `v1alpha1` | `ProposalsExplanation.schema.json` |
+| `routes` | `BRegRoutesExplanation` | `v1alpha5` | `RoutesExplanation.schema.json` |
+| `queries` | `BRegQueriesExplanation` | `v1alpha5` | `QueriesExplanation.schema.json` |
+| `events` | `BRegEventsExplanation` | `v1alpha6` | `EventsExplanation.schema.json` |
+| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha6` | `LifecycleExplanation.schema.json` |
+
+Each format's identifier is
+`id.registrystack.org/formats/breg/<format>/<version>`, with the format name
+in lowercase kebab-case. For example, the model format is
+`id.registrystack.org/formats/breg/model-explanation/v1alpha5`.
+
+`lifecycle` accepts no project and describes the engine-owned Proposal state
+machine. Every other subject requires a project. `proposals` returns the
+same source-free Action definitions as `actions`, filtered to Proposal
+execution. The removed `change-requests` subject has no current example or
+schema.
+
+## Version changes
+
+`v1alpha5` names the native model and Proposal contracts. Model inspection
+replaces the old entity/package projection with source-free `recordTypes`,
+`actions`, and the compiled `revision`. Action inspection uses those same
+normalized definitions, including execution policy, plan, commit guards,
+dependencies, and bounds. Access inspection renames its top-level `entities`
+to `recordTypes`, route references to `recordType`, and consent record
+references to `recordType`. Query operations use `recordType` in place of
+`entity`. Record routes use `type: record`; Action routes include `start`
+and no longer describe the removed request operations. Lifecycle inspection
+replaces the request state machine with the Proposal state machine.
+
+Model field entries always include `id`, `apiName`, `required`, `classification`,
+`schema` and `fieldType`, including fields absent from every query projection.
+`fieldType` carries the same compiled type object as query field summaries, so
+a form can distinguish multiline `text` from a bounded `string` and discover a
+reference's target. Its internal shape follows the engine field type contract;
+the JSON value `schema` remains the validation contract for field values.
+
+Consumers of the five formats above at `v1alpha5` must select that
+schema and use the native fields above. `ProposalsExplanation` starts at
+`v1alpha1`. Event inspection adds the owning hook phase and Proposal transition
+selection. `AccessPreview` retains `v1alpha4` because its pinned shape is unchanged.
+
+`LifecycleExplanation` `v1alpha6` adds the terminal `rejected` state, the
+`reject` transition from `submitted`, and the `review-authority-result`
+enforcement that only a verified review result performs it. Consumers select
+the `v1alpha6` schema.
+
+`EventsExplanation` `v1alpha6` adds the `rejected` and `review-returned`
+Proposal transitions to the transition selection a Proposal hook may name.
+Consumers select the `v1alpha6` schema.
+
+## Schemas and compatibility
+
+Each schema is draft 2020-12 and self-contained. A pinned object seals its
+members with `additionalProperties: false`. Adding, removing, renaming, or
+changing a pinned member requires a version bump for that format alone.
+
+`x-registry-passthrough` marks compiler-owned values whose internal shape is
+outside this explanation contract. Consumers must validate any opaque data
+they use. The annotation states why each node is opaque; JSON Schema
+validators ignore the annotation. The Access authority inventory pins
+`principalClaims` and the mutually exclusive inventory/error relationship,
+while the remaining inventory members stay opaque. Casework provider pairing
+independently verifies its sealed context export and grants no BReg authority.
+
+The Lifecycle payload is pinned in full because its model exists solely to
+explain this state machine. Actions and Proposals share a source-free
+inspection shape; their schemas independently describe it without external
+references.
+
+## Canonical examples and verification
+
+`products/platform/config-formats.yaml` registers each schema and canonical
+example under `products/breg/examples/formats/explain/`.
+`crates/registry-bregctl/tests/explain_contract.rs` reads those registered
+example bytes, validates them against the schema, and compares them with the
+current formatter's pretty-printed JSON plus a final newline. It also checks
+the registered `ctl-report.json` Actions report, multiple native projects,
+and malformed pinned values. The committed full report normalizes diagnostic
+`findings[].source.file` and `findings[].related[].file` under the repository
+root to repository-relative paths before formatting and comparison. All other
+report content remains unchanged. This fixture convention does not change the
+CLI's source addresses.
+
+Generate the examples from a binary built from the matching checkout. From
+the repository root, with that `bregctl` on `PATH`:
+
+```sh
+python3 - <<'PY'
+import json
+import subprocess
+from pathlib import Path
+
+examples = Path('products/breg/examples/formats/explain')
+project = 'products/breg/examples/facility'
+preview = 'crates/registry-bregctl/tests/fixtures/retained-native/access-review'
+commands = {f'{subject}-explanation': [subject, project] for subject in
+            ['model', 'access', 'actions', 'proposals', 'events', 'queries', 'routes']}
+commands['access-preview'] = ['access', preview, '--scenario', f'{preview}/allowed.json']
+commands['lifecycle-explanation'] = ['lifecycle']
+for name, args in commands.items():
+    report = json.loads(subprocess.check_output(['bregctl', '--format', 'json', 'explain', *args]))
+    assert report['ok'], report
+    (examples / f'{name}.json').write_text(
+        json.dumps(report['explanation'], indent=2, sort_keys=True, ensure_ascii=False) + '\n')
+report = json.loads(subprocess.check_output(
+    ['bregctl', '--format', 'json', 'explain', 'actions', project]))
+root = Path.cwd().resolve()
+for finding in report['findings']:
+    locations = [finding['source']] if 'source' in finding else []
+    locations += finding.get('related', [])
+    for location in locations:
+        file = Path(location['file'])
+        if file.is_relative_to(root):
+            location['file'] = str(file.relative_to(root))
+(examples.parent / 'ctl-report.json').write_text(
+    json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + '\n')
+PY
+cargo test --locked -p registry-bregctl --test explain_contract
 ```
-
-The report's own `apiVersion` and `kind` name the `bregctl --format json`
-report format, which every command writes through `write_ctl_report` in
-`crates/registry-bregctl/src/lib.rs`. Inside `explanation`,
-`apiVersion` and `kind` are injected after serialization by
-`explain_envelope` in the same file; they are not
-fields on any `registry-breg` type. Nine formats exist, one per
-subject (ten invocations, because `explain access` produces a different
-format with `--scenario` than without). Each carries its own `apiVersion`,
-`id.registrystack.org/formats/breg/<format>/v1alpha4`, and a `kind` that names
-the product:
-
-`v1alpha2` adds `operation` and `source` to every immediate-action permission
-target. A consumer no longer has to join `permissions[].targets[]` back to the
-action's own `targets[]` to distinguish creates and patches from referenced
-invocation targets.
-
-`v1alpha3` adds `consent` to `AccessExplanation` (null for a project without
-consent configuration) and `recipients` to `AccessPreview`. `consent` states
-each consent-gated permission with its record, `on` key, scope, purposes,
-`maximumDurationDays`, probe function, index names, readable-field classifications,
-admitted clients and issuing actions, plus the recipient set of every client
-with each group expanded. `recipients` is the recipient set of the scenario's
-`requesterClient`. The same version's `LifecycleExplanation` lists four request
-states, without the unreachable `superseded`, and a twenty-first enforcement
-layer, `review_outcome`, for the `revise` and `rebase` events.
-
-`v1alpha4` removes what an anonymous access profile once carried, because a
-registry serves authenticated callers only: an immediate-action permission in
-`ActionsExplanation` has no `anonymous` member, and `claimContractError` in
-`AccessExplanation` no longer takes `anonymous_profile_carries_authority`.
-The same version's `AccessExplanation` carries `statisticalDatasets`: for each
-statistical dataset, the access profiles that hold `read-live`, the one that
-holds `publish`, and every profile that reads its releases. The list is empty
-when the project declares no dataset.
-
-The `v1alpha4` schema also pins an existing part of the authority-inventory
-wire shape for the Casework `source add` consumer. A successful
-`AccessExplanation.claimContract` has a unique, possibly empty
-`principalClaims` array of nonempty strings and a null `claimContractError`.
-An inventory failure has a null `claimContract` and one pinned
-`claimContractError` value. Every other member of the authority inventory
-remains opaque. This guarantee changes no serialized key or value, so it does
-not require another format version.
-
-The release that gave each format its own `apiVersion` also respells pinned
-keys and values, under the same `v1alpha4`: the value a consumer compares
-already changed in that release, so no further version marks these.
-`LifecycleExplanation` writes every enforcement layer `id` in lowercase
-kebab-case, for example `review-outcome` where it wrote `review_outcome`.
-Every identifier an explanation copies from the registry project (a module,
-action, effect, consent organization, or consent group `id`) and every
-lifecycle `id` is typed as `$defs/LocalId`, the grammar the project already
-holds them to, so no output changes.
-`ActionsExplanation` and `RoutesExplanation` tag every union with `type`
-where they wrote `kind` (a target `source`, an effect target `binding`, an
-effect field mutation and its `value`, and each entry of `routes[]`), and an
-effect field value reads `from-input` or `from-effect` where it read
-`from_input` or `from_effect`. A handler `kind` and an action route `kind`
-keep their earlier spelling.
-`ChangeRequestsExplanation` tags six unions the same way (a `planner`, its
-`declaringOrigin`, the `target` of each of its `possibleWrites`, an effect
-target `binding`, an effect field mutation, and its `value`) and writes
-`reserved-create`, `from-field`, and `from-effect` where it wrote
-`reserved_create`, `from_field`, and `from_effect`. Its `review` is tagged by
-`type` too, `required` or `none`, as the registry project writes it.
-`ActionsExplanation` writes what it states about a handler, its evidence, and
-a requirement in kebab-case, for example `reads: supplied-inputs-only` where
-it wrote `supplied_inputs_only`.
-`QueriesExplanation` names each member of `operations[].bounds`
-`maximum<Thing>`, for example `maximumPageSize` where it wrote `maxPageSize`.
-`ActionsExplanation` reports how long an accepted assertion is retained as
-`evidence.retentionDays` (`1`) where it wrote `retentionSeconds` (`86400`).
-`AccessExplanation` writes a `claimContractError` in kebab-case, for example
-`principal-claim-missing` where it wrote `principal_claim_missing`, and
-`AccessPreview` writes `mode: offline-synthetic` and `recordAccess:
-not-evaluated` where it wrote `offline_synthetic` and `not_evaluated`. The
-preview's `reason` is typed as a string and keeps its spelling.
-
-| Subject | `--scenario` | Format | `kind` | Schema |
-|---|---|---|---|---|
-| `model` | n/a | `model-explanation` | `BRegModelExplanation` | `ModelExplanation.schema.json` |
-| `access` | absent | `access-explanation` | `BRegAccessExplanation` | `AccessExplanation.schema.json` |
-| `access` | present | `access-preview` | `BRegAccessPreview` | `AccessPreview.schema.json` |
-| `routes` | n/a | `routes-explanation` | `BRegRoutesExplanation` | `RoutesExplanation.schema.json` |
-| `queries` | n/a | `queries-explanation` | `BRegQueriesExplanation` | `QueriesExplanation.schema.json` |
-| `actions` | n/a | `actions-explanation` | `BRegActionsExplanation` | `ActionsExplanation.schema.json` |
-| `change-requests` | n/a | `change-requests-explanation` | `BRegChangeRequestsExplanation` | `ChangeRequestsExplanation.schema.json` |
-| `events` | n/a | `events-explanation` | `BRegEventsExplanation` | `EventsExplanation.schema.json` |
-| `lifecycle` | n/a | `lifecycle-explanation` | `BRegLifecycleExplanation` | `LifecycleExplanation.schema.json` |
-
-`lifecycle` is the one subject that takes no PROJECT: `bregctl explain
-lifecycle` reports the request lifecycle the engine enforces, which no
-registry project changes. It refuses a PROJECT rather than ignoring one, so
-that a reader is never taught the lifecycle might vary, and so that an
-unrelated authoring error cannot refuse an answer that never depended on a
-project. Its report is also the only one whose `revision` is absent, for the
-same reason: there is no compiled project to name.
-
-Each schema file is draft 2020-12, self-contained (its own `$defs`, no
-cross-file `$ref`), and is validated against every fixture the gate covers by
-`crates/registry-bregctl/tests/explain_contract.rs`. Its `$id` is its
-identifier in the Registry Stack identifier catalog, named for the kind and
-the version, for example
-`https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json`.
-
-## `x-registry-passthrough`
-
-A schema node that carries `x-registry-passthrough: <reason>` marks a payload
-that `bregctl` writes as the engine holds it (a compiled-model value such as an
-access-route entry) and that this contract version neither describes nor
-promises. The value is a sentence saying why the node is opaque and which
-engine type its shape follows. The annotation is read by the configuration
-conventions lint, `products/platform/scripts/check-config-conventions.py`
-(CFG-SCHEMA-4), which accepts an open object only when it carries the keyword
-with a reason. JSON Schema validators ignore it, so it changes no validation
-result. A consumer must not rely on the shape under a marked node.
-
-## Examples
-
-Each kind registers a minimal valid example in
-`products/platform/config-formats.yaml`: the `explanation` that `bregctl`
-writes for the `products/breg/examples/access-review` project, or with no
-project for `lifecycle`, committed under
-`products/breg/examples/formats/explain/`. `explain_contract.rs` validates
-each against its schema and fails when one differs from what the command
-writes now. Rewrite them from the repository root with:
-
-```bash
-project=products/breg/examples/access-review
-examples=products/breg/examples/formats/explain
-for subject in model access actions change-requests events queries routes; do
-  bregctl --format json explain "$subject" "$project" |
-    jq .explanation >"$examples/$subject-explanation.json"
-done
-bregctl --format json explain access "$project" --scenario "$project/allowed.json" |
-  jq .explanation >"$examples/access-preview.json"
-bregctl --format json explain lifecycle |
-  jq .explanation >"$examples/lifecycle-explanation.json"
-```
-
-The whole report around an explanation is the `breg/ctl-report` format. Its
-example is the report `bregctl --format json explain actions "$project"`
-writes, committed as `products/breg/examples/formats/ctl-report.json`; the
-same test holds it to the command's output byte for byte.
-
-## What is pinned, what is opaque, and why
-
-A key is **pinned** (named in `required`, typed, `additionalProperties:
-false` on its containing object) when bregctl's `explain_*` function
-reconstructs it key by key: each output key is an explicit line of Rust in
-`lib.rs` that names the key and picks the value.
-
-A pinned integer states a minimum and a maximum: the range of the Rust type
-`bregctl` writes it from, or 0 to 9007199254740991, the largest integer JSON
-carries exactly, where that type is wider. The bound is the type's range
-rather than today's engine constant, so retuning a limit changes no schema.
-
-A key is declared **opaque** (`type: "object"` or `"array"`, with a
-description, and no further `required`/`additionalProperties` constraint)
-when bregctl instead serializes a `registry-breg` compiled-model value
-directly (a "passthrough"): `serde_json::to_value(compiled.entities())`,
-`"application": request.application`, `"limits": handler.limits`, and
-similar. A passthrough's wire shape changes automatically whenever the
-compiled-model type changes, with no corresponding line changing in
-`explain_*`, so pinning it would create a contract nothing in `lib.rs` is
-actually holding.
-
-The two constructions can sit side by side under the same key name with
-different treatment. For example, `actions[].handler.possibleWrites` is
-`"possibleWrites": handler.writes` (a raw passthrough) and is opaque, while
-`requests[].planner.possibleWrites` in `ChangeRequestsExplanation` is built
-field by field (`target`, `operation`, `fields` each assigned explicitly) and
-is pinned in full. Likewise `actions[].handler.limits` is a raw passthrough
-of `CompiledActionHandlerLimits` and is opaque, while
-`requests[].planner.limits` is eleven individually named integer fields and
-is pinned in full.
-
-`fieldType` (the compiled field's `FieldTypeSource`) is always a passthrough
-wherever it appears (`queries[].operations[].apiFields[].fieldType`,
-`actions[].inputs[].fieldType`, and elsewhere), so it is opaque everywhere,
-even though it sits inside otherwise fully pinned `queries` and `actions`
-payloads.
-
-Several keys are pinned despite being technically passthroughs of primitive or
-small values, because they are read by adopters today and are unlikely to
-grow internal structure that would make a passthrough opaque in practice:
-`model.registryId`, `model.version`, `model.moduleOrder`, and
-`model.moduleClosure` (including its `id`, `digest`, and `version` entries).
-`access.routes.entries[].entityId` and `AccessPreview.admitted` /
-`AccessPreview.reason` are pinned the same way, alongside the other scalar
-fields of `AccessExplanation`'s and `AccessPreview`'s own top level, because
-both are small, hand-authored structs whose fields are named directly in
-`registry-breg`.
-
-`AccessExplanation.claimContract` is a partial exception to the normal
-passthrough rule. Casework `source add` reads `principalClaims` to bind its
-source-reader profile to the registry's compiled principal claim. The schema
-therefore pins that one array and the mutually exclusive success/error
-relationship with `claimContractError`. The containing inventory object stays
-open, so `purposeRequired`, `directClaims`, and any later inventory members
-remain opaque passthrough data.
-
-`AccessExplanation.consent` is pinned in full on the same ground as
-`LifecycleExplanation`, described next: it is a passthrough of
-`registry_breg::access::ConsentExplanation`, a structure that exists only to be
-this payload.
-
-`LifecycleExplanation` is pinned in full for a different reason. It is a
-passthrough by construction (`serde_json::to_value` of a
-`registry_breg::lifecycle::LifecycleDescription`), but the usual argument
-against pinning a passthrough does not apply: `LifecycleDescription` is not
-a compiled-model type that `explain_*` happens to forward, it exists only to
-be this payload. Nothing else reads it, so its fields cannot drift under this
-contract as a side effect of an unrelated change to the compiler; changing
-them is changing this contract, and the test that gates it is the same test
-that gates the engine's own lifecycle table.
-
-Opaque nodes, in full:
-
-- `model.entities`, `model.physicalNames`, `model.package`,
-  `model.manifestProjection`
-- `access.routes.entries[].*` other than `entityId`, `access.entities`,
-  `access.actions`, `access.rowReach`, and every `access.claimContract` member
-  other than `principalClaims`
-- `AccessPreview.effectiveProfile`
-- `RoutesExplanation`'s entity-route half of `routes[]` (every field other
-  than the injected `type`)
-- `fieldType` everywhere it appears (`QueriesExplanation`,
-  `ActionsExplanation`)
-- `ActionsExplanation`'s `actions[].handler.possibleWrites`,
-  `actions[].handler.limits`, and `actions[].evidence.capabilities`
-- `ChangeRequestsExplanation`'s `requests[].application`,
-  `requests[].onApproved`, and `requests[].fields[].schema` (a JSON Schema
-  fragment read from the entity's generated schema artifact, not authored by
-  `explain_*`)
-- `EventsExplanation.deliveries` in full (the entire kind is one
-  `serde_json::to_value` passthrough of `CompiledEventDeliveryInventory`)
-
-## Compatibility promise
-
-`apiVersion` versions the payload as a whole, across all nine kinds. A
-change bumps it when it removes a pinned key, renames a pinned key, changes
-a pinned key's type or enum member set, or **adds any key to a pinned
-object**, optional or not. Adding a key is a breaking change here and
-nowhere else in the stack, because every pinned object seals itself with
-`additionalProperties: false`: a consumer holding this version's schema
-rejects a response carrying tomorrow's new key, so calling that addition
-compatible would be a promise the published schemas refuse to keep. A change
-does not need a new `apiVersion` when it changes content inside a node this
-contract declares opaque (adding, removing, or reshaping fields under
-`entities`, `application`, `fieldType`, and so on), since those nodes are
-not part of the pinned contract to begin with.
-
-Read that second half as a warning, not as a permission. A stable
-`apiVersion` is not a promise that the opaque nodes have not moved, and for a
-consumer reading the compiled model, the event deliveries, the entity routes,
-an unpinned claim-contract member, or a `fieldType`, the opaque nodes are most
-of what it consumes. `claimContract.principalClaims` and its relationship with
-`claimContractError` are the supported exception. Assert every other opaque
-shape where you read it, because drift inside an opaque node does not fail
-loudly: a key that is renamed or removed reads as absent, which is
-indistinguishable from a project that never declared it, so a consumer returns
-a confident wrong answer instead of an error.
-
-## Unexercised branches
-
-No fixture tracked by `explain_contract.rs` declares a WASM action handler
-(`handler.kind == "wasm"`). `ActionsExplanation.schema.json` pins that branch
-from the `lib.rs` source (`kind`, `abi`, `moduleSha256`, `compatibility`),
-but the gate never instantiates it; a WASM handler fixture is a good addition
-to the tracked set the next time this contract needs to change.
-
-A further branch is visible in the same sense but not exercised today: the
-`"clear"` field mutation in both `ActionsExplanation` and
-`ChangeRequestsExplanation` (every tracked action and change request only
-ever `"set"`s a field). It is pinned from source and unexercised by the gate.
-
-No tracked fixture publishes a revisions route
-(`operation: "revisions"` with `revisionKind: "list" | "detail"`) either, but
-that costs this contract nothing: the entity-route half of
-`RoutesExplanation.routes[]` is opaque, so an unexercised `revisionKind`
-is simply one more field this contract does not pin.

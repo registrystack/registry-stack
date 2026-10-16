@@ -34,6 +34,13 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
         let explained =
             serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
         assert!(explained.to_string().contains("membershipBoundaries"));
+        assert!(explained.to_string().contains("membershipRecordType"));
+        assert!(!explained.to_string().contains("membershipEntity"));
+        let compiled =
+            serde_json::to_value(&registry.entities()[root].membership_boundaries["member"][0])
+                .unwrap();
+        assert_eq!(compiled["membershipRecordType"], "membership");
+        assert!(compiled.get("membershipEntity").is_none());
         assert!(!registry
             .findings()
             .iter()
@@ -42,21 +49,51 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
 }
 
 #[test]
+fn membership_reference_uses_one_positioned_spelling() {
+    let source = source("facility");
+    let bytes = serde_json::to_vec(&source).unwrap();
+    let decoded = registry_breg::contract::read_project_yaml("registry.yaml", &bytes).unwrap();
+    let wire = serde_json::to_value(&decoded.value).unwrap();
+    assert_eq!(
+        wire.pointer(
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipRecordType"
+        ),
+        Some(&json!("membership"))
+    );
+    for value in [json!("membership"), json!(""), serde_json::Value::Null] {
+        let mut previous = source.clone();
+        let boundary = previous
+            .pointer_mut("/accessProfiles/0/permissions/records/0/membershipBoundaries/0")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        boundary.remove("membershipRecordType");
+        boundary.insert("membershipEntity".to_owned(), value);
+        let report = registry_breg::contract::read_project_yaml(
+            "registry.yaml",
+            &serde_json::to_vec_pretty(&previous).unwrap(),
+        )
+        .expect_err("previous reference is refused");
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .expect("migration guidance is present");
+        assert_eq!(
+            diagnostic.path,
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipEntity"
+        );
+        assert!(diagnostic.suggested_action.contains("membershipRecordType"));
+        assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    }
+}
+
+#[test]
 fn membership_boundaries_refuse_unenforced_authority_paths() {
     for (path, value, code) in [
         (
-            "/accessProfiles/0/permissions/entities/0/operations",
+            "/accessProfiles/0/permissions/records/0/operations",
             json!(["get", "patch"]),
-            "breg.access.membership-read-only",
-        ),
-        (
-            "/accessProfiles/0/permissions/entities/0/applyTargets",
-            json!([{"entity":"facility","rowBoundaries":"unrestricted"}]),
-            "breg.access.membership-read-only",
-        ),
-        (
-            "/accessProfiles/0/permissions/entities/0/requestPresence",
-            json!([{"requestType":"request","rowBoundaries":"unrestricted"}]),
             "breg.access.membership-read-only",
         ),
         (
@@ -65,27 +102,27 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "breg.access.requirements-scope-missing",
         ),
         (
-            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/field",
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/field",
             json!("label"),
             "breg.access.membership-key-type",
         ),
         (
-            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/principalField",
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/principalField",
             json!("active"),
             "breg.access.membership-principal-type",
         ),
         (
-            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/activeField",
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/activeField",
             json!("principal"),
             "breg.access.membership-active-type",
         ),
         (
-            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/membershipEntity",
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipRecordType",
             json!("facility"),
             "breg.access.membership-source-recursive",
         ),
         (
-            "/entities/1/accessRequirements",
+            "/recordTypes/1/accessRequirements",
             json!({"rowBoundaries":[{"field":"principal","claim":"principal","operator":"equals"}]}),
             "breg.access.membership-source-row-requirement",
         ),
@@ -105,9 +142,9 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         );
     }
     let mut value = source("facility");
-    value["entities"][0]["readPaths"] =
+    value["recordTypes"][0]["readPaths"] =
         json!([{"id":"facilities","through":"membership","to":"facility","route":"facilities"}]);
-    value["accessProfiles"][1]["permissions"]["entities"][0]["readPaths"] =
+    value["accessProfiles"][1]["permissions"]["records"][0]["readPaths"] =
         json!([{"path":"facilities","readableFields":["label"]}]);
     let failure =
         compile(&value).expect_err("read paths cannot ignore protected target membership");
@@ -118,7 +155,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
 
     let mut action = action_requirements::project();
     action["accessProfiles"][0]["permissions"]["actions"][0]["membershipBoundaries"] =
-        source("facility")["accessProfiles"][0]["permissions"]["entities"][0]
+        source("facility")["accessProfiles"][0]["permissions"]["records"][0]
             ["membershipBoundaries"]
             .clone();
     let failure = registry_breg::parse_project_yaml(&serde_json::to_vec(&action).unwrap())

@@ -1,0 +1,129 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+syntheticOnly: true
+common:
+  observedAt: '2026-10-14T00:00:00Z'
+  selectors:
+    coverage-record:
+      profile: coverage-by-id
+      values:
+        coverage_id: coverage-synthetic
+    patient:
+      profile: patient-by-id
+      values:
+        patient_id: patient-synthetic
+  derivationSelectorInputs:
+    patient:
+      profile: patient-by-id
+      values:
+        patient_id: patient-synthetic
+  expectedRequestParts:
+    query: []
+    body: null
+  expectedTransport:
+    path: /Coverage/coverage-synthetic
+    fixedHeaders:
+    - name: Accept
+      value: application/json
+cases:
+- id: active
+  response:
+    resourceType: Coverage
+    id: coverage-synthetic
+    status: active
+    beneficiary:
+      reference: Patient/patient-synthetic
+  expected:
+    lookup: match
+    value: true
+    derivationRuns: true
+    signed: true
+- id: cancelled-is-false
+  response:
+    resourceType: Coverage
+    id: coverage-synthetic
+    status: cancelled
+    beneficiary:
+      reference: Patient/patient-synthetic
+  expected:
+    lookup: match
+    value: false
+    derivationRuns: true
+    signed: true
+- id: beneficiary-mismatch
+  response:
+    resourceType: Coverage
+    id: coverage-synthetic
+    status: active
+    beneficiary:
+      reference: Patient/another-synthetic
+  expected:
+    publicProblem: evidence.unavailable
+    derivationRuns: true
+    signed: false
+    lookup: match
+- id: resource-identity-mismatch
+  response:
+    resourceType: Coverage
+    id: another-coverage
+    status: active
+    beneficiary:
+      reference: Patient/patient-synthetic
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: missing-beneficiary
+  response:
+    resourceType: Coverage
+    id: coverage-synthetic
+    status: active
+    beneficiary: {}
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: unknown-status
+  response:
+    resourceType: Coverage
+    id: coverage-synthetic
+    status: unknown-status
+    beneficiary:
+      reference: Patient/patient-synthetic
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: private-fields-are-projected-out
+  response:
+    resourceType: Coverage
+    id: coverage-synthetic
+    status: active
+    beneficiary:
+      reference: Patient/patient-synthetic
+      display: FHIR-PRIVATE-CANARY
+    subscriberId: FHIR-PRIVATE-CANARY
+  expected:
+    lookup: match
+    value: true
+    derivationRuns: true
+    signed: true
+- id: source-timeout
+  sourceFailure: timeout
+  expected:
+    publicProblem: source.unavailable
+    signed: false
+    sourceRequestCount: 1
+privacyExpectation:
+  evidenceContains:
+  - urn:example:concept:coverage-record-reports-active:v1
+  evidenceExcludes:
+  - coverage-synthetic
+  - patient-synthetic
+  - organization-synthetic
+  - FHIR-PRIVATE-CANARY
+  diagnosticsExclude:
+  - coverage-synthetic
+  - patient-synthetic
+  - organization-synthetic
+  - FHIR-PRIVATE-CANARY

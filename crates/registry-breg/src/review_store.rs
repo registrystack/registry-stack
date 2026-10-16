@@ -7,17 +7,13 @@
 //! an exact proposal and submission-digest comparison.
 
 use chrono::{DateTime, Utc};
-use registry_platform_httputil::client::{
-    build_client, OutboundOptions, ServiceBaseUrl, TokenError, TokenProvider,
-};
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::client::TokenProvider;
 use registry_review_client::{
     submission_digest, BearerToken, ReviewAuth, ReviewClient, ReviewClientError, ReviewCompletion,
     ReviewCompletionType, ReviewCreateRequest, ReviewRequestAccepted, ReviewResult,
     ReviewResultResponse, ReviewResultsQuery, SourceContextBinding, SubjectBinding,
 };
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, IF_MATCH};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,41 +22,14 @@ use tokio_postgres::{GenericClient, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::model::{
-    CompiledChangeRequestOnApprovedMode, CompiledChangeRequestReview, CompiledRegistry,
-};
+use crate::model::{CompiledProposalReview, CompiledRegistry};
 use crate::mutation::MutationError;
 use crate::postgres::SqlIdentifier;
-use crate::request_workflow::ProposalSnapshot;
+use crate::proposal_workflow::ProposalSnapshot;
 
 const APPLICATION_LEASE_MINIMUM_SECONDS: i64 = 30;
-pub(crate) const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
-const APPLICATION_ATTEMPTS_EXHAUSTED: &str = "application-attempts-exhausted";
-const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
-
-/// A `queued` job has never been applied, so claiming one whose cached
-/// approval already passed `available_until` only spends an attempt on a
-/// request that no longer advertises `apply-request`: discovery ends in
-/// `block_application_job(..., "source-action-unavailable")`, or a cached
-/// action draws a 412 that requeues the same job, up to
-/// `MAX_APPLICATION_ATTEMPTS`. Leaving it `queued` costs nothing, since the
-/// read projection already reports that combination as application state
-/// `expired`. An `applying` job stays claimable regardless: the earlier claim
-/// may still be in flight, or its receipt may need recovery, and a 412 there
-/// returns the job to `queued`, where this predicate then applies on its next
-/// pass. `verify_retained_bindings` shares this predicate: a job it would not
-/// let the worker claim is not durable work either, so it does not pin the
-/// review authority or executor binding it used, and an operator may drop
-/// that binding. The metrics queue-age sample shares it too, so a job left
-/// `queued` this way does not age the application queue. `q` names the
-/// candidate job row in every query this is spliced into.
-pub(crate) const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
-        SELECT 1 FROM registry_internal.registry_request_review_results r
-         WHERE (r.request_entity_id,r.request_id,r.proposal_version)
-               =(q.request_entity_id,q.request_id,q.proposal_version)
-           AND r.status='approved' AND r.available_until <= transaction_timestamp()))";
 
 /// A review submission is claimable once it is due and no live lease holds
 /// it: a `submitting` claim stays with its holder until its lease expires,
@@ -142,160 +111,13 @@ impl std::fmt::Display for RetainedReviewBindingError {
 
 impl std::error::Error for RetainedReviewBindingError {}
 
-pub struct ReviewExecutorClient {
-    executor: String,
-    http: reqwest::Client,
-    base_url: ServiceBaseUrl,
-    token_provider: Arc<dyn TokenProvider>,
-    registry_id: String,
-    access_profile: String,
-    request_routes: BTreeMap<String, String>,
-    lease_seconds: i64,
-}
-
-impl ReviewExecutorClient {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        executor: String,
-        endpoint: reqwest::Url,
-        token_provider: Arc<dyn TokenProvider>,
-        registry_id: String,
-        access_profile: String,
-        request_routes: BTreeMap<String, String>,
-        request_timeout: std::time::Duration,
-    ) -> Result<Self, ReviewConfigurationError> {
-        if executor.trim().is_empty()
-            || executor.len() > 128
-            || registry_id.trim().is_empty()
-            || registry_id.len() > 128
-            || access_profile.trim().is_empty()
-            || access_profile.len() > 128
-            || request_routes.is_empty()
-            || request_routes.iter().any(|(entity, route)| {
-                entity.is_empty()
-                    || entity.len() > 128
-                    || route.is_empty()
-                    || route.len() > 128
-                    || !route.bytes().all(|byte| {
-                        byte.is_ascii_lowercase()
-                            || byte.is_ascii_digit()
-                            || matches!(byte, b'-' | b'_')
-                    })
-            })
-        {
-            return Err(ReviewConfigurationError);
-        }
-        let base_url = ServiceBaseUrl::new(endpoint).map_err(|_| ReviewConfigurationError)?;
-        let http = build_client(OutboundOptions {
-            request_timeout,
-            connect_timeout: request_timeout,
-            user_agent: Some("registry-breg-review-executor"),
-            trusted_root_certificates: None,
-        })
-        .map_err(|_| ReviewConfigurationError)?;
-        // Discovery and application each acquire a token before their HTTP
-        // exchange. A renewal must not let another worker reclaim this job.
-        let lease_seconds = outbound_lease_seconds(request_timeout.saturating_mul(4));
-        Ok(Self {
-            executor,
-            http,
-            base_url,
-            token_provider,
-            registry_id,
-            access_profile,
-            request_routes,
-            lease_seconds,
-        })
-    }
-}
-
-pub struct ReviewExecutorRegistry {
-    executors: BTreeMap<String, Arc<ReviewExecutorClient>>,
-}
-
-impl ReviewExecutorRegistry {
-    pub fn new(
-        executors: BTreeMap<String, Arc<ReviewExecutorClient>>,
-    ) -> Result<Self, ReviewConfigurationError> {
-        if executors.is_empty()
-            || executors
-                .iter()
-                .any(|(id, executor)| id != &executor.executor)
-        {
-            return Err(ReviewConfigurationError);
-        }
-        Ok(Self { executors })
-    }
-
-    fn contains_binding(&self, executor: &str, request_entity_id: &str) -> bool {
-        self.executors
-            .get(executor)
-            .is_some_and(|configured| configured.request_routes.contains_key(request_entity_id))
-    }
-
-    async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
-        let exhausted = client
-            .execute(
-                "UPDATE registry_internal.registry_request_application_jobs
-                    SET state='blocked',claim_token=NULL,last_error_code=$1,
-                        updated_at=transaction_timestamp()
-                  WHERE attempt_count >= $2
-                    AND (state='queued' OR (state='applying'
-                         AND next_attempt_at <= transaction_timestamp()))",
-                &[&APPLICATION_ATTEMPTS_EXHAUSTED, &MAX_APPLICATION_ATTEMPTS],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
-        if exhausted != 0 {
-            return Ok(true);
-        }
-        let Some(row) = client
-            .query_opt(
-                &format!(
-                    "SELECT q.executor,q.job_id
-                       FROM registry_internal.registry_request_application_jobs q
-                      WHERE q.state IN ('queued','applying')
-                        AND q.attempt_count < $1
-                        AND q.next_attempt_at <= transaction_timestamp()
-                        AND {APPLICATION_JOB_CLAIMABLE}
-                      ORDER BY q.next_attempt_at,q.created_at LIMIT 1"
-                ),
-                &[&MAX_APPLICATION_ATTEMPTS],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?
-        else {
-            return Ok(false);
-        };
-        let executor: String = row.get(0);
-        let Some(configured) = self.executors.get(&executor) else {
-            let job_id: Uuid = row.get(1);
-            client
-                .execute(
-                    "UPDATE registry_internal.registry_request_application_jobs
-                        SET state='blocked',claim_token=NULL,
-                            last_error_code='executor-unconfigured',
-                            updated_at=transaction_timestamp()
-                      WHERE job_id=$1
-                        AND (state='queued' OR (state='applying'
-                             AND next_attempt_at <= transaction_timestamp()))",
-                    &[&job_id],
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            return Ok(true);
-        };
-        run_one_application(client, configured).await
-    }
-}
-
-/// Refuse an activation that would strand durable work accepted under the
-/// previous package. Operators may retain superseded bindings until their jobs
-/// finish; only then may those bindings be removed from runtime configuration.
+/// Configured bindings must retain the producer identity of accepted work.
+/// Missing bindings leave that immutable work pending and inspectable until
+/// the dependency is restored, while unrelated registry operations stay usable.
 pub async fn verify_retained_bindings(
     pool: &crate::postgres::RuntimePool,
+    registry: &CompiledRegistry,
     authorities: Option<&ReviewAuthorityRegistry>,
-    executors: Option<&ReviewExecutorRegistry>,
 ) -> Result<(), RetainedReviewBindingError> {
     let client = pool
         .get()
@@ -303,55 +125,31 @@ pub async fn verify_retained_bindings(
         .map_err(|_| RetainedReviewBindingError::Unavailable)?;
     let authority_rows = client
         .query(
-            &format!(
-                "SELECT authority,
+            "SELECT authority,
                         array_agg(DISTINCT producer_id ORDER BY producer_id),
                         count(*)::bigint
-               FROM registry_internal.registry_request_review_submissions s
+               FROM registry_internal.registry_proposal_review_submissions s
               WHERE state IN ('pending','submitting','uncertain','cancelling')
-                 OR (state='accepted' AND NOT EXISTS (
-                        SELECT 1 FROM registry_internal.registry_request_review_results r
-                         WHERE (r.request_entity_id,r.request_id,r.proposal_version)=
-                               (s.request_entity_id,s.request_id,s.proposal_version)))
-                 OR EXISTS (
-                        SELECT 1 FROM registry_internal.registry_request_application_jobs q
-                         WHERE (q.request_entity_id,q.request_id,q.proposal_version)=
-                               (s.request_entity_id,s.request_id,s.proposal_version)
-                           AND q.state IN ('queued','applying')
-                           AND {APPLICATION_JOB_CLAIMABLE})
-                 OR (s.state='accepted' AND s.on_approved_mode='manual'
-                     AND EXISTS (
-                         SELECT 1 FROM registry_internal.registry_request_review_results r
-                          WHERE (r.request_entity_id,r.request_id,r.proposal_version)=
-                                (s.request_entity_id,s.request_id,s.proposal_version)
-                            AND r.status='approved')
-                     AND EXISTS (
-                         SELECT 1 FROM registry_internal.registry_request_state w
-                          WHERE (w.request_entity_id,w.request_id,w.proposal_version)=
-                                (s.request_entity_id,s.request_id,s.proposal_version)
+                 OR (s.state='accepted' AND EXISTS (
+                         SELECT 1 FROM registry_internal.registry_proposal_state w
+                          WHERE (w.action_id,w.proposal_id,w.submission_version)=
+                                (s.action_id,s.proposal_id,s.submission_version)
                             AND w.state='submitted'))
               GROUP BY authority
-              ORDER BY authority"
-            ),
+              ORDER BY authority",
             &[],
         )
         .await
         .map_err(|_| RetainedReviewBindingError::Unavailable)?;
     for row in &authority_rows {
         let authority = row.get::<_, String>(0);
-        let retained_submissions = u64::try_from(row.get::<_, i64>(2))
-            .map_err(|_| RetainedReviewBindingError::Unavailable)?;
-        if authorities.is_none_or(|configured| !configured.contains(&authority)) {
-            return Err(RetainedReviewBindingError::MissingAuthority {
-                authority,
-                retained_submissions,
-            });
-        }
-    }
-    for row in &authority_rows {
-        let authority = row.get::<_, String>(0);
+        // Missing configuration is a recoverable dependency outage. If a
+        // binding is supplied, its retained producer identity must still match.
+        let Some(configured) = authorities.filter(|configured| configured.contains(&authority))
+        else {
+            continue;
+        };
         let producer_ids = row.get::<_, Vec<String>>(1);
-        let configured = authorities.ok_or(RetainedReviewBindingError::Refused)?;
         if producer_ids
             .iter()
             .any(|producer_id| !configured.contains_binding(&authority, producer_id))
@@ -359,38 +157,31 @@ pub async fn verify_retained_bindings(
             return Err(RetainedReviewBindingError::Refused);
         }
     }
-    let executor_rows = client
-        .query(
-            &format!(
-                "SELECT DISTINCT executor,request_entity_id
-               FROM registry_internal.registry_request_application_jobs q
-              WHERE q.state IN ('queued','applying')
-                AND {APPLICATION_JOB_CLAIMABLE}"
-            ),
-            &[],
-        )
-        .await
-        .map_err(|_| RetainedReviewBindingError::Unavailable)?;
-    if executor_rows.iter().any(|row| {
-        executors.is_none_or(|configured| {
-            !configured.contains_binding(
-                row.get::<_, String>(0).as_str(),
-                row.get::<_, String>(1).as_str(),
-            )
-        })
-    }) {
-        return Err(RetainedReviewBindingError::Refused);
+    if let Some(configured) = authorities {
+        let current = registry
+            .actions()
+            .actions
+            .iter()
+            .filter_map(|action| match &action.execution {
+                crate::model::CompiledActionExecution::Proposal { proposal } => match &proposal
+                    .review
+                {
+                    CompiledProposalReview::Required { authority, .. } => Some(authority.as_str()),
+                    CompiledProposalReview::None => None,
+                },
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if configured.authorities.keys().any(|authority| {
+            !current.contains(authority.as_str())
+                && !authority_rows
+                    .iter()
+                    .any(|row| row.get::<_, String>(0) == *authority)
+        }) {
+            return Err(RetainedReviewBindingError::Refused);
+        }
     }
     Ok(())
-}
-
-#[cfg(feature = "postgres-test")]
-#[doc(hidden)]
-pub async fn run_review_application_once_for_test(
-    client: &mut tokio_postgres::Client,
-    executor: &ReviewExecutorClient,
-) -> Result<bool, MutationError> {
-    run_one_application(client, executor).await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -398,9 +189,10 @@ pub async fn run_review_application_once_for_test(
 pub async fn run_review_authority_once_for_test(
     pool: &crate::postgres::RuntimePool,
     authorities: &ReviewAuthorityRegistry,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     let mut client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
-    authorities.run_one(&mut client).await
+    authorities.run_one(&mut client, mutations).await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -426,11 +218,11 @@ pub async fn install_review_storage_for_test(
 #[doc(hidden)]
 pub async fn schedule_cancellation_for_test(
     transaction: &Transaction<'_>,
-    request_entity_id: &str,
-    request_id: Uuid,
-    proposal_version: i64,
+    action_id: &str,
+    proposal_id: Uuid,
+    submission_version: i64,
 ) -> Result<(), MutationError> {
-    schedule_cancellation(transaction, request_entity_id, request_id, proposal_version).await
+    schedule_cancellation(transaction, action_id, proposal_id, submission_version).await
 }
 
 #[async_trait::async_trait]
@@ -541,6 +333,65 @@ fn feed_backoff_delay(failures: u32) -> Duration {
 }
 
 impl ReviewAuthorityRegistry {
+    /// Read the original accepted closure through its configured authority.
+    /// The exchange sends only the retained request UUID, with no Proposal
+    /// input, context payload, or creation/recovery key.
+    pub(crate) async fn prove_accepted_closure(
+        &self,
+        authority: &str,
+        producer: &str,
+        accepted: &ReviewRequestAccepted,
+        retained_result: Option<&ReviewResult>,
+    ) -> Result<Vec<u8>, MutationError> {
+        let configured = self
+            .authorities
+            .get(authority)
+            .ok_or(MutationError::Unavailable)?;
+        if configured.producer_id != producer {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let token = configured
+            .token_provider
+            .bearer_token()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let view = configured
+            .client
+            .request(
+                ReviewAuth::new(&token, &configured.profile),
+                accepted.request_id,
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .value;
+        if view.request_id != accepted.request_id
+            || view.subject != accepted.subject
+            || view.policy != accepted.policy
+            || view.submission_digest != accepted.submission_digest
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let result = if let Some(retained) = retained_result {
+            let ReviewResultResponse::Available(current) = configured
+                .client
+                .result(ReviewAuth::new(&token, &configured.profile), accepted)
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+            else {
+                return Err(MutationError::PreconditionFailed);
+            };
+            if current.value != *retained || current.value.available_until <= Utc::now() {
+                return Err(MutationError::PreconditionFailed);
+            }
+            Some(current.value)
+        } else {
+            None
+        };
+        registry_platform_canonical_json::canonicalize_json(&serde_json::json!({
+            "authority":authority,"producer":producer,"accepted":accepted,"request":view,"result":result,
+        })).map_err(|_|MutationError::Unavailable)
+    }
+
     pub fn new(
         authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>,
     ) -> Result<Self, ReviewConfigurationError> {
@@ -706,7 +557,7 @@ impl ReviewAuthorityRegistry {
             .query(
                 &format!(
                     "SELECT authority,min(next_attempt_at) AS ready_at
-                       FROM registry_internal.registry_request_review_submissions
+                       FROM registry_internal.registry_proposal_review_submissions
                       WHERE state=ANY($1) AND {REVIEW_SUBMISSION_CLAIMABLE}
                       GROUP BY authority ORDER BY ready_at,authority"
                 ),
@@ -714,14 +565,14 @@ impl ReviewAuthorityRegistry {
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        rows.into_iter()
-            .map(|row| {
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
                 self.authorities
                     .get(row.get::<_, String>(0).as_str())
                     .cloned()
-                    .ok_or(MutationError::Unavailable)
             })
-            .collect()
+            .collect())
     }
 
     async fn back_off_token_failure(
@@ -736,7 +587,7 @@ impl ReviewAuthorityRegistry {
         client
             .execute(
                 &format!(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state=CASE WHEN state='submitting' THEN 'uncertain' ELSE state END,
                             lease_until=NULL,last_error_code='token-unavailable',
                             next_attempt_at=transaction_timestamp()+interval '5 seconds',
@@ -750,7 +601,11 @@ impl ReviewAuthorityRegistry {
         Ok(())
     }
 
-    async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
+    async fn run_one(
+        &self,
+        client: &mut tokio_postgres::Client,
+        mutations: &crate::postgres::PostgresRecordMutationService,
+    ) -> Result<bool, MutationError> {
         let erased_completions = erase_expired_review_completions(client).await?;
         if erased_completions > 0 {
             tracing::debug!(
@@ -769,7 +624,7 @@ impl ReviewAuthorityRegistry {
         }
         if client
             .execute(
-                "UPDATE registry_internal.registry_request_review_submissions
+                "UPDATE registry_internal.registry_proposal_review_submissions
                     SET state='failed',lease_until=NULL,last_error_code='submission-recovery-expired',
                         updated_at=transaction_timestamp()
                   WHERE accepted_binding IS NULL AND recovery_deadline <= transaction_timestamp()
@@ -789,16 +644,16 @@ impl ReviewAuthorityRegistry {
         // submission converges to cancelled while retaining its binding.
         if client
             .execute(
-                "UPDATE registry_internal.registry_request_review_submissions s
+                "UPDATE registry_internal.registry_proposal_review_submissions s
                     SET state='cancelled',lease_until=NULL,last_error_code=NULL,
                         updated_at=transaction_timestamp()
                   WHERE s.state='cancelling' AND s.accepted_binding IS NOT NULL
                     AND (s.recovery_deadline <= transaction_timestamp()
                          OR s.attempt_count >= 1000)
                     AND EXISTS (
-                        SELECT 1 FROM registry_internal.registry_request_review_results r
-                         WHERE (r.request_entity_id,r.request_id,r.proposal_version)
-                               = (s.request_entity_id,s.request_id,s.proposal_version)
+                        SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                         WHERE (r.action_id,r.proposal_id,r.submission_version)
+                               = (s.action_id,s.proposal_id,s.submission_version)
                     )",
                 &[],
             )
@@ -814,7 +669,7 @@ impl ReviewAuthorityRegistry {
                 // operator reading the row both correlate a late Casework
                 // settlement by the same `accepted_binding` a live cancellation
                 // used, exactly as the result-bearing sweep above retains it.
-                "UPDATE registry_internal.registry_request_review_submissions
+                "UPDATE registry_internal.registry_proposal_review_submissions
                     SET state='failed',lease_until=NULL,
                         last_error_code=CASE
                             WHEN recovery_deadline <= transaction_timestamp()
@@ -843,7 +698,7 @@ impl ReviewAuthorityRegistry {
         // is preserved for the same late-correlation reason as above.
         if client
             .execute(
-                "UPDATE registry_internal.registry_request_review_submissions s
+                "UPDATE registry_internal.registry_proposal_review_submissions s
                     SET state='failed',lease_until=NULL,
                         last_error_code='result-poll-attempts-exhausted',
                         updated_at=transaction_timestamp()
@@ -851,9 +706,9 @@ impl ReviewAuthorityRegistry {
                     AND s.result_poll_attempts >= 1000
                     AND (s.lease_until IS NULL OR s.lease_until < transaction_timestamp())
                     AND NOT EXISTS (
-                        SELECT 1 FROM registry_internal.registry_request_review_results r
-                         WHERE (r.request_entity_id,r.request_id,r.proposal_version)
-                               = (s.request_entity_id,s.request_id,s.proposal_version))",
+                        SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                         WHERE (r.action_id,r.proposal_id,r.submission_version)
+                               = (s.action_id,s.proposal_id,s.submission_version))",
                 &[],
             )
             .await
@@ -913,6 +768,7 @@ impl ReviewAuthorityRegistry {
                 &authority.profile,
                 &token,
                 authority.lease_seconds,
+                mutations,
             )
             .await?
             {
@@ -939,11 +795,11 @@ impl ReviewAuthorityRegistry {
         let rows = client
             .query(
                 "SELECT DISTINCT authority
-                   FROM registry_internal.registry_request_review_submissions s
+                   FROM registry_internal.registry_proposal_review_submissions s
                   WHERE state='accepted' AND NOT EXISTS (
-                    SELECT 1 FROM registry_internal.registry_request_review_results r
-                     WHERE r.request_entity_id=s.request_entity_id AND r.request_id=s.request_id
-                       AND r.proposal_version=s.proposal_version)
+                    SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                     WHERE r.action_id=s.action_id AND r.proposal_id=s.proposal_id
+                       AND r.submission_version=s.submission_version)
                     AND next_result_poll_at <= transaction_timestamp()
                   ORDER BY authority",
                 &[],
@@ -966,6 +822,7 @@ impl ReviewAuthorityRegistry {
                         &authority.profile,
                         &token,
                         authority.lease_seconds,
+                        mutations,
                     )
                     .await,
                     None,
@@ -989,18 +846,20 @@ impl ReviewAuthorityRegistry {
                     // on every due row; a failed lookup already recorded its
                     // code on the one row it claimed. A later answered lookup
                     // (pending or 404) or reconciled result clears the code.
+                    // Another worker's live lookup keeps its own schedule.
                     client
                         .execute(
-                            "UPDATE registry_internal.registry_request_review_submissions s
+                            "UPDATE registry_internal.registry_proposal_review_submissions s
                                 SET next_result_poll_at=transaction_timestamp()+interval '5 seconds',
                                     last_error_code=COALESCE($2,last_error_code),
                                     updated_at=transaction_timestamp()
                               WHERE s.authority=$1 AND s.state='accepted'
                                 AND s.next_result_poll_at <= transaction_timestamp()
+                                AND (s.lease_until IS NULL OR s.lease_until < transaction_timestamp())
                                 AND NOT EXISTS (
-                                    SELECT 1 FROM registry_internal.registry_request_review_results r
-                                     WHERE (r.request_entity_id,r.request_id,r.proposal_version)
-                                           = (s.request_entity_id,s.request_id,s.proposal_version))",
+                                    SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                                     WHERE (r.action_id,r.proposal_id,r.submission_version)
+                                           = (s.action_id,s.proposal_id,s.submission_version))",
                             &[&authority.authority, &outage_code],
                         )
                         .await
@@ -1061,7 +920,7 @@ async fn erase_expired_review_completions(
 ) -> Result<u64, MutationError> {
     client
         .execute(
-            "DELETE FROM registry_internal.registry_request_review_completions
+            "DELETE FROM registry_internal.registry_proposal_review_completions
               WHERE expires_at <= transaction_timestamp()",
             &[],
         )
@@ -1074,11 +933,11 @@ async fn correlate_stored_review_completions(
 ) -> Result<u64, MutationError> {
     client
         .execute(
-            "UPDATE registry_internal.registry_request_review_completions c
+            "UPDATE registry_internal.registry_proposal_review_completions c
                 SET state='correlated'
-               FROM registry_internal.registry_request_review_submissions s
-               JOIN registry_internal.registry_request_review_results r
-                 USING (request_entity_id,request_id,proposal_version)
+               FROM registry_internal.registry_proposal_review_submissions s
+               JOIN registry_internal.registry_proposal_review_results r
+                 USING (action_id,proposal_id,submission_version)
               WHERE c.state IN ('pending','unmatched')
                 AND c.authority=s.authority AND r.authority=s.authority
                 AND s.accepted_binding->>'requestId'=c.review_request_id::text
@@ -1100,7 +959,7 @@ async fn consume_result_feed(
         .map_err(|_| MutationError::Unavailable)?;
     let cursor = client
         .query_opt(
-            "SELECT cursor FROM registry_internal.registry_request_review_feed_checkpoints
+            "SELECT cursor FROM registry_internal.registry_proposal_review_feed_checkpoints
               WHERE authority=$1",
             &[&authority.authority],
         )
@@ -1122,7 +981,7 @@ async fn consume_result_feed(
         Err(ReviewClientError::Problem { status: 410, .. }) if cursor.is_some() => {
             client
                 .execute(
-                    "INSERT INTO registry_internal.registry_request_review_feed_checkpoints
+                    "INSERT INTO registry_internal.registry_proposal_review_feed_checkpoints
                      (authority,cursor,updated_at) VALUES ($1,NULL,transaction_timestamp())
                      ON CONFLICT (authority) DO UPDATE
                          SET cursor=NULL,updated_at=transaction_timestamp()",
@@ -1162,7 +1021,7 @@ async fn consume_result_feed(
     }
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_review_feed_checkpoints
+            "INSERT INTO registry_internal.registry_proposal_review_feed_checkpoints
              (authority,cursor,updated_at) VALUES ($1,$2,transaction_timestamp())
              ON CONFLICT (authority) DO UPDATE
                  SET cursor=EXCLUDED.cursor,updated_at=transaction_timestamp()",
@@ -1234,7 +1093,7 @@ impl ReviewCompletionReceiver {
 pub struct ReviewWorker {
     pool: crate::postgres::RuntimePool,
     authorities: Option<Arc<ReviewAuthorityRegistry>>,
-    executors: Option<Arc<ReviewExecutorRegistry>>,
+    mutations: Arc<crate::postgres::PostgresRecordMutationService>,
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
@@ -1242,12 +1101,12 @@ impl ReviewWorker {
     pub fn new(
         pool: crate::postgres::RuntimePool,
         authorities: Option<Arc<ReviewAuthorityRegistry>>,
-        executors: Option<Arc<ReviewExecutorRegistry>>,
+        mutations: Arc<crate::postgres::PostgresRecordMutationService>,
     ) -> Self {
         Self {
             pool,
             authorities,
-            executors,
+            mutations,
             last_success: Arc::default(),
         }
     }
@@ -1274,23 +1133,6 @@ impl ReviewWorker {
                                 false
                             }
                         };
-                    // A source apply whose response was lost is retried against
-                    // BReg before another Casework exchange. The source's
-                    // idempotency receipt is the application authority.
-                    let application_worked = if housekeeping_worked {
-                        false
-                    } else {
-                        match &self.executors {
-                            Some(executors) => match executors.run_one(&mut client).await {
-                                Ok(worked) => worked,
-                                Err(_) => {
-                                    failed = true;
-                                    false
-                                }
-                            },
-                            None => false,
-                        }
-                    };
                     // Authority recovery keeps a fair turn on every iteration:
                     // a sustained application backlog must not starve
                     // submissions, cancellations, result feeds, and polls.
@@ -1298,23 +1140,35 @@ impl ReviewWorker {
                         false
                     } else {
                         match &self.authorities {
-                            Some(authorities) => match authorities.run_one(&mut client).await {
-                                Ok(worked) => worked,
-                                Err(_) => {
-                                    failed = true;
-                                    false
+                            Some(authorities) => {
+                                match authorities.run_one(&mut client, &self.mutations).await {
+                                    Ok(worked) => worked,
+                                    Err(_) => {
+                                        failed = true;
+                                        false
+                                    }
                                 }
-                            },
+                            }
                             None => false,
                         }
                     };
-                    housekeeping_worked || application_worked || authority_worked
+                    housekeeping_worked || authority_worked
                 }
                 Err(_) => {
                     failed = true;
                     false
                 }
             };
+            // Drop the review/housekeeping checkout before automatic apply
+            // can acquire fresh dependency observations or its own transaction.
+            let application_worked = match self.mutations.run_automatic_proposal_once().await {
+                Ok(worked) => worked,
+                Err(_) => {
+                    failed = true;
+                    false
+                }
+            };
+            let worked = worked || application_worked;
             if failed {
                 crate::startup::OperationalEvent::ReviewWorkerIterationFailed.emit();
             } else {
@@ -1378,7 +1232,7 @@ impl ReviewResultSource for ReviewAuthorityClient {
             ReviewResultResponse::Pending { .. }
             | ReviewResultResponse::ConcealedOrUnknown { .. }
             | ReviewResultResponse::Expired { .. } => {
-                return Err(MutationError::PreconditionFailed)
+                return Err(MutationError::PreconditionFailed);
             }
         };
         if result.available_until <= chrono::Utc::now() {
@@ -1391,23 +1245,103 @@ impl ReviewResultSource for ReviewAuthorityClient {
     }
 }
 
+/// Read the exact accepted correlation without treating worker state as authority.
+/// In particular, cancellation keeps the original accepted binding while it settles.
+pub(crate) async fn load_status_binding(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    action_id: &str,
+    proposal_id: Uuid,
+    frozen: &ProposalSnapshot,
+) -> Result<Option<ReviewRequestAccepted>, MutationError> {
+    let CompiledProposalReview::Required {
+        authority: expected_authority,
+        source,
+        policy,
+    } = frozen.review_requirement()
+    else {
+        return Err(MutationError::PreconditionFailed);
+    };
+    let row = client
+        .query_opt(
+            "SELECT authority,proposal_digest,expected_policy,create_request,
+            producer_id,expected_submission_digest,accepted_binding
+            FROM registry_internal.registry_proposal_review_submissions
+            WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&action_id, &proposal_id, &i64::from(frozen.version().get())],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(3)).map_err(|_| MutationError::PreconditionFailed)?;
+    create
+        .check()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    let context_reference = format!(
+        "breg:{}:{}:{}:{}",
+        registry.registry_id(),
+        action_id,
+        proposal_id,
+        frozen.version().get()
+    );
+    let expected_digest = registry_review_client::submission_digest(
+        &row.get::<_, String>(4),
+        registry.registry_id(),
+        &create,
+    )
+    .map_err(|_| MutationError::PreconditionFailed)?;
+    if row.get::<_, String>(0) != *expected_authority
+        || row.get::<_, String>(1) != frozen.effect_digest().as_str()
+        || row.get::<_, Value>(2)
+            != serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?
+        || create.policy != *policy
+        || create.subject.source != *source
+        || create.subject.subject_type != "proposal"
+        || create.subject.id != proposal_id.to_string()
+        || create.subject.version != frozen.version().get().to_string()
+        || create.subject.digest.as_str() != frozen.effect_digest().as_str()
+        || !matches!(&create.context,registry_review_client::ReviewContext::CurrentSource { binding }
+                if binding.reference == context_reference)
+        || expected_digest.as_str() != row.get::<_, String>(5)
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let accepted = row
+        .get::<_, Option<Value>>(6)
+        .map(serde_json::from_value::<registry_review_client::ReviewRequestAccepted>)
+        .transpose()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    if accepted.as_ref().is_some_and(|accepted| {
+        accepted.request_id.is_nil()
+            || accepted.subject.check().is_err()
+            || accepted.policy.check().is_err()
+            || accepted.subject != create.subject
+            || !policy.matches(&accepted.policy)
+            || accepted.submission_digest != expected_digest
+    }) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(accepted)
+}
+
 pub(crate) async fn load_accepted_binding(
     client: &impl GenericClient,
-    request_entity_id: &str,
-    request_id: Uuid,
-    proposal_version: i64,
+    action_id: &str,
+    proposal_id: Uuid,
+    submission_version: i64,
     proposal_digest: &str,
 ) -> Result<(String, ReviewRequestAccepted), MutationError> {
     let row = client
         .query_opt(
             "SELECT authority,accepted_binding
-               FROM registry_internal.registry_request_review_submissions
-              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+               FROM registry_internal.registry_proposal_review_submissions
+              WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                 AND proposal_digest=$4 AND state='accepted'",
             &[
-                &request_entity_id,
-                &request_id,
-                &proposal_version,
+                &action_id,
+                &proposal_id,
+                &submission_version,
                 &proposal_digest,
             ],
         )
@@ -1420,23 +1354,23 @@ pub(crate) async fn load_accepted_binding(
 
 pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
     (
-        "registry_request_review_submissions",
+        "registry_proposal_review_submissions",
         &["INSERT", "SELECT", "UPDATE"],
     ),
     (
-        "registry_request_review_completions",
+        "registry_proposal_review_completions",
         &["INSERT", "SELECT", "UPDATE", "DELETE"],
     ),
     (
-        "registry_request_review_results",
+        "registry_proposal_review_results",
         &["INSERT", "SELECT", "UPDATE"],
     ),
     (
-        "registry_request_review_feed_checkpoints",
+        "registry_proposal_review_feed_checkpoints",
         &["INSERT", "SELECT", "UPDATE"],
     ),
     (
-        "registry_request_application_jobs",
+        "registry_proposal_application_jobs",
         &["INSERT", "SELECT", "UPDATE"],
     ),
 ];
@@ -1447,15 +1381,16 @@ pub(crate) async fn install(
 ) -> Result<(), MutationError> {
     client
         .batch_execute(
-            "CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_submissions (
-                 request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
-                 request_id uuid NOT NULL,
-                 proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+            "CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_submissions (
+                 action_id text NOT NULL CHECK (action_id <> ''),
+                 proposal_id uuid NOT NULL,
+                 submission_version bigint NOT NULL CHECK (submission_version BETWEEN 1 AND 4294967295),
                  proposal_digest text NOT NULL CHECK (proposal_digest ~ '^sha256:[0-9a-f]{64}$'),
                  job_id uuid NOT NULL UNIQUE,
                  authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
                  producer_id text NOT NULL CHECK (producer_id <> '' AND octet_length(producer_id) <= 128),
                  policy_id text NOT NULL CHECK (policy_id <> '' AND octet_length(policy_id) <= 128),
+                 expected_policy jsonb NOT NULL CHECK (jsonb_typeof(expected_policy) = 'object'),
                  idempotency_key text NOT NULL UNIQUE CHECK (
                      idempotency_key <> '' AND octet_length(idempotency_key) <= 128
                  ),
@@ -1490,19 +1425,19 @@ pub(crate) async fn install(
                  ),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (request_entity_id, request_id, proposal_version),
-                 FOREIGN KEY (request_entity_id, request_id, proposal_version)
-                     REFERENCES registry_internal.registry_request_proposals,
+                 PRIMARY KEY (action_id, proposal_id, submission_version),
+                 FOREIGN KEY (action_id, proposal_id, submission_version)
+                     REFERENCES registry_internal.registry_proposal_submissions,
                  CHECK ((on_approved_mode = 'manual' AND executor IS NULL)
                      OR (on_approved_mode = 'automatic' AND executor IS NOT NULL)),
                  CHECK ((state IN ('accepted','cancelling') AND accepted_binding IS NOT NULL)
                      OR state NOT IN ('accepted','cancelling'))
              );
-             CREATE INDEX IF NOT EXISTS registry_request_review_submission_jobs
-                 ON registry_internal.registry_request_review_submissions
+             CREATE INDEX IF NOT EXISTS registry_proposal_review_submission_jobs
+                 ON registry_internal.registry_proposal_review_submissions
                  (next_attempt_at, created_at)
                  WHERE state IN ('pending','submitting','uncertain');
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_completions (
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_completions (
                  authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
                  event_id uuid NOT NULL,
                  review_request_id uuid NOT NULL,
@@ -1515,13 +1450,13 @@ pub(crate) async fn install(
                  PRIMARY KEY (authority, event_id),
                  CHECK (expires_at > received_at)
              );
-             CREATE INDEX IF NOT EXISTS registry_request_review_completion_reconcile
-                 ON registry_internal.registry_request_review_completions
+             CREATE INDEX IF NOT EXISTS registry_proposal_review_completion_reconcile
+                 ON registry_internal.registry_proposal_review_completions
                  (state, received_at) WHERE state IN ('pending','unmatched');
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_results (
-                 request_entity_id text NOT NULL,
-                 request_id uuid NOT NULL,
-                 proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_results (
+                 action_id text NOT NULL,
+                 proposal_id uuid NOT NULL,
+                 submission_version bigint NOT NULL CHECK (submission_version BETWEEN 1 AND 4294967295),
                  authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
                  result_id uuid NOT NULL,
                  result jsonb NOT NULL,
@@ -1530,30 +1465,32 @@ pub(crate) async fn install(
                  completed_at timestamptz NOT NULL,
                  available_until timestamptz NOT NULL,
                  verified_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (request_entity_id, request_id, proposal_version),
+                 PRIMARY KEY (action_id, proposal_id, submission_version),
                  UNIQUE (authority, result_id),
-                 FOREIGN KEY (request_entity_id, request_id, proposal_version)
-                     REFERENCES registry_internal.registry_request_review_submissions,
+                 FOREIGN KEY (action_id, proposal_id, submission_version)
+                     REFERENCES registry_internal.registry_proposal_review_submissions,
                  CHECK (available_until > completed_at),
-                 CONSTRAINT registry_request_review_results_result_size CHECK (
+                 CONSTRAINT registry_proposal_review_results_result_size CHECK (
                      jsonb_typeof(result)='object'
                      AND octet_length(result::text)<=1048576
                  )
              );
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_feed_checkpoints (
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_feed_checkpoints (
                  authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
                  cursor uuid,
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_application_jobs (
-                 request_entity_id text NOT NULL,
-                 request_id uuid NOT NULL,
-                 proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_application_jobs (
+                 action_id text NOT NULL,
+                 proposal_id uuid NOT NULL,
+                 submission_version bigint NOT NULL CHECK (submission_version BETWEEN 1 AND 4294967295),
                  job_id uuid NOT NULL UNIQUE,
                  proposal_digest text NOT NULL CHECK (proposal_digest ~ '^sha256:[0-9a-f]{64}$'),
-                 result_id uuid NOT NULL,
+                 result_id uuid,
                  executor text NOT NULL CHECK (executor <> '' AND octet_length(executor) <= 128),
-                 state text NOT NULL CHECK (state IN ('queued','applying','applied','blocked')),
+                 maximum_attempts integer NOT NULL CHECK (maximum_attempts BETWEEN 1 AND 1000),
+                 system_grant_revision text NOT NULL CHECK (system_grant_revision ~ '^sha256:[0-9a-f]{64}$'),
+                 state text NOT NULL CHECK (state IN ('queued','applying','applied','blocked','cancelled')),
                  attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 1000),
                  next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  claim_token uuid,
@@ -1573,12 +1510,12 @@ pub(crate) async fn install(
                  receipt_recovered boolean NOT NULL DEFAULT false,
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (request_entity_id, request_id, proposal_version),
-                 FOREIGN KEY (request_entity_id, request_id, proposal_version)
-                     REFERENCES registry_internal.registry_request_review_results,
+                 PRIMARY KEY (action_id, proposal_id, submission_version),
+                 FOREIGN KEY (action_id, proposal_id, submission_version)
+                     REFERENCES registry_internal.registry_proposal_submissions,
                  CHECK ((state = 'applied' AND application_id IS NOT NULL)
                      OR (state <> 'applied' AND application_id IS NULL)),
-                 CONSTRAINT registry_request_application_jobs_receipt_recovered_check
+                 CONSTRAINT registry_proposal_application_jobs_receipt_recovered_check
                      CHECK (NOT receipt_recovered OR state = 'applied'),
                  CHECK ((action_href IS NULL) = (action_if_match IS NULL))
              );",
@@ -1588,10 +1525,30 @@ pub(crate) async fn install(
     client
         .batch_execute(
             "DO $$ BEGIN
-                 ALTER TABLE registry_internal.registry_request_application_jobs
-                     ADD CONSTRAINT registry_request_application_jobs_action_binding_check
+                 ALTER TABLE registry_internal.registry_proposal_application_jobs
+                     ADD CONSTRAINT registry_proposal_application_jobs_action_binding_check
                      CHECK ((action_href IS NULL) = (action_if_match IS NULL));
              EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    // A database installed before Cancel closed application jobs lacks the
+    // `cancelled` state. Widening the check keeps every existing row valid.
+    client
+        .batch_execute(
+            "DO $$ BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                     WHERE conrelid='registry_internal.registry_proposal_application_jobs'::regclass
+                       AND conname='registry_proposal_application_jobs_state_check'
+                       AND pg_catalog.pg_get_constraintdef(oid) LIKE '%cancelled%'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_proposal_application_jobs
+                         DROP CONSTRAINT IF EXISTS registry_proposal_application_jobs_state_check,
+                         ADD CONSTRAINT registry_proposal_application_jobs_state_check
+                         CHECK (state IN ('queued','applying','applied','blocked','cancelled'));
+                 END IF;
+             END $$;",
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -1617,39 +1574,42 @@ pub(crate) async fn install(
 pub(crate) async fn enqueue_submission(
     transaction: &Transaction<'_>,
     registry: &CompiledRegistry,
-    request_entity_id: &str,
-    request_id: Uuid,
+    action_id: &str,
+    proposal_id: Uuid,
     proposal: &ProposalSnapshot,
     requester_reference: &str,
     initiator: Option<&registry_review_client::HumanIdentity>,
     authorities: &ReviewAuthorityRegistry,
 ) -> Result<(), MutationError> {
-    let CompiledChangeRequestReview::Required(requirement) = proposal.review_requirement() else {
+    let CompiledProposalReview::Required {
+        authority,
+        source,
+        policy,
+    } = proposal.review_requirement()
+    else {
         return Ok(());
     };
     let source_namespace = registry.registry_id();
     let (producer_id, recovery_days) = authorities
-        .submission_binding(&requirement.authority)
+        .submission_binding(authority)
         .ok_or(MutationError::Unavailable)?;
     let source_reference = format!(
-        "breg:{source_namespace}:{request_entity_id}:{request_id}:{}",
+        "breg:{source_namespace}:{action_id}:{proposal_id}:{}",
         proposal.version().get()
     );
     let create = ReviewCreateRequest {
-        kind: requirement.policy_id.clone(),
+        policy: policy.clone(),
         subject: SubjectBinding {
-            source: source_namespace.to_owned(),
-            // The subject type names the registry's own request entity, the
-            // same identifier the Casework source adapter validates against.
-            subject_type: request_entity_id.to_owned(),
-            id: request_id.to_string(),
+            source: source.clone(),
+            subject_type: "proposal".to_owned(),
+            id: proposal_id.to_string(),
             version: proposal.version().get().to_string(),
             digest: registry_review_client::ContentDigest::parse(proposal.effect_digest().as_str())
                 .map_err(|_| MutationError::Unavailable)?,
         },
         requester_reference: requester_reference.to_owned(),
         initiator: initiator.cloned(),
-        context: registry_review_client::ReviewContext::Source {
+        context: registry_review_client::ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: source_reference,
             },
@@ -1661,43 +1621,40 @@ pub(crate) async fn enqueue_submission(
     let job_id = Uuid::new_v4();
     let idempotency_key = format!("breg-review-{job_id}");
     let create_value = serde_json::to_value(&create).map_err(|_| MutationError::Unavailable)?;
-    let (mode, executor) = match proposal.on_approved().mode {
-        CompiledChangeRequestOnApprovedMode::Manual => ("manual", None),
-        CompiledChangeRequestOnApprovedMode::Automatic => (
-            "automatic",
-            Some(
-                proposal
-                    .on_approved()
-                    .executor
-                    .as_deref()
-                    .ok_or(MutationError::InvalidRequest)?,
-            ),
-        ),
+    let mode = if proposal.application_policy().is_automatic() {
+        "automatic"
+    } else {
+        "manual"
     };
+    let executor = proposal
+        .application_policy()
+        .is_automatic()
+        .then_some("builtin");
     let inserted = transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_review_submissions
-             (request_entity_id, request_id, proposal_version, proposal_digest,
+            "INSERT INTO registry_internal.registry_proposal_review_submissions
+             (action_id, proposal_id, submission_version, proposal_digest,
               job_id, authority, producer_id, policy_id, idempotency_key, create_request,
-              expected_submission_digest, on_approved_mode, executor, state,recovery_deadline)
+              expected_submission_digest, on_approved_mode, executor, state,recovery_deadline,expected_policy)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',
-                     transaction_timestamp()+($14::bigint * interval '1 day'))
+                     transaction_timestamp()+($14::bigint * interval '1 day'),$15)
              ON CONFLICT DO NOTHING",
             &[
-                &request_entity_id,
-                &request_id,
+                &action_id,
+                &proposal_id,
                 &i64::from(proposal.version().get()),
                 &proposal.effect_digest().as_str(),
                 &job_id,
-                &requirement.authority,
+                &authority,
                 &producer_id,
-                &requirement.policy_id,
+                &policy.id,
                 &idempotency_key,
                 &create_value,
                 &expected_digest.as_str(),
                 &mode,
                 &executor,
                 &i64::from(recovery_days),
+                &serde_json::to_value(policy).map_err(|_|MutationError::Unavailable)?,
             ],
         )
         .await
@@ -1706,25 +1663,27 @@ pub(crate) async fn enqueue_submission(
         let row = transaction
             .query_one(
                 "SELECT proposal_digest, authority, producer_id, policy_id, create_request,
-                        expected_submission_digest, on_approved_mode, executor
-                   FROM registry_internal.registry_request_review_submissions
-                  WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+                        expected_submission_digest, on_approved_mode, executor, expected_policy
+                   FROM registry_internal.registry_proposal_review_submissions
+                  WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
                 &[
-                    &request_entity_id,
-                    &request_id,
+                    &action_id,
+                    &proposal_id,
                     &i64::from(proposal.version().get()),
                 ],
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
         let exact = row.get::<_, String>(0) == proposal.effect_digest().as_str()
-            && row.get::<_, String>(1) == requirement.authority
+            && row.get::<_, String>(1) == *authority
             && row.get::<_, String>(2) == producer_id
-            && row.get::<_, String>(3) == requirement.policy_id
+            && row.get::<_, String>(3) == policy.id
             && row.get::<_, Value>(4) == create_value
             && row.get::<_, String>(5) == expected_digest.as_str()
             && row.get::<_, String>(6) == mode
-            && row.get::<_, Option<String>>(7).as_deref() == executor;
+            && row.get::<_, Option<String>>(7).as_deref() == executor
+            && row.get::<_, Value>(8)
+                == serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?;
         if !exact {
             return Err(MutationError::IdempotencyConflict);
         }
@@ -1732,15 +1691,137 @@ pub(crate) async fn enqueue_submission(
     Ok(())
 }
 
-pub(crate) async fn schedule_cancellation(
+/// Close every unapplied application job of a Proposal being cancelled, or
+/// whose submitted version is being revised or rebased, in that lifecycle
+/// transaction. A closed job is never claimed or recovered again.
+pub(crate) async fn close_application_jobs(
     transaction: &Transaction<'_>,
-    request_entity_id: &str,
-    request_id: Uuid,
-    proposal_version: i64,
+    action_id: &str,
+    proposal_id: Uuid,
 ) -> Result<(), MutationError> {
     transaction
         .execute(
-            "UPDATE registry_internal.registry_request_review_submissions
+            "UPDATE registry_internal.registry_proposal_application_jobs
+        SET state='cancelled',claim_token=NULL,updated_at=transaction_timestamp()
+        WHERE action_id=$1 AND proposal_id=$2 AND state IN ('queued','applying','blocked')",
+            &[&action_id, &proposal_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(())
+}
+
+/// Queue the engine's own authority. This row contains no author credential.
+pub(crate) async fn enqueue_automatic_application(
+    transaction: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+    proposal: &ProposalSnapshot,
+) -> Result<(), MutationError> {
+    if !proposal.application_policy().is_automatic() {
+        return Err(MutationError::InvalidRequest);
+    }
+    let grant = proposal
+        .system_grant_revision()
+        .ok_or(MutationError::PreconditionFailed)?;
+    let maximum = i32::from(proposal.application_policy().maximum_attempts());
+    let version = i64::from(proposal.version().get());
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_proposal_application_jobs
+        (action_id,proposal_id,submission_version,job_id,proposal_digest,result_id,executor,
+         maximum_attempts,system_grant_revision,state)
+        SELECT $1,$2,$3,$4,$5,r.result_id,'builtin',$6,$7,'queued'
+        FROM (SELECT 1) anchor LEFT JOIN registry_internal.registry_proposal_review_results r
+          ON r.action_id=$1 AND r.proposal_id=$2 AND r.submission_version=$3
+        ON CONFLICT DO NOTHING",
+            &[
+                &action_id,
+                &proposal_id,
+                &version,
+                &Uuid::new_v4(),
+                &proposal.effect_digest().as_str(),
+                &maximum,
+                &grant,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let row = transaction
+        .query_one(
+            "SELECT proposal_digest,maximum_attempts,system_grant_revision
+        FROM registry_internal.registry_proposal_application_jobs
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&action_id, &proposal_id, &version],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if row.get::<_, String>(0) != proposal.effect_digest().as_str()
+        || row.get::<_, i32>(1) != maximum
+        || row.get::<_, String>(2) != grant
+    {
+        return Err(MutationError::IdempotencyConflict);
+    }
+    Ok(())
+}
+
+/// Retry retained work without changing its immutable plan, job key, or budget.
+pub(crate) async fn submission_work_is_retryable(
+    client: &impl GenericClient,
+    action_id: &str,
+    proposal_id: Uuid,
+    version: i64,
+) -> Result<bool, MutationError> {
+    client.query_one("SELECT EXISTS (
+        SELECT 1 FROM registry_internal.registry_proposal_application_jobs
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND state='blocked'
+          AND attempt_count<maximum_attempts AND last_error_code IN
+            ('dependency-outage','source-unavailable','executor-unavailable','lease-expired')
+        UNION ALL SELECT 1 FROM registry_internal.registry_proposal_review_submissions s
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND NOT withdrawn
+          AND state IN ('pending','uncertain','accepted') AND lease_until IS NULL
+          AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_review_results r
+            WHERE (r.action_id,r.proposal_id,r.submission_version)=(s.action_id,s.proposal_id,s.submission_version)))",
+        &[&action_id,&proposal_id,&version]).await.map(|row|row.get(0)).map_err(|_|MutationError::Unavailable)
+}
+
+pub(crate) async fn retry_submission_work(
+    transaction: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+    proposal: &ProposalSnapshot,
+) -> Result<(), MutationError> {
+    let version = i64::from(proposal.version().get());
+    let application=transaction.execute("UPDATE registry_internal.registry_proposal_application_jobs
+        SET state='queued',claim_token=NULL,last_error_code=NULL,next_attempt_at=transaction_timestamp(),
+            updated_at=transaction_timestamp()
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND state='blocked'
+          AND attempt_count<maximum_attempts AND last_error_code IN
+            ('dependency-outage','source-unavailable','executor-unavailable','lease-expired')",
+        &[&action_id,&proposal_id,&version]).await.map_err(|_|MutationError::Unavailable)?;
+    let review=transaction.execute("UPDATE registry_internal.registry_proposal_review_submissions s
+        SET next_attempt_at=transaction_timestamp(),next_result_poll_at=transaction_timestamp(),
+            last_error_code=NULL,updated_at=transaction_timestamp()
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND NOT withdrawn
+          AND state IN ('pending','uncertain','accepted') AND lease_until IS NULL
+          AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_review_results r
+            WHERE (r.action_id,r.proposal_id,r.submission_version)=(s.action_id,s.proposal_id,s.submission_version))",
+        &[&action_id,&proposal_id,&version]).await.map_err(|_|MutationError::Unavailable)?;
+    if application + review == 0 {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
+pub(crate) async fn schedule_cancellation(
+    transaction: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+    submission_version: i64,
+) -> Result<(), MutationError> {
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions
                 SET withdrawn=true,
                     attempt_count=CASE
                         WHEN accepted_binding IS NOT NULL AND state<>'cancelling' THEN 0
@@ -1754,9 +1835,9 @@ pub(crate) async fn schedule_cancellation(
                     END,
                     lease_until=NULL,next_attempt_at=transaction_timestamp(),
                     updated_at=transaction_timestamp()
-              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+              WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                 AND state NOT IN ('cancelled','failed')",
-            &[&request_entity_id, &request_id, &proposal_version],
+            &[&action_id, &proposal_id, &submission_version],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -1765,14 +1846,16 @@ pub(crate) async fn schedule_cancellation(
 
 #[derive(Clone, Debug)]
 pub struct ClaimedReviewSubmission {
-    pub request_entity_id: String,
-    pub request_id: Uuid,
-    pub proposal_version: i64,
+    pub action_id: String,
+    pub proposal_id: Uuid,
+    pub submission_version: i64,
     pub authority: String,
     pub idempotency_key: String,
     pub request: ReviewCreateRequest,
     pub expected_submission_digest: registry_review_client::SubmissionDigest,
     pub lease_until: DateTime<Utc>,
+    pub expected_policy: registry_review_protocol::PolicySelection,
+    pub accepted_binding: Option<ReviewRequestAccepted>,
 }
 
 pub async fn claim_submission(
@@ -1783,8 +1866,8 @@ pub async fn claim_submission(
     let row = client
         .query_opt(
             "WITH candidate AS (
-                 SELECT s.request_entity_id, s.request_id, s.proposal_version
-                   FROM registry_internal.registry_request_review_submissions s
+                 SELECT s.action_id, s.proposal_id, s.submission_version
+                   FROM registry_internal.registry_proposal_review_submissions s
                   WHERE next_attempt_at <= transaction_timestamp()
                     AND authority=$2
                     AND recovery_deadline > transaction_timestamp()
@@ -1793,10 +1876,10 @@ pub async fn claim_submission(
                     AND (
                         withdrawn OR NOT EXISTS (
                             SELECT 1
-                             FROM registry_internal.registry_request_review_submissions older
-                             WHERE older.request_entity_id=s.request_entity_id
-                               AND older.request_id=s.request_id
-                               AND older.proposal_version<s.proposal_version
+                             FROM registry_internal.registry_proposal_review_submissions older
+                             WHERE older.action_id=s.action_id
+                               AND older.proposal_id=s.proposal_id
+                               AND older.submission_version<s.submission_version
                                AND older.withdrawn
                                AND older.state IN ('pending','submitting','uncertain','cancelling')
                         )
@@ -1804,25 +1887,25 @@ pub async fn claim_submission(
                   ORDER BY next_attempt_at, created_at
                   FOR UPDATE SKIP LOCKED LIMIT 1
              )
-             UPDATE registry_internal.registry_request_review_submissions s
+             UPDATE registry_internal.registry_proposal_review_submissions s
                 SET state='submitting', attempt_count=LEAST(attempt_count+1,1000),
                     lease_until=transaction_timestamp()+($1::bigint * interval '1 second'),
                     updated_at=transaction_timestamp()
                FROM candidate c
-              WHERE s.request_entity_id=c.request_entity_id
-                AND s.request_id=c.request_id AND s.proposal_version=c.proposal_version
-             RETURNING s.request_entity_id,s.request_id,s.proposal_version,s.authority,
+              WHERE s.action_id=c.action_id
+                AND s.proposal_id=c.proposal_id AND s.submission_version=c.submission_version
+             RETURNING s.action_id,s.proposal_id,s.submission_version,s.authority,
                        s.idempotency_key,s.create_request,s.expected_submission_digest,
-                       s.lease_until",
+                       s.lease_until,s.expected_policy,s.accepted_binding",
             &[&lease_seconds, &authority],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
     row.map(|row| {
         Ok(ClaimedReviewSubmission {
-            request_entity_id: row.get(0),
-            request_id: row.get(1),
-            proposal_version: row.get(2),
+            action_id: row.get(0),
+            proposal_id: row.get(1),
+            submission_version: row.get(2),
             authority: row.get(3),
             idempotency_key: row.get(4),
             request: serde_json::from_value(row.get(5)).map_err(|_| MutationError::Unavailable)?,
@@ -1831,6 +1914,13 @@ pub async fn claim_submission(
             )
             .map_err(|_| MutationError::Unavailable)?,
             lease_until: row.get(7),
+            expected_policy: serde_json::from_value(row.get(8))
+                .map_err(|_| MutationError::Unavailable)?,
+            accepted_binding: row
+                .get::<_, Option<serde_json::Value>>(9)
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|_| MutationError::Unavailable)?,
         })
     })
     .transpose()
@@ -1857,22 +1947,52 @@ pub async fn run_one_submission(
         .await;
     match response {
         Ok(complete) => {
+            let refusal = if job
+                .accepted_binding
+                .as_ref()
+                .is_some_and(|accepted| accepted != &complete.value)
+            {
+                Some("review-acceptance-changed")
+            } else if !job.expected_policy.matches(&complete.value.policy) {
+                Some("review-policy-changed")
+            } else {
+                None
+            };
+            if let Some(code) = refusal {
+                client
+                    .execute(
+                        "UPDATE registry_internal.registry_proposal_review_submissions
+                        SET state='failed',lease_until=NULL,last_error_code=$5
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
+                        AND state='submitting' AND lease_until=$4",
+                        &[
+                            &job.action_id,
+                            &job.proposal_id,
+                            &job.submission_version,
+                            &job.lease_until,
+                            &code,
+                        ],
+                    )
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                return Ok(true);
+            }
             let accepted =
                 serde_json::to_value(&complete.value).map_err(|_| MutationError::Unavailable)?;
             let updated = client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state=CASE WHEN withdrawn THEN 'cancelling' ELSE 'accepted' END,
                             accepted_binding=$4,lease_until=NULL,
                             attempt_count=CASE WHEN withdrawn THEN 0 ELSE attempt_count END,
                             last_error_code=NULL,updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='submitting' AND expected_submission_digest=$5
                         AND lease_until=$6",
                     &[
-                        &job.request_entity_id,
-                        &job.request_id,
-                        &job.proposal_version,
+                        &job.action_id,
+                        &job.proposal_id,
+                        &job.submission_version,
                         &accepted,
                         &job.expected_submission_digest.as_str(),
                         &job.lease_until,
@@ -1887,15 +2007,15 @@ pub async fn run_one_submission(
         Err(error) if terminal_submission_error(&error) => {
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='failed',lease_until=NULL,last_error_code='remote-refused',
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='submitting' AND lease_until=$4",
                     &[
-                        &job.request_entity_id,
-                        &job.request_id,
-                        &job.proposal_version,
+                        &job.action_id,
+                        &job.proposal_id,
+                        &job.submission_version,
                         &job.lease_until,
                     ],
                 )
@@ -1905,16 +2025,16 @@ pub async fn run_one_submission(
         Err(_) => {
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='uncertain',lease_until=NULL,last_error_code='remote-uncertain',
                             next_attempt_at=transaction_timestamp()+interval '5 seconds',
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='submitting' AND lease_until=$4",
                     &[
-                        &job.request_entity_id,
-                        &job.request_id,
-                        &job.proposal_version,
+                        &job.action_id,
+                        &job.proposal_id,
+                        &job.submission_version,
                         &job.lease_until,
                     ],
                 )
@@ -1932,20 +2052,21 @@ pub async fn run_one_cancellation(
     profile: &str,
     token: &BearerToken,
     lease_seconds: i64,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     let Some(row) = client
         .query_opt(
-            "UPDATE registry_internal.registry_request_review_submissions
+            "UPDATE registry_internal.registry_proposal_review_submissions
                 SET lease_until=transaction_timestamp()+($1::bigint * interval '1 second'),
                     attempt_count=LEAST(attempt_count+1,1000),updated_at=transaction_timestamp()
-              WHERE (request_entity_id,request_id,proposal_version)=(
-                    SELECT request_entity_id,request_id,proposal_version
-                      FROM registry_internal.registry_request_review_submissions
+              WHERE (action_id,proposal_id,submission_version)=(
+                    SELECT action_id,proposal_id,submission_version
+                      FROM registry_internal.registry_proposal_review_submissions
                      WHERE state='cancelling' AND authority=$2
                        AND next_attempt_at <= transaction_timestamp()
                        AND (lease_until IS NULL OR lease_until < transaction_timestamp())
                      ORDER BY next_attempt_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-              RETURNING request_entity_id,request_id,proposal_version,authority,
+              RETURNING action_id,proposal_id,submission_version,authority,
                         idempotency_key,accepted_binding,lease_until",
             &[&lease_seconds, &authority_id],
         )
@@ -1955,7 +2076,7 @@ pub async fn run_one_cancellation(
         return Ok(false);
     };
     let entity_id: String = row.get(0);
-    let request_id: Uuid = row.get(1);
+    let proposal_id: Uuid = row.get(1);
     let version: i64 = row.get(2);
     let authority: String = row.get(3);
     let key = format!("{}-cancel", row.get::<_, String>(4));
@@ -1986,15 +2107,15 @@ pub async fn run_one_cancellation(
                 .transaction()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            reconcile_result(&transaction, &authority, &accepted, &result).await?;
+            reconcile_result(&transaction, &authority, &accepted, &result, mutations).await?;
             let updated = transaction
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='cancelled',lease_until=NULL,last_error_code=NULL,
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='cancelling' AND lease_until=$4",
-                    &[&entity_id, &request_id, &version, &lease_until],
+                    &[&entity_id, &proposal_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -2013,13 +2134,13 @@ pub async fn run_one_cancellation(
         Err(_) => {
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET lease_until=NULL,last_error_code='cancellation-uncertain',
                             next_attempt_at=transaction_timestamp()+interval '5 seconds',
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='cancelling' AND lease_until=$4",
-                    &[&entity_id, &request_id, &version, &lease_until],
+                    &[&entity_id, &proposal_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -2039,7 +2160,7 @@ pub async fn receive_completion(
     // ordering, where a result commits immediately before a late completion.
     let matched = transaction
         .query_opt(
-            "SELECT 1 FROM registry_internal.registry_request_review_submissions
+            "SELECT 1 FROM registry_internal.registry_proposal_review_submissions
               WHERE authority=$1 AND accepted_binding->>'requestId'=$2
               FOR UPDATE",
             &[&authority, &completion.request_id.to_string()],
@@ -2050,9 +2171,9 @@ pub async fn receive_completion(
         if transaction
             .query_opt(
                 "SELECT 1
-                   FROM registry_internal.registry_request_review_results r
-                   JOIN registry_internal.registry_request_review_submissions s
-                     USING (request_entity_id,request_id,proposal_version)
+                   FROM registry_internal.registry_proposal_review_results r
+                   JOIN registry_internal.registry_proposal_review_submissions s
+                     USING (action_id,proposal_id,submission_version)
                   WHERE r.authority=$1 AND s.authority=r.authority
                     AND s.accepted_binding->>'requestId'=$2 AND r.result_id=$3",
                 &[
@@ -2074,14 +2195,14 @@ pub async fn receive_completion(
     };
     let persisted = transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_review_completions
+            "INSERT INTO registry_internal.registry_proposal_review_completions
              (authority,event_id,review_request_id,result_id,completed_at,state,expires_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7)
              ON CONFLICT (authority,event_id) DO UPDATE
-                 SET state=registry_request_review_completions.state
-               WHERE registry_request_review_completions.review_request_id=EXCLUDED.review_request_id
-                 AND registry_request_review_completions.result_id=EXCLUDED.result_id
-                 AND registry_request_review_completions.completed_at=EXCLUDED.completed_at",
+                 SET state=registry_proposal_review_completions.state
+               WHERE registry_proposal_review_completions.review_request_id=EXCLUDED.review_request_id
+                 AND registry_proposal_review_completions.result_id=EXCLUDED.result_id
+                 AND registry_proposal_review_completions.completed_at=EXCLUDED.completed_at",
             &[
                 &authority,
                 &completion.event_id,
@@ -2102,7 +2223,7 @@ pub async fn receive_completion(
         // review's lookup is due now instead of after its backoff.
         transaction
             .execute(
-                "UPDATE registry_internal.registry_request_review_submissions
+                "UPDATE registry_internal.registry_proposal_review_submissions
                     SET next_result_poll_at=LEAST(next_result_poll_at,transaction_timestamp())
                   WHERE authority=$1 AND accepted_binding->>'requestId'=$2
                     AND state='accepted'",
@@ -2119,6 +2240,7 @@ pub async fn reconcile_result(
     authority: &str,
     accepted: &ReviewRequestAccepted,
     result: &ReviewResult,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<(), MutationError> {
     result
         .check()
@@ -2130,26 +2252,40 @@ pub async fn reconcile_result(
     {
         return Err(MutationError::PreconditionFailed);
     }
+    // The accepted subject and result agree above. Lock that lifecycle row
+    // before the review submission, matching mutations and public observations.
+    // The exact accepted-binding lookup and id/version/digest checks below
+    // prove it is the same Proposal before retaining a result or creating a job.
+    let locked_proposal =
+        Uuid::parse_str(&accepted.subject.id).map_err(|_| MutationError::PreconditionFailed)?;
+    transaction
+        .query_opt(
+            "SELECT 1 FROM registry_internal.registry_proposal_state
+              WHERE proposal_id=$1 FOR UPDATE",
+            &[&locked_proposal],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let accepted_value = serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?;
     let row = transaction
         .query_opt(
-            "SELECT request_entity_id,request_id,proposal_version,proposal_digest,
+            "SELECT action_id,proposal_id,submission_version,proposal_digest,
                     on_approved_mode,executor,withdrawn
-               FROM registry_internal.registry_request_review_submissions
+               FROM registry_internal.registry_proposal_review_submissions
               WHERE authority=$1 AND accepted_binding=$2 AND state IN ('accepted','cancelling')
               FOR UPDATE",
-            &[
-                &authority,
-                &serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?,
-            ],
+            &[&authority, &accepted_value],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?
         .ok_or(MutationError::PreconditionFailed)?;
     let entity_id: String = row.get(0);
-    let request_id: Uuid = row.get(1);
+    let proposal_id: Uuid = row.get(1);
     let version: i64 = row.get(2);
     let proposal_digest: String = row.get(3);
-    if result.subject.id != request_id.to_string()
+    if proposal_id != locked_proposal
+        || result.subject.id != proposal_id.to_string()
         || result.subject.version != version.to_string()
         || result.subject.digest.as_str() != proposal_digest
     {
@@ -2159,17 +2295,17 @@ pub async fn reconcile_result(
     let value = serde_json::to_value(result).map_err(|_| MutationError::Unavailable)?;
     let persisted = transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_review_results
-             (request_entity_id,request_id,proposal_version,authority,result_id,result,
+            "INSERT INTO registry_internal.registry_proposal_review_results
+             (action_id,proposal_id,submission_version,authority,result_id,result,
               status,completed_at,available_until)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             ON CONFLICT (request_entity_id,request_id,proposal_version) DO UPDATE
+             ON CONFLICT (action_id,proposal_id,submission_version) DO UPDATE
                  SET result=EXCLUDED.result
-               WHERE registry_request_review_results.result_id=EXCLUDED.result_id
-                 AND registry_request_review_results.result=EXCLUDED.result",
+               WHERE registry_proposal_review_results.result_id=EXCLUDED.result_id
+                 AND registry_proposal_review_results.result=EXCLUDED.result",
             &[
                 &entity_id,
-                &request_id,
+                &proposal_id,
                 &version,
                 &authority,
                 &result.result_id,
@@ -2189,16 +2325,16 @@ pub async fn reconcile_result(
     // attention. A later failure on this row records its own code again.
     transaction
         .execute(
-            "UPDATE registry_internal.registry_request_review_submissions
+            "UPDATE registry_internal.registry_proposal_review_submissions
                 SET last_error_code=NULL,updated_at=transaction_timestamp()
-              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
-            &[&entity_id, &request_id, &version],
+              WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&entity_id, &proposal_id, &version],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
     transaction
         .execute(
-            "UPDATE registry_internal.registry_request_review_completions
+            "UPDATE registry_internal.registry_proposal_review_completions
                 SET state='correlated'
               WHERE authority=$1 AND review_request_id=$2 AND result_id=$3
                 AND state IN ('pending','unmatched')",
@@ -2207,28 +2343,31 @@ pub async fn reconcile_result(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     let mode: String = row.get(4);
-    let executor: Option<String> = row.get(5);
     let withdrawn: bool = row.get(6);
     if status == "approved" && mode == "automatic" && !withdrawn {
-        let executor = executor.ok_or(MutationError::Unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO registry_internal.registry_request_application_jobs
-                 (request_entity_id,request_id,proposal_version,job_id,proposal_digest,
-                  result_id,executor,state)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,'queued') ON CONFLICT DO NOTHING",
-                &[
-                    &entity_id,
-                    &request_id,
-                    &version,
-                    &Uuid::new_v4(),
-                    &proposal_digest,
-                    &result.result_id,
-                    &executor,
-                ],
+        let workflow =
+            crate::proposal_store::load(transaction, &entity_id, proposal_id, false).await?;
+        let frozen = workflow
+            .current_proposal()
+            .ok_or(MutationError::PreconditionFailed)?;
+        if i64::from(frozen.version().get()) != version
+            || frozen.effect_digest().as_str() != proposal_digest
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        enqueue_automatic_application(transaction, &entity_id, proposal_id, frozen).await?;
+    }
+    if !withdrawn {
+        mutations
+            .record_review_result(
+                transaction,
+                authority,
+                &entity_id,
+                proposal_id,
+                version,
+                status,
             )
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
+            .await?;
     }
     Ok(())
 }
@@ -2240,39 +2379,41 @@ pub async fn poll_one_result(
     profile: &str,
     token: &BearerToken,
     lease_seconds: i64,
+    mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     // The lookup is claimed with a lease before the outbound exchange so two
     // instances cannot both act on one submission's result at once. Among due
     // reviews, one a webhook completion already announced goes first, and one
     // the authority last answered as unknown goes last, so reviews an
     // authority lost (a restored or replaced review environment) cannot hold
-    // back live ones. Every due review is still reached in turn.
+    // back live ones. Every due review is still reached in turn. A completed
+    // exchange releases its claim; next_result_poll_at owns the backoff.
     let Some(row) = client
         .query_opt(
-            "UPDATE registry_internal.registry_request_review_submissions s
+            "UPDATE registry_internal.registry_proposal_review_submissions s
                 SET lease_until=transaction_timestamp()+($2::bigint * interval '1 second'),
                     updated_at=transaction_timestamp()
-              WHERE (s.request_entity_id,s.request_id,s.proposal_version)=(
-                    SELECT c.request_entity_id,c.request_id,c.proposal_version
-                      FROM registry_internal.registry_request_review_submissions c
+              WHERE (s.action_id,s.proposal_id,s.submission_version)=(
+                    SELECT c.action_id,c.proposal_id,c.submission_version
+                      FROM registry_internal.registry_proposal_review_submissions c
                      WHERE c.state='accepted' AND c.authority=$1
                        AND c.next_result_poll_at <= transaction_timestamp()
                        AND (c.lease_until IS NULL OR c.lease_until < transaction_timestamp())
                        AND NOT EXISTS (
-                           SELECT 1 FROM registry_internal.registry_request_review_results r
-                            WHERE r.request_entity_id=c.request_entity_id
-                              AND r.request_id=c.request_id
-                              AND r.proposal_version=c.proposal_version)
+                           SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                            WHERE r.action_id=c.action_id
+                              AND r.proposal_id=c.proposal_id
+                              AND r.submission_version=c.submission_version)
                      ORDER BY EXISTS (
                                   SELECT 1
-                                    FROM registry_internal.registry_request_review_completions k
+                                    FROM registry_internal.registry_proposal_review_completions k
                                    WHERE k.authority=c.authority AND k.state='pending'
                                      AND k.review_request_id::text=c.accepted_binding->>'requestId')
                                   DESC,
                               c.last_error_code IS NOT DISTINCT FROM 'result-unknown-to-authority',
                               c.updated_at
                      FOR UPDATE SKIP LOCKED LIMIT 1)
-              RETURNING s.request_entity_id,s.request_id,s.proposal_version,
+              RETURNING s.action_id,s.proposal_id,s.submission_version,
                         s.authority,s.accepted_binding,s.lease_until",
             &[&authority_id, &lease_seconds],
         )
@@ -2282,7 +2423,7 @@ pub async fn poll_one_result(
         return Ok(false);
     };
     let entity_id: String = row.get(0);
-    let request_id: Uuid = row.get(1);
+    let proposal_id: Uuid = row.get(1);
     let version: i64 = row.get(2);
     let authority: String = row.get(3);
     let accepted: ReviewRequestAccepted =
@@ -2300,15 +2441,16 @@ pub async fn poll_one_result(
             // silence.
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
-                        SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
+                    "UPDATE registry_internal.registry_proposal_review_submissions
+                        SET lease_until=NULL,
+                            result_poll_attempts=LEAST(result_poll_attempts+1,1000),
                             last_error_code='result-lookup-uncertain',
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='accepted' AND lease_until=$4",
-                    &[&entity_id, &request_id, &version, &lease_until],
+                    &[&entity_id, &proposal_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -2321,7 +2463,14 @@ pub async fn poll_one_result(
                 .transaction()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            reconcile_result(&transaction, &authority, &accepted, &complete.value).await?;
+            reconcile_result(
+                &transaction,
+                &authority,
+                &accepted,
+                &complete.value,
+                mutations,
+            )
+            .await?;
             transaction
                 .commit()
                 .await
@@ -2338,15 +2487,16 @@ pub async fn poll_one_result(
             // that lost its claim from republishing over the new holder.
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
-                        SET result_poll_attempts=LEAST(result_poll_attempts+1,12),
+                    "UPDATE registry_internal.registry_proposal_review_submissions
+                        SET lease_until=NULL,
+                            result_poll_attempts=LEAST(result_poll_attempts+1,12),
                             last_error_code=NULL,
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,12)) * interval '1 second'),
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='accepted' AND lease_until=$4",
-                    &[&entity_id, &request_id, &version, &lease_until],
+                    &[&entity_id, &proposal_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -2362,15 +2512,16 @@ pub async fn poll_one_result(
             // the review, which a slow reviewer never produces.
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
-                        SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
+                    "UPDATE registry_internal.registry_proposal_review_submissions
+                        SET lease_until=NULL,
+                            result_poll_attempts=LEAST(result_poll_attempts+1,1000),
                             last_error_code='result-unknown-to-authority',
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='accepted' AND lease_until=$4",
-                    &[&entity_id, &request_id, &version, &lease_until],
+                    &[&entity_id, &proposal_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -2380,577 +2531,22 @@ pub async fn poll_one_result(
             // submission another worker already reconciled a result for.
             client
                 .execute(
-                    "UPDATE registry_internal.registry_request_review_submissions
+                    "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='failed',last_error_code='result-expired',lease_until=NULL,
                             updated_at=transaction_timestamp()
-                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                      WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='accepted' AND lease_until=$4
                         AND NOT EXISTS (
-                            SELECT 1 FROM registry_internal.registry_request_review_results r
-                             WHERE r.request_entity_id=$1 AND r.request_id=$2
-                               AND r.proposal_version=$3)",
-                    &[&entity_id, &request_id, &version, &lease_until],
+                            SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                             WHERE r.action_id=$1 AND r.proposal_id=$2
+                               AND r.submission_version=$3)",
+                    &[&entity_id, &proposal_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
         }
     }
     Ok(true)
-}
-
-struct ApplicationJob {
-    entity_id: String,
-    request_id: Uuid,
-    proposal_version: i64,
-    job_id: Uuid,
-    proposal_digest: String,
-    claim_token: Uuid,
-    attempt_count: i32,
-    action_href: Option<String>,
-    action_if_match: Option<String>,
-}
-
-enum ApplicationDiscovery {
-    Action { href: String, if_match: String },
-    Applied(Uuid),
-}
-
-async fn run_one_application(
-    client: &mut tokio_postgres::Client,
-    executor: &ReviewExecutorClient,
-) -> Result<bool, MutationError> {
-    let claim_token = Uuid::new_v4();
-    let Some(row) = client
-        .query_opt(
-            &format!(
-                "UPDATE registry_internal.registry_request_application_jobs j
-                    SET state='applying',attempt_count=attempt_count+1,
-                        next_attempt_at=transaction_timestamp()+($4::bigint * interval '1 second'),
-                        claim_token=$2,last_error_code=NULL,updated_at=transaction_timestamp()
-                  WHERE (request_entity_id,request_id,proposal_version)=(
-                        SELECT q.request_entity_id,q.request_id,q.proposal_version
-                          FROM registry_internal.registry_request_application_jobs q
-                         WHERE q.executor=$1 AND q.state IN ('queued','applying')
-                           AND q.attempt_count < $3
-                           AND q.next_attempt_at <= transaction_timestamp()
-                           AND {APPLICATION_JOB_CLAIMABLE}
-                         ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-              RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
-                        action_href,action_if_match,attempt_count"
-            ),
-            &[
-                &executor.executor,
-                &claim_token,
-                &MAX_APPLICATION_ATTEMPTS,
-                &executor.lease_seconds,
-            ],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?
-    else {
-        return Ok(false);
-    };
-    let mut job = ApplicationJob {
-        entity_id: row.get(0),
-        request_id: row.get(1),
-        proposal_version: row.get(2),
-        job_id: row.get(3),
-        proposal_digest: row.get(4),
-        claim_token,
-        action_href: row.get(5),
-        action_if_match: row.get(6),
-        attempt_count: row.get(7),
-    };
-    if job.action_href.is_none() {
-        match discover_application(executor, &job).await {
-            Ok(ApplicationDiscovery::Applied(application_id)) => {
-                finish_application_job(client, &job, application_id, true).await?;
-                return Ok(true);
-            }
-            Ok(ApplicationDiscovery::Action { href, if_match }) => {
-                let updated = client
-                    .execute(
-                        "UPDATE registry_internal.registry_request_application_jobs
-                            SET action_href=$2,action_if_match=$3,updated_at=transaction_timestamp()
-                          WHERE job_id=$1 AND state='applying'
-                            AND claim_token=$4
-                            AND action_href IS NULL AND action_if_match IS NULL",
-                        &[&job.job_id, &href, &if_match, &job.claim_token],
-                    )
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                if updated != 1 {
-                    return Err(MutationError::Unavailable);
-                }
-                job.action_href = Some(href);
-                job.action_if_match = Some(if_match);
-            }
-            Err(ApplicationExchangeError::Denied) => {
-                block_application_job(client, &job, "executor-denied").await?;
-                return Ok(true);
-            }
-            Err(ApplicationExchangeError::UnavailableAction) => {
-                block_application_job(client, &job, "source-action-unavailable").await?;
-                return Ok(true);
-            }
-            Err(ApplicationExchangeError::Transient) => {
-                exhaust_application_job_if_limit(client, &job).await?;
-                return Ok(true);
-            }
-            Err(ApplicationExchangeError::InvalidResponse) => {
-                block_application_job(client, &job, "source-response-invalid").await?;
-                return Ok(true);
-            }
-            Err(ApplicationExchangeError::Stale) => {
-                if exhaust_application_job_if_limit(client, &job).await? {
-                    return Ok(true);
-                }
-                return Err(MutationError::Unavailable);
-            }
-        }
-    }
-    match send_application(executor, &job).await {
-        Ok(application_id) => finish_application_job(client, &job, application_id, false).await?,
-        Err(ApplicationExchangeError::Denied) => {
-            block_application_job(client, &job, "executor-denied").await?
-        }
-        Err(ApplicationExchangeError::UnavailableAction) => {
-            block_application_job(client, &job, "source-action-unavailable").await?
-        }
-        Err(ApplicationExchangeError::InvalidResponse) => {
-            exhaust_application_job_if_limit(client, &job).await?;
-        }
-        Err(ApplicationExchangeError::Stale) => {
-            let updated = client
-                .execute(
-                    "UPDATE registry_internal.registry_request_application_jobs
-                        SET state=CASE WHEN attempt_count >= $3 THEN 'blocked' ELSE 'queued' END,
-                            action_href=NULL,action_if_match=NULL,
-                            claim_token=NULL,
-                            next_attempt_at=transaction_timestamp()+($5::bigint * interval '1 second'),
-                            last_error_code=CASE WHEN attempt_count >= $3 THEN $4
-                                ELSE 'source-precondition-changed' END,
-                            updated_at=transaction_timestamp()
-                      WHERE job_id=$1 AND state='applying' AND claim_token=$2",
-                    &[
-                        &job.job_id,
-                        &job.claim_token,
-                        &MAX_APPLICATION_ATTEMPTS,
-                        &APPLICATION_ATTEMPTS_EXHAUSTED,
-                        &application_retry_seconds(job.attempt_count),
-                    ],
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            if updated != 1 {
-                return Err(MutationError::Unavailable);
-            }
-        }
-        Err(ApplicationExchangeError::Transient) => {
-            exhaust_application_job_if_limit(client, &job).await?;
-        }
-    }
-    Ok(true)
-}
-
-// A 412 can mean a stale revision, a business precondition, or a row
-// boundary refusal. Rediscover after a bounded delay instead of guessing
-// which invariant failed from the deliberately value-free problem response.
-fn application_retry_seconds(attempt: i32) -> i64 {
-    5_i64
-        .saturating_mul(1_i64 << attempt.saturating_sub(1).clamp(0, 6))
-        .min(300)
-}
-
-async fn exhaust_application_job_if_limit(
-    client: &tokio_postgres::Client,
-    job: &ApplicationJob,
-) -> Result<bool, MutationError> {
-    if job.attempt_count < MAX_APPLICATION_ATTEMPTS {
-        return Ok(false);
-    }
-    let updated = client
-        .execute(
-            "UPDATE registry_internal.registry_request_application_jobs
-                SET state='blocked',claim_token=NULL,last_error_code=$2,
-                    updated_at=transaction_timestamp()
-              WHERE job_id=$1 AND state='applying' AND claim_token=$3",
-            &[
-                &job.job_id,
-                &APPLICATION_ATTEMPTS_EXHAUSTED,
-                &job.claim_token,
-            ],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if updated != 1 {
-        return Err(MutationError::Unavailable);
-    }
-    Ok(true)
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ApplicationExchangeError {
-    Denied,
-    UnavailableAction,
-    InvalidResponse,
-    Stale,
-    Transient,
-}
-
-// A credential the authorization server refused, or one the provider cannot
-// use as configured, will not heal by waiting. Blocking it as a denial lets an
-// operator renew the credential and requeue the approved application.
-fn application_token_error(error: TokenError) -> ApplicationExchangeError {
-    match error {
-        TokenError::Refused { .. }
-        | TokenError::Configuration { .. }
-        | TokenError::Invalid { .. }
-        | TokenError::ScopeNarrowed => ApplicationExchangeError::Denied,
-        _ => ApplicationExchangeError::Transient,
-    }
-}
-
-fn retryable_application_status(status: reqwest::StatusCode) -> bool {
-    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-}
-
-async fn discover_application(
-    executor: &ReviewExecutorClient,
-    job: &ApplicationJob,
-) -> Result<ApplicationDiscovery, ApplicationExchangeError> {
-    let route = executor
-        .request_routes
-        .get(&job.entity_id)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let mut url = executor
-        .base_url
-        .join(&format!("v1/records/{route}/{}", job.request_id))
-        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
-    url.query_pairs_mut()
-        .append_pair("accessProfile", &executor.access_profile);
-    let token = executor
-        .token_provider
-        .bearer_token()
-        .await
-        .map_err(application_token_error)?;
-    let response = executor
-        .http
-        .get(url)
-        .header(AUTHORIZATION, token.authorization_header_value())
-        .header(ACCEPT, "application/json")
-        .send()
-        .await
-        .map_err(|_| ApplicationExchangeError::Transient)?;
-    if matches!(response.status().as_u16(), 401 | 403 | 404) {
-        return Err(ApplicationExchangeError::Denied);
-    }
-    if response.status() != reqwest::StatusCode::OK {
-        return if retryable_application_status(response.status()) {
-            Err(ApplicationExchangeError::Transient)
-        } else {
-            Err(ApplicationExchangeError::InvalidResponse)
-        };
-    }
-    validate_response_headers(response.headers())
-        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
-    let body = read_bounded(response, MAX_APPLICATION_RESPONSE_BYTES)
-        .await
-        .map_err(|_| ApplicationExchangeError::Transient)?;
-    decode_application_discovery(executor, job, &body)
-}
-
-fn decode_application_discovery(
-    executor: &ReviewExecutorClient,
-    job: &ApplicationJob,
-    body: &[u8],
-) -> Result<ApplicationDiscovery, ApplicationExchangeError> {
-    let value: Value =
-        serde_json::from_slice(body).map_err(|_| ApplicationExchangeError::InvalidResponse)?;
-    let root = value
-        .as_object()
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let data = root
-        .get("data")
-        .and_then(Value::as_object)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let meta = root
-        .get("meta")
-        .and_then(Value::as_object)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    if meta.get("registryIdentifier").and_then(Value::as_str) != Some(executor.registry_id.as_str())
-        || meta.get("entityTypeIdentifier").and_then(Value::as_str) != Some(job.entity_id.as_str())
-        || data.get("recordIdentifier").and_then(Value::as_str)
-            != Some(job.request_id.to_string().as_str())
-    {
-        return Err(ApplicationExchangeError::InvalidResponse);
-    }
-    let request = data
-        .get("request")
-        .and_then(Value::as_object)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    if request.get("proposalVersion").and_then(Value::as_i64) != Some(job.proposal_version)
-        || request.get("effectDigest").and_then(Value::as_str) != Some(job.proposal_digest.as_str())
-    {
-        return Err(ApplicationExchangeError::InvalidResponse);
-    }
-    if request.get("bregState").and_then(Value::as_str) == Some("applied") {
-        let application_id = request
-            .get("application")
-            .and_then(Value::as_object)
-            .and_then(|application| application.get("applicationId"))
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or(ApplicationExchangeError::InvalidResponse)?;
-        return Ok(ApplicationDiscovery::Applied(application_id));
-    }
-    if request.get("bregState").and_then(Value::as_str) != Some("submitted") {
-        return Err(ApplicationExchangeError::UnavailableAction);
-    }
-    let actions = request
-        .get("actions")
-        .and_then(Value::as_array)
-        .ok_or(ApplicationExchangeError::UnavailableAction)?;
-    let mut matches = actions.iter().filter_map(|action| {
-        let action = action.as_object()?;
-        (action.get("operation")?.as_str()? == "apply-request"
-            && action.get("method")?.as_str()? == "POST"
-            && action.get("proposalVersion")?.as_i64()? == job.proposal_version
-            && action.get("effectDigest")?.as_str()? == job.proposal_digest)
-            .then_some(action)
-    });
-    let action = matches
-        .next()
-        .filter(|_| matches.next().is_none())
-        .ok_or(ApplicationExchangeError::UnavailableAction)?;
-    let href = action
-        .get("href")
-        .and_then(Value::as_str)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    validate_application_href(executor, job, href)?;
-    let if_match = action
-        .get("ifMatch")
-        .and_then(Value::as_str)
-        .filter(|value| {
-            value.len() <= 1024
-                && value.starts_with('"')
-                && value.ends_with('"')
-                && value.bytes().all(|byte| byte >= 0x21 && byte != 0x7f)
-        })
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    Ok(ApplicationDiscovery::Action {
-        href: href.to_owned(),
-        if_match: if_match.to_owned(),
-    })
-}
-
-fn validate_application_href(
-    executor: &ReviewExecutorClient,
-    job: &ApplicationJob,
-    href: &str,
-) -> Result<(), ApplicationExchangeError> {
-    if href.is_empty()
-        || href.len() > 2048
-        || !href.starts_with("/v1/records/")
-        || href.starts_with("//")
-        || href.contains('#')
-    {
-        return Err(ApplicationExchangeError::InvalidResponse);
-    }
-    let (path, query) = href
-        .split_once('?')
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let route = executor
-        .request_routes
-        .get(&job.entity_id)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let expected_path = format!("/v1/records/{route}/{}/actions/apply", job.request_id);
-    if path != expected_path
-        || query
-            != format!(
-                "accessProfile={}",
-                percent_encode_query(&executor.access_profile)
-            )
-    {
-        return Err(ApplicationExchangeError::InvalidResponse);
-    }
-    Ok(())
-}
-
-fn percent_encode_query(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut output = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            output.push(char::from(byte));
-        } else {
-            output.push('%');
-            output.push(char::from(HEX[usize::from(byte >> 4)]));
-            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-    }
-    output
-}
-
-async fn send_application(
-    executor: &ReviewExecutorClient,
-    job: &ApplicationJob,
-) -> Result<Uuid, ApplicationExchangeError> {
-    let href = job
-        .action_href
-        .as_deref()
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    validate_application_href(executor, job, href)?;
-    let (path, query) = href
-        .trim_start_matches('/')
-        .split_once('?')
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let mut url = executor
-        .base_url
-        .join(path)
-        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
-    url.set_query(Some(query));
-    let token = executor
-        .token_provider
-        .bearer_token()
-        .await
-        .map_err(application_token_error)?;
-    let response = executor
-        .http
-        .post(url)
-        .header(AUTHORIZATION, token.authorization_header_value())
-        .header(ACCEPT, "application/json")
-        .header(CONTENT_TYPE, "application/json")
-        .header(
-            IF_MATCH,
-            job.action_if_match
-                .as_deref()
-                .ok_or(ApplicationExchangeError::InvalidResponse)?,
-        )
-        .header("idempotency-key", format!("review-apply-{}", job.job_id))
-        .json(&json!({
-            "proposalVersion": job.proposal_version,
-            "effectDigest": job.proposal_digest,
-        }))
-        .send()
-        .await
-        .map_err(|_| ApplicationExchangeError::Transient)?;
-    if matches!(response.status().as_u16(), 401 | 403 | 404) {
-        return Err(ApplicationExchangeError::Denied);
-    }
-    if matches!(response.status().as_u16(), 409 | 412) {
-        return Err(ApplicationExchangeError::Stale);
-    }
-    if response.status() != reqwest::StatusCode::OK {
-        return if retryable_application_status(response.status()) {
-            Err(ApplicationExchangeError::Transient)
-        } else {
-            Err(ApplicationExchangeError::InvalidResponse)
-        };
-    }
-    validate_response_headers(response.headers())
-        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
-    let body = read_bounded(response, MAX_APPLICATION_RESPONSE_BYTES)
-        .await
-        .map_err(|_| ApplicationExchangeError::Transient)?;
-    decode_application_receipt(job, &body)
-}
-
-fn decode_application_receipt(
-    job: &ApplicationJob,
-    body: &[u8],
-) -> Result<Uuid, ApplicationExchangeError> {
-    let value: Value =
-        serde_json::from_slice(body).map_err(|_| ApplicationExchangeError::InvalidResponse)?;
-    let root = value
-        .as_object()
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    let request = root
-        .get("request")
-        .and_then(Value::as_object)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    if root.get("id").and_then(Value::as_str) != Some(job.request_id.to_string().as_str())
-        || request.get("bregState").and_then(Value::as_str) != Some("applied")
-        || request.get("proposalVersion").and_then(Value::as_i64) != Some(job.proposal_version)
-        || request.get("effectDigest").and_then(Value::as_str) != Some(job.proposal_digest.as_str())
-    {
-        return Err(ApplicationExchangeError::InvalidResponse);
-    }
-    let application = request
-        .get("application")
-        .and_then(Value::as_object)
-        .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    if application.get("proposalVersion").and_then(Value::as_i64) != Some(job.proposal_version)
-        || application.get("effectDigest").and_then(Value::as_str)
-            != Some(job.proposal_digest.as_str())
-    {
-        return Err(ApplicationExchangeError::InvalidResponse);
-    }
-    application
-        .get("applicationId")
-        .and_then(Value::as_str)
-        .and_then(|value| Uuid::parse_str(value).ok())
-        .ok_or(ApplicationExchangeError::InvalidResponse)
-}
-
-async fn finish_application_job(
-    client: &tokio_postgres::Client,
-    job: &ApplicationJob,
-    application_id: Uuid,
-    receipt_recovered: bool,
-) -> Result<(), MutationError> {
-    let updated = client
-        .execute(
-            "UPDATE registry_internal.registry_request_application_jobs
-                SET state='applied',application_id=$2,receipt_recovered=$3,
-                    claim_token=NULL,last_error_code=NULL,
-                    updated_at=transaction_timestamp()
-              WHERE job_id=$1 AND state='applying' AND claim_token=$4",
-            &[
-                &job.job_id,
-                &application_id,
-                &receipt_recovered,
-                &job.claim_token,
-            ],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if updated != 1 {
-        let converged = client
-            .query_opt(
-                "SELECT 1 FROM registry_internal.registry_request_application_jobs
-                  WHERE job_id=$1 AND state='applied' AND application_id=$2",
-                &[&job.job_id, &application_id],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?
-            .is_some();
-        if !converged {
-            return Err(MutationError::Unavailable);
-        }
-    }
-    Ok(())
-}
-
-async fn block_application_job(
-    client: &tokio_postgres::Client,
-    job: &ApplicationJob,
-    code: &'static str,
-) -> Result<(), MutationError> {
-    let updated = client
-        .execute(
-            "UPDATE registry_internal.registry_request_application_jobs
-                SET state='blocked',claim_token=NULL,last_error_code=$2,
-                    updated_at=transaction_timestamp()
-              WHERE job_id=$1 AND state='applying' AND claim_token=$3",
-            &[&job.job_id, &code, &job.claim_token],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if updated != 1 {
-        return Err(MutationError::Unavailable);
-    }
-    Ok(())
 }
 
 fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static str {
@@ -2964,350 +2560,9 @@ fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static
     }
 }
 
-/// The locally reconciled review result for one proposal, as far as it
-/// decides which request actions remain meaningful. The request workflow
-/// itself does not change when a result settles: the owner acts on it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SettledReviewOutcome {
-    Approved {
-        expired: bool,
-    },
-    Rejected,
-    ChangesRequested,
-    /// Answered, cancelled, or superseded: none of them can be applied, and
-    /// none of them narrows the other actions.
-    Other,
-}
-
-pub(crate) async fn settled_outcome(
-    client: &impl GenericClient,
-    request_entity_id: &str,
-    request_id: Uuid,
-    proposal_version: u32,
-) -> Result<Option<SettledReviewOutcome>, MutationError> {
-    let row = client
-        .query_opt(
-            "SELECT status, available_until <= transaction_timestamp()
-               FROM registry_internal.registry_request_review_results
-              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
-            &[
-                &request_entity_id,
-                &request_id,
-                &i64::from(proposal_version),
-            ],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    Ok(Some(match row.get::<_, String>(0).as_str() {
-        "approved" => SettledReviewOutcome::Approved {
-            expired: row.get::<_, bool>(1),
-        },
-        "rejected" => SettledReviewOutcome::Rejected,
-        "changes-requested" => SettledReviewOutcome::ChangesRequested,
-        "answered" | "cancelled" | "superseded" => SettledReviewOutcome::Other,
-        _ => return Err(MutationError::Unavailable),
-    }))
-}
-
-pub(crate) async fn read_projection(
-    transaction: &Transaction<'_>,
-    request_entity_id: &str,
-    request_id: Uuid,
-    proposal: &ProposalSnapshot,
-    request_submitted: bool,
-) -> Result<Option<Value>, MutationError> {
-    let CompiledChangeRequestReview::Required(requirement) = proposal.review_requirement() else {
-        return Ok(None);
-    };
-    let row = transaction
-        .query_opt(
-            "SELECT s.state,s.authority,s.accepted_binding,s.on_approved_mode,s.executor,
-                    r.status,r.result_id,
-                    to_char(r.completed_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    to_char(r.available_until AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    j.state,j.application_id,COALESCE(j.last_error_code,s.last_error_code),
-                    c.state,c.event_id,
-                    to_char(c.received_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    s.withdrawn,
-                    to_char(s.recovery_deadline AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    j.attempt_count,
-                    to_char(j.next_attempt_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    j.receipt_recovered,
-                    r.available_until <= transaction_timestamp()
-               FROM registry_internal.registry_request_review_submissions s
-               LEFT JOIN registry_internal.registry_request_review_results r
-                 USING (request_entity_id,request_id,proposal_version)
-               LEFT JOIN registry_internal.registry_request_application_jobs j
-                 USING (request_entity_id,request_id,proposal_version)
-               LEFT JOIN LATERAL (
-                    SELECT state,event_id,received_at
-                      FROM registry_internal.registry_request_review_completions c
-                     WHERE c.authority=s.authority
-                       AND c.review_request_id=(s.accepted_binding->>'requestId')::uuid
-                     ORDER BY received_at DESC LIMIT 1
-               ) c ON s.accepted_binding IS NOT NULL
-              WHERE s.request_entity_id=$1 AND s.request_id=$2 AND s.proposal_version=$3",
-            &[
-                &request_entity_id,
-                &request_id,
-                &i64::from(proposal.version().get()),
-            ],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    let Some(row) = row else {
-        // The same executor presence rule the accepted row publishes and the
-        // clients decode applies before any submission exists: an automatic
-        // application always names its executor.
-        let mut application = json!({"mode":application_mode(proposal),"state":"awaitingReview"});
-        if let Some(executor) = proposal.on_approved().executor.as_deref() {
-            application["executor"] = json!(executor);
-        }
-        return Ok(Some(json!({
-            "submission":{"state":"pending","authority":requirement.authority},
-            "result":{"state":"pending"},
-            "delivery":{"state":"polling"},
-            "application":application,
-            "recovery":{"state":"none"}
-        })));
-    };
-    let accepted: Option<Value> = row.get(2);
-    if accepted_binding_was_erased(accepted.as_ref()) {
-        // Retention removes the whole projection rather than publishing an
-        // accepted or cancelled submission with null correlation members.
-        return Ok(None);
-    }
-    let withdrawn: bool = row.get(15);
-    let submission_state = match row.get::<_, String>(0).as_str() {
-        "pending" | "submitting" | "uncertain" if withdrawn => "cancelling",
-        "pending" | "submitting" => "pending",
-        "accepted" => "accepted",
-        "uncertain" => "uncertain",
-        "cancelling" => "cancelling",
-        "cancelled" => "cancelled",
-        "failed" => "failed",
-        _ => return Err(MutationError::Unavailable),
-    };
-    let mut submission = json!({
-        "state": submission_state,
-        "authority": row.get::<_, String>(1),
-        "recoveryDeadline": row.get::<_, String>(16),
-    });
-    if let Some(accepted) = accepted {
-        submission["requestId"] = accepted["requestId"].clone();
-        submission["submissionDigest"] = accepted["submissionDigest"].clone();
-        submission["policy"] = accepted["policy"].clone();
-    }
-    let result_state = match row.get::<_, Option<String>>(5).as_deref() {
-        None => "pending",
-        Some("approved") => "approved",
-        Some("rejected") => "rejected",
-        Some("changes-requested") => "changesRequested",
-        Some("answered") => "answered",
-        Some("cancelled") => "cancelled",
-        Some("superseded") => "superseded",
-        Some(_) => return Err(MutationError::Unavailable),
-    };
-    let mut result = json!({"state": result_state});
-    if let Some(result_id) = row.get::<_, Option<Uuid>>(6) {
-        result["resultId"] = json!(result_id);
-        if let Some(completed_at) = row.get::<_, Option<String>>(7) {
-            result["completedAt"] = json!(completed_at);
-        }
-        if let Some(available_until) = row.get::<_, Option<String>>(8) {
-            result["availableUntil"] = json!(available_until);
-        }
-    }
-    let delivery_state = match row.get::<_, Option<String>>(12).as_deref() {
-        None => "polling",
-        Some("pending") => "received",
-        Some("correlated" | "applied") => "reconciled",
-        Some("unmatched") => "unmatched",
-        Some("exhausted") => "exhausted",
-        Some(_) => return Err(MutationError::Unavailable),
-    };
-    let mut delivery = json!({"state":delivery_state});
-    if let Some(event_id) = row.get::<_, Option<Uuid>>(13) {
-        delivery["eventId"] = json!(event_id);
-        if let Some(received_at) = row.get::<_, Option<String>>(14) {
-            delivery["receivedAt"] = json!(received_at);
-        }
-    }
-    let application_state = match row.get::<_, Option<String>>(9).as_deref() {
-        // Automatic application queues every approval, so a queued job must
-        // not hide that the approval passed its availability unapplied. An
-        // apply already in flight keeps its state: it may still succeed.
-        Some("queued")
-            if request_submitted
-                && row.get::<_, Option<String>>(5).as_deref() == Some("approved")
-                && row.get::<_, Option<bool>>(20) == Some(true) =>
-        {
-            "expired"
-        }
-        Some("queued") => "queued",
-        Some("applying") => "applying",
-        Some("applied") => "applied",
-        Some("blocked") => "blocked",
-        Some(_) => return Err(MutationError::Unavailable),
-        // An approval that raced the requester's withdrawal can never be
-        // applied: the projection must not offer it as ready.
-        None if withdrawn && row.get::<_, Option<String>>(5).as_deref() == Some("approved") => {
-            "blocked"
-        }
-        // An unapplied approval past its availability can no longer be
-        // applied: the owner revises it or cancels it.
-        None if request_submitted
-            && row.get::<_, Option<String>>(5).as_deref() == Some("approved")
-            && row.get::<_, Option<bool>>(20) == Some(true) =>
-        {
-            "expired"
-        }
-        None if row.get::<_, Option<String>>(5).as_deref() == Some("approved") => "ready",
-        None => "awaitingReview",
-    };
-    let mode: String = row.get(3);
-    let mut application = json!({"mode":mode,"state":application_state});
-    if let Some(executor) = row.get::<_, Option<String>>(4) {
-        application["executor"] = json!(executor);
-    }
-    if let Some(application_id) = row.get::<_, Option<Uuid>>(10) {
-        application["applicationId"] = json!(application_id);
-    }
-    if row.get::<_, Option<bool>>(19) == Some(true) {
-        application["receiptRecovered"] = json!(true);
-    }
-    match (
-        row.get::<_, Option<i32>>(17),
-        row.get::<_, Option<String>>(18),
-    ) {
-        (Some(attempts), Some(next_attempt_at)) => {
-            application["attempts"] = json!(attempts);
-            if matches!(application_state, "queued" | "applying") {
-                application["nextAttemptAt"] = json!(next_attempt_at);
-            }
-        }
-        (None, None) => {}
-        _ => return Err(MutationError::Unavailable),
-    }
-    let recovery = match row.get::<_, Option<String>>(11) {
-        None => json!({"state":"none"}),
-        Some(code) => json!({"state":"operatorAttention","code":code}),
-    };
-    Ok(Some(json!({
-        "submission":submission,"result":result,"delivery":delivery,
-        "application":application,"recovery":recovery
-    })))
-}
-
-fn accepted_binding_was_erased(binding: Option<&Value>) -> bool {
-    matches!(binding, Some(Value::Object(object)) if object.is_empty())
-}
-
-fn application_mode(proposal: &ProposalSnapshot) -> &'static str {
-    match proposal.on_approved().mode {
-        CompiledChangeRequestOnApprovedMode::Manual => "manual",
-        CompiledChangeRequestOnApprovedMode::Automatic => "automatic",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn automatic_application_retries_rate_limits_and_server_failures() {
-        assert!(retryable_application_status(
-            reqwest::StatusCode::TOO_MANY_REQUESTS
-        ));
-        assert!(retryable_application_status(
-            reqwest::StatusCode::SERVICE_UNAVAILABLE
-        ));
-        assert!(!retryable_application_status(
-            reqwest::StatusCode::BAD_REQUEST
-        ));
-    }
-
-    #[test]
-    fn a_refused_executor_credential_blocks_as_a_recoverable_denial() {
-        use registry_platform_httputil::client::{OAuthErrorCode, TransportKind};
-
-        for error in [
-            TokenError::Refused {
-                code: OAuthErrorCode::InvalidClient,
-            },
-            TokenError::Refused {
-                code: OAuthErrorCode::UnauthorizedClient,
-            },
-            TokenError::Refused {
-                code: OAuthErrorCode::InvalidGrant,
-            },
-            TokenError::Refused {
-                code: OAuthErrorCode::Other,
-            },
-            TokenError::Configuration { reason: "fixed" },
-            TokenError::Invalid { reason: "fixed" },
-            TokenError::ScopeNarrowed,
-        ] {
-            assert!(
-                matches!(
-                    application_token_error(error),
-                    ApplicationExchangeError::Denied
-                ),
-                "{error:?}"
-            );
-        }
-        for error in [
-            TokenError::Unavailable,
-            TokenError::Transport {
-                kind: TransportKind::Timeout,
-            },
-            TokenError::Protocol { status: 503 },
-        ] {
-            assert!(
-                matches!(
-                    application_token_error(error),
-                    ApplicationExchangeError::Transient
-                ),
-                "{error:?}"
-            );
-        }
-    }
-
-    fn executor() -> ReviewExecutorClient {
-        ReviewExecutorClient::new(
-            "registry-automatic".to_owned(),
-            "http://127.0.0.1:8080/registry-prefix/"
-                .parse()
-                .expect("URL"),
-            Arc::new(
-                registry_platform_httputil::StaticToken::new("ordinary-executor-token")
-                    .expect("token"),
-            ),
-            "registry-a".to_owned(),
-            "automatic-applier".to_owned(),
-            BTreeMap::from([("requests".to_owned(), "requests".to_owned())]),
-            std::time::Duration::from_secs(1),
-        )
-        .expect("executor")
-    }
-
-    fn application_job() -> ApplicationJob {
-        ApplicationJob {
-            entity_id: "requests".to_owned(),
-            request_id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
-            proposal_version: 7,
-            job_id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap(),
-            proposal_digest:
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-            claim_token: Uuid::parse_str("00000000-0000-4000-8000-000000000006").unwrap(),
-            attempt_count: 1,
-            action_href: None,
-            action_if_match: None,
-        }
-    }
 
     fn authority(id: &str, completion: Option<(&str, &str)>) -> Arc<ReviewAuthorityClient> {
         let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
@@ -3421,15 +2676,6 @@ mod tests {
     }
 
     #[test]
-    fn erased_accepted_binding_omits_the_review_projection() {
-        assert!(accepted_binding_was_erased(Some(&json!({}))));
-        assert!(!accepted_binding_was_erased(None));
-        assert!(!accepted_binding_was_erased(Some(&json!({
-            "requestId": Uuid::from_u128(1)
-        }))));
-    }
-
-    #[test]
     fn completion_sender_rejects_tokens_outside_the_inbound_bearer_grammar() {
         for token in ["sender token", "sender,token"] {
             let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
@@ -3535,559 +2781,5 @@ mod tests {
             registry.submission_binding("casework-a"),
             Some(("casework-a-producer", 30))
         );
-    }
-
-    #[test]
-    fn automatic_executor_discovers_only_the_exact_source_action_binding() {
-        let executor = executor();
-        let job = application_job();
-        let response = json!({
-            "data": {
-                "recordIdentifier": job.request_id,
-                "revisionIdentifier": "3",
-                "domainData": {},
-                "request": {
-                    "bregState": "submitted",
-                    "proposalVersion": job.proposal_version,
-                    "effectDigest": job.proposal_digest,
-                    "editable": false,
-                    "actions": [{
-                        "operation": "apply-request",
-                        "method": "POST",
-                        "href": format!(
-                            "/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",
-                            job.request_id
-                        ),
-                        "ifMatch": "\"breg-request-etag\"",
-                        "proposalVersion": job.proposal_version,
-                        "effectDigest": job.proposal_digest,
-                    }]
-                }
-            },
-            "meta": {
-                "registryIdentifier": "registry-a",
-                "datasetIdentifier": "requests",
-                "entityTypeIdentifier": "requests"
-            }
-        });
-        let decoded =
-            decode_application_discovery(&executor, &job, &serde_json::to_vec(&response).unwrap());
-        assert!(matches!(decoded, Ok(ApplicationDiscovery::Action { .. })));
-
-        for pointer in [
-            "/meta/registryIdentifier",
-            "/data/request/effectDigest",
-            "/data/request/actions/0/effectDigest",
-            "/data/request/actions/0/href",
-        ] {
-            let mut substituted = response.clone();
-            *substituted.pointer_mut(pointer).expect("fixture pointer") =
-                Value::String("substituted".to_owned());
-            assert!(matches!(
-                decode_application_discovery(
-                    &executor,
-                    &job,
-                    &serde_json::to_vec(&substituted).unwrap()
-                ),
-                Err(ApplicationExchangeError::InvalidResponse)
-                    | Err(ApplicationExchangeError::UnavailableAction)
-            ));
-        }
-    }
-
-    #[test]
-    fn application_precondition_backoff_is_positive_increasing_and_bounded() {
-        assert_eq!(
-            (1..=8).map(application_retry_seconds).collect::<Vec<_>>(),
-            [5, 10, 20, 40, 80, 160, 300, 300]
-        );
-        assert_eq!(application_retry_seconds(i32::MAX), 300);
-    }
-
-    #[tokio::test]
-    async fn automatic_executor_renews_credentials_between_discovery_and_application() {
-        use axum::{
-            extract::State,
-            http::HeaderMap,
-            routing::{get, post},
-            Json, Router,
-        };
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        async fn issue(State(issued): State<Arc<AtomicUsize>>) -> Json<Value> {
-            let number = issued.fetch_add(1, Ordering::SeqCst) + 1;
-            Json(
-                json!({"access_token":format!("rotating-token-{number}"),"token_type":"Bearer","expires_in":1,"scope":"requests:apply"}),
-            )
-        }
-        async fn discover(headers: HeaderMap) -> Json<Value> {
-            assert_eq!(headers["authorization"], "Bearer rotating-token-1");
-            let job = application_job();
-            Json(
-                json!({"meta":{"registryIdentifier":"registry-a","datasetIdentifier":"requests","entityTypeIdentifier":"requests"},"data":{
-                    "recordIdentifier":job.request_id,"revisionIdentifier":"3","domainData":{},
-                    "request":{"bregState":"submitted","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,"actions":[{
-                        "operation":"apply-request","method":"POST","href":format!("/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",job.request_id),
-                        "ifMatch":"\"current\"","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest
-                    }]}
-                }}),
-            )
-        }
-        async fn apply(headers: HeaderMap) -> Json<Value> {
-            assert_eq!(
-                headers["authorization"], "Bearer rotating-token-2",
-                "the first credential must not be retained across requests"
-            );
-            let job = application_job();
-            Json(
-                json!({"id":job.request_id,"revision":4,"snapshot":"snapshot","actorReference":"executor",
-                "request":{"bregState":"applied","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,
-                "application":{"applicationId":Uuid::from_u128(55),"proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,"appliedAt":"2026-09-30T00:00:00Z"}}}),
-            )
-        }
-        let issued = Arc::new(AtomicUsize::new(0));
-        let router = Router::new()
-            .route("/token", post(issue))
-            .route("/v1/records/requests/{id}", get(discover))
-            .route("/v1/records/requests/{id}/actions/apply", post(apply))
-            .with_state(issued.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint: reqwest::Url = format!("http://{}/", listener.local_addr().unwrap())
-            .parse()
-            .unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, router).await });
-        let key = registry_platform_crypto::generate_private_jwk(
-            registry_platform_crypto::GeneratedKeyAlgorithm::Es256,
-        )
-        .unwrap();
-        let provider = registry_platform_httputil::PrivateKeyJwt::new(
-            registry_platform_httputil::PrivateKeyJwtConfig::new(
-                endpoint.join("token").unwrap(),
-                "executor",
-                key,
-            )
-            .with_scopes(vec!["requests:apply".to_owned()]),
-        )
-        .unwrap();
-        let mut executor = executor();
-        executor.base_url = ServiceBaseUrl::new(endpoint).unwrap();
-        executor.token_provider = Arc::new(provider);
-        let mut job = application_job();
-        let ApplicationDiscovery::Action { href, if_match } =
-            discover_application(&executor, &job).await.unwrap()
-        else {
-            panic!("apply action")
-        };
-        job.action_href = Some(href);
-        job.action_if_match = Some(if_match);
-        assert_eq!(
-            send_application(&executor, &job).await.unwrap(),
-            Uuid::from_u128(55)
-        );
-        assert_eq!(issued.load(Ordering::SeqCst), 2);
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn automatic_executor_refuses_substituted_apply_hrefs_before_http() {
-        let executor = executor();
-        let mut job = application_job();
-        job.action_if_match = Some("\"breg-request-etag\"".to_owned());
-        for href in [
-            format!(
-                "/v1/records/other/{}/actions/apply?accessProfile=automatic-applier",
-                job.request_id
-            ),
-            "/v1/records/requests/00000000-0000-4000-8000-000000000099/actions/apply?accessProfile=automatic-applier".to_owned(),
-            format!(
-                "/v1/records/requests/{}/actions/cancel?accessProfile=automatic-applier",
-                job.request_id
-            ),
-            format!(
-                "/v1/records/requests/{}/actions/apply/extra?accessProfile=automatic-applier",
-                job.request_id
-            ),
-            format!(
-                "/v1/records/requests/{}/actions/apply?accessProfile=substituted",
-                job.request_id
-            ),
-        ] {
-            job.action_href = Some(href);
-            assert!(matches!(
-                send_application(&executor, &job).await,
-                Err(ApplicationExchangeError::InvalidResponse)
-            ));
-        }
-    }
-
-    #[test]
-    fn automatic_executor_accepts_only_an_exact_application_receipt() {
-        let job = application_job();
-        let application_id = Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
-        let receipt = json!({
-            "id": job.request_id,
-            "revision": 4,
-            "snapshot": "breg1_00000000-0000-4000-8000-000000000004",
-            "actorReference": "actor",
-            "request": {
-                "bregState": "applied",
-                "proposalVersion": job.proposal_version,
-                "effectDigest": job.proposal_digest,
-                "application": {
-                    "applicationId": application_id,
-                    "proposalVersion": job.proposal_version,
-                    "effectDigest": job.proposal_digest,
-                    "appliedAt": "2026-09-19T00:00:00Z"
-                }
-            }
-        });
-        assert_eq!(
-            decode_application_receipt(&job, &serde_json::to_vec(&receipt).unwrap())
-                .expect("exact receipt"),
-            application_id
-        );
-
-        for pointer in [
-            "/id",
-            "/request/proposalVersion",
-            "/request/application/effectDigest",
-            "/request/application/applicationId",
-        ] {
-            let mut substituted = receipt.clone();
-            *substituted.pointer_mut(pointer).expect("fixture pointer") =
-                Value::String("substituted".to_owned());
-            assert!(matches!(
-                decode_application_receipt(&job, &serde_json::to_vec(&substituted).unwrap()),
-                Err(ApplicationExchangeError::InvalidResponse)
-            ));
-        }
-    }
-
-    // Both settled_outcome and read_projection decide the same thing (has this
-    // approval passed its available_until) and must agree even when a slow
-    // earlier statement in the same transaction has let wall-clock time move
-    // on. pg_sleep before the approval's available_until deterministically
-    // separates transaction_timestamp() (fixed at BEGIN) from
-    // statement_timestamp() (advances per statement) without racing exact
-    // statement boundaries.
-    #[cfg(feature = "postgres-test")]
-    mod transaction_instant_tests {
-        use registry_platform_canonical_json::canonicalize_json;
-        use serde_json::json;
-        use uuid::Uuid;
-
-        use super::*;
-        use crate::contract::Operation;
-        use crate::model::CompiledChangeRequestReviewRequirement;
-        use crate::request_workflow::{
-            ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenPlannerKind,
-            FrozenPlanningBinding, PackageFingerprint, PreparedEffect, PreparedFieldChange,
-            PreparedProposal, PreparedTarget, RecordId, RecordRevision, RequestKey,
-            RequestWorkflow, StateRevision, TrustedActorRef, TrustedTimestamp,
-            TrustedTransitionContext,
-        };
-
-        #[allow(dead_code)]
-        mod postgres_harness {
-            use crate as registry_breg;
-            include!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/support/postgres_harness.rs"
-            ));
-        }
-        use postgres_harness::TestDatabase;
-
-        const DIGEST: &str =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-        // A proposal with a required review, detached from the fixture rows
-        // below: settled_outcome and read_projection take the request
-        // entity id, request id, and proposal version as explicit
-        // parameters, so only proposal.version(), .review_requirement(), and
-        // .on_approved() need to line up with the inserted rows.
-        fn required_review_proposal() -> RequestWorkflow {
-            let effect = PreparedEffect::new(
-                EffectId::new("patch-placement").expect("effect id"),
-                Operation::Patch,
-                PreparedTarget::existing(
-                    EntityId::new("asset-placement").expect("entity id"),
-                    RecordId::new("placement-1").expect("record id"),
-                    RecordRevision::new(3).expect("record revision"),
-                ),
-                vec![PreparedFieldChange::set(
-                    FieldId::new("site").expect("field id"),
-                    FieldValue::present(json!("site-a")),
-                    json!("site-b"),
-                )
-                .expect("field change")],
-            )
-            .expect("effect");
-            let snapshot_bytes = canonicalize_json(
-                &serde_json::to_value(std::slice::from_ref(&effect)).expect("effect serializes"),
-            )
-            .expect("effect canonicalizes")
-            .len();
-            let proposal = PreparedProposal::new_with_binding(
-                RecordRevision::new(7).expect("record revision"),
-                ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
-                PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-                CompiledChangeRequestReview::Required(CompiledChangeRequestReviewRequirement {
-                    authority: "casework-main".to_owned(),
-                    policy_id: "request-review".to_owned(),
-                }),
-                FrozenPlanningBinding::new(
-                    FrozenPlannerKind::Declarative,
-                    "registry.change-request-plan/v1",
-                    None,
-                )
-                .expect("planning binding"),
-                vec![effect],
-                snapshot_bytes,
-            )
-            .expect("proposal");
-            let workflow = RequestWorkflow::new_draft(
-                RequestKey::new(
-                    EntityId::new("placement-correction-request").expect("entity id"),
-                    RecordId::new("request-1").expect("record id"),
-                ),
-                TrustedActorRef::from_verified_context("submitter").expect("owner"),
-                StateRevision::new(1).expect("state revision"),
-            );
-            let context = TrustedTransitionContext::from_verified_context(
-                TrustedActorRef::from_verified_context("submitter").expect("actor"),
-                TrustedTimestamp::from_server_clock("2026-09-19T00:00:00Z").expect("timestamp"),
-            );
-            workflow
-                .submit(context, proposal)
-                .expect("submit")
-                .into_workflow()
-        }
-
-        #[tokio::test]
-        async fn settled_outcome_and_read_projection_judge_expiry_at_one_instant() {
-            let mut database = TestDatabase::create(2).await;
-            database
-                .admin
-                .batch_execute(
-                    "CREATE TABLE registry_internal.registry_request_proposals (
-                         request_entity_id text NOT NULL,
-                         request_id uuid NOT NULL,
-                         proposal_version bigint NOT NULL,
-                         PRIMARY KEY (request_entity_id,request_id,proposal_version)
-                     );",
-                )
-                .await
-                .expect("proposal parent table");
-            install_review_storage_for_test(&database.admin, &database.runtime_role)
-                .await
-                .expect("review storage");
-
-            let request_entity_id = "requests";
-            let request_id = Uuid::new_v4();
-            let result_id = Uuid::new_v4();
-            database
-                .admin
-                .execute(
-                    "INSERT INTO registry_internal.registry_request_proposals VALUES ($1,$2,1)",
-                    &[&request_entity_id, &request_id],
-                )
-                .await
-                .expect("proposal");
-            database
-                .admin
-                .execute(
-                    "INSERT INTO registry_internal.registry_request_review_submissions
-                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
-                  producer_id,policy_id,idempotency_key,create_request,expected_submission_digest,
-                  on_approved_mode,executor,state,accepted_binding)
-                 VALUES ($1,$2,1,$3,$4,'casework-main','registry-producer','request-review',
-                         'submission-key','{}'::jsonb,$3::text,'manual',NULL,'accepted',$5)",
-                    &[
-                        &request_entity_id,
-                        &request_id,
-                        &DIGEST,
-                        &Uuid::new_v4(),
-                        &json!({"requestId": Uuid::new_v4()}),
-                    ],
-                )
-                .await
-                .expect("submission");
-
-            let transaction = database.admin.transaction().await.expect("transaction");
-            transaction
-                .batch_execute("SELECT pg_sleep(0.3)")
-                .await
-                .expect("sleep past the approval's halfway point");
-            transaction
-                .execute(
-                    "INSERT INTO registry_internal.registry_request_review_results
-                 (request_entity_id,request_id,proposal_version,authority,result_id,result,
-                  status,completed_at,available_until)
-                 VALUES ($1,$2,1,'casework-main',$3,'{}'::jsonb,'approved',
-                         transaction_timestamp(),
-                         transaction_timestamp() + interval '150 milliseconds')",
-                    &[&request_entity_id, &request_id, &result_id],
-                )
-                .await
-                .expect("result");
-
-            let workflow = required_review_proposal();
-            let proposal = workflow.current_proposal().expect("frozen proposal");
-
-            let outcome = settled_outcome(&transaction, request_entity_id, request_id, 1)
-                .await
-                .expect("settled outcome query")
-                .expect("settled outcome row");
-            let projection =
-                read_projection(&transaction, request_entity_id, request_id, proposal, true)
-                    .await
-                    .expect("projection query")
-                    .expect("projection row");
-
-            assert_eq!(
-                outcome,
-                SettledReviewOutcome::Approved { expired: false },
-                "an approval that has not reached its available_until at the transaction's \
-                 own instant must not be judged expired just because an earlier statement \
-                 in the same transaction ran slowly"
-            );
-            assert_eq!(
-                projection["application"]["state"],
-                json!("ready"),
-                "read_projection must agree with settled_outcome about the same approval"
-            );
-        }
-
-        #[tokio::test]
-        async fn a_reconciled_result_clears_the_lookup_failure_it_outlived_from_the_projection() {
-            let mut database = TestDatabase::create(2).await;
-            database
-                .admin
-                .batch_execute(
-                    "CREATE TABLE registry_internal.registry_request_proposals (
-                         request_entity_id text NOT NULL,
-                         request_id uuid NOT NULL,
-                         proposal_version bigint NOT NULL,
-                         PRIMARY KEY (request_entity_id,request_id,proposal_version)
-                     );",
-                )
-                .await
-                .expect("proposal parent table");
-            install_review_storage_for_test(&database.admin, &database.runtime_role)
-                .await
-                .expect("review storage");
-
-            let request_entity_id = "requests";
-            let request_id = Uuid::new_v4();
-            let digest = registry_review_client::ContentDigest::parse(DIGEST).expect("digest");
-            let accepted = ReviewRequestAccepted {
-                request_id: Uuid::new_v4(),
-                subject: SubjectBinding {
-                    source: "registry-a".to_owned(),
-                    subject_type: "change-request".to_owned(),
-                    id: request_id.to_string(),
-                    version: "1".to_owned(),
-                    digest: digest.clone(),
-                },
-                policy: registry_review_client::PolicyBinding {
-                    id: "request-review".to_owned(),
-                    version: "1".to_owned(),
-                    digest: digest.clone(),
-                },
-                submission_digest: digest,
-            };
-            database
-                .admin
-                .execute(
-                    "INSERT INTO registry_internal.registry_request_proposals VALUES ($1,$2,1)",
-                    &[&request_entity_id, &request_id],
-                )
-                .await
-                .expect("proposal");
-            database
-                .admin
-                .execute(
-                    "INSERT INTO registry_internal.registry_request_review_submissions
-                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
-                  producer_id,policy_id,idempotency_key,create_request,expected_submission_digest,
-                  on_approved_mode,executor,state,accepted_binding)
-                 VALUES ($1,$2,1,$3,$4,'casework-main','registry-producer','request-review',
-                         'submission-key','{}'::jsonb,$3::text,'manual',NULL,'accepted',$5)",
-                    &[
-                        &request_entity_id,
-                        &request_id,
-                        &DIGEST,
-                        &Uuid::new_v4(),
-                        &serde_json::to_value(&accepted).expect("accepted binding"),
-                    ],
-                )
-                .await
-                .expect("submission");
-            let workflow = required_review_proposal();
-            let proposal = workflow.current_proposal().expect("frozen proposal");
-
-            // One result lookup fails at the transport layer.
-            let unreachable = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                "http://127.0.0.1:9/".parse().expect("unroutable endpoint"),
-            ))
-            .expect("review client");
-            assert!(matches!(
-                poll_one_result(
-                    &mut database.admin,
-                    "casework-main",
-                    &unreachable,
-                    "producer-profile",
-                    &BearerToken::new("token").expect("token"),
-                    30,
-                )
-                .await,
-                Err(MutationError::Unavailable)
-            ));
-            let transaction = database.admin.transaction().await.expect("transaction");
-            let failed =
-                read_projection(&transaction, request_entity_id, request_id, proposal, true)
-                    .await
-                    .expect("projection query")
-                    .expect("projection row");
-            assert_eq!(
-                failed["recovery"],
-                json!({"state":"operatorAttention","code":"result-lookup-uncertain"})
-            );
-            transaction.rollback().await.expect("rollback");
-
-            // A later delivery reconciles the terminal result.
-            let result = ReviewResult {
-                result_id: Uuid::new_v4(),
-                request_id: accepted.request_id,
-                subject: accepted.subject.clone(),
-                policy: accepted.policy.clone(),
-                submission_digest: accepted.submission_digest.clone(),
-                status: registry_review_client::ReviewResultStatus::Approved,
-                outcome: None,
-                result: None,
-                completed_at: Utc::now(),
-                available_until: Utc::now() + chrono::Duration::days(1),
-            };
-            let transaction = database.admin.transaction().await.expect("transaction");
-            reconcile_result(&transaction, "casework-main", &accepted, &result)
-                .await
-                .expect("reconcile the result");
-            transaction.commit().await.expect("commit");
-
-            let transaction = database.admin.transaction().await.expect("transaction");
-            let settled =
-                read_projection(&transaction, request_entity_id, request_id, proposal, true)
-                    .await
-                    .expect("projection query")
-                    .expect("projection row");
-            assert_eq!(settled["result"]["state"], json!("approved"));
-            assert_eq!(
-                settled["recovery"],
-                json!({"state":"none"}),
-                "a settled review must not keep asking the operator to act on a lookup \
-                 failure its reconciled result outlived"
-            );
-            transaction.rollback().await.expect("rollback");
-            database.cleanup().await;
-        }
     }
 }

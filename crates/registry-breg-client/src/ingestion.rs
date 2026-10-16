@@ -282,6 +282,7 @@ pub struct BRegIngestionRun {
     run_id: Uuid,
     status: BRegIngestionRunStatus,
     blocked_reason: Option<BRegIngestionBlockedReason>,
+    #[serde(rename = "recordType")]
     entity_id: String,
     operation: BRegBatchOperation,
     profile_id: String,
@@ -320,7 +321,7 @@ impl BRegIngestionRun {
     }
 
     #[must_use]
-    pub fn entity_id(&self) -> &str {
+    pub fn record_type(&self) -> &str {
         &self.entity_id
     }
 
@@ -420,7 +421,7 @@ impl BRegIngestionRun {
             "runId",
             "status",
             "blockedReason",
-            "entityId",
+            "recordType",
             "operation",
             "profileId",
             "packageRevision",
@@ -463,7 +464,7 @@ impl BRegIngestionRun {
                     .ok_or(refuse)?,
             ),
         };
-        let entity_id = text_member(object, "entityId")?;
+        let entity_id = text_member(object, "recordType")?;
         if !valid_breg_identifier(entity_id) {
             return Err(refuse);
         }
@@ -550,7 +551,7 @@ impl BRegIngestionRun {
 pub struct BRegIngestionRunPage {
     runs: Vec<BRegIngestionRun>,
     has_more: bool,
-    next_after: Option<String>,
+    next_cursor: Option<String>,
 }
 
 impl BRegIngestionRunPage {
@@ -568,8 +569,8 @@ impl BRegIngestionRunPage {
     /// a canonical run id the next [`BRegIngestionRunListQuery::after`]
     /// continues after.
     #[must_use]
-    pub fn next_after(&self) -> Option<&str> {
-        self.next_after.as_deref()
+    pub fn next_cursor(&self) -> Option<&str> {
+        self.next_cursor.as_deref()
     }
 
     fn from_members(object: &mut Map<String, Value>) -> Result<Self, BRegIngestionError> {
@@ -582,20 +583,20 @@ impl BRegIngestionRunPage {
             .map(BRegIngestionRun::from_value)
             .collect::<Result<Vec<_>, _>>()?;
         let has_more = take_member(object, "hasMore")?.as_bool().ok_or(refuse)?;
-        let next_after = match take_member(object, "nextAfter")? {
+        let next_cursor = match take_member(object, "nextCursor")? {
             Value::Null => None,
             value => {
                 let cursor = value.as_str().ok_or(refuse)?;
                 Some(canonical_run_cursor(cursor).ok_or(refuse)?)
             }
         };
-        if has_more != next_after.is_some() || !object.is_empty() {
+        if has_more != next_cursor.is_some() || !object.is_empty() {
             return Err(refuse);
         }
         Ok(Self {
             runs,
             has_more,
-            next_after,
+            next_cursor,
         })
     }
 }
@@ -1099,7 +1100,7 @@ pub struct BRegIngestionRunListQuery {
     status: Option<BRegIngestionRunStatus>,
     input_digest: Option<String>,
     limit: Option<u32>,
-    after: Option<String>,
+    cursor: Option<String>,
 }
 
 impl BRegIngestionRunListQuery {
@@ -1137,12 +1138,12 @@ impl BRegIngestionRunListQuery {
     }
 
     /// Continue after the canonical run-id cursor a previous page returned.
-    /// The engine parses the `after` pair as a canonical lowercase UUID, so
+    /// The engine parses the `cursor` pair as a canonical lowercase UUID, so
     /// any other text is refused here rather than encoded into a request the
     /// endpoint would always refuse.
-    pub fn after(mut self, value: impl Into<String>) -> Result<Self, BRegIngestionError> {
+    pub fn cursor(mut self, value: impl Into<String>) -> Result<Self, BRegIngestionError> {
         let value = value.into();
-        self.after = Some(canonical_run_cursor(&value).ok_or(BRegIngestionError::InvalidCursor)?);
+        self.cursor = Some(canonical_run_cursor(&value).ok_or(BRegIngestionError::InvalidCursor)?);
         Ok(self)
     }
 
@@ -1154,8 +1155,8 @@ impl BRegIngestionRunListQuery {
         if let Some(limit) = self.limit {
             pairs.push(("limit".to_owned(), limit.to_string()));
         }
-        if let Some(after) = &self.after {
-            pairs.push(("after".to_owned(), after.clone()));
+        if let Some(cursor) = &self.cursor {
+            pairs.push(("cursor".to_owned(), cursor.clone()));
         }
         if let Some(status) = self.status {
             pairs.push(("status".to_owned(), status.as_str().to_owned()));
@@ -1254,7 +1255,7 @@ fn bounded_text(value: &str) -> bool {
 }
 
 /// One listing cursor in the canonical lowercase run-id form the engine
-/// parses an `after` pair with, so a cursor this client issues is one the
+/// parses a `cursor` pair with, so a cursor this client issues is one the
 /// endpoint accepts and a cursor it returns is one this client can reuse.
 fn canonical_run_cursor(value: &str) -> Option<String> {
     Uuid::parse_str(value)
@@ -1493,7 +1494,7 @@ impl BaseRegistryClient {
         decode_envelope(
             raw,
             reqwest::StatusCode::OK.as_u16(),
-            &["runs", "hasMore", "nextAfter"],
+            &["runs", "hasMore", "nextCursor"],
             BRegIngestionRunPage::from_members,
         )
     }
@@ -1670,7 +1671,7 @@ mod tests {
             "runId": RUN_ID,
             "status": "open",
             "blockedReason": null,
-            "entityId": "facility",
+            "recordType": "facility",
             "operation": "create",
             "profileId": "importer.v1",
             "packageRevision": "revision-1",
@@ -1740,7 +1741,7 @@ mod tests {
         assert_eq!(run.status(), BRegIngestionRunStatus::Open);
         assert_eq!(run.blocked_reason(), None);
         assert_eq!(run.operation(), BRegBatchOperation::Create);
-        assert_eq!(run.entity_id(), "facility");
+        assert_eq!(run.record_type(), "facility");
         assert_eq!(run.input_digest(), INPUT_DIGEST);
         assert_eq!(run.input_length(), 4321);
         assert_eq!(run.item_count(), 10);
@@ -1800,7 +1801,13 @@ mod tests {
             |wire: &mut Value| wire["extra"] = json!("member"),
             |wire: &mut Value| wire["inputDigest"] = json!("AAAA"),
             |wire: &mut Value| wire["runId"] = json!("not-a-uuid"),
-            |wire: &mut Value| wire["entityId"] = json!("Facility"),
+            |wire: &mut Value| wire["recordType"] = json!("Facility"),
+            |wire: &mut Value| wire["recordType"] = json!(""),
+            |wire: &mut Value| wire["recordType"] = Value::Null,
+            |wire: &mut Value| {
+                let record_type = wire.as_object_mut().unwrap().remove("recordType").unwrap();
+                wire["entityId"] = record_type;
+            },
             |wire: &mut Value| wire["itemCount"] = json!(0),
             |wire: &mut Value| wire["chunkCount"] = json!(0),
             |wire: &mut Value| wire["maximumItems"] = json!(0),
@@ -1936,29 +1943,29 @@ mod tests {
             .is_err());
         }
 
-        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextAfter": RUN_ID});
+        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextCursor": RUN_ID});
         let decoded = BRegIngestionRunPage::from_members(page.as_object_mut().expect("object"))
             .expect("the page decodes");
         assert_eq!(decoded.runs().len(), 1);
         assert!(decoded.has_more());
-        assert_eq!(decoded.next_after(), Some(RUN_ID));
+        assert_eq!(decoded.next_cursor(), Some(RUN_ID));
 
         for mutate in [
             |wire: &mut Value| wire["hasMore"] = json!(false),
-            |wire: &mut Value| wire["nextAfter"] = json!(Value::Null),
-            |wire: &mut Value| wire["nextAfter"] = json!(""),
+            |wire: &mut Value| wire["nextCursor"] = json!(Value::Null),
+            |wire: &mut Value| wire["nextCursor"] = json!(""),
         ] {
-            let mut wire = json!({"runs": [run_wire()], "hasMore": true, "nextAfter": "cursor"});
+            let mut wire = json!({"runs": [run_wire()], "hasMore": true, "nextCursor": "cursor"});
             mutate(&mut wire);
             assert!(
                 BRegIngestionRunPage::from_members(wire.as_object_mut().expect("object")).is_err()
             );
         }
-        let mut page = json!({"runs": [], "hasMore": false, "nextAfter": null});
+        let mut page = json!({"runs": [], "hasMore": false, "nextCursor": null});
         let decoded = BRegIngestionRunPage::from_members(page.as_object_mut().expect("object"))
             .expect("a final page decodes");
         assert!(decoded.runs().is_empty());
-        assert_eq!(decoded.next_after(), None);
+        assert_eq!(decoded.next_cursor(), None);
     }
 
     #[test]
@@ -2323,7 +2330,7 @@ mod tests {
             .unwrap()
             .limit(25)
             .unwrap()
-            .after(RUN_ID)
+            .cursor(RUN_ID)
             .unwrap()
             .status(BRegIngestionRunStatus::Open)
             .input_digest(INPUT_DIGEST)
@@ -2333,7 +2340,7 @@ mod tests {
             vec![
                 ("accessProfile".to_owned(), "importer.v1".to_owned()),
                 ("limit".to_owned(), "25".to_owned()),
-                ("after".to_owned(), RUN_ID.to_owned()),
+                ("cursor".to_owned(), RUN_ID.to_owned()),
                 ("status".to_owned(), "open".to_owned()),
                 ("inputDigest".to_owned(), INPUT_DIGEST.to_owned()),
             ]
@@ -2351,7 +2358,7 @@ mod tests {
             Err(BRegIngestionError::InvalidDigest)
         );
         assert_eq!(
-            BRegIngestionRunListQuery::default().after("cursor\n"),
+            BRegIngestionRunListQuery::default().cursor("cursor\n"),
             Err(BRegIngestionError::InvalidCursor)
         );
         // The selected access profile is carried as one bounded identifier.
@@ -2444,42 +2451,42 @@ mod tests {
 
     #[test]
     fn list_cursors_are_canonical_run_ids() {
-        // The engine parses an `after` pair as a canonical lowercase run id,
+        // The engine parses a `cursor` pair as a canonical lowercase run id,
         // so a cursor it could never issue is refused where the query is
         // built instead of encoded into a request the endpoint would always
         // refuse.
         for cursor in ["cursor+/=", "CURSOR-UPPER", "", "cursor\n"] {
             assert_eq!(
-                BRegIngestionRunListQuery::default().after(cursor),
+                BRegIngestionRunListQuery::default().cursor(cursor),
                 Err(BRegIngestionError::InvalidCursor),
                 "the cursor {cursor} is not a canonical run id"
             );
         }
         let query = BRegIngestionRunListQuery::default()
-            .after(RUN_ID)
+            .cursor(RUN_ID)
             .expect("a canonical run id is a valid cursor");
         assert_eq!(
             query.query_pairs(),
-            vec![("after".to_owned(), RUN_ID.to_owned())]
+            vec![("cursor".to_owned(), RUN_ID.to_owned())]
         );
     }
 
     #[test]
     fn page_cursors_are_canonical_run_ids() {
-        // A nextAfter the client could never reuse in a later query is a
+        // A nextCursor the client could never reuse in a later query is a
         // body mismatch, never a cursor to persist.
-        for next_after in ["cursor+/=", "CURSOR-UPPER", ""] {
-            let mut page = json!({"runs": [], "hasMore": true, "nextAfter": next_after});
+        for next_cursor in ["cursor+/=", "CURSOR-UPPER", ""] {
+            let mut page = json!({"runs": [], "hasMore": true, "nextCursor": next_cursor});
             assert_eq!(
                 BRegIngestionRunPage::from_members(page.as_object_mut().expect("object")),
                 Err(BRegIngestionError::InvalidResponse),
-                "the cursor {next_after} is not a canonical run id"
+                "the cursor {next_cursor} is not a canonical run id"
             );
         }
-        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextAfter": RUN_ID});
+        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextCursor": RUN_ID});
         let decoded = BRegIngestionRunPage::from_members(page.as_object_mut().expect("object"))
             .expect("a canonical run id decodes as the page cursor");
-        assert_eq!(decoded.next_after(), Some(RUN_ID));
+        assert_eq!(decoded.next_cursor(), Some(RUN_ID));
     }
 
     #[test]

@@ -257,7 +257,7 @@ impl DedicatedApplyConnection {
         .await
     }
 
-    pub(crate) fn client_for_request_retention_guard(&self) -> &Client {
+    pub(crate) fn client_for_proposal_retention_guard(&self) -> &Client {
         &self.client
     }
 
@@ -409,13 +409,8 @@ impl DedicatedApplyConnection {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
 
-        self.ensure_successor_history_ready(
-            current,
-            predecessor_baseline,
-            predecessor_history_descriptor,
-            runtime_role,
-        )
-        .await?;
+        self.ensure_successor_history_ready(current, predecessor_history_descriptor)
+            .await?;
 
         self.execute_reviewed_assertion_phase(plan, ledger, prior_tables, false)
             .await?;
@@ -545,7 +540,7 @@ impl DedicatedApplyConnection {
                             .get(entity_id)
                             .ok_or(PostgresKernelError::RegistryUnavailable)?
                             .physical_table;
-                        self.refuse_retained_plaintext_request_snapshots(history_choice, &covered)
+                        self.refuse_retained_plaintext_proposal_snapshots(history_choice, &covered)
                             .await?;
                         self.field_encryption_duplicate_preflight(&service, table, &covered)
                             .await?;
@@ -1068,10 +1063,10 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Phase 1 cannot safely reinterpret retained change-request copies after
+    /// Phase 1 cannot safely reinterpret retained Proposal copies after
     /// a plaintext-to-envelope boundary. Refuse before the first chunk commits,
     /// while the operator-facing preflight counts identify what must be cleared.
-    async fn refuse_retained_plaintext_request_snapshots(
+    async fn refuse_retained_plaintext_proposal_snapshots(
         &mut self,
         history_choice: ReviewedFieldEncryptionHistory,
         covered: &[FieldEncryptionCoveredField<'_>],
@@ -1086,13 +1081,13 @@ impl DedicatedApplyConnection {
                     "SELECT
                          EXISTS (
                              SELECT 1
-                               FROM registry_internal.registry_request_targets
+                               FROM registry_internal.registry_proposal_targets
                               WHERE target_entity_id = $1
                                 AND (base_snapshot ? $2 OR after_snapshot ? $2)
                          )
                          OR EXISTS (
                              SELECT 1
-                               FROM registry_internal.registry_request_proposals AS proposal
+                               FROM registry_internal.registry_proposal_submissions AS proposal
                               WHERE proposal.snapshot IS NOT NULL
                                 AND (
                                     EXISTS (
@@ -1132,7 +1127,7 @@ impl DedicatedApplyConnection {
                 .get(0);
             if retained {
                 return Err(
-                    PostgresKernelError::FieldEncryptionRetainedRequestSnapshots {
+                    PostgresKernelError::FieldEncryptionRetainedProposalSnapshots {
                         entity_id: field.entity_id.to_owned(),
                         field_id: field.candidate.id.clone(),
                     },
@@ -1449,41 +1444,17 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Establishes or verifies successor history readiness while the durable
-    /// maintenance boundary and dedicated session-level apply lock are held.
+    /// Verifies current successor history under the dedicated apply lock.
     pub(crate) async fn ensure_successor_history_ready(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        predecessor_baseline: Option<&CompiledRegistryMigrationBaseline>,
         predecessor_history_descriptor: Option<&HistorySchemaDescriptor>,
-        runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         let transaction = self.client.transaction().await?;
-        let predecessor_tables = predecessor_baseline
-            .map(|baseline| {
-                baseline
-                    .entities
-                    .values()
-                    .map(|entity| entity.physical_table.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !predecessor_tables.is_empty() {
-            set_force_row_security(&transaction, &predecessor_tables, false).await?;
-        }
-        let readiness = ensure_successor_history_ready_state(
-            &transaction,
-            current,
-            predecessor_baseline,
-            predecessor_history_descriptor,
-            runtime_role,
-        )
-        .await;
-        if !predecessor_tables.is_empty() {
-            set_force_row_security(&transaction, &predecessor_tables, true).await?;
-        }
-        readiness.map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        ensure_successor_history_ready_state(&transaction, current, predecessor_history_descriptor)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1545,6 +1516,7 @@ impl DedicatedApplyConnection {
     pub(crate) async fn activate_role_change(
         &mut self,
         registry: &CompiledRegistry,
+        compatibility: Option<&crate::proposal_retention::ProposalActivationCompatibilityInventory>,
         current: Option<&ExpectedRegistryIdentity>,
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
@@ -1573,6 +1545,8 @@ impl DedicatedApplyConnection {
         }
         let superseded =
             activate_verified_package_in(&transaction, current, target, transition).await?;
+        finish_proposal_activation_in(&transaction, registry, compatibility, current, target)
+            .await?;
         transaction.commit().await?;
         Ok(superseded)
     }
@@ -1656,24 +1630,6 @@ impl DedicatedApplyConnection {
         super::runtime_grants_missing(&self.client, runtime_role, expected_catalog).await
     }
 
-    /// Reconciles product-owned control tables before a successor enters
-    /// maintenance. This upgrades registries initialized by an older binary,
-    /// including installations that predate field-encryption key and flip
-    /// state, without giving the runtime role write authority.
-    pub(crate) async fn reconcile_successor_control_plane(
-        &mut self,
-        runtime_role: &SqlIdentifier,
-    ) -> Result<()> {
-        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        let transaction = self.client.transaction().await?;
-        install_registry_state_schema(&transaction, runtime_role).await?;
-        install_history_schema_store(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
-        transaction.commit().await?;
-        Ok(())
-    }
-
     /// Records or resumes a successor only when the durable source identity,
     /// exact target, ordered checksums, and activation all agree.
     pub(crate) async fn begin_successor_package(
@@ -1710,17 +1666,14 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Runs every check and write [`Self::reconcile_successor_control_plane`]
-    /// and [`Self::begin_successor_package`] run, in one transaction it rolls
-    /// back, so a plan reports what the begin would refuse and leaves the
-    /// database as it was.
+    /// Rehearses successor begin in a transaction it rolls back, leaving the
+    /// current catalog and state unchanged when planning.
     pub(crate) async fn rehearse_successor_package(
         &mut self,
         current: &ExpectedRegistryIdentity,
         target: &ExpectedRegistryIdentity,
         ledger: &MigrationLedgerEntry,
         event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
-        runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         current.validate()?;
@@ -1738,10 +1691,6 @@ impl DedicatedApplyConnection {
         }
         let transaction = self.client.transaction().await?;
         let rehearsed = async {
-            install_registry_state_schema(&transaction, runtime_role).await?;
-            install_history_schema_store(&transaction, runtime_role)
-                .await
-                .map_err(|_| PostgresKernelError::Connection)?;
             begin_successor_in(
                 &transaction,
                 current,
@@ -1842,23 +1791,6 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Explicit W2 compatibility wrapper for the feasibility kernel catalog.
-    #[cfg(feature = "postgres-test")]
-    pub async fn activate(
-        &mut self,
-        target: &ExpectedRegistryIdentity,
-        migration_role: &SqlIdentifier,
-        runtime_role: &SqlIdentifier,
-    ) -> Result<()> {
-        self.activate_for_catalog(
-            target,
-            &ExpectedManagedCatalog::kernel(),
-            migration_role,
-            runtime_role,
-        )
-        .await
-    }
-
     /// Atomically records the immutable applied-ledger outcome and makes the
     /// exact package digest and its activation ready only after closed
     /// catalog, RLS, ACL, ownership, and schema-fingerprint verification
@@ -1867,6 +1799,8 @@ impl DedicatedApplyConnection {
     /// the activation has committed.
     pub(crate) async fn activate_verified_package(
         &mut self,
+        registry: &CompiledRegistry,
+        compatibility: Option<&crate::proposal_retention::ProposalActivationCompatibilityInventory>,
         current: Option<&ExpectedRegistryIdentity>,
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
@@ -1877,6 +1811,8 @@ impl DedicatedApplyConnection {
         let transaction = self.client.transaction().await?;
         let superseded =
             activate_verified_package_in(&transaction, current, target, transition).await?;
+        finish_proposal_activation_in(&transaction, registry, compatibility, current, target)
+            .await?;
         transaction.commit().await?;
         Ok(superseded)
     }
@@ -1884,7 +1820,8 @@ impl DedicatedApplyConnection {
     /// Activates the target only after exact package-catalog verification in
     /// the same transaction as the Registry state transition.
     #[cfg(feature = "postgres-test")]
-    pub(crate) async fn activate_for_catalog(
+    #[doc(hidden)]
+    pub async fn activate_for_catalog(
         &mut self,
         target: &ExpectedRegistryIdentity,
         expected_catalog: &ExpectedManagedCatalog,
@@ -2027,17 +1964,6 @@ impl DedicatedApplyConnection {
             )
             .await?;
         Ok(row.map(|row| (row.get(0), row.get(1))))
-    }
-
-    /// Whether a role of this name exists. A runtime role the ledger records
-    /// can be dropped or renamed by an administrator after its activation.
-    pub(crate) async fn role_exists(&mut self, role: &SqlIdentifier) -> Result<bool> {
-        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        Ok(self
-            .client
-            .query_one("SELECT to_regrole($1) IS NOT NULL", &[&role.as_str()])
-            .await?
-            .try_get(0)?)
     }
 
     /// Reads the durable maintenance state while this session holds the
@@ -2231,6 +2157,44 @@ impl DedicatedApplyConnection {
 /// The activation transaction's work: closed catalog verification, the
 /// applied ledger outcome, and the registry state transition. Answers the
 /// supersession record of every import authority the activation retired.
+async fn finish_proposal_activation_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    registry: &CompiledRegistry,
+    compatibility: Option<&crate::proposal_retention::ProposalActivationCompatibilityInventory>,
+    current: Option<&ExpectedRegistryIdentity>,
+    target: &ExpectedRegistryIdentity,
+) -> Result<()> {
+    if let Some(current) = current {
+        crate::proposal_retention::install_activation_compatibility(
+            transaction,
+            registry,
+            current,
+            &target.package_digest,
+            &target.activation_id,
+            compatibility,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    } else if compatibility.is_some() {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    crate::proposal_retention::mark_incompatible_proposals(
+        transaction,
+        registry,
+        &target.package_digest,
+        &target.activation_id,
+    )
+    .await
+    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    crate::proposal_retention::verify_activation_compatibility_freshness(
+        transaction,
+        compatibility,
+    )
+    .await
+    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    Ok(())
+}
+
 async fn activate_verified_package_in(
     transaction: &tokio_postgres::Transaction<'_>,
     current: Option<&ExpectedRegistryIdentity>,
@@ -2413,8 +2377,7 @@ async fn retire_runtime_role_in(
 }
 
 /// Refuse a successor unless history coverage is complete or narrowed only by
-/// a recorded standalone erasure. An absent commit head is refused here; only
-/// the begin check admits it.
+/// a recorded standalone erasure. An absent commit head is refused.
 async fn verify_complete_history_coverage(
     client: &impl tokio_postgres::GenericClient,
 ) -> Result<()> {
@@ -2473,7 +2436,7 @@ async fn begin_successor_in(
     // Refuse before maintenance or ledger state can start: otherwise a
     // successor could add new flip rows while an erase lifecycle is using
     // the current durable flip manifest for crash-resumable correlation.
-    verify_history_coverage_can_begin_successor(transaction).await?;
+    verify_complete_history_coverage(transaction).await?;
     verify_retained_webhook_delivery_bindings(
         transaction,
         event_destination_compatibility_inventory,
@@ -2506,21 +2469,6 @@ async fn begin_successor_in(
     } else {
         verify_successor_resumable_state(transaction, current, target).await?;
         verify_resumable(transaction, ledger).await?;
-    }
-    Ok(())
-}
-
-/// Permit a legacy registry with no commit head to enter the successor path
-/// that establishes its first baseline. Once a head exists, coverage that is
-/// not ready means an erase lifecycle may be active and must freeze successors.
-async fn verify_history_coverage_can_begin_successor(
-    client: &impl tokio_postgres::GenericClient,
-) -> Result<()> {
-    if !history_coverage_admits_successor(client)
-        .await?
-        .unwrap_or(true)
-    {
-        return Err(PostgresKernelError::HistoryCoverageIncomplete);
     }
     Ok(())
 }
@@ -3072,8 +3020,8 @@ struct FieldEncryptionContentVerification {
     sealed_rows: u64,
     sealed_journal_rows: u64,
     accepted_plaintext_journal_rows: u64,
-    accepted_request_target_rows: u64,
-    accepted_request_proposal_rows: u64,
+    accepted_proposal_target_rows: u64,
+    accepted_proposal_submission_rows: u64,
     accepted_idempotency_rows: u64,
     accepted_outbox_rows: u64,
 }
@@ -3279,20 +3227,20 @@ async fn verify_field_encryption_content(
             "SELECT count(*) FILTER (
                         WHERE base_snapshot ? $2 OR after_snapshot ? $2
                     )::bigint
-               FROM registry_internal.registry_request_targets
+               FROM registry_internal.registry_proposal_targets
               WHERE target_entity_id = $1",
             &[&entity_id, &field_id],
         )
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
     let target_mentions: i64 = request_targets.get(0);
-    verification.accepted_request_target_rows =
+    verification.accepted_proposal_target_rows =
         u64::try_from(target_mentions).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
 
     let request_proposals = transaction
         .query_one(
             "SELECT count(*)::bigint
-               FROM registry_internal.registry_request_proposals AS proposal
+               FROM registry_internal.registry_proposal_submissions AS proposal
               WHERE snapshot IS NOT NULL
                 AND (
                     EXISTS (
@@ -3322,8 +3270,9 @@ async fn verify_field_encryption_content(
         )
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
-    verification.accepted_request_proposal_rows = u64::try_from(request_proposals.get::<_, i64>(0))
-        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    verification.accepted_proposal_submission_rows =
+        u64::try_from(request_proposals.get::<_, i64>(0))
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
 
     // The recursive path binds as text and casts in the server: no client
     // parameter type maps to jsonpath, and the explicit I/O cast is exact.
@@ -3390,8 +3339,8 @@ async fn record_field_encryption_flip(
                  entity_id, field_id, boundary_package_revision, history_choice,
                  history_commit_position,
                  sealed_row_count, sealed_journal_row_count,
-                 accepted_plaintext_journal_row_count, accepted_request_target_row_count,
-                 accepted_request_proposal_row_count, accepted_idempotency_row_count,
+                 accepted_plaintext_journal_row_count, accepted_proposal_target_row_count,
+                 accepted_proposal_submission_row_count, accepted_idempotency_row_count,
                  accepted_outbox_row_count
              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
             &[
@@ -3406,9 +3355,9 @@ async fn record_field_encryption_flip(
                     .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
                 &i64::try_from(verification.accepted_plaintext_journal_rows)
                     .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
-                &i64::try_from(verification.accepted_request_target_rows)
+                &i64::try_from(verification.accepted_proposal_target_rows)
                     .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
-                &i64::try_from(verification.accepted_request_proposal_rows)
+                &i64::try_from(verification.accepted_proposal_submission_rows)
                     .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
                 &i64::try_from(verification.accepted_idempotency_rows)
                     .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
@@ -3828,13 +3777,17 @@ async fn read_activation_status_in(
     let ledger = rows
         .iter()
         .map(|row| {
+            let plan_kind: String = row.try_get(5)?;
+            if !matches!(plan_kind.as_str(), "initial" | "successor") {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
             Ok(RecordedLedgerEntry {
                 activation_id: row.try_get(0)?,
                 apply_order: row.try_get(1)?,
                 package_digest: row.try_get(2)?,
                 predecessor_package_digest: row.try_get(3)?,
                 registry_revision: row.try_get(4)?,
-                plan_kind: row.try_get(5)?,
+                plan_kind,
                 migration_kind: row.try_get(6)?,
                 outcome: row.try_get(7)?,
                 role_mode: row.try_get(8)?,
@@ -4022,7 +3975,7 @@ mod tests {
                     "defaultLanguage": "en",
                     "canonicalBaseIri": "https://scan-keys.example.test"
                 },
-                "entities": [{
+                "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                     "id": "case",
                     "primaryDataset": "test-dataset",
                     "route": "cases",
@@ -4034,8 +3987,8 @@ mod tests {
                     "default": true,
                     "principalClaim": "principal",
                     "requiredScopes": "unrestricted",
-                    "permissions": {"entities": [{
-                        "entity": "case",
+                    "permissions": {"records": [{
+                        "recordType": "case",
                         "rowBoundaries": "unrestricted",
                         "operations": ["get", "list", "create", "patch"],
                         "readableFields": ["secret"],

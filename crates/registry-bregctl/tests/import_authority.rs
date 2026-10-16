@@ -36,7 +36,7 @@ fn open(runtime_config: &str, extra: &[&str]) -> Vec<String> {
         "open",
         "--runtime-config",
         runtime_config,
-        "--entity",
+        "--record-type",
         "widget",
         "--profile",
         "loader",
@@ -255,7 +255,7 @@ fn import_authority_help_describes_the_operator_contract() {
     assert!(stderr.is_empty());
     for flag in [
         "--runtime-config <ABSOLUTE_FILE>",
-        "--entity <ENTITY>",
+        "--record-type <ID>",
         "--profile <PROFILE>",
         "--max-items <COUNT>",
         "--expires-in <DURATION>",

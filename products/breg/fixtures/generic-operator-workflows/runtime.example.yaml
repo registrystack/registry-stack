@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json
+# An example runtime configuration. It is not read by any command: copy it to a
+# file the operator keeps outside this project, then replace every value below.
+# The runtime file is a deployment artifact. It binds one compiled package to
+# one database, one token issuer, and one listener. It never holds a credential:
+# a `secret:file/<name>` reference names an owner-only file under the file
+# provider root, and `secret:env/<NAME>` an environment variable.
+# Every host here is under `.example.invalid`, which never resolves.
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
+kind: BRegRuntimeConfig
+
+# Where the server listens. Client addresses and TLS termination belong to
+# whatever sits in front of it: the runtime reads neither peer addresses nor
+# forwarded headers.
+listener:
+  bind: 127.0.0.1:8080
+
+# The environment, instance, and database this file serves. A package names
+# none of them, so the same package directory is applied in every environment;
+# `bregctl apply` records this identity in the database it activates.
+identity:
+  environment: local
+  instanceId: generic-registry-1
+  databaseId: generic-registry-db-1
+  databaseInitializationEnvironment: local
+
+# The directory holding the owner-only files the references below name.
+secretProviders:
+  file:
+    root: /replace/me/secrets
+
+# Two connection URLs and the two PostgreSQL roles the package's policies are
+# written for: one role migrates, the other serves requests.
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maximumConnections: 8
+  roles:
+    migration: registry_migration
+    runtime: registry_runtime
+
+# The activated package directory. The server starts only when the database
+# records this package's digest, the `packageDigest` `bregctl package` reports,
+# as its active package.
+package:
+  root: /replace/me/packages/build-1/package
+
+# The token issuer this deployment accepts, and the claim names that carry
+# Registry authority. `authorityClaims` must name the claims the access profiles
+# in registry.yaml read: `principalClaim`, and the claims row boundaries compare.
+authentication:
+  oidc:
+    issuer: https://issuer.example.invalid
+    audience: generic-registry
+    allowedAlgorithm: ES256
+    accessTokenType: at+jwt
+    scopeClaim: scope
+    scopeSeparator: " "
+    allowedClients: [generic-registry-client]
+    maximumTokenLifetimeSeconds: 300
+    leewayMilliseconds: 30000
+    jwksSource:
+      type: discovery
+  authorityClaims:
+    principal: registry_principal
+    purpose: registry_purpose
+
+# The key that derives the keyed references in audit entries and the secret
+# that signs pagination cursors. Losing the audit key breaks the link between
+# references written before and after it; losing the cursor secret invalidates
+# issued cursors, so generate them once and keep them. The server appends audit
+# entries to the absolute JSON Lines file `path`, in an owner-only directory;
+# `bregctl` maintenance commands append to the sibling `audit.bregctl.jsonl`.
+audit:
+  hashKeyRef: secret:file/audit-key
+  destination: file
+  path: /var/lib/breg/audit/audit.jsonl
+cursor:
+  secretRef: secret:file/cursor-key
+
+# One binding for every webhook destination the package's events declare, and
+# no others: activation refuses a missing binding and an extra one alike. This
+# project declares no event, so the map is empty. A destination's URL, shared
+# HMAC key, and retry ceilings live only here, never in the project.
+eventDestinations: {}

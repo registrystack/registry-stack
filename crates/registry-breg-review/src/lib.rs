@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A server-rendered page where a signed-in person reviews and submits their
-//! own Base Registry Engine change request.
+//! own Base Registry Engine Proposal.
 //!
 //! The page is an OpenID Connect relying party and a confidential OAuth
 //! client. It signs a person in with the authorization code flow, keeps the
@@ -87,7 +87,7 @@ const ID_TOKEN_ALGORITHMS: [Algorithm; 5] = [
 pub fn command() -> Command {
     Command::new("breg-review")
         .version(registry_platform_buildinfo::DISPLAY_VERSION)
-        .about("Serve the citizen review page for Base Registry Engine change requests")
+        .about("Serve the citizen review page for Base Registry Engine Proposals")
         .arg(
             Arg::new("runtime-config")
                 .long("runtime-config")
@@ -205,8 +205,8 @@ pub(crate) struct App {
     pub client_id: String,
     pub scopes: Vec<String>,
     pub resource: String,
-    pub entity: String,
-    pub target_field: String,
+    pub action: String,
+    pub target_input: String,
     pub access_profile: String,
     pub authorization_endpoint: Url,
     /// Whether the provider promises an `iss` parameter on every
@@ -244,6 +244,7 @@ pub(crate) enum Problem {
     AuditUnavailable,
     RegistryUnavailable,
     RegistryRefused,
+    ActionChanged,
     RequestConflict,
     RateLimited,
     Internal,
@@ -335,6 +336,12 @@ impl Problem {
                 "request-conflict",
                 "Request changed",
                 "This request changed while it was being submitted. Open it again.",
+            ),
+            Self::ActionChanged => (
+                StatusCode::CONFLICT,
+                "action-changed",
+                "Service changed",
+                "This service changed after the request was prepared. Your request is still saved. Contact the service to update it before reviewing again.",
             ),
             Self::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -701,8 +708,8 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         client_id: config.sign_in.client_id.as_str().to_owned(),
         scopes: scopes(&config),
         resource: config.registry.resource.as_str().to_owned(),
-        entity: config.registry.entity.as_str().to_owned(),
-        target_field: config.registry.target_field.as_str().to_owned(),
+        action: config.registry.action.as_str().to_owned(),
+        target_input: config.registry.target_input.as_str().to_owned(),
         access_profile: config.registry.access_profile.as_str().to_owned(),
         authorization_endpoint,
         requires_iss,
@@ -734,9 +741,9 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         .route("/signin", guarded(get(signin::start)))
         .route("/signin/callback", guarded(get(signin::callback)))
         .route("/signout", guarded(post(pages::sign_out)))
-        .route("/requests/{request_id}", guarded(get(pages::review)))
+        .route("/proposals/{request_id}", guarded(get(pages::review)))
         .route(
-            "/requests/{request_id}/submit",
+            "/proposals/{request_id}/submit",
             guarded(post(pages::submit)),
         )
         .fallback(not_found)

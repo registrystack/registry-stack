@@ -1,16 +1,13 @@
 //! The committed JSON Schemas of the documents `evidencectl` itself reads and
-//! writes: the local access client and the source mock plan. The documents the
-//! authoring crate owns are generated there; this module follows the same
-//! rendering so every committed schema is shaped alike.
+//! writes: the local access client, source mock plan, and source-import
+//! resolution file. The normalized project and target documents are generated
+//! by the authoring crate; this module follows the same rendering.
 
 use std::collections::BTreeMap;
 
 use registry_evidence_authoring::formats::{
     ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND, ACCESS_CLIENT_SCHEMA_ID, MOCK_PLAN_API_VERSION,
-    MOCK_PLAN_KIND, MOCK_PLAN_SCHEMA_ID, SELECTOR_API_VERSION, SELECTOR_KIND, SELECTOR_SCHEMA_ID,
-    SOURCE_API_VERSION, SOURCE_KIND, SOURCE_SCHEMA_ID, TARGET_GOVERNANCE_API_VERSION,
-    TARGET_GOVERNANCE_KIND, TARGET_GOVERNANCE_SCHEMA_ID, TARGET_SETTINGS_API_VERSION,
-    TARGET_SETTINGS_KIND, TARGET_SETTINGS_SCHEMA_ID,
+    MOCK_PLAN_KIND, MOCK_PLAN_SCHEMA_ID,
 };
 use registry_evidence_authoring::schema::publish;
 
@@ -26,29 +23,6 @@ pub const MOCK_PLAN_SCHEMA_FILE: &str = "mock-plan.schema.json";
 
 /// The schema for one source import resolution file.
 pub const SOURCE_RESOLUTION_SCHEMA_FILE: &str = "source-resolution.schema.json";
-
-/// The schema for one deployment target's `governance.yaml`.
-pub const TARGET_GOVERNANCE_SCHEMA_FILE: &str = "target-governance.schema.json";
-
-/// The schema for one selector profile under `selectors/`.
-pub const SELECTOR_SCHEMA_FILE: &str = "selector.schema.json";
-
-/// The schema for one source under `sources/`.
-pub const SOURCE_SCHEMA_FILE: &str = "source.schema.json";
-
-/// The schema for one deployment target's `settings.yaml`.
-pub const TARGET_SETTINGS_SCHEMA_FILE: &str = "target-settings.schema.json";
-
-/// The schema body of a source or selector: `evidencectl` reads the header and
-/// passes the flat body, unchanged, into the Evidence bundle grammar.
-fn bundle_body_schema(member: &str) -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "x-registry-passthrough": format!(
-            "{member} of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
-        ),
-    })
-}
 
 /// Every generated schema this crate owns, keyed by the filename it is
 /// committed under.
@@ -77,42 +51,6 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
             )?,
         ),
         (
-            TARGET_GOVERNANCE_SCHEMA_FILE,
-            publish(
-                crate::build::governance_document_schema(),
-                "Evidence deployment target governance",
-                TARGET_GOVERNANCE_SCHEMA_ID,
-                (TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND),
-            )?,
-        ),
-        (
-            TARGET_SETTINGS_SCHEMA_FILE,
-            publish(
-                crate::target::settings_document_schema(),
-                "Evidence deployment target settings",
-                TARGET_SETTINGS_SCHEMA_ID,
-                (TARGET_SETTINGS_API_VERSION, TARGET_SETTINGS_KIND),
-            )?,
-        ),
-        (
-            SELECTOR_SCHEMA_FILE,
-            publish(
-                bundle_body_schema("A selector profile"),
-                "Evidence selector profile",
-                SELECTOR_SCHEMA_ID,
-                (SELECTOR_API_VERSION, SELECTOR_KIND),
-            )?,
-        ),
-        (
-            SOURCE_SCHEMA_FILE,
-            publish(
-                bundle_body_schema("A source"),
-                "Evidence source",
-                SOURCE_SCHEMA_ID,
-                (SOURCE_API_VERSION, SOURCE_KIND),
-            )?,
-        ),
-        (
             SOURCE_RESOLUTION_SCHEMA_FILE,
             publish(
                 resolution_schema(),
@@ -131,9 +69,7 @@ mod tests {
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
     use super::{
-        documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE, SELECTOR_SCHEMA_FILE,
-        SOURCE_RESOLUTION_SCHEMA_FILE, SOURCE_SCHEMA_FILE, TARGET_GOVERNANCE_SCHEMA_FILE,
-        TARGET_SETTINGS_SCHEMA_FILE,
+        documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE, SOURCE_RESOLUTION_SCHEMA_FILE,
     };
 
     fn compile(file: &str) -> jsonschema::JSONSchema {
@@ -148,6 +84,18 @@ mod tests {
 
     #[test]
     fn the_committed_schemas_are_the_generated_ones() {
+        assert_eq!(
+            documents()
+                .expect("schemas generate")
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![
+                ACCESS_CLIENT_SCHEMA_FILE,
+                MOCK_PLAN_SCHEMA_FILE,
+                SOURCE_RESOLUTION_SCHEMA_FILE,
+            ]
+        );
         for (file, generated) in documents().expect("schemas generate") {
             let committed = std::fs::read_to_string(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -168,7 +116,7 @@ mod tests {
                 "kind": "EvidenceAccessClient",
                 "clientId": "assistant",
                 "status": "active",
-                "policies": ["readers"],
+                "accessProfiles": ["readers"],
                 "principal": "assistant",
                 "evidenceAudience": "https://evidence.example.test",
                 "keys": [],
@@ -266,127 +214,70 @@ mod tests {
     }
 
     #[test]
-    fn source_and_selector_schemas_and_reader_agree_on_the_header() {
-        use registry_evidence_authoring::formats::{read_envelope_body, SELECTOR, SOURCE};
+    fn normalized_target_schema_and_reader_agree_on_the_top_level() {
+        use registry_evidence_authoring::{schema::TARGET_SCHEMA_FILE, target};
 
-        for (file, format, kind, body) in [
+        let schemas = registry_evidence_authoring::schema::documents().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&schemas[TARGET_SCHEMA_FILE]).unwrap();
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&value)
+            .unwrap();
+        let canonical =
+            include_str!("../../../products/evidence/examples/standalone/local-target.yaml");
+        let reads = |text: &str| {
+            let value: serde_json::Value = serde_norway::from_str(text).unwrap();
             (
-                SELECTOR_SCHEMA_FILE,
-                SELECTOR,
-                "EvidenceSelector",
-                "fields: {}\n",
-            ),
-            (
-                SOURCE_SCHEMA_FILE,
-                SOURCE,
-                "EvidenceSource",
-                "type: http-json\n",
-            ),
+                schema.is_valid(&value),
+                target::read_target("local-target.yaml", text.as_bytes()).is_ok(),
+            )
+        };
+        assert_eq!(reads(canonical), (true, true));
+        for refused in [
+            canonical.replacen("kind: EvidenceTarget\n", "", 1),
+            canonical.replacen("apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1\n", "", 1),
+            canonical.replacen("id: local\n", "", 1),
+            format!("{canonical}unknown: true\n"),
+            "apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\ngovernance: {}\nruntime: {}\n".to_owned(),
         ] {
-            let schema = compile(file);
-            let name = kind.trim_start_matches("Evidence").to_lowercase();
-            let header = format!(
-                "apiVersion: id.registrystack.org/formats/evidence/{name}/v1alpha1\nkind: {kind}\n"
-            );
-            let reads = |text: String| {
-                let value: serde_json::Value =
-                    serde_norway::from_str(&text).expect("the test document is YAML");
-                let reader = read_envelope_body("file.yaml", text.as_bytes(), &format).is_ok();
-                (schema.is_valid(&value), reader)
-            };
-            for (document, accepted) in [
-                (format!("{header}{body}"), true),
-                (header.clone(), true),
-                (body.to_owned(), false),
-                (format!("apiVersion: id.registrystack.org/formats/evidence/{name}/v1alpha1\n{body}"), false),
-                (format!("kind: {kind}\n{body}"), false),
-                (format!("apiVersion: id.registrystack.org/formats/evidence/{name}/v2\nkind: {kind}\n{body}"), false),
-            ] {
-                assert_eq!(reads(document.clone()), (accepted, accepted), "{document}");
-            }
+            assert_eq!(reads(&refused), (false, false), "{refused}");
         }
     }
 
     #[test]
-    fn target_settings_schema_and_reader_agree_on_the_top_level() {
-        use registry_evidence_authoring::formats::{decode_authored, TARGET_SETTINGS};
+    fn normalized_target_authority_schema_and_reader_agree_on_the_top_level() {
+        use registry_evidence_authoring::{project, schema::TARGET_AUTHORITY_SCHEMA_FILE, target};
 
-        let schema = compile(TARGET_SETTINGS_SCHEMA_FILE);
-        let header = "apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\n";
-        let members = "governance: {}\nruntime: {}\n";
-        let reads = |text: String| {
-            let value: serde_json::Value =
-                serde_norway::from_str(&text).expect("the test document is YAML");
-            let reader = decode_authored::<crate::target::TargetSettings>(
-                "settings.yaml",
-                text.as_bytes(),
-                &TARGET_SETTINGS,
+        let schemas = registry_evidence_authoring::schema::documents().unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&schemas[TARGET_AUTHORITY_SCHEMA_FILE]).unwrap();
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&value)
+            .unwrap();
+        let project = project::read_project(
+            "evidence.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
+        )
+        .unwrap()
+        .value;
+        let canonical =
+            include_str!("../../../products/evidence/examples/standalone/dev-authority.yaml");
+        let reads = |text: &str| {
+            let value: serde_json::Value = serde_norway::from_str(text).unwrap();
+            (
+                schema.is_valid(&value),
+                target::read_authority("dev-authority.yaml", text.as_bytes(), &project).is_ok(),
             )
-            .is_ok();
-            (schema.is_valid(&value), reader)
         };
-        for (document, accepted) in [
-            (format!("{header}{members}"), true),
-            (format!("{header}{members}publicKeys: {{}}\n"), true),
-            (format!("{header}runtime: {{}}\n"), false),
-            (format!("{header}governance: {{}}\n"), false),
-            (format!("{header}{members}unknown: true\n"), false),
-            (members.to_owned(), false),
+        assert_eq!(reads(canonical), (true, true));
+        for refused in [
+            canonical.replacen("kind: EvidenceTargetAuthority\n", "", 1),
+            canonical.replacen("project: standalone-evidence\n", "", 1),
+            format!("{canonical}unknown: true\n"),
+            "apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1\nkind: EvidenceTargetGovernance\nassuranceProfile: local\n".to_owned(),
         ] {
-            assert_eq!(reads(document.clone()), (accepted, accepted), "{document}");
+            assert_eq!(reads(&refused), (false, false), "{refused}");
         }
-    }
-
-    #[test]
-    fn target_governance_schema_and_reader_agree_on_the_top_level() {
-        use registry_evidence_authoring::formats::{decode_authored, TARGET_GOVERNANCE};
-
-        let schema = compile(TARGET_GOVERNANCE_SCHEMA_FILE);
-        let header = "apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1\nkind: EvidenceTargetGovernance\n";
-        let required = [
-            "assuranceProfile: local",
-            "service: {}",
-            "issuer: {}",
-            "authentication: {}",
-            "audit: {}",
-            "subjectBinding: {}",
-            "rateLimits: {}",
-            "signing: {}",
-            "authorityProfiles: {}",
-        ];
-        let optional = [
-            "publication: {}",
-            "responseFormats: {}",
-            "sourceConnections: {}",
-        ];
-        let document = |members: &[&str]| format!("{header}{}\n", members.join("\n"));
-        let agree = |text: String, accepted: bool| {
-            let value: serde_json::Value =
-                serde_norway::from_str(&text).expect("the test document is YAML");
-            let reader = decode_authored::<crate::build::TargetGovernance>(
-                "governance.yaml",
-                text.as_bytes(),
-                &TARGET_GOVERNANCE,
-            )
-            .is_ok();
-            assert_eq!(
-                (schema.is_valid(&value), reader),
-                (accepted, accepted),
-                "{text}"
-            );
-        };
-        agree(document(&required), true);
-        let mut with_optional = required.to_vec();
-        with_optional.extend(optional);
-        agree(document(&with_optional), true);
-        for index in 0..required.len() {
-            let mut without = required.to_vec();
-            without.remove(index);
-            agree(document(&without), false);
-        }
-        let mut unknown = required.to_vec();
-        unknown.push("unknown: true");
-        agree(document(&unknown), false);
-        agree(required.join("\n") + "\n", false);
     }
 }

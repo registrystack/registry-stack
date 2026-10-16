@@ -20,6 +20,13 @@ pub fn render(config: &EvidenceConfig) -> Result<Option<Vec<u8>>, ProfileError> 
     let mut bindings = BTreeSet::new();
     for requirement in &config.requirements {
         for format in &config.response_formats {
+            if requirement
+                .representations
+                .as_ref()
+                .is_some_and(|formats| !formats.contains(format))
+            {
+                continue;
+            }
             if let Some(capability) =
                 capability_profile(requirement.subject_binding_mode(), *format)
             {
@@ -199,6 +206,27 @@ mod tests {
             service.evidence_type_ids() == [holder_type.clone()]
                 && service.conforms_to()[1].contains("/audience-scoped/")
         }));
+    }
+
+    #[test]
+    fn provider_publication_never_exceeds_definition_representations() {
+        let mut config = config();
+        config.requirements[0].representations = Some(vec![ResponseFormat::SignedJws]);
+        let evidence_type = config.requirements[0].evidence_type.clone();
+        let bytes = render(&config)
+            .expect("description renders")
+            .expect("publication");
+        let parsed = registry_discovery_profile::parse_description(&bytes).expect("valid profile");
+        let profiles = parsed
+            .services()
+            .iter()
+            .filter(|service| service.evidence_type_ids() == [evidence_type.clone()])
+            .map(|service| service.conforms_to()[1].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            profiles,
+            ["https://registrystack.org/evidence/profile/v1/audience-scoped/signed-jws"]
+        );
     }
 
     #[test]

@@ -28,9 +28,12 @@ use crate::error::{bounded_token, redacted_message};
 
 /// The payload bound the envelope carries, in bytes.
 ///
-/// The same 2 MiB payload bound the delivery store enforces on a stored
-/// envelope. A per-delivery bound can only tighten this, never widen it.
-pub const MAX_ENVELOPE_BYTES: usize = 2_097_152;
+/// The 1 MiB Version 1 signable bound
+/// (`registry_platform_crypto::delivery_signature::MAX_BODY_BYTES`), so every
+/// envelope a product emits can be signed and verified on a delivery path. The
+/// delivery store's 2 MiB payload column is a looser outer bound. A
+/// per-delivery bound can only tighten this, never widen it.
+pub const MAX_ENVELOPE_BYTES: usize = 1_048_576;
 
 /// The causation hop ceiling.
 ///
@@ -56,7 +59,7 @@ impl EnvelopeLimits {
     ///
     /// A request above [`MAX_ENVELOPE_BYTES`] is clamped to it rather than
     /// refused: a per-delivery bound is a tightening, and a caller that asks
-    /// for more gets the store's bound, never more than it.
+    /// for more gets the envelope bound, never more than it.
     #[must_use]
     pub const fn tightened_to(bytes: usize) -> Self {
         Self {
@@ -79,6 +82,7 @@ impl Default for EnvelopeLimits {
 
 /// The product record the triggering change landed on.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EventSubject {
     /// The record reference, as the product addresses it.
@@ -86,24 +90,29 @@ pub struct EventSubject {
     /// The revision the triggering change produced. Revisions start at one, so
     /// a revision of zero or below is refused on both encode and decode, the
     /// same bound the delivery store enforces on a stored envelope.
+    #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
     pub record_revision: i64,
 }
 
 /// Why this event exists: the chain it belongs to and the event that caused it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Causation {
     /// The id of the first event in the chain; equals `id` for a root event.
     /// A later orchestrator correlates on this field. A UUID, like every
     /// event identity on the envelope.
+    #[cfg_attr(feature = "schema", schemars(extend("format" = "uuid")))]
     pub root: String,
     /// The id of the event whose handler proposed the change that produced
     /// this one. Absent for a root event, never spelled `null` on the wire:
     /// the decoder refuses bytes a re-encode cannot reproduce. A UUID when
     /// present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("type" = "string", "format" = "uuid")))]
     pub parent: Option<String>,
     /// 0 for a root event, parent hop + 1 otherwise.
+    #[cfg_attr(feature = "schema", schemars(range(max = 8)))]
     pub hop: u32,
 }
 
@@ -143,6 +152,7 @@ impl Causation {
 
 /// The hook envelope, one shape for every product and every destination kind.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HookEnvelope {
     /// Event identity, unique per triggering change. The idempotency key a
@@ -151,6 +161,7 @@ pub struct HookEnvelope {
     /// A UUID: the delivery store keys an envelope by a UUID event id, so an
     /// id that is not one could never be stored. Refused on both encode and
     /// decode.
+    #[cfg_attr(feature = "schema", schemars(extend("format" = "uuid")))]
     pub id: String,
     /// The hook's stable contract id.
     #[serde(rename = "type")]
@@ -166,6 +177,7 @@ pub struct HookEnvelope {
     /// normalized one. Decoding requires that wire form and refuses any other
     /// spelling, so a decoded envelope re-encodes to the bytes it arrived as.
     #[serde(with = "utc_millisecond_rfc3339")]
+    #[cfg_attr(feature = "schema", schemars(with = "String", extend("format" = "date-time")))]
     pub time: OffsetDateTime,
     /// The product record reference and revision.
     pub subject: EventSubject,
@@ -823,7 +835,7 @@ mod tests {
         let limits = EnvelopeLimits::default();
         let oversized = vec![b' '; MAX_ENVELOPE_BYTES + 1];
         let error = HookEnvelope::from_canonical_bytes(&oversized, &limits)
-            .expect_err("the outbox bound is the ceiling");
+            .expect_err("the envelope bound is the ceiling");
         assert!(matches!(
             error,
             HookEnvelopeError::PayloadTooLarge { size, max }
@@ -917,9 +929,24 @@ mod tests {
     }
 
     #[test]
-    fn the_envelope_ceiling_constant_mirrors_the_outbox_table() {
-        assert_eq!(MAX_ENVELOPE_BYTES, 2_097_152);
-        assert_eq!(EnvelopeLimits::default().max_envelope_bytes, 2_097_152);
+    fn the_envelope_ceiling_is_the_signable_bound_inside_the_outbox_column() {
+        assert_eq!(MAX_ENVELOPE_BYTES, 1_048_576);
+        assert_eq!(EnvelopeLimits::default().max_envelope_bytes, 1_048_576);
+        const {
+            assert!(
+                MAX_ENVELOPE_BYTES <= 2_097_152,
+                "the outbox column holds it"
+            )
+        };
+    }
+
+    #[cfg(feature = "receiver")]
+    #[test]
+    fn the_envelope_ceiling_matches_the_version_1_signable_bound() {
+        assert_eq!(
+            MAX_ENVELOPE_BYTES,
+            registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
+        );
     }
 
     #[test]
@@ -927,7 +954,7 @@ mod tests {
         assert_eq!(
             EnvelopeLimits::tightened_to(MAX_ENVELOPE_BYTES + 1).max_envelope_bytes,
             MAX_ENVELOPE_BYTES,
-            "a widened request is clamped to the store's bound"
+            "a widened request is clamped to the envelope bound"
         );
         assert_eq!(
             EnvelopeLimits::tightened_to(usize::MAX).max_envelope_bytes,
@@ -939,7 +966,7 @@ mod tests {
             "a tightened request is honored"
         );
 
-        // The clamp is enforced, not just reported: bytes over the store's
+        // The clamp is enforced, not just reported: bytes over the envelope
         // bound are still refused after asking for a wider ceiling.
         let widened = EnvelopeLimits::tightened_to(MAX_ENVELOPE_BYTES * 2);
         let oversized = vec![b' '; MAX_ENVELOPE_BYTES + 1];

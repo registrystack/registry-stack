@@ -13,8 +13,9 @@
 //! transaction and can never mutate Scheduling from a receiver's response.
 //!
 //! For reminders,
-//! each due outbox intent is rendered as one CloudEvents 1.0 JSON event and
-//! POSTed to the operator-configured destination, exactly once per claim, with
+//! each due outbox intent is rendered as one shared hook envelope in canonical
+//! JSON and POSTed with `content-type: application/json` to the
+//! operator-configured destination, exactly once per claim, with
 //! the transport and the notification bus wholly external (INT-02). When no
 //! destination is configured the outbox is the boundary: intents are recorded
 //! and marked local, never pretended delivered.
@@ -22,13 +23,13 @@
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::{Arg, Command};
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{ProtectedSecret, SecretResolver};
+use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use registry_platform_httputil::destination::{
     DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
     DestinationAuthorizationValue, DestinationBodyTemplate, DestinationMethod, DestinationProfile,
@@ -270,7 +271,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             policy_digest,
             audit_hasher,
             audit,
-            config.retention.attempt_receipt_retention_days,
+            config.retention.receipt_retention_days,
         )
         .with_hooks(hooks)
         .with_task_grant_status(task_grant_status),
@@ -343,7 +344,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // The whole of retention, and deliberately not all of retention. This
     // sweep erases two things: idempotency attempt receipts, with the raw
     // caller and key they were filed under, after the configured
-    // `retention.attemptReceiptRetentionDays`, and listing cursors, after
+    // `retention.receiptRetentionDays`, and listing cursors, after
     // the fifteen minutes the listing contract gives them. Appointments,
     // their history, and the delivery outbox are never swept, by decision
     // and not by omission: committed scheduling data has
@@ -664,7 +665,7 @@ fn reminder_template(
         &[],
         &[
             ("accept", b"application/json".as_slice()),
-            ("content-type", b"application/cloudevents+json".as_slice()),
+            ("content-type", b"application/json".as_slice()),
         ],
         authorization,
         DestinationBodyTemplate::Required {
@@ -675,19 +676,29 @@ fn reminder_template(
     .map_err(|_| "the reminder request shape could not be compiled".to_owned())
 }
 
-/// Render one due intent as a CloudEvents 1.0 event in canonical JSON: the
-/// intent's own id, the deployment it came from, the purpose it was minted
-/// under, the instant it fell due, and the payload the runtime committed.
+/// Render one due intent as the shared hook envelope in canonical JSON, the
+/// same envelope an observer delivery carries: the intent's own id, the
+/// deployment it came from, the purpose it was minted under, the instant it
+/// fell due, the appointment and revision it concerns, and the payload the
+/// runtime committed.
 fn reminder_event(scheduling_id: &str, row: &OutboxRow) -> Result<Vec<u8>, RuntimeError> {
-    let event = serde_json::json!({
-        "specversion": "1.0",
-        "id": row.outbox_id.to_string(),
-        "source": scheduling_id,
-        "type": format!("org.registrystack.scheduling.{}", row.purpose),
-        "time": row.due_at.to_rfc3339(),
-        "data": row.payload,
-    });
-    canonicalize_json(&event).map_err(|_| RuntimeError::ReminderEvent)
+    let id = row.outbox_id.to_string();
+    let envelope = HookEnvelope {
+        id: id.clone(),
+        event_type: format!("org.registrystack.scheduling.{}", row.purpose),
+        source: format!("urn:registrystack:scheduling:{scheduling_id}"),
+        time: SystemTime::from(row.due_at).into(),
+        subject: EventSubject {
+            record_reference: format!("/v1/appointments/{}", row.claim_id),
+            record_revision: row.appointment_revision,
+        },
+        dataschema: format!("urn:registrystack:scheduling:reminder-data:{}", row.purpose),
+        data: row.payload.clone(),
+        causation: Causation::root(&id),
+    };
+    envelope
+        .to_canonical_bytes(&EnvelopeLimits::tightened_to(REMINDER_MAXIMUM_BODY_BYTES))
+        .map_err(|_| RuntimeError::ReminderEvent)
 }
 
 /// How one dispatch attempt's outcome is held, before it is written back.
@@ -903,18 +914,39 @@ mod tests {
     }
 
     #[test]
-    fn a_due_intent_renders_as_one_canonical_cloudevents_event() {
-        let row = intent("reminder-60");
+    fn a_due_intent_renders_as_the_shared_hook_envelope() {
+        let row = intent("reminder");
         let body = reminder_event("registry-north", &row).unwrap();
         let event: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(event["specversion"], "1.0");
         assert_eq!(event["id"], row.outbox_id.to_string());
-        assert_eq!(event["source"], "registry-north");
-        assert_eq!(event["type"], "org.registrystack.scheduling.reminder-60");
-        assert_eq!(event["time"], "2026-10-05T08:00:00+00:00");
+        assert_eq!(
+            event["source"],
+            "urn:registrystack:scheduling:registry-north"
+        );
+        assert_eq!(event["type"], "org.registrystack.scheduling.reminder");
+        assert_eq!(event["time"], "2026-10-05T08:00:00Z");
+        assert_eq!(
+            event["subject"],
+            serde_json::json!({
+                "recordReference": format!("/v1/appointments/{}", row.claim_id),
+                "recordRevision": 3,
+            })
+        );
+        assert_eq!(
+            event["dataschema"],
+            "urn:registrystack:scheduling:reminder-data:reminder"
+        );
         assert_eq!(event["data"]["minutesBefore"], 60);
-        // Canonical JSON carries no insignificant whitespace.
-        assert!(!String::from_utf8(body.clone()).unwrap().contains(' '));
+        assert_eq!(event["causation"]["root"], row.outbox_id.to_string());
+        assert!(event.get("specversion").is_none());
+        // The receiver parses the bytes with the same decoder an observer
+        // delivery goes through.
+        let decoded = registry_platform_hooks::HookEnvelope::from_canonical_bytes(
+            &body,
+            &registry_platform_hooks::EnvelopeLimits::tightened_to(REMINDER_MAXIMUM_BODY_BYTES),
+        )
+        .unwrap();
+        assert_eq!(decoded.id, row.outbox_id.to_string());
     }
 
     #[test]

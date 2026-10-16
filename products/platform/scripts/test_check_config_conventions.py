@@ -953,7 +953,7 @@ class IdentifierTests(ConventionsTestCase):
     def union(self, branches: list, keyword: str = "oneOf") -> None:
         self.repo.project["$defs"]["Queue"]["properties"]["source"] = {keyword: branches}
 
-    def variant(self, tag: str, value: str, extra: str) -> dict:
+    def variant(self, tag: str, value: str | bool, extra: str) -> dict:
         return {
             "type": "object",
             "additionalProperties": False,
@@ -1061,6 +1061,30 @@ class QuantityTests(ConventionsTestCase):
             self.repo.run(), "CFG-QTY-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/targetElapsed")
         )
 
+    def test_cfg_qty_1_reports_an_elapsed_member_written_as_text(self) -> None:
+        self.queue()["after"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["elapsed"],
+            "properties": {"elapsed": {"type": "string"}},
+        }
+        self.assertFinding(
+            self.repo.run(), "CFG-QTY-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/after/properties/elapsed")
+        )
+
+    def test_cfg_qty_1_reports_a_member_whose_values_are_iso_8601_durations(self) -> None:
+        self.queue()["wait"] = {"type": "string", "examples": ["PT48H"]}
+        self.queue()["grace"] = {"type": "string", "default": "P2D"}
+        self.queue()["step"] = {"type": "string", "enum": ["PT15M", "PT1H"]}
+        report = self.repo.run()
+        for key in ("wait", "grace", "step"):
+            self.assertFinding(report, "CFG-QTY-1", P, at(PROJECT_SCHEMA, f"/$defs/Queue/properties/{key}"))
+
+    def test_cfg_qty_1_accepts_text_that_only_resembles_a_duration(self) -> None:
+        self.queue()["code"] = {"type": "string", "examples": ["PTO", "P", "PT"]}
+        self.queue()["mode"] = {"type": "string", "enum": ["P", "approved"]}
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-1")
+
     def test_cfg_qty_2_reports_the_minority_unit_of_a_stem(self) -> None:
         self.queue()["pollSeconds"] = {"type": "integer", "minimum": 1, "maximum": 10}
         self.repo.project["properties"]["pollSeconds"] = {"type": "integer", "minimum": 1, "maximum": 10}
@@ -1086,6 +1110,29 @@ class QuantityTests(ConventionsTestCase):
 
     def test_cfg_qty_4_reports_an_unsigned_type_s_own_range_as_unstated(self) -> None:
         self.queue()["retryCount"] = {"type": "integer", "format": "uint16", "minimum": 0, "maximum": 65535}
+        self.assertFinding(self.repo.run(), "CFG-QTY-4", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/retryCount"))
+
+    def test_cfg_qty_4_accepts_explicit_native_output_range(self) -> None:
+        self.repo.report["properties"]["filesChecked"] = {
+            "type": "integer", "format": "uint64", "minimum": 0, "maximum": 2**64 - 1,
+        }
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-4")
+        self.repo.report["properties"]["filesChecked"] = {
+            "type": "integer", "format": "int64", "minimum": -(2**63), "maximum": 2**63 - 1,
+        }
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-4")
+
+    def test_cfg_qty_4_output_still_requires_both_bounds(self) -> None:
+        self.repo.report["properties"]["filesChecked"] = {
+            "type": "integer", "format": "uint64", "minimum": 0,
+        }
+        self.assertFinding(self.repo.run(), "CFG-QTY-4", R, at(REPORT_SCHEMA, "/properties/filesChecked"))
+
+    def test_cfg_qty_4_read_back_format_still_requires_semantic_bounds(self) -> None:
+        self.repo.fmt(P)["audience"] = "generated"
+        self.queue()["retryCount"] = {
+            "type": "integer", "format": "uint64", "minimum": 0, "maximum": 2**64 - 1,
+        }
         self.assertFinding(self.repo.run(), "CFG-QTY-4", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/retryCount"))
 
     def test_cfg_qty_4_accepts_a_bounded_type_whose_stated_minimum_is_zero(self) -> None:
@@ -1536,6 +1583,23 @@ class SourceLintTests(ConventionsTestCase):
         report = self.repo.run()
         self.assertEqual(report.errors, [])
         self.assertEqual(sorted(key for key in keys(report.findings) if key[1] == P), [])
+
+    def test_build_artifact_without_an_envelope_keeps_reader_custody(self) -> None:
+        entry = self.build_artifact()
+        entry["buildArtifact"] = True
+        entry["current"] = {"apiVersion": "none", "kind": "none", "checkedBy": "none"}
+        entry["target"] = "none"
+        self.assertEqual(self.repo.run().errors, [])
+        entry["reader"]["function"] = "missing_reader"
+        self.assertError(self.repo.run(), "does not define fn missing_reader")
+
+    def test_ordinary_author_and_operator_formats_still_require_a_target(self) -> None:
+        entry = self.repo.fmt()
+        entry["target"] = "none"
+        for audience in ("authored", "operator", "generated"):
+            with self.subTest(audience=audience):
+                entry["audience"] = audience
+                self.assertError(self.repo.run(), "target none needs an exceptionClass or generated buildArtifact")
 
     def test_build_artifact_keeps_the_registry_accuracy_checks(self) -> None:
         entry = self.build_artifact()

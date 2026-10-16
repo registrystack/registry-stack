@@ -14,8 +14,10 @@ workspace = true
 [features]
 default = []
 postgres-test = []
+schema = ["dep:schemars"]
 
 [dependencies]
+schemars = { workspace = true, optional = true, features = ["chrono04", "uuid1"] }
 chrono = { workspace = true, features = ["serde"] }
 serde.workspace = true
 thiserror.workspace = true

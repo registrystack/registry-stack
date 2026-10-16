@@ -19,6 +19,7 @@ schema = [
     "dep:schemars",
     "registry-casework-breg/schema",
     "registry-casework-core/schema",
+    "registry-casework/schema",
     "registry-platform-yaml/schema",
 ]
 
@@ -58,4 +59,5 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+registry-casework-client.workspace = true
 tokio-postgres.workspace = true

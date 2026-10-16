@@ -170,17 +170,21 @@ lint_probe() {
 # change that did would carry the registry past the citizen's draft.
 cat >"$probe/lifecycle.rs" <<'RUST'
 use registry_breg_client::BaseRegistryClient as Registry;
-
-pub async fn act(
-    registry: &Registry,
-    action: &registry_breg_client::BRegLifecycleAction,
-    key: &registry_breg_client::BRegIdempotencyKey,
-) -> bool {
-    registry.execute_lifecycle_action(action, key).await.is_ok()
+pub async fn act(registry: &Registry, attempt: &registry_breg_client::BRegPreparedProposal) -> bool {
+    registry.execute_proposal(attempt).await.is_ok()
 }
 RUST
 
 lint_probe lifecycle
+
+cat >"$probe/direct.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+pub async fn create(registry: &Registry, binding: &registry_breg_client::BRegCreateBinding,
+    request: &registry_breg_client::BRegCreateRequest, key: &registry_breg_client::BRegIdempotencyKey) -> bool {
+    registry.create_record(binding, request, key, registry_breg_client::BRegRecordFormat::Json).await.is_ok()
+}
+RUST
+lint_probe direct
 
 # A credential swapped in through a type alias, and one built from text through
 # the client's re-export of the platform token types. Either would let a string
@@ -278,7 +282,7 @@ use registry_breg_client::BaseRegistryClient as Registry;
 
 pub async fn conditions(
     registry: &Registry,
-    action: &registry_breg_client::BRegImmediateActionBinding,
+    action: &registry_breg_client::BRegActionBinding,
     request: &registry_breg_client::BRegActionTargetConditionsRequest,
 ) -> bool {
     registry
@@ -289,7 +293,7 @@ pub async fn conditions(
 
 pub async fn invoke(
     registry: &Registry,
-    action: &registry_breg_client::BRegImmediateActionBinding,
+    action: &registry_breg_client::BRegActionBinding,
     request: &registry_breg_client::BRegActionInvocationRequest,
     key: &registry_breg_client::BRegIdempotencyKey,
 ) -> bool {
@@ -301,34 +305,13 @@ lint_probe invoke
 
 cat >"$probe/attachments.rs" <<'RUST'
 use registry_breg_client::BaseRegistryClient as Registry;
-
-pub async fn upload(
-    registry: &Registry,
-    slot: &registry_breg_client::BRegAttachmentSlot,
-    record: registry_breg_client::Uuid,
-    etag: &registry_breg_client::BRegEtag,
-    upload: &registry_breg_client::BRegAttachmentUpload,
-    key: &registry_breg_client::BRegIdempotencyKey,
-    format: registry_breg_client::BRegRecordFormat,
-) -> bool {
-    registry
-        .upload_attachment(slot, record, etag, upload, key, format)
-        .await
-        .is_ok()
+pub async fn upload(registry: &Registry, proposal: &registry_breg_client::BRegProposal,
+    key: &registry_breg_client::BRegIdempotencyKey) -> bool {
+    registry.upload_proposal_attachment(proposal, "slot", "application/pdf", b"value", key).await.is_ok()
 }
-
-pub async fn delete(
-    registry: &Registry,
-    slot: &registry_breg_client::BRegAttachmentSlot,
-    record: registry_breg_client::Uuid,
-    etag: &registry_breg_client::BRegEtag,
-    key: &registry_breg_client::BRegIdempotencyKey,
-    format: registry_breg_client::BRegRecordFormat,
-) -> bool {
-    registry
-        .delete_attachment(slot, record, etag, key, format)
-        .await
-        .is_ok()
+pub async fn delete(registry: &Registry, proposal: &registry_breg_client::BRegProposal,
+    key: &registry_breg_client::BRegIdempotencyKey) -> bool {
+    registry.delete_proposal_attachment(proposal, "slot", key).await.is_ok()
 }
 RUST
 
@@ -414,7 +397,8 @@ lint_probe read
 # own, quoting the name it refuses, and every one is single-quoted and literal.
 # shellcheck disable=SC2016
 verdicts=(
-  'refuses|lifecycle|a lifecycle action through an aliased import|disallowed method `registry_breg_client::BaseRegistryClient::execute_lifecycle_action`'
+  'refuses|direct|direct Record creation|disallowed method `registry_breg_client::BaseRegistryClient::create_record`'
+  'refuses|lifecycle|a lifecycle action through an aliased import|disallowed method `registry_breg_client::BaseRegistryClient::execute_proposal`'
   'refuses|credential|a bearer token swapped in through a type alias|disallowed method `registry_breg_client::BaseRegistryClient::with_bearer_token`'
   'refuses|credential|a static token built through a re-export|disallowed method `registry_platform_httputil::client::StaticToken::new`'
   'refuses|credential|a bearer token built through a re-export|disallowed method `registry_platform_httputil::client::BearerToken::new`'
@@ -425,8 +409,8 @@ verdicts=(
   'refuses|batch|a batch write through an aliased import|disallowed method `registry_breg_client::BaseRegistryClient::batch_records`'
   'refuses|invoke|a governed action target-condition read|disallowed method `registry_breg_client::BaseRegistryClient::action_target_conditions`'
   'refuses|invoke|a governed action invocation|disallowed method `registry_breg_client::BaseRegistryClient::invoke_action`'
-  'refuses|attachments|an attachment upload|disallowed method `registry_breg_client::BaseRegistryClient::upload_attachment`'
-  'refuses|attachments|an attachment removal|disallowed method `registry_breg_client::BaseRegistryClient::delete_attachment`'
+  'refuses|attachments|an attachment upload|disallowed method `registry_breg_client::BaseRegistryClient::upload_proposal_attachment`'
+  'refuses|attachments|an attachment removal|disallowed method `registry_breg_client::BaseRegistryClient::delete_proposal_attachment`'
   'refuses|ingestion|an ingestion run opened|disallowed method `registry_breg_client::BaseRegistryClient::create_ingestion_run`'
   'refuses|ingestion|an ingestion chunk submitted|disallowed method `registry_breg_client::BaseRegistryClient::submit_ingestion_chunk`'
   'refuses|ingestion|an ingestion run cancelled|disallowed method `registry_breg_client::BaseRegistryClient::cancel_ingestion_run`'

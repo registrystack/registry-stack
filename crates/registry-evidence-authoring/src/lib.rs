@@ -20,35 +20,26 @@
 //! The invariant is enforced by `tests/no_io.rs`, which sweeps this crate's own
 //! sources and its dependency list rather than trusting this paragraph.
 
+pub mod acquisition_validation;
+pub mod compile;
 pub mod derivation;
 pub mod finding;
 pub mod formats;
 pub mod layout;
-pub mod marker;
-pub mod model;
-pub mod names;
 pub mod openapi;
+pub mod output;
+pub mod project;
 #[cfg(feature = "schema")]
 pub mod schema;
-#[cfg(feature = "testing")]
-pub mod testing;
+pub mod selector;
+pub mod target;
+mod target_binding;
+mod target_value;
+pub mod types;
 pub mod validate;
 
-pub use derivation::{validate_answer_fact_reads, validate_authored_answer};
+pub use derivation::{validate_derive_fact_reads, validate_function};
 pub use finding::{FieldPath, FieldStep, Finding};
-pub use marker::{
-    default_project_marker_document, parse_project_marker, ProjectMarker, PROJECT_MARKER_FILE,
-};
-pub use model::{
-    default_response_formats, AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer,
-    QuestionDisclosure, QuestionFact, QuestionGovernance, QuestionResponseFormat, QuestionSdJwtVc,
-    QuestionSdJwtVcDisclosure, QuestionSource, QuestionSubject, RequirementKind,
-};
-pub use names::{
-    local_selector_profile_id, local_source_id, local_subject_selector_profile_id,
-    MAX_COMPILED_NAME_BYTES,
-};
 pub use validate::{
-    collection_pointers, question_subjects, valid_field_name, valid_local_identifier,
-    validate_access_policy, validate_answer, validate_answer_schema_document, validate_question,
+    collection_pointers, valid_field_name, valid_local_identifier, validate_output_schema_document,
 };

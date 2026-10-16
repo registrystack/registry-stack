@@ -166,7 +166,7 @@ class ClientRegistryTest(unittest.TestCase):
         self.module.validate_distribution(self.directory, self.version, "relay")
 
     def test_validates_the_unified_distribution_with_all_native_bindings(self) -> None:
-        self.version = "0.40.0"
+        self.version = "0.42.0"
         self._write_distribution("stack")
         self.module.validate_distribution(self.directory, self.version, "stack")
         platform = self.module.npm_tarballs(
@@ -798,6 +798,7 @@ class CheckedInClientManifestTest(unittest.TestCase):
             "casework": repo / "crates/registry-casework-client-node",
             "messaging": repo / "crates/registry-messaging-client-node",
             "scheduling": repo / "crates/registry-scheduling-client-node",
+            "coordinator": repo / "crates/registry-coordinator-client-node",
             "stack": repo / "crates/registry-stack-client-node",
         }
         for client, root in roots.items():
@@ -822,9 +823,9 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for pattern in ("*-client-node", "*-client-py")
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
-        # Six products have Node and Python bindings, and both unified
+        # Seven products have Node and Python bindings, and both unified
         # facades remain present.
-        self.assertEqual(14, len(found), found)
+        self.assertEqual(16, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:

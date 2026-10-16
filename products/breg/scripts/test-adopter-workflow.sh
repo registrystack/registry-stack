@@ -5,7 +5,6 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
 fixture="$repository_root/products/breg/acceptance/asset-site-placement"
-baseline="$repository_root/products/breg/generated/asset-site-placement"
 temporary_root=""
 breg_pid=""
 lock_pid=""
@@ -437,7 +436,7 @@ import sys
 routes = json.load(open(sys.argv[1], encoding="utf-8"))["routes"]
 for route in routes:
     if (
-        route.get("entityId") == sys.argv[2]
+        route.get("recordType") == sys.argv[2]
         and route.get("operation") == "list"
         and route.get("method") == "GET"
         and route.get("queryKind") == "list"
@@ -614,7 +613,7 @@ access = json.load(open(sys.argv[2], encoding="utf-8"))
 entries = access["explanation"]["routes"]["entries"]
 by_entity_operation = {}
 for entry in entries:
-    key = (entry.get("entityId"), entry.get("operation"))
+    key = (entry.get("recordType"), entry.get("operation"))
     by_entity_operation[key] = set(entry.get("profileIds", []))
 for operation in ("create", "get", "list", "patch"):
     if by_entity_operation.get(("asset-placement", operation)) != {"asset-operator", "site-planner"}:
@@ -626,13 +625,12 @@ PY
 
 (
   cd "$temporary_root"
-  mkdir ./generated
+  # Exercise public generators here; check-generated.sh independently compares
+  # the complete canonical native trees, including compiled inventories and SDKs.
   for selector in openapi schemas manifest metadata sql; do
     "$bregctl" generate "$selector" "$fixture" --output "./$selector"
-    cp -R "./$selector/." ./generated
   done
 )
-python3 "$script_dir/compare-generated-tree.py" "$baseline" "$temporary_root/generated"
 
 run_json "$temporary_root/schema-test-v1.json" test "$fixture" \
   --runtime-config "$temporary_root/runtime-test-v1.yaml" \
@@ -691,7 +689,7 @@ cat >"$temporary_root/assets-create.jsonl" <<'EOF'
 EOF
 run_json "$temporary_root/data-validate-v1.json" data validate \
   --package "$temporary_root/build-v1/package" \
-  --entity asset-item \
+  --record-type asset-item \
   --profile asset-operator \
   --operation create \
   --input "$temporary_root/assets-create.jsonl"
@@ -700,7 +698,7 @@ run_json "$temporary_root/data-import-v1.json" data import \
   --package "$temporary_root/build-v1/package" \
   --breg-url "$server_url" \
   --access-token-file "$temporary_root/secrets/operator-token" \
-  --entity asset-item \
+  --record-type asset-item \
   --profile asset-operator \
   --operation create \
   --input "$temporary_root/assets-create.jsonl" \
@@ -720,25 +718,19 @@ PY
 
 cp -R "$fixture" "$temporary_root/project-v2"
 python3 - "$temporary_root/project-v2/registry.yaml" <<'PY'
+import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
-source = path.read_text(encoding="utf-8")
-needle = """      - id: asset-class
-        type: vocabulary-code
-        vocabulary: asset-classification
-        required: true
-        classification: internal
-"""
-replacement = needle + """      - id: placement-review-note
-        type: string
-        required: false
-        maximumLength: 120
-        classification: restricted
-"""
-if needle not in source:
-    raise SystemExit("asset item field insertion point was not found")
-path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+source = json.loads(path.read_text(encoding="utf-8"))
+record_type = next(item for item in source["recordTypes"] if item["id"] == "asset-item")
+if any(field["id"] == "placement-review-note" for field in record_type["fields"]):
+    raise SystemExit("restricted successor field already exists")
+record_type["fields"].append({
+    "id": "placement-review-note", "type": "string", "required": False,
+    "maximumLength": 120, "classification": "restricted",
+})
+path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v2.yaml" "$temporary_root/empty-package-root" 60000 \
   "secret:file/schema-test-v2-runtime-url" "secret:file/schema-test-v2-migration-url" "127.0.0.1:0"
@@ -834,7 +826,7 @@ if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temp
   printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.failed
+assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.statement-failed
 wait_ready_status "${server_url}ready" 503
 # The failed activation stays durable: status names its exact target and the
 # ledger keeps the failed entry, so the operator's retry resumes it.
@@ -1003,35 +995,27 @@ PY
 # This is a reviewed successor, not an automatic additive upgrade.
 cp -R "$temporary_root/project-v2" "$temporary_root/project-v3"
 python3 - "$temporary_root/project-v3/registry.yaml" <<'PY'
+import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
-source = path.read_text(encoding="utf-8")
-needle = """      - id: placement-review-note
-        type: string
-        required: false
-        maximumLength: 120
-        classification: restricted
-"""
-grant = """          readableFields:
-            - asset-code
-            - label
-            - asset-class
-          writableFields:
-            - asset-code
-            - label
-            - asset-class
-"""
-if needle not in source or grant not in source:
-    raise SystemExit("reviewed successor insertion points were not found")
-source = source.replace(needle, needle + """      - id: maintenance-note
-        type: string
-        required: false
-        maximumLength: 120
-        classification: internal
-""", 1)
-source = source.replace(grant, grant.replace("            - asset-class\n", "            - asset-class\n            - maintenance-note\n"), 1)
-path.write_text(source, encoding="utf-8")
+source = json.loads(path.read_text(encoding="utf-8"))
+record_type = next(item for item in source["recordTypes"] if item["id"] == "asset-item")
+if not any(field["id"] == "placement-review-note" for field in record_type["fields"]):
+    raise SystemExit("reviewed successor is missing its restricted predecessor field")
+if any(field["id"] == "maintenance-note" for field in record_type["fields"]):
+    raise SystemExit("reviewed successor field already exists")
+record_type["fields"].append({
+    "id": "maintenance-note", "type": "string", "required": False,
+    "maximumLength": 120, "classification": "internal",
+})
+profile = next(item for item in source["accessProfiles"] if item["id"] == "asset-operator")
+permission = next(item for item in profile["permissions"]["records"] if item["recordType"] == "asset-item")
+for grant in ("readableFields", "writableFields"):
+    if "maintenance-note" in permission[grant]:
+        raise SystemExit("reviewed successor field grant already exists")
+    permission[grant].append("maintenance-note")
+path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/empty-package-root" 60000 \
   "secret:file/schema-test-v3-runtime-url" "secret:file/schema-test-v3-migration-url" "127.0.0.1:0"
@@ -1162,7 +1146,7 @@ wait_ready_status "${server_url}ready" 200
 printf '%s\n' '{"operation":"create","data":{"assetCode":"ASSET-PUBLIC-002","label":"Reviewed field asset","assetClass":"equipment","maintenanceNote":"Synthetic maintenance note"}}' >"$temporary_root/assets-create-v3.jsonl"
 run_json "$temporary_root/data-import-v3.json" data import --package "$temporary_root/build-v3/package" \
   --breg-url "$server_url" --access-token-file "$temporary_root/secrets/operator-token" \
-  --entity asset-item --profile asset-operator --operation create --input "$temporary_root/assets-create-v3.jsonl" \
+  --record-type asset-item --profile asset-operator --operation create --input "$temporary_root/assets-create-v3.jsonl" \
   --checkpoint "$temporary_root/assets-import-v3.checkpoint.json"
 assert_json_ok "$temporary_root/data-import-v3.json" "data import"
 asset_list_path_v3=$(entity_list_path "$temporary_root/build-v3/package" asset-item asset-operator)

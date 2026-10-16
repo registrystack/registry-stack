@@ -1,4 +1,4 @@
-fn handle(ctx) {
+fn plan(ctx) {
     let given = if "given-name" in ctx.inputs && ctx.inputs["given-name"] != () {
         ctx.inputs["given-name"]
     } else { "" };
@@ -28,7 +28,7 @@ fn handle(ctx) {
             set: #{
                 "registration-code": ctx.inputs["registration-code"],
                 person: #{fromEffect: "person"},
-                register: #{fromField: "register"}
+                register: #{fromInput: "register"}
             }
         });
     }

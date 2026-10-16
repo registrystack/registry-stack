@@ -1,19 +1,18 @@
 # Approve bounded work for an institutional agent
 
-A task grant records a current human holder's explicit approval for one
-institutional agent to perform a bounded task under its own principal. Unified
-review tasks use the review-task grant routes; retained source work items use
-their existing routes during migration. In both cases the source remains
-authoritative for proposal identity and disclosed subject facts.
+A task grant records a current human ReviewTask holder's explicit approval for
+one institutional agent to perform bounded work under its own principal.
+Casework grants only from ReviewTask. The trusted producer remains authoritative
+for the subject and proposal; the resource server independently authorizes and
+commits the agent's operation.
 
 ## Declare templates
 
 Add `taskTemplates` to the Casework project. Each template declares:
 
-- A stable `id`, immutable `version`, and human-readable `label`.
-- `eligibleTeams`, human Staff/Supervisor `eligibleProfiles`, and `source`.
-- `reviewKinds` for unified review tasks, or `itemKinds` plus eligible
-  `itemStates` for retained source work items. A template cannot mix the two.
+- A stable id as its key under `taskTemplates`, an immutable `version`, and a human-readable `label`.
+- `eligibleTeams`, human Staff/Supervisor `eligibleProfiles`, `source`, and
+  `reviewPolicies` naming the held ReviewTasks that may issue the grant.
 - Exact `agent: {issuer, subject}`, OAuth `client`, one absolute `resource`,
   and `purpose`, plus explicit OAuth `scopes` for that resource.
 - `bounds`, one of `{type: evidence, requirement: ...}`,
@@ -40,9 +39,14 @@ underscores, or hyphens, so `apply-request` and `apply_request` are both
 well formed and the registry decides which one it knows. Any other value is
 refused as `casework.task-template.invalid-operation` at the operation's own
 pointer.
-Required source fields must be disclosed to the approving human and exposed to
-the configured service reader for later checks. Callers cannot supply subject
-values. Changing a template requires a new version. Retiring a version
+For BReg, bind a named Action or Proposal operation and its exact target
+scope. A task grant does not authorize an arbitrary direct record write;
+BReg checks its own governed operation and the current grant status before
+commit.
+Required current-source fields must be disclosed to the approving human and
+available through the provider's separate `task-grant-context` capability for
+later checks. Submitted-context grants use the admitted snapshot. Callers
+cannot supply subject values. Changing a template requires a new version. Retiring a version
 invalidates its live grants; reactivation does not restore those grants.
 
 Scheduling permissions use the same strict claim grammar its runtime verifies:
@@ -88,14 +92,12 @@ governed writes.
 ## Preview and approve
 
 1. The current eligible holder reads
-   `GET /v1/review-tasks/{taskId}/task-templates` using Casework and source
-   profiles. Retained source work items use
-   `GET /v1/work-items/{itemId}/task-templates`. The response includes the
-   current task or item revision and the exact disclosed authorization to
+   `GET /v1/review-tasks/{taskId}/task-templates` using the Casework profile
+   and, for current-source context, the human's source profile. The response
+   includes the current task revision and exact disclosed authorization to
    review.
 2. After explicit approval, call
-   `POST /v1/review-tasks/{taskId}/task-grants`, or the retained
-   `POST /v1/work-items/{itemId}/task-grants`, with only `templateId` and
+   `POST /v1/review-tasks/{taskId}/task-grants` with only `templateId` and
    `templateVersion`, current `If-Match`, and `Idempotency-Key`. Casework
    rechecks the exact holder, eligibility, proposal identity, and subject facts.
 3. The agent obtains its bootstrap token and calls
@@ -122,20 +124,17 @@ new grant ID. Listings omit retained subject selectors.
 Any officer with a profile and team membership eligible under the grant template
 for the task's queue can call
 `POST /v1/review-tasks/{taskId}/task-grants/{grantId}/revoke` with an empty
-body. Retained work-item grants use the corresponding `/v1/work-items` route.
+body.
 Revocation does not require holding the task or reading its source.
 Resource servers call `GET /v1/task-grants/{grantId}/status`; inactive status
 returns no grant detail. Machine callers cannot substitute resources or subjects.
 
-Retained work-item grants use the existing transactional item and directory
-triggers: definitive holder/state/proposal loss invalidates the grant and records
-history even without a status observation. Benign revision changes do not.
-Retired templates and observed definitive subject changes also invalidate grants.
-Deferred review grants pin an assignment generation: release, reassignment, queue movement, absence-cover
+Retired templates and observed definitive subject changes invalidate grants.
+Deferred grants pin an assignment generation: release, reassignment, queue movement, absence-cover
 change, decision, and completion change it in the same task transaction. A
 release followed by reclaim cannot revive the approval even if no status check
-observed the intervening release. Immediate review grants keep the exact
-ordinary task revision; deferred review grants allow draft revision changes
+observed the intervening release. Immediate grants keep the exact
+ordinary task revision; deferred grants allow draft revision changes
 while the assignment, subject, proposal, and disclosed facts stay unchanged.
 Temporary source failure refuses the current request without permanent
 invalidation. A mutable source revision alone does not change frozen proposal

@@ -14,60 +14,6 @@ use std::{
     process::{Command, Output},
 };
 
-const OPENAPI: &str = r#"openapi: 3.1.0
-info: {title: Tutorial registry, version: 1.0.0}
-servers: [{url: 'http://127.0.0.1:8000'}]
-paths:
-  /people/{person_id}:
-    get:
-      operationId: getPerson
-      parameters:
-        - name: person_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: A person
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [person_id, date_of_birth]
-                properties:
-                  person_id: {type: string}
-                  date_of_birth: {type: string, format: date}
-"#;
-
-const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: adult-status
-question: Is the person at least 18 years old?
-purpose: age-check
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: is_adult
-    type: boolean
-derivation: derivations/adult-status.rhai
-disclosure:
-  allow: [is_adult]
-"#;
-
-const DERIVATION: &str = r#"fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    #{is_adult: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}
-}
-"#;
-
 #[test]
 #[ignore = "exact gate: starts the pinned stock issuer container and real Evidence binary"]
 fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
@@ -75,23 +21,29 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     let docker = installed_or_env("DOCKER_BIN", "docker");
     let fixture = Project::new();
     fixture.generate_evidence_keys();
+    assert_success(
+        &evidencectl()
+            .args([
+                "access",
+                "client",
+                "add",
+                "local-tutorial-caller",
+                "--access-profile",
+                "standalone-service",
+                "--generate-local-key",
+                "--project",
+            ])
+            .arg(&fixture.root)
+            .output()
+            .expect("register local tutorial client"),
+        "register local tutorial client",
+    );
     let (evidence_port, issuer_port) = unused_port_pair();
 
     let name_prefix = format!("evidence-gate-{}", std::process::id());
     let started =
         fixture.dev_start_named(&evidence, &docker, evidence_port, issuer_port, &name_prefix);
     assert_success(&started, "issuer-backed dev start");
-    let containers = Command::new(&docker)
-        .args(["ps", "--format", "{{.Names}}", "--filter"])
-        .arg(format!("name=thunderid-{name_prefix}-"))
-        .output()
-        .expect("list issuer containers");
-    assert_success(&containers, "docker ps");
-    assert_eq!(
-        String::from_utf8_lossy(&containers.stdout).lines().count(),
-        1,
-        "the issuer container carries the selected name prefix"
-    );
     let stdout = String::from_utf8_lossy(&started.stdout);
     assert!(
         stdout.contains(&format!(
@@ -121,6 +73,22 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
         state["tokenUrl"],
         format!("http://127.0.0.1:{issuer_port}/oauth2/token")
     );
+    let first_issuer_root = issuer_mount_root(&docker, &name_prefix);
+    assert_eq!(
+        first_issuer_root.file_name().and_then(|name| name.to_str()),
+        state["issuerSessionId"]
+            .as_str()
+            .map(|session| format!("issuer-{session}"))
+            .as_deref()
+    );
+    assert_eq!(
+        first_issuer_root
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str()),
+        Some("generated")
+    );
+    assert!(first_issuer_root.is_dir());
 
     let token = evidencectl()
         .args(["dev", "token", "local-tutorial-caller"])
@@ -139,10 +107,13 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
         .expect("authorization header prefix");
     let claims = decode_claims(compact);
     assert_eq!(claims["registry_actor_kind"], "service");
-    assert_eq!(claims["evidence_tags"], serde_json::json!(["local-caller"]));
+    assert_eq!(
+        claims["evidence_tags"],
+        serde_json::json!(["standalone-service"])
+    );
     assert_eq!(
         claims["evidence_audience"],
-        "urn:registrystack:evidence:local:caller"
+        "urn:example:audience:standalone-app"
     );
     assert_eq!(claims["aud"], "urn:registrystack:evidence:local:gateway");
     assert!(claims.get("registry_grant_id").is_none());
@@ -152,7 +123,36 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     assert_eq!(stopped["status"], "stopped");
     assert!(stopped["caller"].is_null());
     assert!(!fixture.root.join(".evidence/dev/control.sock").exists());
+    assert!(!first_issuer_root.exists());
     assert_success(&fixture.dev_clean(), "dev clean");
+    assert!(!fixture.root.join(".evidence/dev").exists());
+
+    let (next_evidence_port, next_issuer_port) = unused_port_pair();
+    let restarted = fixture.dev_start_named(
+        &evidence,
+        &docker,
+        next_evidence_port,
+        next_issuer_port,
+        &name_prefix,
+    );
+    assert_success(&restarted, "immediate fresh dev start after clean");
+    let restarted_state = read_json(&fixture.root.join(".evidence/dev/state.json"));
+    let second_issuer_root = issuer_mount_root(&docker, &name_prefix);
+    assert_eq!(
+        second_issuer_root
+            .file_name()
+            .and_then(|name| name.to_str()),
+        restarted_state["issuerSessionId"]
+            .as_str()
+            .map(|session| format!("issuer-{session}"))
+            .as_deref()
+    );
+    assert_ne!(first_issuer_root, second_issuer_root);
+    assert!(second_issuer_root.is_dir());
+    assert!(!first_issuer_root.exists());
+    assert_success(&fixture.dev_stop(), "fresh dev stop");
+    assert!(!second_issuer_root.exists());
+    assert_success(&fixture.dev_clean(), "fresh dev clean");
     assert!(!fixture.root.join(".evidence/dev").exists());
 }
 
@@ -166,8 +166,9 @@ fn mint_issuer_flags_are_unknown_arguments_and_create_no_private_state() {
             "/missing/mint"
         };
         let output = evidencectl()
-            .args(["dev", "--detach", flag, value, "--project"])
+            .args(["dev", "start"])
             .arg(&fixture.root)
+            .args([flag, value])
             .output()
             .expect("Mint issuer flag");
         assert_eq!(output.status.code(), Some(2));
@@ -330,16 +331,9 @@ fn dev_grant_prints_every_connection_file_finding_without_its_values() {
 fn equal_local_ports_fail_before_creating_private_state() {
     let fixture = Project::new();
     let output = evidencectl()
-        .args([
-            "dev",
-            "--detach",
-            "--evidence-port",
-            "18080",
-            "--issuer-port",
-            "18080",
-            "--project",
-        ])
+        .args(["dev", "start"])
         .arg(&fixture.root)
+        .args(["--evidence-port", "18080", "--issuer-port", "18080"])
         .output()
         .expect("equal-port start");
     assert!(!output.status.success());
@@ -413,57 +407,19 @@ fn public_symlink_and_stale_state_are_never_replaced() {
 }
 
 #[test]
-fn compatibility_flags_beside_a_dev_action_are_refused_naming_both_flags() {
-    let fixture = Project::new();
-    // The flags stay parseable next to the action so the refusal can name
-    // them; both output formats must carry that cause.
-    let human = evidencectl()
-        .args(["dev", "--detach", "start"])
-        .arg(&fixture.root)
-        .output()
-        .expect("compat-flag start");
-    assert_eq!(human.status.code(), Some(1));
-    let error = String::from_utf8_lossy(&human.stderr);
-    assert!(
-        error.contains("evidence.dev.compat-flags-refused"),
-        "{error}"
-    );
-    assert!(error.contains("--detach"), "{error}");
-    assert!(error.contains("--project"), "{error}");
-    assert!(!fixture.root.join(".evidence").exists());
-
-    let json = evidencectl()
-        .args(["--format=json", "dev", "--project"])
-        .arg(&fixture.root)
-        .args(["token", "local-tutorial-caller"])
-        .output()
-        .expect("compat-flag token");
-    assert_eq!(json.status.code(), Some(1));
-    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
-    assert_eq!(report["status"], "domain-refusal");
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "evidence.dev.compat-flags-refused"
-    );
-    assert!(report["diagnostics"][0]["message"]
-        .as_str()
-        .expect("message")
-        .contains("--detach or --project"));
-}
-
-#[test]
-fn bare_dev_without_detach_names_the_required_spelling() {
-    let fixture = Project::new();
-    let output = evidencectl()
-        .args(["dev", "--project"])
-        .arg(&fixture.root)
-        .output()
-        .expect("bare dev");
-    assert_eq!(output.status.code(), Some(1));
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("evidence.dev.detach-required"), "{error}");
-    assert!(error.contains("dev start"), "{error}");
-    assert!(!fixture.root.join(".evidence").exists());
+fn retired_bare_dev_spellings_are_unknown_and_create_no_private_state() {
+    for arguments in [vec!["dev", "--detach"], vec!["dev", "--project", "project"]] {
+        let fixture = Project::new();
+        let output = evidencectl()
+            .args(arguments)
+            .current_dir(&fixture.root)
+            .output()
+            .expect("retired bare dev spelling");
+        assert_eq!(output.status.code(), Some(2));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("error[evidencectl.usage]"), "{error}");
+        assert!(!fixture.root.join(".evidence").exists());
+    }
 }
 
 #[test]
@@ -490,7 +446,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     );
     assert!(error.contains("does not bind SQLite extracts"), "{error}");
     assert!(
-        error.contains("sources/record-status.yaml:/type"),
+        error.contains("evidence.yaml:/sources/record-status/type"),
         "{error}"
     );
     assert!(error.contains("evidencectl test"), "{error}");
@@ -510,7 +466,10 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     assert_eq!(report["status"], "domain-refusal");
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
-    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/type");
+    assert_eq!(
+        diagnostic["path"],
+        "evidence.yaml:/sources/record-status/type"
+    );
     assert!(diagnostic["message"]
         .as_str()
         .expect("message")
@@ -547,7 +506,10 @@ fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
     assert_eq!(report["status"], "domain-refusal");
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
-    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/type");
+    assert_eq!(
+        diagnostic["path"],
+        "evidence.yaml:/sources/record-status/type"
+    );
     assert!(diagnostic["message"]
         .as_str()
         .expect("message")
@@ -558,7 +520,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
 /// Freeing a port cannot make a SQLite extract servable, so the transport is
 /// judged before the ports the session would otherwise have claimed.
 #[test]
-fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
+fn sqlite_extract_dev_start_refuses_local_serving_before_an_occupied_port() {
     let fixture = Project::new();
     let project = fixture.sqlite_extract_starter();
     let tool = fixture.tool_that_never_serves();
@@ -567,14 +529,14 @@ fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
     let (_, issuer_port) = unused_port_pair();
 
     let output = evidencectl()
-        .args(["dev", "--detach", "--project"])
+        .args(["dev", "start"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&tool)
         .args(["--evidence-port", &evidence_port.to_string()])
         .args(["--issuer-port", &issuer_port.to_string()])
         .output()
-        .expect("sqlite bare dev start on an occupied port");
+        .expect("sqlite dev start on an occupied port");
 
     assert_eq!(output.status.code(), Some(1));
     let error = String::from_utf8_lossy(&output.stderr);
@@ -583,7 +545,7 @@ fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
         "{error}"
     );
     assert!(
-        error.contains("sources/record-status.yaml:/type"),
+        error.contains("evidence.yaml:/sources/record-status/type"),
         "{error}"
     );
     assert!(!error.contains("evidence.dev.port-unavailable"), "{error}");
@@ -688,11 +650,9 @@ impl Project {
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
             .expect("tempdir mode");
         let root = temporary.path().join("tutorial");
-        fs::create_dir_all(root.join("questions")).expect("questions");
-        fs::create_dir(root.join("derivations")).expect("derivations");
-        fs::write(root.join("source.openapi.yaml"), OPENAPI).expect("OpenAPI");
-        fs::write(root.join("questions/adult-status.yaml"), QUESTION).expect("question");
-        fs::write(root.join("derivations/adult-status.rhai"), DERIVATION).expect("derivation");
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_example(&example, &root);
         Self {
             _temporary: temporary,
             root,
@@ -700,7 +660,7 @@ impl Project {
     }
 
     fn generate_evidence_keys(&self) {
-        let secrets = self.root.join("secrets");
+        let secrets = self.root.join(".generated/secrets");
         assert_success(
             &evidencectl()
                 .args(["keygen", "signing", "--output-dir"])
@@ -719,6 +679,14 @@ impl Project {
                 "HMAC key",
             );
         }
+        assert_success(
+            &evidencectl()
+                .args(["keygen", "token", "--output"])
+                .arg(secrets.join("synthetic-source-token"))
+                .output()
+                .expect("source token"),
+            "source token",
+        );
     }
 
     /// Scaffold a second project beside this one whose only source is read
@@ -732,7 +700,7 @@ impl Project {
         assert_success(
             &evidencectl()
                 .args([
-                    "new",
+                    "init",
                     project.to_str().expect("UTF-8 project path"),
                     "--transport",
                     "sqlite-extract",
@@ -769,7 +737,7 @@ impl Project {
         issuer_port: u16,
     ) -> Output {
         evidencectl()
-            .args(["dev", "--detach", "--project"])
+            .args(["dev", "start"])
             .arg(&self.root)
             .arg("--evidence-bin")
             .arg(evidence)
@@ -809,7 +777,7 @@ impl Project {
 
     fn start_without_binaries(&self) -> Output {
         evidencectl()
-            .args(["dev", "--detach", "--project"])
+            .args(["dev", "start"])
             .arg(&self.root)
             .output()
             .expect("dev start")
@@ -832,6 +800,21 @@ impl Project {
     }
 }
 
+fn copy_example(source: &Path, destination: &Path) {
+    fs::create_dir(destination).expect("example directory");
+    for entry in fs::read_dir(source).expect("public example files") {
+        let entry = entry.expect("public example entry");
+        let metadata = entry.file_type().expect("public example file type");
+        let output = destination.join(entry.file_name());
+        if metadata.is_dir() {
+            copy_example(&entry.path(), &output);
+        } else {
+            assert!(metadata.is_file(), "public examples contain ordinary files");
+            fs::copy(entry.path(), output).expect("copy public example");
+        }
+    }
+}
+
 fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
 }
@@ -850,6 +833,41 @@ fn installed_or_env(variable: &str, binary: &str) -> PathBuf {
         .map(|directory| directory.join(binary))
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| panic!("set {variable} for the exact lifecycle gate"))
+}
+
+fn issuer_mount_root(docker: &Path, name_prefix: &str) -> PathBuf {
+    let containers = Command::new(docker)
+        .args(["ps", "--format", "{{.Names}}", "--filter"])
+        .arg(format!("name=thunderid-{name_prefix}-"))
+        .output()
+        .expect("list issuer containers");
+    assert_success(&containers, "docker ps");
+    let names: Vec<_> = String::from_utf8_lossy(&containers.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        names.len(),
+        1,
+        "the issuer container carries the selected name prefix"
+    );
+
+    let inspected = Command::new(docker)
+        .args(["inspect", "--format", "{{json .Mounts}}"])
+        .arg(&names[0])
+        .output()
+        .expect("inspect issuer container");
+    assert_success(&inspected, "docker inspect");
+    let mounts: Value = serde_json::from_slice(&inspected.stdout).expect("container mounts");
+    let mounts = mounts.as_array().expect("container mount array");
+    let secrets = mounts
+        .iter()
+        .find(|mount| mount["Destination"] == "/opt/thunderid/config/secrets")
+        .expect("issuer secrets mount");
+    PathBuf::from(secrets["Source"].as_str().expect("issuer mount source"))
+        .parent()
+        .expect("issuer state root")
+        .to_path_buf()
 }
 
 fn unused_port_pair() -> (u16, u16) {

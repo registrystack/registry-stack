@@ -4,38 +4,38 @@ project:
   id: standalone-decision
   version: "1"
 accessProfiles:
-  - id: staff
+  staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
     role: staff
-  - id: supervisor
+  supervisor:
     principalClaim: sub
     requiredScopes: [casework:supervisor]
     role: supervisor
-  - id: administrator
+  administrator:
     principalClaim: sub
     requiredScopes: [casework:admin]
     role: administrator
-  - id: requester
+  requester:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
 queues:
-  - id: decisions
+  decisions:
     label: Decisions awaiting review
-reviewKinds:
-  - id: decision
+reviewPolicies:
+  decision:
     version: "1"
     purpose: answer
-    contextStrategy: submitted
+    context: {mode: submitted}
     stages:
       - id: answer
         queue: decisions
         decidingProfiles: [staff]
         requiredApprovals: 1
     retention:
-      terminalDays: 90
-      accountabilityDays: 365
+      terminalRetentionDays: 90
+      accountabilityRetentionDays: 365
     displaySchema:
       type: object
       additionalProperties: false
@@ -44,19 +44,21 @@ reviewKinds:
         summary: {type: string, maxLength: 160}
         reference: {type: string, maxLength: 120}
     outcomes:
-      - id: confirmed
+      confirmed:
         label: Confirm
         settlement: answered
         reasonRequired: false
-      - id: rejected
+        publicReason: optional
+      rejected:
         label: Return for correction
         settlement: answered
         reasonRequired: true
-reviewProducers:
-  - id: requester
+        publicReason: required
+trustedProducers:
+  requester:
     profile: requester
-    issuer: http://127.0.0.1:8091
-    subject: requester
+    issuer: http://127.0.0.1:8093
+    subject: b75315b2-5854-70f3-8867-511dd771a6da
     sourceNamespaces: [standalone]
-    kinds: [decision]
-    recoveryDays: 30
+    reviewPolicies: [decision]
+    retention: {receiptRetentionDays: 30}

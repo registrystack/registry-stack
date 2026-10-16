@@ -15,9 +15,11 @@ deployment projects use this YAML format so an adopter can review one case
 matrix beside the requirement.
 
 A requirement may omit its fixture reference only while its immutable bundle
-declares `assuranceProfile: local`. Local serving still uses the ordinary
-authenticated, authorized, source-bounded, minimum-disclosure, signed, and
-fail-closed audit path. Production and evidence-grade bundles retain this
+declares `assuranceProfile: local`. A local bundle may also reference a focused
+synthetic suite covering only the cases its project declares. A successful
+local fixture run proves those cases, not readiness for production promotion.
+Local serving still uses the ordinary authenticated, authorized, source-bounded,
+minimum-disclosure, signed, and fail-closed audit path. Production and evidence-grade bundles retain this
 document's complete fixture-coverage requirement and fail to load when a
 reference is absent or its captured suite is incomplete.
 
@@ -34,9 +36,9 @@ runtime are not fixture inputs and never appear in the package.
 ```yaml
 apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
 common:
-  observed_at: "2026-08-02T00:00:00Z"
+  observedAt: "2026-08-02T00:00:00Z"
   selectors: {}
   derivationSelectorInputs: {}
   expectedRequestParts:
@@ -57,7 +59,7 @@ privacyExpectation:
 |---|---|---|
 | `apiVersion` | yes | `id.registrystack.org/formats/evidence/fixture/v1alpha1`. |
 | `kind` | yes | `EvidenceFixture`. |
-| `synthetic_only` | yes | Must be literal `true`. Live values are forbidden. |
+| `syntheticOnly` | yes | Must be literal `true`. Live values are forbidden. |
 | `common` | yes | Deterministic inputs inherited by every case. |
 | `cases` | yes | Non-empty ordered array with unique case ids. |
 | `privacyExpectation` | yes | Tokens/canaries that must be present or absent at public and diagnostic boundaries. |
@@ -65,13 +67,31 @@ privacyExpectation:
 The bundle loader reads every referenced fixture with the shared configuration
 reader. A missing or unknown envelope, the retired `fixture` identifier key, and
 a `${...}` expression are refused, and so is a fixture that is not synthetic or
-does not cover every required case category. Each refusal names the file, the
-member, its line and column, and the fix, and never repeats a value from the
+does not cover every required case category under production or evidence-grade
+assurance. Local suites retain the same envelope, synthetic-data, case-count,
+unique-ID, and unresolved-outcome checks at load, with the same evaluator and
+privacy checks when the suite is run. Each refusal
+names the file, the member, its line and column, and the fix, and never repeats a value from the
 file. The evaluator runs a fixture that declares
-`coequal_acceptance_definition: true` as a coequal acceptance definition and
+`coequalAcceptanceDefinition: true` as a coequal acceptance definition and
 every other fixture under this contract.
 
-`observed_at` is required and may be overridden by a case. Rust derives
+Both forms close their root, common, case and expectation control keys at the
+shared YAML decoding boundary. Case IDs are local identifiers and unique within
+the file. Source/response, selector, fact and expected-value trees retain their
+reviewed payload keys and nulls. The existing source, selector and output
+contracts check those trees.
+
+The coequal form uses `source`/`sources`, `expectedValue`/`expectedValues`,
+`expectedLookup`, `expectedPublicProblem`, `derivationRuns` and `signedSuccess`.
+Its rejection controls are `sourceFailure`, `injectedDerivation` and
+`companionBundle`. Form-specific combinations, source-stage rules, coverage and
+privacy remain runtime semantic checks. Retired snake_case fixture control
+spellings are refused with the replacement named; no aliases are accepted.
+Production Rhai context members such as `legal_local_date` retain their ABI
+spelling.
+
+`observedAt` is required and may be overridden by a case. Rust derives
 `legal_local_date` and `legal_local_time` from that instant and the requirement's
 configured IANA timezone exactly as it does in production. A fixture cannot
 inject those derived values. Boundary cases choose an observation instant that
@@ -99,7 +119,7 @@ import or evaluate a foreign bundle as a fixture.
 
 ```yaml
 common:
-  observed_at: "2026-08-02T00:00:00Z"
+  observedAt: "2026-08-02T00:00:00Z"
   selectors:
     subject:
       profile: record-reference-v1
@@ -265,7 +285,7 @@ recorded statement result is not evidence for reviewed SQL.
 
 The optional inputs shared by applicable forms are:
 
-- `observed_at`;
+- `observedAt`;
 - `purpose`, which selects one of the requirement's declared purposes and
   overrides any `common.purpose`.
 
@@ -331,7 +351,7 @@ those stages apply. Omission is not treated as a wildcard.
 | `facts` | JSON object | Exact complete fact object after fact-schema validation, never a partial match. |
 | `value` | supported scalar | Exact value of the requirement's only concept. Use only for a one-concept requirement. |
 | `values` | concept map | Exact complete set of disclosed concepts, keyed by concept id. Use for a requirement disclosing more than one concept. |
-| `entityReferenceCount` | integer | Exact number of audience-scoped entity references in the public value. |
+| `entityReferenceCount` | integer from 0 through 64 | Exact number of audience-scoped entity references in the public value. |
 | `rawReferencesDisclosed` | boolean | Whether any configured raw reference appears in evidence; these projects require `false`. |
 | `signed` | boolean | Whether a flattened JWS success is returned. A valid `false` concept still requires `true`. |
 | `publicProblem` | problem code | Exact safe public failure code. |
@@ -340,7 +360,7 @@ those stages apply. Omission is not treated as a wildcard.
 | `bundle` | `accepted` or `rejected` | Startup bundle result. |
 | `outputGate` | `accepted` or `rejected` | Derived-value gate result. |
 | `rejectedBefore` | `credential`, `source`, `derivation`, or `signing` | Latest boundary that must not be crossed. |
-| `sourceRequestCount` | integer | Exact number of evidence-data operations the production path would attempt. Version 1 permits `0` through the acquisition's fixed ceiling, at most `5`. For an injected `sourceFailure`, this count is modeled; it does not prove the fixture harness executed the source. |
+| `sourceRequestCount` | integer | Exact number of evidence-data operations the production path would attempt. The reference evaluator permits `0` through `2`; fetch-set cases use the coequal fixture form and do not declare this control. For an injected `sourceFailure`, this count is modeled; it does not prove the fixture harness executed the source. |
 | `expectedTransport` | object | Exact expanded path, encoded query string, and normalized body bytes for a transport-focused case, or the exact statement artifact and bound parameters where the source reads an extract. |
 
 `expectedTransport` is accepted only for the `selectorOverrides` form.

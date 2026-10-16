@@ -284,6 +284,8 @@ project:
   defaultLanguage: en
 package:
   sourceRevision: wasm-schema-test-source
+datasets:
+  - id: wasm-schema-test
 manifestProjection:
   accessProfile: operator
   classificationCeiling: public
@@ -297,7 +299,7 @@ manifestProjection:
   dataServices:
     - {id: wasm-schema-test-data, title: WASM Schema Test, endpointUrl: https://wasm-schema-test.invalid, servesDatasets: [wasm-schema-test]}
   distributions: []
-entities:
+recordTypes:
   - id: record
     primaryDataset: wasm-schema-test
     route: records
@@ -305,17 +307,24 @@ entities:
     classification: public
     fields:
       - {id: code, type: string, required: true, maximumLength: 32, classification: public}
+functions:
+  - id: fixed-output-plan
+    runtime: wasm
+    source: handlers/fixed-output.wasm
+    entrypoint: handle
+    abi: registry.action-plan/v1
 actions:
   - id: create-fixed-record
+    execution: {mode: immediate}
     inputs:
       - {id: request, type: string, required: true, maximumLength: 32, classification: public}
-    handler:
-      type: wasm
-      module: handlers/fixed-output.wasm
-      abi: registry.action-handler/v1
+    plan:
+      type: function
+      function: fixed-output-plan
+      inputs: [request]
       writes:
         - id: record
-          target: {entity: record}
+          target: {recordType: record}
           operation: create
           fields: [code]
 accessProfiles:
@@ -325,12 +334,12 @@ accessProfiles:
     requiredScopes: [registry:wasm-fixture:invoke]
     requiredPurposes: [fixture-assurance]
     permissions:
-      entities:
-        - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: unrestricted}
+      records:
+        - {recordType: record, operations: [get, list], readableFields: [code], rowBoundaries: unrestricted}
       actions:
         - action: create-fixed-record
           operations: [invoke]
-          targets: [{entity: record, rowBoundaries: unrestricted}]
+          targets: [{recordType: record, rowBoundaries: unrestricted}]
           results: [record]
 "#
 }

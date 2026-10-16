@@ -79,22 +79,10 @@ fn a_refused_check_report_keeps_the_passing_report_top_level_keys() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let questions = fs::read_dir(project.join("questions")).expect("questions directory");
-    let mut corrupted = false;
-    for entry in questions {
-        let path = entry.expect("question entry").path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "yaml")
-        {
-            let text = fs::read_to_string(&path).expect("question text");
-            fs::write(&path, text.replacen("purpose:", "purpose: [unclosed", 1))
-                .expect("corrupt question");
-            corrupted = true;
-            break;
-        }
-    }
-    assert!(corrupted, "the scaffold must ship at least one question");
+    let path = project.join("evidence.yaml");
+    let text = fs::read_to_string(&path).expect("normalized project text");
+    assert!(text.contains("purpose:"));
+    fs::write(&path, text.replacen("purpose:", "purpose: [unclosed", 1)).expect("corrupt project");
 
     let output = evidencectl()
         .args(["--format", "json", "check", &project.display().to_string()])
@@ -156,8 +144,8 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
     let project = workspace.path().join("project");
     fs::create_dir(&project).expect("project directory");
     fs::write(
-        project.join("evidence-project.yaml"),
-        registry_evidence_authoring::default_project_marker_document(),
+        project.join("evidence.yaml"),
+        include_str!("../../../products/evidence/examples/standalone/evidence.yaml"),
     )
     .expect("project marker");
 
@@ -198,14 +186,11 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
         [
             ".evidence-editor/manifest.json",
             ".evidence-editor/schemas/access-client.schema.json",
-            ".evidence-editor/schemas/access-policy.schema.json",
             ".evidence-editor/schemas/fixture.schema.json",
             ".evidence-editor/schemas/mock-plan.schema.json",
-            ".evidence-editor/schemas/project-marker.schema.json",
-            ".evidence-editor/schemas/question.schema.json",
-            ".evidence-editor/schemas/selector.schema.json",
-            ".evidence-editor/schemas/source.schema.json",
-            ".evidence-editor/schemas/target-settings.schema.json",
+            ".evidence-editor/schemas/project.schema.json",
+            ".evidence-editor/schemas/target-authority.schema.json",
+            ".evidence-editor/schemas/target.schema.json",
             ".vscode/extensions.json",
             ".vscode/settings.json",
             ".zed/settings.json",

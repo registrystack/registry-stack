@@ -14,6 +14,7 @@ use crate::model::{CompiledEntity, CompiledRegistry};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessScenario {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub access_profile: String,
     pub operation: Operation,
@@ -75,7 +76,7 @@ pub fn preview_access(
         .and_then(|entity| entity.access_profiles.get(&scenario.access_profile));
     let claims = synthetic_claims(registry, scenario.claims, entity.zip(profile))?;
     let reason = match profile {
-        None => Some("entity-or-profile-not-found"),
+        None => Some("record-type-or-profile-not-found"),
         Some(profile) => {
             let operation_granted = if let Some(path) = &scenario.read_path {
                 scenario.operation == Operation::List

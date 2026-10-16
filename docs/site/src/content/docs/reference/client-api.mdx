@@ -35,7 +35,8 @@ carry no Base Registry Engine client package and no unified package; they distri
 package per product instead. The `casework` namespace is present in those same unified packages
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
 beginning with Registry Stack v0.38.0</DocsetProduct>; the `scheduling` namespace is present
-beginning with Registry Stack v0.40.0. Python requires version 3.11 or later and the wheels use the
+beginning with Registry Stack v0.40.0.
+Python requires version 3.11 or later and the wheels use the
 Python 3.11 stable ABI (`abi3-py311`), so a later Python imports the same file. Node requires version 24.11
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
 macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains
@@ -127,6 +128,15 @@ use registry_stack_client::{breg, casework, discovery, evidence, scheduling};
 
 </DocsetProduct>
 
+<DocsetProduct product="registry-coordinator">
+
+The unified packages carry no Registry Coordinator namespace. Its client is the
+`registry-coordinator-client` Rust crate, with Node.js and Python bindings built from source in the
+same repository. The [Registry Coordinator API](../apis/registry-coordinator/) reference describes
+the routes it reaches.
+
+</DocsetProduct>
+
 Import only the namespaces an application uses. Nothing crosses a namespace, and a Discovery
 selection is inert metadata that grants no access.
 
@@ -212,15 +222,15 @@ apply the mutation twice. A refusal that answers a resend does not prove the ear
 effect, so the client returns the earlier unknown-outcome error instead of that refusal.
 
 The receipt horizon is how long a service holds a key's first answer: BReg's
-`idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
-Messaging's `retention.submissionReceiptRetentionDays`,</DocsetProduct> and Scheduling's
-`retention.attemptReceiptRetentionDays`. Every service answers a spent key by one rule: a different request
+`retention.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
+Messaging's `retention.receiptRetentionDays`,</DocsetProduct> and Scheduling's
+`retention.receiptRetentionDays`. Every service answers a spent key by one rule: a different request
 under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
 `409 idempotency.key-reused` in the others, whatever the key's age. Past the horizon the same
 request is refused with `410 idempotency.expired` and the key stays spent. In BReg that `410` means
 the first attempt committed: read the record or its history rather than sending the write again
 under a new key. In Casework it means an earlier attempt under the key committed and retention
-erased only its stored response: reconcile by reading the item, review request, or directory before
+erased only its stored response: reconcile by reading the review request, task, or Directory before
 choosing a new key.<DocsetProduct product="registry-messaging"> In Messaging, once retention deletes
 the message record after `retention.recordRetentionDays`, the request hash goes with it and any request under
 the key is refused with `410`.</DocsetProduct>
@@ -242,7 +252,7 @@ the key is refused with `410`.</DocsetProduct>
 <DocsetProduct product="registry-messaging">
 
 {/* Evidence: crates/registry-messaging-client/src/error.rs, is_outcome_unknown;
-    crates/registry-messaging/src/config.rs, default_submission_receipt_retention_days;
+    crates/registry-messaging/src/config.rs, default_receipt_retention_days;
     crates/registry-messaging-core/src/problem.rs, IdempotencyExpired;
     crates/registry-messaging/src/messages.rs, replay();
     crates/registry-messaging/src/retention.rs, delete_records();
@@ -260,7 +270,7 @@ hold carries no key and is never resent.
     crates/registry-scheduling-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
     crates/registry-scheduling-client-py/tests/python/test_mutation_retry.py */}
 
-In Casework, every keyed work-item, review task, and directory mutation is resent, and the error's
+In Casework, every keyed review-task and Directory mutation is resent, and the error's
 `mutation_class()` is `Ambiguous` exactly when `is_outcome_unknown()` holds. Review request create
 and cancel carry a key but go through the review client's single exchange and are never resent.
 Grant revocation and the caseload and clock previews carry no key and are never resent either.
@@ -806,8 +816,8 @@ case in Node) beside the selection methods below.
 `registry_contract` parses caller-filtered Registry Metadata into `BRegMetadata` and binds the
 metadata to the client's exact origin. `select_direct_write` returns `BRegDirectWrite::Create` or
 `BRegDirectWrite::Patch` only when the operation, route, request contract, capabilities, registry,
-dataset, entity, profile, revision, and origin match the supported shape. `select_lifecycle` returns
-one `BRegLifecycleAuthority` for the matching entity and profile.
+dataset, Record type, profile, revision, and origin match the supported shape.
+`select_action` selects a native Action with a fixed execution mode.
 
 A mismatch returns `BRegMetadataSelectionError`. The error carries a closed reason kind and no
 response-controlled values.
@@ -815,8 +825,8 @@ response-controlled values.
 The bindings split the direct write selection by operation.
 `select_create(operation_identifier, expected_profile)` returns a `BRegCreateBinding`,
 `select_patch(operation_identifier, expected_profile)` returns a `BRegPatchBinding`, and
-`select_lifecycle(entity_identifier, expected_profile)` returns a `BRegLifecycleAuthority` (Node:
-`selectCreate`, `selectPatch`, `selectLifecycle`). A mismatch raises the client error with kind
+`select_action(action_identifier, expected_profile)` returns a `BRegActionBinding` (Node:
+`selectCreate`, `selectPatch`, `selectAction`). A mismatch raises the client error with kind
 `metadata-selection` and a code from `not-found`, `unbound-source`, `profile-mismatch`,
 `unsupported-operation`, `required-capability`, and `contract-mismatch`.
 
@@ -830,7 +840,7 @@ operation serializes under `/data/<field>`.
 The client never creates a key, and resends a mutation only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). A retry after an unknown outcome must
 reuse the same binding, body, precondition, representation, and key. BReg holds a response under the
-key only for a committed success, and only for `idempotency.receiptRetentionDays` after that commit.
+key only for a committed success, and only for `retention.receiptRetentionDays` after that commit.
 A resend after a 5xx replays that success within the horizon, runs the operation again when nothing
 committed, and past the horizon answers `410 idempotency.expired` without running it. The key stays
 spent, so that `410` is a known outcome: the write committed.
@@ -854,107 +864,65 @@ plain objects and arrays only, at most 128 levels, 100,000 nodes, and 4 MiB of s
 converts dicts, lists, tuples, and JSON scalars. An input either binding cannot convert, and any
 value the Rust validation refuses, raises kind `invalid-request` before an exchange.
 
-### Lifecycle actions
+### Actions and Proposals
 
-Change-request records carry a BReg-owned `request` extension. `lifecycle_actions` promotes only the
-actor-bound actions from a fresh record against a matching `BRegLifecycleAuthority`.
-`execute_lifecycle_action` sends the promoted href, body, ETag, and caller-supplied idempotency key.
+`select_action` / `selectAction` selects the Action's caller-filtered descriptor.
+Its `mode` is fixed: immediate Invoke or durable Proposal Start. Each input has a
+required compiler-emitted JSON Schema. The client validates that schema contract;
+MCP copies it exactly, with no partial field-type fallback.
 
-`BRegLifecycleOperation` contains `SubmitRequest`, `ApproveRequest`, `RejectRequest`,
-`RequestRevision`, `ReviseRequest`, `CancelRequest`, and `ApplyRequest`. Refetch the record after a
-success or refusal before choosing the next operation. Lifecycle ETags are not record ETags.
+Python accepts native dictionaries for inputs and transition bodies. Node's
+Proposal Start and transition preparation accept exact JSON text. The promoted
+Proposal remains opaque and bound to the client source and selected profile.
 
-Python `lifecycle_actions(authority, record, *, format="json")` returns a sequence of
-`BRegLifecycleAction`; Node `lifecycleActions(authority, record, format)` returns an array and
-performs no exchange. `record` is the `value` of a fresh record read. An action's `operation` is the
-kebab-case operation name, such as `submit-request`; `stage` and `review` are `None` or `null` when
-absent. A promotion whose authority does not conform, or whose action is not bound to that authority
-and record, raises kind `lifecycle-promotion` with code `authority` or `binding`.
-`execute_lifecycle_action(action, idempotency_key)` and
-`executeLifecycleAction(action, idempotencyKey)` return the receipt as an outcome.
+| Operation | Rust and Python | Node |
+| --- | --- | --- |
+| Action selection | `select_action` | `selectAction` |
+| Immediate invocation | `invoke_action` | `invokeAction` |
+| Start durable work | `start_proposal` | `startProposal` |
+| Proposal collection selection | `select_proposals` | `selectProposals` |
+| Proposal lookup selection | `select_proposal_get` | `selectProposalGet` |
+| List or Get work | `list_proposals`, `get_proposal` | `listProposals`, `getProposal` |
+| Refresh a promoted resource | `read_proposal` | `readProposal` |
+| Prepare a transition | `prepare_proposal` | `prepareProposal` |
+| Execute or recover a prepared transition | `execute_proposal`, `recover_proposal` | `executeProposal`, `recoverProposal` |
 
-### Request attachments
+Get, List, Start, and every transition have separate authority. Proposal links bind
+method, path, profile, lifecycle condition, and operation. Clients refuse another
+origin or registry base and credential-bearing redirects. Refetch after each
+transition; never substitute a record ETag for a lifecycle condition.
 
-A change-request entity can declare governed attachment slots. Slot content is engine-owned: a
-create body, a patch operation, and a request effect never set it, and only the served attachment
-routes move the bytes. `select_attachments(entity_identifier, expected_profile)` returns every slot
-the caller-filtered metadata advertises for that entity and profile, bound to the client's origin
-(Node: `selectAttachments`). A mismatch raises kind `metadata-selection` with a code from the same
-closed list as the other selections.
+For a frozen submission, preserve Action revision, submission version, and effect
+digest while observing local application status. Applied work carries retained
+application evidence; blocked work carries safe recovery information. Revise or
+Rebase makes the earlier binding stale. A later Get does not reconcile an uncertain
+Start or Submit. Keep the original prepared command and key for exact recovery.
 
-A `BRegAttachmentSlot` exposes `slot_identifier`, `entity_identifier`, `access_profile`,
-`required_for_submit`, `maximum_bytes`, `content_types`, `classification`, `can_download`,
-`can_upload`, `can_remove`, and `accepts_content_type(content_type)`, camel case in Node.
-`classification` is the authored sensitivity of the slot content, `public`, `internal`, or
-`restricted`. The served routes stay opaque, so only the client can spend a slot.
+### Proposal attachments
 
-`prepare_upload(content_type, body)` and `prepareUpload(contentType, body)` check the bytes against
-that served policy before any I/O and return an opaque `BRegAttachmentUpload` carrying `content_type`
-and `byte_size`. They raise kind `invalid-request` when the slot advertises no upload route, when the
-body is empty, when the body exceeds `maximum_bytes`, when the content type is not a lowercase
-`type/subtype`, and when that media type is outside `content_types`. A parameter, a wildcard, and an
-uppercase spelling all refuse, since a served type is matched exactly.
+Attachments belong to a Proposal's declared slots and promoted links. Download,
+upload, and removal use `download_proposal_attachment`,
+`upload_proposal_attachment`, and `delete_proposal_attachment` (Node camel case).
+They require the bound Proposal and exact slot ID, and honor current disclosure,
+byte/content limits, verification, and lifecycle conditions.
 
-| Operation | Rust and Python | Node | Rust returns |
-| --- | --- | --- | --- |
-| Slot selection | `select_attachments(entity_identifier, expected_profile)` | `selectAttachments(entityIdentifier, expectedProfile)` | `Vec<BRegAttachmentSlot>` |
-| Slot state in a record | `value_in(record)` | `valueIn(record, format)` | `BRegAttachmentSlotValue` |
-| Upload | `upload_attachment(slot, record_identifier, etag, upload, idempotency_key)` | `uploadAttachment(slot, recordIdentifier, etag, upload, idempotencyKey, format)` | `BRegComplete<RegistryRecordSingleResponse>` |
-| Download | `download_attachment(slot, record_identifier, proposal_version)` | `downloadAttachment(slot, recordIdentifier, proposalVersion)` | `BRegComplete<BRegRawDocument>` |
-| Delete | `delete_attachment(slot, record_identifier, etag, idempotency_key)` | `deleteAttachment(slot, recordIdentifier, etag, idempotencyKey, format)` | `BRegComplete<RegistryRecordSingleResponse>` |
+Submission freezes content digests and verification. Changed bytes cannot inherit
+an earlier approval. Review context contains no raw attachment bytes. Retention
+revokes scoped access independently of asynchronous external deletion; another
+retained authorized reference can keep identical bytes alive.
 
-An upload and a delete take an ETag from a fresh read through the same route and access profile and a
-caller-supplied idempotency key, on the same terms as `patch_record`, and answer with the updated
-record. The record format comes last: a keyword argument in Python and an optional argument in Node.
-`uploadAttachmentJson` and `deleteAttachmentJson` return those receipts as exact JSON text, like the
-other Node exact-JSON methods. A download names a positive proposal version, answers with a raw
-document, and reads its body under the client's maximum response bytes, 8 MiB by default, so raise
-that bound before fetching a slot that serves more.
-
-`value_in` and `valueIn` read one slot's state out of the `domainData` of a fresh record read rather
-than from the wire. The result carries `kind`, one of `not-selected`, `empty`, and `filled`, and a
-`value` present only when filled. A filled value carries `slot_identifier`, `proposal_version`,
-`erased`, `byte_size`, `sha256`, `content_type`, `uploaded_at`, `uploaded_by`, and
-`verification_status`, camel case in Node. `verification_status` is `notRequired`, `pending`,
-`approved`, or `rejected` when the record carries one. A record whose slot value does not match the
-served shape raises kind `invalid-request`.
+{/* Evidence: crates/registry-breg-client/src/metadata.rs;
+    crates/registry-breg-client/src/actions.rs; crates/registry-breg-client/src/proposal.rs;
+    crates/registry-breg-client-node/client.d.ts;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
 
 ### Exact JSON in Node
 
-The Node methods whose names end in `Json` keep domain values on the Rust side of the JavaScript
-number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`, `lookupRecordJson`,
-`createRecordJson`, `patchRecordJson`, `executeLifecycleActionJson`, `uploadAttachmentJson`, and
-`deleteAttachmentJson` return a `JsonOutcome`: the validated response as JSON text in `valueJson`,
-with the same trace, ETag, location, and continuation semantics as their object counterparts. `lifecycleActionsJson` takes a complete record
-envelope as JSON text, and every action it promotes carries `bodyJson` and `reviewJson` beside
-`body` and `review`. The Python binding has no such methods.
-
-An input is the same domain data object or field-based patch array the object method takes, encoded
-as JSON text, not an arbitrary HTTP body. The client refuses duplicate members, invalid JSON, bounds
-violations, and numeric literals whose value would change during decoding, among them
-`0.10000000000000001`, `1e9999`, and `9007199254740993.0`. BReg's numeric model still governs a
-write: `9007199254740992` is a supported write, and `9007199254740993` is refused with kind
-`invalid-request` before any exchange. Do not round a refused input to make it pass.
-
-```js
-const result = await client.createRecordJson(
-  binding,
-  '{"quantity":9007199254740992,"amount":"12.3400","date":"2026-09-08"}',
-  'caller-chosen-idempotency-key',
-);
-```
-
-A response passes the same decoder and reaches the caller unchanged: a `9007199254740993` that
-arrives in a response is returned intact in `valueJson`, and a response literal that cannot
-round-trip fails with kind `protocol`. Fixed-scale decimals stay JSON strings, and a null member
-stays distinct from an absent one. JSON whitespace and equivalent number spellings may be
-canonicalized, because the promise covers values and types. Decode `valueJson` with a lossless JSON
-library to display a number outside the JavaScript safe integer range.
-
-The client resends a mutation only under the
-[same-key retry](#unknown-outcomes-and-the-same-key-retry). After an unknown outcome it still
-reports, the caller decides whether to send the same action again with the same idempotency key,
-within the receipt horizon described under [Writes](#writes).
+The Node `*Json` record and immediate Action methods retain exact validated JSON
+text in their outcomes. Proposal Start and transition preparation take JSON text
+and return opaque native Proposal objects. Use `documentJson` when you need their
+validated representation. Keep persisted preparation bytes private and recover
+only against the original binding and idempotency key.
 
 ### BReg error contract
 
@@ -1013,18 +981,17 @@ and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `t
 
 ## Registry Casework
 
-The Casework client owns source work-item, unified review, and directory routes and types, its closed
-problem catalogue, and its attempt recovery contract. It carries no Base Registry Engine routes or
-protocol types, even where the deployment it calls reads source-backed work from a registry.
+The Casework client covers pinned review policies, producer requests and results, human review
+tasks, and Directory operations. A `ReviewResult` records the human outcome. You independently
+authorize any later business mutation in the producer's system.
 
 ### Construct a Casework client
 
 ```rust
-use registry_casework_client::{CaseworkClient, CaseworkClientConfig};
-use url::Url;
+use registry_stack_client::casework::{CaseworkClient, CaseworkClientConfig};
 
 let client = CaseworkClient::new(CaseworkClientConfig::new(
-    Url::parse("https://casework.example.invalid/")?,
+    "https://casework.example.invalid/".parse()?,
 ))?;
 ```
 
@@ -1032,7 +999,6 @@ let client = CaseworkClient::new(CaseworkClientConfig::new(
 from registry_client import casework
 
 client = casework.CaseworkClient("https://casework.example.invalid/")
-page = client.review_tasks(token, "staff", {"limit": 25})
 ```
 
 ```js
@@ -1041,168 +1007,180 @@ const { casework } = require('@registrystack/client');
 const client = new casework.CaseworkClient({
   baseUrl: 'https://casework.example.invalid/',
 });
-const page = await client.listWorkItems(token, 'staff', 'reviewer', { view: 'my-teams', limit: 25 });
 ```
 
-`CaseworkClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
-`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
-`with_max_mutation_retries`. The Python constructor takes the same settings as keyword arguments and
-the Node constructor as config members.
-A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
-credential, and its debug output redacts the base URL, the user agent, and any trusted root
-certificates.
+`CaseworkClientConfig` provides request and connection timeouts, a response-size bound, trusted
+root certificates, a user agent, and a mutation retry ceiling. Python takes these as constructor
+keyword arguments; Node uses config members. Responses are bounded to 4 MiB by default and 16 MiB
+at most. Configuration retains no bearer token or selected profile.
 
 {/* Evidence: crates/registry-casework-client/src/config.rs, CaseworkClientConfig,
-    DEFAULT_MAXIMUM_RESPONSE_BYTES, and MAXIMUM_RESPONSE_BYTES,
-    crates/registry-casework-client/tests/http_boundary.rs,
-    crates/registry-casework-client-py/README.md, crates/registry-stack-client-node/README.md */}
+    DEFAULT_MAXIMUM_RESPONSE_BYTES, MAXIMUM_RESPONSE_BYTES;
+    crates/registry-casework-client-node/client.d.ts, CaseworkClientConfig;
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi */}
 
 ### Casework authentication and profiles
 
-In Python and Node, every method takes the request's bearer token and the selected Casework profile
-as its first two arguments, and a source-scoped method takes the selected source profile as its
-third. Unified review task reads take a source profile only when the pinned context strategy is
-`source`; submitted-context tasks need none. In Rust the
-same three values travel together as `CaseworkAuth`, built with `CaseworkAuth::new(token, profile)`
-and extended with `with_source_profile`.
+For producer, human-review, and Directory calls, pass the request's bearer token and Casework
+profile. Rust uses `CaseworkAuth::new(&token, profile)`; Node and Python take these as the first
+two arguments.
+Current-source context operations also take a source profile as an optional final argument, or
+through Rust's `with_source_profile`. Submitted-context reviews need no provider or source profile.
+The selected source profile travels in `Registry-Source-Profile`, never in a decision body.
 
-The client sends those values as `Authorization`, `Registry-Casework-Profile`, and
-`Registry-Source-Profile` on that one call, and retains none of them. The module is for a trusted
-server host: the host holds the session, chooses the profile for the request, and passes both in. A
-browser sends the host's session cookie and never a Casework token.
+Producer authority is separate from human review authority. Agent assertion and grant-status
+calls take only a bearer token and grant ID. The local digest helper takes no credential and
+performs no I/O.
 
-{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkAuth,
-    crates/registry-casework-client-node/client.d.ts, listWorkItems and assignWorkItem,
-    crates/registry-casework-client-node/README.md, crates/registry-stack-client-node/README.md,
-    crates/registry-casework-client-py/README.md */}
+{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkAuth;
+    crates/registry-casework-client-node/client.d.ts, taskAssertion, taskGrantStatus;
+    crates/registry-casework-client-py/src/lib.rs, submission_digest */}
+
+### Submit and recover a review
+
+Select the policy by ID in `ReviewCreateRequest.policy`; Casework freezes its concrete version and
+digest at acceptance. To require an exact pin, use `review_policy` (`reviewPolicy` in Node) to
+discover a compiled closure and supply its complete `identity`, or use your reviewed project's
+binding. See the [Casework API policy contract](../apis/registry-casework/#policy-and-submission-binding)
+for selector validation. Submitted context uses `mode: submitted` and a bounded snapshot;
+current-source context uses `mode: current-source` and a reference binding.
+The subject supplies all five immutable binding fields.
+
+These host-side functions take your complete `ReviewCreateRequest`, declared trusted-producer ID,
+and retained idempotency key. They use the shared Rust canonicalizer, including its portable JSON
+validation and Unicode key ordering.
+
+```ts
+import { casework } from '@registrystack/client';
+
+const client = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
+
+async function submitReview(
+  token: string,
+  producerId: string,
+  request: casework.ReviewCreateRequest,
+  key: string,
+) {
+  const digest = casework.submissionDigest(producerId, request.subject.source, request);
+  return client.createOrRecoverReviewRequest(token, 'requester', key, request, digest);
+}
+```
+
+```python
+def submit_review(token, producer_id, request, key):
+    digest = casework.submission_digest(producer_id, request["subject"]["source"], request)
+    return client.create_or_recover_review_request(token, "requester", key, request, digest)
+```
+
+Rust exposes the same local helper as `submission_digest(producer_id, source_namespace, &request)`.
+Persist the accepted concrete request binding. Recover a lost response with the original selector,
+subject, request body, key, and digest, even after a policy update. Do not rewrite an ID-only
+selector into the accepted exact binding during recovery: that changes the submission identity.
+Read `review_result` with the accepted binding or resume the authenticated `review_results` feed.
+Producer create and cancel calls are never automatically resent.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, submission_digest, ReviewCreateRequest;
+    crates/registry-review-client/src/client.rs;
+    crates/registry-review-client/tests/http_boundary.rs,
+    current_policy_create_accepts_a_concrete_binding_and_refuses_partial_pins_before_io;
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    current_policy_selection_recovers_before_updates_and_requires_live_authority;
+    crates/registry-casework-client/src/client.rs, create_or_recover_review_request;
+    crates/registry-casework-client-node/src/lib.rs, submission_digest;
+    crates/registry-casework-client-py/src/lib.rs, submission_digest;
+    crates/registry-casework-client/tests/submission_digest.rs;
+    crates/registry-casework-client-node/__test__/submission-digest.test.js;
+    crates/registry-casework-client-py/tests/python/test_submission_digest.py */}
 
 ### Casework operations by role
 
-Method names are given in the Rust and Python form. Node uses the camel case form of the same name.
+Rust and Python use snake case; Node uses the corresponding camel case.
 
-- __Service and review descriptions.__ `description`, `review_kinds`, and `review_kind` return the
-  source-neutral configuration the selected profile may read.
-- __Producer.__ `create_or_recover_review_request`, `review_request`, `review_result`,
-  `review_results`, and `cancel_review_request` cover requests inside the producer's exact binding.
-- __Human reviewer.__ `review_tasks`, `review_task`, `review_task_context`, `claim_review_task`,
-  `assign_review_task`, `delegate_review_task`, `release_review_task`, review-task draft methods,
-  `decide_review_task`, `review_history`, and review-note methods cover unified tasks.
-- __Staff on source-backed work.__ `list_work_items`, `next_work_item`, `get_work_item`,
-  `claim_work_item`, `release_work_item`, `get_draft`, `save_draft`, `delete_draft`,
-  `decide_work_item`, `work_item_history`, and `work_item_clocks`, each under the selected source
-  profile, with `recover_decision` and `recover_decision_by_key` for a lost decision response.
-- __Supervisor.__ `holdings`, `assign_work_item`, `delegate_work_item`, `preview_caseload_move`,
-  `apply_caseload_move`, and `review_accountability` for a retained protected record.
-- __Administrator.__ `directory`, `directory_targets`, `bootstrap_directory`,
-  `update_directory_team`, `create_absence`, `update_absence`, `delete_absence`, `holiday_revision`,
-  `create_holiday_revision`, `preview_clock_recompute`, and `apply_clock_recompute`.
+| Caller | Operations | Boundary |
+| --- | --- | --- |
+| Producer | `review_policies`, `review_policy`, request creation, cancellation, result reads and feed | Exact admitted producer and subject binding |
+| Human reviewer | `review_tasks`, `next_review_task`, `review_task_holdings`, task context, claim, release, assignment, delegation, private drafts, decisions, history and notes | Current profile, membership, exclusions, ownership and context disclosure |
+| Deciding caller | `own_review_decisions`, own single-task receipt | Retained authorship, not prior holding |
+| Supervisor | `supervisory_review_tasks`, `review_accountability` | Currently served queues; accountability is a separate audited read |
+| Administrator | Directory, absence, holiday, caseload and clock preview/apply operations | Administration grants no review or external write authority |
 
-Absence reads are scoped rather than reserved to one role: Staff read their own absences,
-Supervisors read absences for staff they currently supervise, and Administrators read all of them. In
-Rust, `absences` reads with the default query and `absences_page` takes one; the Python and Node
-`absences` takes the query as an optional argument.
+`ReviewStaffingQuery` supports queue, ownership, visible reference, and either all five exact
+subject selectors or none. Sort by `due`, `subject`, or `reference`. `next_review_task` is
+due-ordered and returns one task or no task; holdings return a bounded page.
+Caseload and clock apply calls send the reviewed preview ID and caller's key. The runtime
+revision-fences the complete preview set; clock recomputation uses pinned policy meaning.
 
-{/* Evidence: crates/registry-casework-client/src/client.rs, CaseworkClient and absences_page(),
-    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    crates/registry-casework-client-py/tests/python/test_capabilities.py,
-    test_all_canonical_operations_are_exported,
-    products/casework/generated/registry-casework.openapi.json */}
+{/* Evidence: crates/registry-casework-client/src/client.rs, review_tasks, next_review_task,
+    review_task_holdings, review_accountability, apply_caseload_move, apply_clock_recompute;
+    crates/registry-casework-core/src/staffing.rs, ReviewStaffingQuery;
+    crates/registry-casework-client-py/tests/python/test_capabilities.py */}
 
 ### Revisions, actions, and recovery
 
-A claim, release, or decision takes the caller-filtered `CaseworkAction` the item carried, which
-holds the exact route and the `if_match` revision to send, so the caller never assembles that route.
-Every other revisioned mutation takes the revision the caller displayed and a caller-chosen
-idempotency key, both as explicit arguments. A Casework client resends a mutation only under the
-same-key retry above, and none replaces a key.
+Task mutations take the task UUID, displayed numeric revision, and caller-chosen idempotency key.
+The client constructs the route and quoted revision header. Follow the
+[same-key retry contract](#unknown-outcomes-and-the-same-key-retry) for ambiguous keyed mutations;
+never invent a replacement key merely because the response was lost.
 
-After a lost response, `recover_decision_by_key` replays the original idempotency key, so recovery
-does not depend on the attempt identifier reaching the caller. `recover_decision` names the attempt
-identifier instead, for a caller that did receive one, including through the
-`Registry-Casework-Attempt` header on a refusal.
+Read `review_task` to recover the caller's retained `decisionReceipt`, or use
+`own_review_decisions` after a fresh sign-in. Receipts disclose the deciding caller's outcome and
+pinned label without private reason or structured result data. Supervisory discovery returns
+bounded task/accountability references with a holder-free state; it grants no decision or context
+authority. It intentionally omits holder identities and due dates and does not provide a team
+holdings board. The separate audited accountability read has its own retention.
 
-The selected source profile travels only in the `Registry-Source-Profile` header. The decision body
-names the displayed binding and operation, the recovery body is an empty object, and a body that
-still carries `sourceProfileId` is refused as not matching the contract.
+Caseload preview selects the source officer's complete claimed set, optionally within one queue,
+up to 100 tasks. It has no subset, limit or continuation parameter. A larger set refuses with
+`review.query-too-broad`. Apply is atomic over the exact previewed set; individual task assignments
+remain available for a selected subset, with independent revisions and outcomes.
 
-{/* Evidence: crates/registry-casework-client/src/client.rs, claim_work_item(),
-    decide_work_item(), recover_decision(), recover_decision_by_key(), and ORIGINAL_ATTEMPT_HEADER,
-    crates/registry-casework-client/tests/http_boundary.rs,
-    crates/registry-stack-client-node/README.md */}
+{/* Evidence: crates/registry-casework-client/src/client.rs, claim_review_task, decide_review_task,
+    own_review_decisions, review_accountability;
+    crates/registry-casework-client/tests/http_boundary.rs;
+    crates/registry-casework-client-node/client.d.ts, ReviewDecisionReceipt, SupervisoryReviewTask */}
 
 ### Casework outcomes
 
-A successful call returns `CaseworkComplete<T>` in Rust, a dict carrying `kind` (`complete`),
-`value`, and `trace_id` in Python, and an object carrying `kind`, `value`, and `traceId` in Node. The
-value is the camel case wire DTO the service returned.
+Successful calls return `CaseworkComplete<T>` in Rust, a Python dict with `kind: complete`,
+`value`, and `trace_id`, or a Node object with `kind`, `value`, and `traceId`. Wire DTO fields remain
+camel case in both language bindings. Result reads instead distinguish `available`, `pending`,
+`concealed_or_unknown`, and `expired`; only `available` carries a result.
 
-A paged read returns `items`, a `status` of `complete`, `budget-exhausted`, or `source-unavailable`,
-and `nextCursor` when another page exists. An empty page and an exhausted budget are both successful
-answers; pass the cursor back through the same method to continue. Source discovery alone does not
-issue a cursor. If a source-backed page reports `budget-exhausted` without a cursor, retry the read
-without a cursor after reconciliation. The retried walk starts from the first position and can
-return items earlier pages already returned: deduplicate work items by `itemId`, and replace
-holdings totals instead of adding to them.
+Pass `nextCursor` unchanged through the same operation with the same caller, profiles, and query.
+Staffing cursors are opaque visibility snapshots valid for at most 15 minutes. Holding,
+membership, or current-source visibility changes can invalidate them. After
+`410 review.result-expired`, restart without the cursor. Task list, next-task and holdings reads
+scan the complete candidate set before sorting or paging, including unfiltered reads. Exhausted
+candidate or source-read budgets return `422 review.query-too-broad`, with no partial page;
+narrow the queue or exact subject selectors before retrying. A smaller page size or a visible
+reference filter does not reduce that scan. See the [queue sizing limits](../../operate/casework/#size-the-review-queue-reads).
+An unavailable required provider is a failure, not an empty reviewer inbox.
 
-{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete,
-    crates/registry-casework-client-node/client.d.ts, CaseworkOutcome and PageStatus,
-    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    crates/registry-casework-client-py/README.md,
-    products/casework/README.md, budget-exhausted without a cursor,
-    crates/registry-casework/tests/inbox_ordering_postgres.rs,
-    a_discovery_wait_ends_the_walk_and_a_restart_repeats_earlier_results */}
+{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete, ReviewResultResponse;
+    crates/registry-casework-client-node/client.d.ts, ReviewResultOutcome;
+    crates/registry-casework/src/review/staffing.rs, QueryTooBroad;
+    crates/registry-casework/tests/review_http.rs */}
 
 ### Casework error contract
 
-`CaseworkClientError` is distinct from every other namespace's error type. Rust answers with
-`Configuration`, `InvalidRequest`, `Transport`, `Problem`, or `Protocol`. A `Problem` carries the
-status, a `CaseworkProblemCode`, the fixed detail, the validated trace identifier, the original
-attempt identifier when the refusal named one, and the review validation detail when the service
-refused a submitted field. A `Protocol` carries a `CaseworkProtocolFailure` of `HeaderBounds`,
-`TraceContext`, `MediaType`, `Body`, `Problem`, or `Status`.
+`CaseworkClientError` is distinct from every other product's error. Rust uses `Configuration`,
+`InvalidRequest`, `Transport`, `Problem`, and `Protocol`. Python raises
+`casework.CaseworkClientError`; Node rejects with the same named error class. The language bindings
+expose `kind`, status, problem code, validated trace context, bounded validation detail, transport
+category, protocol failure, and `outcome_unknown` (Node: `outcomeUnknown`) when applicable.
+Errors do not repeat rejected values or credentials.
 
-`CaseworkProblemCode` registers the closed catalogue the service publishes and answers
-`expected_status` for each code. A code outside the catalogue arrives as `Unknown` rather than a
-parse failure, so an older client keeps the status and trace context of a refusal it does not
-recognize.
+Unknown problem codes retain the status and trace context without gaining known recovery meaning.
+`review.policy-mismatch` is a `409` refusal of the expected policy binding. Validation details name
+a bounded field `path` and closed `reason`, such as `policy-not-allowed`, `schema-mismatch`,
+`outcome-not-declared`, `result-required`, or `constraint-violated`. A `410 idempotency.expired`
+requires reconciling the original task, request, or Directory operation before choosing a new key.
 
-Python raises `casework.CaseworkClientError`, an `Exception` whose attributes are `kind`, `code`,
-`detail`, `status`, `trace_id`, `original_attempt_id`, `validation`, `transport_kind`,
-`protocol_failure`, and the boolean `outcome_unknown`; an absent member is `None`. Node rejects with
-`casework.CaseworkClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`, and the
-optional `code`, `detail`, `status`, `traceId`, `originalAttemptId`, `validation`, `transportKind`,
-and `protocolFailure`; an absent member is undefined.
-
-`kind` is one of:
-
-| Kind | Meaning | Members set |
-| --- | --- | --- |
-| `configuration` | The construction inputs were refused | none |
-| `invalid-request` | An input was refused before any exchange | none |
-| `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | Casework answered with an accepted problem | `status`, `code`, `detail`, `trace_id`, plus `original_attempt_id` on a recoverable attempt and `validation` on a refused review submission |
-| `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
-
-A validation member carries the bounded `path` of the refused field and one `reason` from a closed
-set: `kind-not-allowed`, `reference-invalid`, `object-required`, `maximum-bytes-exceeded`,
-`maximum-depth-exceeded`, `schema-mismatch`, `outcome-not-declared`, `reason-required`,
-`text-invalid`, `result-not-declared`, `result-required`, `field-not-declared`,
-`constraint-invalid`, and `constraint-violated`. Neither member repeats a submitted value.
-
-The five result reasons govern a review request's structured result. `result-not-declared` refuses a
-result or a result constraint when the review kind declares no `resultSchema`. `result-required`
-refuses a decision for an outcome whose `resultRequired` is set when the body carries none.
-`field-not-declared` refuses a result constraint that names a property the kind's schema does not
-declare. `constraint-invalid` refuses a constraint that is not a narrowing of the schema: an
-unknown keyword, a bound outside the declared one or on a property whose type the schema does not
-declare inline, or a choice value the schema refuses. `constraint-violated` refuses a submitted
-result that passes the schema but falls outside the item's constraints. `schema-mismatch` covers a
-value outside the schema itself, and both reasons carry the instance path of the offending field.
+See the [Casework API contract](../apis/registry-casework/) for exact Problems and headers.
 
 {/* Evidence: crates/registry-casework-client/src/error.rs, CaseworkClientError,
-    CaseworkProblemCode, CaseworkProtocolFailure, and expected_status(),
-    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    CaseworkErrorKind and ValidationDetail, crates/registry-casework-client-py/src/lib.rs,
+    CaseworkProblemCode, CaseworkProtocolFailure, expected_status;
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi;
     crates/registry-casework-client-node/client.d.ts, CaseworkClientError */}
 
 <DocsetProduct product="registry-messaging">
@@ -1276,11 +1254,11 @@ A submission requires an idempotency key the caller chose: 1 to 128 visible ASCI
 refused before any exchange otherwise. A key is scoped to the caller's verified issuer and subject.
 The client never generates or replaces a key, and resends a submission only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). After a lost response it still reports,
-send the same key with the same submission within `retention.submissionReceiptRetentionDays`, and the runtime
+send the same key with the same submission within `retention.receiptRetentionDays`, and the runtime
 answers the stored receipt instead of accepting a second message. A `403` or `422` answering an exact
 retry does not show that the first attempt failed, so never resubmit under a new key: have the
 operator restore the access, template version, or locale the refusal names, then retry under the
-same key within `retention.submissionReceiptRetentionDays`, as the
+same key within `retention.receiptRetentionDays`, as the
 [replay rule](../apis/registry-messaging/#contract-boundary) explains. A message
 identifier must be the lowercase hyphenated UUID the runtime answered; any other value is refused
 before any exchange. The view carries the recipient's channel with the value `redacted`, and no
@@ -1462,5 +1440,12 @@ Deployment-defined data stays dynamic at the SDK boundary.
 
 - [Registry Messaging API](../apis/registry-messaging/) for the Messaging HTTP, idempotency, limit,
   and problem contracts.
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-coordinator">
+
+- [Registry Coordinator API](../apis/registry-coordinator/) for the Coordinator HTTP, run state, and
+  problem contracts.
 
 </DocsetProduct>

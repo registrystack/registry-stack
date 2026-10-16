@@ -37,6 +37,10 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey {
+            pointer: "/seed/*/entity",
+            replacement: "Rename `entity` to `recordType`, keeping the same Record type reference.",
+        },
+        RemovedKey {
             pointer: "/version",
             replacement: "Delete `version`; the apiVersion header names the format version.",
         },
@@ -208,13 +212,6 @@ pub(super) struct Clients {
         schemars(schema_with = "keyed_schema::<LocalId, LocalReviewAuthority>")
     )]
     pub review_authorities: BTreeMap<String, LocalReviewAuthority>,
-    /// Exact local service clients that apply approved change requests.
-    #[serde(default, deserialize_with = "local_id_keys")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "keyed_schema::<LocalId, LocalReviewExecutor>")
-    )]
-    pub review_executors: BTreeMap<String, LocalReviewExecutor>,
     /// Exact Casework status services for compiled task-grant profiles.
     #[serde(default, deserialize_with = "local_id_keys")]
     #[cfg_attr(
@@ -287,17 +284,6 @@ pub(super) struct LocalReviewAuthority {
     pub completion_token_ref: Option<SecretReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_recipient: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LocalReviewExecutor {
-    /// The one service-only apply-request profile selected by the worker.
-    pub access_profile: String,
-    /// Logical client from this same closed file. Its retained issuer key is
-    /// copied into the private runtime secret tree.
-    pub client: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -596,7 +582,7 @@ pub(super) struct Seed {
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     pub client: String,
-    pub entity: String,
+    pub record_type: String,
     pub access_profile: String,
     #[serde(default)]
     pub operation: SeedOperation,
@@ -747,7 +733,9 @@ fn resolve_secret(
         anyhow::anyhow!("{member} could not be resolved: {error}; {fix}")
     })?;
     if secret.len() > maximum {
-        bail!("{member} is larger than its {maximum}-byte limit; store the expected secret under this reference");
+        bail!(
+            "{member} is larger than its {maximum}-byte limit; store the expected secret under this reference"
+        );
     }
     Ok(Zeroizing::new(secret.expose_secret().to_vec()))
 }
@@ -847,7 +835,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 );
             }
             if client.test_bindings.is_empty() && !profile_defaults.insert(profile) {
-                bail!("a shared local access profile needs at most one default client; use exact testBindings for claim variants");
+                bail!(
+                    "a shared local access profile needs at most one default client; use exact testBindings for claim variants"
+                );
             }
         }
         if client.test_bindings.len() > 100 {
@@ -959,7 +949,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                         != Some(&json!("service"))
             })
         {
-            bail!("local task-grant status services need unique source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access");
+            bail!(
+                "local task-grant status services need unique source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access"
+            );
         }
     }
     for (id, authority) in &clients.review_authorities {
@@ -988,7 +980,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .iter()
                 .any(|client| client.id == authority.client)
         {
-            bail!("local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients");
+            bail!(
+                "local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients"
+            );
         }
         match (
             &authority.completion_token_ref,
@@ -1016,25 +1010,6 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             ),
         }
     }
-    if clients.review_executors.len() > 8 {
-        bail!("at most 8 local review executors may be bound");
-    }
-    for (id, executor) in &clients.review_executors {
-        let client = clients
-            .clients
-            .iter()
-            .find(|client| client.id == executor.client);
-        if !governed_identifier(id)
-            || !identifier(&executor.access_profile)
-            || client.is_none_or(|client| {
-                !client.access_profiles.contains(&executor.access_profile)
-                    || client_token_claims(client).get("registry_actor_kind")
-                        != Some(&json!("service"))
-            })
-        {
-            bail!("local review executors need bounded IDs, one declared service client, and its exact access profile");
-        }
-    }
     for (id, provider) in &clients.evidence_providers {
         let origin = reqwest::Url::parse(&provider.base_url)
             .context("local Evidence provider baseUrl must be an exact loopback HTTP origin")?;
@@ -1060,7 +1035,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             || origin.query().is_some()
             || origin.fragment().is_some()
         {
-            bail!("local Evidence providers need bounded IDs, trust bindings, and exact loopback origins");
+            bail!(
+                "local Evidence providers need bounded IDs, trust bindings, and exact loopback origins"
+            );
         }
         if provider.token_ref.is_some() == provider.private_key_jwt.is_some() {
             bail!("local Evidence providers require exactly one tokenRef or privateKeyJwt");
@@ -1102,7 +1079,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                         || !registry_platform_httputil::valid_scope_token(scope)
                 })
             {
-                bail!("local Evidence privateKeyJwt requires exact loopback token endpoint, client, audience, resource and scopes");
+                bail!(
+                    "local Evidence privateKeyJwt requires exact loopback token endpoint, client, audience, resource and scopes"
+                );
             }
         }
     }
@@ -1135,7 +1114,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             )
                 .is_err()
         {
-            bail!("local event destinations need bounded IDs, exact loopback origins, and absolute paths");
+            bail!(
+                "local event destinations need bounded IDs, exact loopback origins, and absolute paths"
+            );
         }
     }
     let mut resource_ids = BTreeSet::new();
@@ -1161,12 +1142,16 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .find(|entry| &entry.id == client)
                 .is_some_and(|entry| grant_scopes(&clients, Some(resource), &entry.scopes))
         {
-            bail!("issuer client resource bindings need a declared client, audience, and resource scopes");
+            bail!(
+                "issuer client resource bindings need a declared client, audience, and resource scopes"
+            );
         }
     }
     for client in &clients.clients {
         if !client.grants.is_empty() && !valid_grants(&clients, &client.grants) {
-            bail!("machine client grants require distinct declared audiences and exact bounded resource scopes");
+            bail!(
+                "machine client grants require distinct declared audiences and exact bounded resource scopes"
+            );
         }
     }
     let mut exchange_clients = BTreeSet::new();
@@ -1185,7 +1170,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .iter()
                 .any(|client| &client.id == id && client.scopes.len() == 1)
         {
-            bail!("exchange clients need one exact bootstrap scope and a registering exchange connection");
+            bail!(
+                "exchange clients need one exact bootstrap scope and a registering exchange connection"
+            );
         }
     }
     let mut connection_ids = BTreeSet::new();
@@ -1197,7 +1184,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .iter()
                 .any(|client| !clients.issuer.exchange_clients.contains(client))
         {
-            bail!("local exchange connections require distinct bounded IDs and declared exchange clients");
+            bail!(
+                "local exchange connections require distinct bounded IDs and declared exchange clients"
+            );
         }
         // The generated purpose connection makes every multi-purpose client a
         // first-party client, and the issuer projects one first-party
@@ -1281,7 +1270,7 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
     for seed in &clients.seed {
         if !identifier(&seed.id)
             || !seeds.insert(&seed.id)
-            || !identifier(&seed.entity)
+            || !identifier(&seed.record_type)
             || !clients.clients.iter().any(|client| {
                 client.id == seed.client && client.access_profiles.contains(&seed.access_profile)
             })
@@ -1322,7 +1311,9 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             .iter()
             .any(|client| !client.grants.is_empty())
         {
-            bail!("a borrowed issuer cannot declare owner-only machine client grants; declare them on the issuer owner");
+            bail!(
+                "a borrowed issuer cannot declare owner-only machine client grants; declare them on the issuer owner"
+            );
         }
     }
     for directory in [
@@ -1376,7 +1367,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
                     .client_resources
                     .contains_key(&client.id)
             {
-                bail!("shared issuer registration differs from the local client or BREG audience for {}", client.id);
+                bail!(
+                    "shared issuer registration differs from the local client or BREG audience for {}",
+                    client.id
+                );
             }
             private::directory(&directory)?;
             let source = owner.root().join("credentials").join(&client.id);
@@ -1484,24 +1478,7 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             )?;
         }
     }
-    for (id, executor) in &clients.review_executors {
-        let credentials = root.join("credentials").join(&executor.client);
-        for (source, name, maximum) in [
-            (
-                credentials.join("client-id"),
-                format!("review-executor-{id}-client-id"),
-                1024,
-            ),
-            (
-                credentials.join("assertion-key.jwk"),
-                format!("review-executor-{id}-client-assertion-key"),
-                64 * 1024,
-            ),
-        ] {
-            let bytes = Zeroizing::new(private::read(&source, maximum)?);
-            private::create(&root.join("secrets").join(name), &bytes)?;
-        }
-    }
+
     for (id, status) in &clients.task_grant_status {
         let source = root
             .join("credentials")
@@ -1626,7 +1603,9 @@ fn validate_borrowed_issuer_composition(issuer: &IssuerComposition) -> Result<()
         || !issuer.client_resources.is_empty()
         || !issuer.exchange_clients.is_empty()
     {
-        bail!("a borrowed issuer cannot declare owner-only resources, exchange connections, applications, users, or client mappings; declare them on the issuer owner");
+        bail!(
+            "a borrowed issuer cannot declare owner-only resources, exchange connections, applications, users, or client mappings; declare them on the issuer owner"
+        );
     }
     Ok(())
 }
@@ -2092,7 +2071,6 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     } else {
         json!({})
     };
-    let review_executors = local_review_executors(state, clients, &compiled)?;
     // A browser application explicitly using this session's default BREG
     // audience is a local OAuth client. Other-resource apps remain outside
     // BREG admission; governed profiles and token scopes still authorize calls.
@@ -2154,7 +2132,6 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             "caBundleRef":provider.ca_bundle_ref.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
         }))).collect::<BTreeMap<_,_>>(),
         "reviewAuthorities":local_review_authorities(state, clients),
-        "reviewExecutors":review_executors,
         "taskGrantStatus":local_task_grant_status(state, clients)
     });
     // runtime.yaml writes an optional member by leaving it out (CFG-EMPTY-1),
@@ -2219,111 +2196,6 @@ fn omit_null_members(value: &mut Value) {
     }
 }
 
-fn local_review_executors(
-    state: &State,
-    clients: &Clients,
-    compiled: &registry_breg::CompiledRegistry,
-) -> Result<BTreeMap<String, Value>> {
-    use registry_breg::contract::{ActorKindSource, Operation};
-    use registry_breg::model::{CompiledChangeRequestOnApprovedMode, CompiledChangeRequestReview};
-
-    if clients.review_executors.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    if state.instance_id != compiled.registry_id() {
-        bail!("local review executors must target this exact registry");
-    }
-    clients
-        .review_executors
-        .iter()
-        .map(|(id, executor)| {
-            let client = clients
-                .clients
-                .iter()
-                .find(|client| client.id == executor.client)
-                .context("a local review executor client is missing")?;
-            let claims = client_token_claims(client);
-            let purposes = client_purposes(client)?;
-            if purposes.len() != 1 {
-                bail!("local review executor {id} needs one fixed registry purpose");
-            }
-            let selected_purpose = purposes.into_iter().next().flatten();
-            let request_entities = compiled
-                .entities()
-                .values()
-                .filter(|entity| {
-                    entity.change_request.as_ref().is_some_and(|request| {
-                        matches!(request.review, CompiledChangeRequestReview::Required(_))
-                            && request.on_approved.mode
-                                == CompiledChangeRequestOnApprovedMode::Automatic
-                            && request.on_approved.executor.as_deref() == Some(id)
-                    })
-                })
-                .collect::<Vec<_>>();
-            if request_entities.is_empty() {
-                bail!("local review executor {id} is not selected by an automatic request");
-            }
-            let mut scopes = BTreeSet::new();
-            for entity in request_entities {
-                let profile = entity
-                    .access_profiles
-                    .get(&executor.access_profile)
-                    .with_context(|| {
-                        format!(
-                            "local review executor {id} has no apply profile for {}",
-                            entity.id
-                        )
-                    })?;
-                if profile.actor_kind != Some(ActorKindSource::Service)
-                    || !profile.operations.contains(&Operation::ApplyRequest)
-                    || (!profile.requester_clients.is_empty()
-                        && !profile.requester_clients.contains(&client.id))
-                    || !profile
-                        .required_scopes
-                        .iter()
-                        .all(|scope| client.scopes.contains(scope))
-                    || (!profile.required_purposes.is_empty()
-                        && selected_purpose
-                            .as_ref()
-                            .is_none_or(|purpose| !profile.required_purposes.contains(purpose)))
-                    || (profile.principal_claim != "sub"
-                        && claims
-                            .get(&profile.principal_claim)
-                            .and_then(Value::as_str)
-                            .is_none_or(str::is_empty))
-                {
-                    bail!("local review executor {id} does not satisfy its service apply profile");
-                }
-                scopes.extend(profile.required_scopes.iter().cloned());
-            }
-            // The OAuth provider requires a non-empty scope request. When the
-            // profile imposes no narrower scope, keep the explicitly authored
-            // client scope set rather than inventing an executor-only scope.
-            let scopes = if scopes.is_empty() {
-                client.scopes.clone()
-            } else {
-                scopes.into_iter().collect()
-            };
-            Ok((
-                id.clone(),
-                json!({
-                    "endpoint": state.breg_origin(),
-                    "registryId": compiled.registry_id(),
-                    "accessProfile": executor.access_profile,
-                    "privateKeyJwt": {
-                        "tokenEndpoint": format!("{}/oauth2/token", state.issuer_origin()),
-                        "clientIdRef": format!("secret:file/review-executor-{id}-client-id"),
-                        "clientAssertionKeyRef": format!("secret:file/review-executor-{id}-client-assertion-key"),
-                        "assertionAudience": state.issuer_origin(),
-                        "resource": state.audience(),
-                        "scopes": scopes,
-                    }
-                }),
-            ))
-        })
-        .collect()
-}
-
 fn local_review_authorities(state: &State, clients: &Clients) -> BTreeMap<String, Value> {
     clients
         .review_authorities
@@ -2380,7 +2252,7 @@ fn local_task_grant_status(state: &State, clients: &Clients) -> Vec<Value> {
                 "clientAssertionAudience": state.issuer_origin(),
                 "clientId": status.client,
                 "privateKeyRef": format!("secret:file/task-status-{id}-client-assertion-key"),
-                "caseworkResource": client_resource(state, clients, &status.client)
+                "statusResource": client_resource(state, clients, &status.client)
             })
         })
         .collect()

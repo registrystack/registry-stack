@@ -47,8 +47,8 @@
 //!
 //! **What none of it proves.** Not that this crate performs no input or output.
 //! It proves that no path this configuration names is reachable by name from
-//! this crate's compiled source, that the crates it links are the seven listed
-//! here, that the one rhai engine it builds has given up its module resolver
+//! this crate's compiled source, that its nine direct normal dependencies are
+//! listed here, that the one rhai engine it builds has given up its module resolver
 //! and both of its printing handlers, and that reading an authored `import`
 //! does not open the file it names. A capability arriving by a route none of
 //! these lists covers is not covered.
@@ -69,7 +69,7 @@
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
-use registry_evidence_authoring::validate_authored_answer;
+use registry_evidence_authoring::{project::FunctionInterface, validate_function};
 
 /// Spellings that would take this crate outside its own arguments, each with
 /// the reason it is refused.
@@ -175,7 +175,7 @@ const FORBIDDEN: &[(&str, &str)] = &[
         "resolves an imported module by reading a file",
     ),
     // Every other way of getting an engine. `Engine::default` is `Engine::new`
-    // (rhai 1.25.1, `src/engine.rs`), so it arrives carrying the file-reading
+    // (rhai 1.26.1, `src/engine.rs`), so it arrives carrying the file-reading
     // resolver under a name the guard below does not read; the raw pair arrives
     // without one, which is safe but equally unread. Leaving one spelling is
     // what lets the guard speak for every engine this crate builds.
@@ -194,6 +194,12 @@ const FORBIDDEN: &[(&str, &str)] = &[
 /// `registry-platform-yaml` is the shared configuration reader: it reads from
 /// the bytes its caller hands it, so the caller stays the one that opened the
 /// file.
+///
+/// sha2 computes a digest over bytes this crate already holds. Locked sha2
+/// 0.11.0 enables only its default alloc and oid features; its normal closure
+/// is the no_std digest, block-buffer, crypto-common, const-oid and cpufeatures
+/// libraries plus the cfg-if macro, with no randomness, file, socket, process,
+/// environment or standard-stream feature.
 const PERMITTED_DEPENDENCIES: &[&str] = &[
     "anyhow",
     "registry-platform-yaml",
@@ -202,6 +208,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "serde",
     "serde_json",
     "serde_norway",
+    "sha2",
     "url",
 ];
 
@@ -745,7 +752,7 @@ fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
 ///
 /// With the default features this workspace pins, a new engine carries a
 /// `FileModuleResolver`, which opens whatever path an `import` statement names,
-/// and a print and a debug handler that are `println!` (rhai 1.25.1,
+/// and a print and a debug handler that are `println!` (rhai 1.26.1,
 /// `src/engine.rs:305-318`). The resolver turns an editor into a file reader
 /// driven by an author's own text; the other two put author-controlled text on
 /// the file descriptor the editor's JSON-RPC conversation runs over. Nothing in
@@ -898,7 +905,7 @@ fn an_authored_import_does_not_read_the_file_it_names() {
 
     let program = |module: &PathBuf| {
         format!(
-            "import \"{}\" as imported;\nfn answer(facts, selectors, context) {{ #{{}} }}\n",
+            "import \"{}\" as imported;\nfn derive(facts, selectors, context) {{ #{{}} }}\n",
             module.display()
         )
     };
@@ -911,7 +918,7 @@ fn an_authored_import_does_not_read_the_file_it_names() {
 
     for module in [&parsable, &unparsable, &absent] {
         assert_eq!(
-            validate_authored_answer(&program(module)),
+            validate_function(&program(module), FunctionInterface::AssertionDerive),
             Vec::new(),
             "reading a derivation that imports `{}` reported something, so \
              something read the path",
@@ -1040,7 +1047,7 @@ fn reading_an_authored_import_never_opens_the_path_it_names() {
     );
 
     let program = format!(
-        "import \"{}\" as imported;\nfn answer(facts, selectors, context) {{ #{{}} }}\n",
+        "import \"{}\" as imported;\nfn derive(facts, selectors, context) {{ #{{}} }}\n",
         module.display()
     );
 
@@ -1072,7 +1079,7 @@ fn reading_an_authored_import_never_opens_the_path_it_names() {
     );
 
     let subject = outcome_within(Duration::from_secs(30), move || {
-        let _ = validate_authored_answer(&program);
+        let _ = validate_function(&program, FunctionInterface::AssertionDerive);
     });
     assert!(
         matches!(subject, Outcome::Finished(_)),
@@ -1172,7 +1179,7 @@ fn the_lint_disallows_the_engine_and_every_way_of_running_one() {
 fn the_source_sweep_reads_prose_as_prose() {
     // The comment above `parser` names the handler an engine arrives with,
     // because saying which one is the point of it.
-    assert!(refusals("/// arrives carrying `println!` (rhai 1.25.1)").is_empty());
+    assert!(refusals("/// arrives carrying `println!` (rhai 1.26.1)").is_empty());
     assert!(refusals("// let bytes = fs::read(path)?;").is_empty());
     // A comment at the end of a line does not cover the line.
     assert!(!refusals("let bytes = fs::read(path)?; // the hazard").is_empty());

@@ -57,7 +57,31 @@ where
 }
 
 #[derive(Debug, Subcommand)]
+pub enum AuthorityCommand {
+    /// Validate package ceilings and durably commit one target authority snapshot.
+    Activate {
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+        /// Target authority document to validate and activate.
+        #[arg(long, value_name = "FILE")]
+        document: PathBuf,
+    },
+    /// Inspect revisions and digests from committed activation history, without identity values.
+    History {
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Atomically activate separately governed target authority for the next restart.
+    Authority {
+        #[command(subcommand)]
+        command: AuthorityCommand,
+    },
     /// Check a runtime file and the package it binds, offline, and report
     /// every problem found.
     ///
@@ -167,6 +191,9 @@ pub enum Command {
     BundleCheck {
         #[arg(long)]
         bundle: PathBuf,
+        /// Validate compiled target grants offline, without activating them.
+        #[arg(long)]
+        authority_document: Option<PathBuf>,
         /// Return value-free bundle and requirement configuration revisions.
         #[arg(long)]
         json: bool,
@@ -176,6 +203,9 @@ pub enum Command {
     BundleEvaluate {
         #[arg(long)]
         bundle: PathBuf,
+        /// Validated compiled target grants used only for offline fixtures.
+        #[arg(long)]
+        authority_document: Option<PathBuf>,
         #[arg(long)]
         fixture: PathBuf,
         #[arg(long)]

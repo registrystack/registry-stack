@@ -811,13 +811,13 @@ tokenEndpoint: https://identity.example.test/oauth2/token\n\
 clientAssertionAudience: https://identity.example.test\n\
 clientId: status-client\n\
 privateKeyRef: secret:file/status-key\n\
-caseworkResource: urn:authority:status\n";
+statusResource: urn:authority:status\n";
 
 #[test]
 fn task_grant_status_defaults_to_the_casework_route_and_scope_and_accepts_operator_values() {
     let defaults: TaskGrantStatusConfig = read_block(TASK_GRANT_STATUS).unwrap();
     assert_eq!(defaults.source_issuer.as_str(), "urn:authority:source");
-    assert_eq!(defaults.casework_resource.as_str(), "urn:authority:status");
+    assert_eq!(defaults.status_resource.as_str(), "urn:authority:status");
     assert_eq!(defaults.status_scope.as_str(), "casework:grants:status");
     assert_eq!(defaults.status_path, "/v1/task-grants/{grantId}/status");
     assert_eq!(defaults.ca_bundle_ref, None);

@@ -1,272 +1,401 @@
-apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
-kind: BRegProject
-project:
-  id: asset-site-placement
-  canonicalBaseIri: "https://asset-site-placement.example.gov"
-  version: 0.1.0
-  defaultLanguage: en
-package:
-  sourceRevision: asset-site-placement-acceptance-0.1.0
-manifestProjection:
-  accessProfile: asset-operator
-  classificationCeiling: internal
-  catalog:
-    baseUrl: https://asset-site-placement.example.gov
-    title: Asset Site Placement Catalog
-    description: Portable metadata for the asset site placement registry.
-    publisher:
-      id: "asset-site-placement-authority"
-      name: Asset Site Placement Authority
-      iri: https://asset-site-placement.example.gov/authority
-  datasets:
-    -
-      id: "asset-site-placement"
-      title: Asset Site Placement Registry
-      description: Asset placement, site, item, and inspection metadata.
-      owner: Asset Site Placement Authority
-      status: active
-  dataServices:
-    -
-      id: "asset-site-placement-data-service"
-      title: Asset Site Placement Catalog
-      endpointUrl: "https://asset-site-placement.example.gov"
-      servesDatasets:
-        - "asset-site-placement"
-  publicService:
-    id: "asset-site-placement-service"
-    title: Asset Site Placement Catalog
-  distributions: []
-modules:
-  - id: asset-site-placement-core
-    version: 0.1.0
-    digest: sha256:6bfb23a7780219187d3f30fab0a37d51e739bb0a26669e4c162b59c1f502ebf3
-entities:
-  - id: asset-item
-    primaryDataset: "asset-site-placement"
-    route: assets
-    mutationMode: mutable
-    batch:
-      maximumItems: 4
-      maximumBytes: 16384
-    fields:
-      - id: asset-code
-        type: string
-        required: true
-        maximumLength: 64
-        classification: internal
-      - id: label
-        type: string
-        required: true
-        maximumLength: 200
-        classification: internal
-      - id: asset-class
-        type: vocabulary-code
-        vocabulary: asset-classification
-        required: true
-        classification: internal
-    constraints:
-      - type: unique
-        fields:
-          - asset-code
-  - id: asset-site
-    primaryDataset: "asset-site-placement"
-    route: sites
-    mutationMode: mutable
-    fields:
-      - id: site-code
-        type: string
-        required: true
-        maximumLength: 64
-        classification: internal
-      - id: label
-        type: string
-        required: true
-        maximumLength: 200
-        classification: internal
-    constraints:
-      - type: unique
-        fields:
-          - site-code
-  - id: asset-placement
-    primaryDataset: "asset-site-placement"
-    route: placements
-    mutationMode: mutable
-    fields:
-      - id: asset
-        type: reference
-        target: asset-item
-        required: true
-        classification: internal
-      - id: site
-        type: reference
-        target: asset-site
-        required: true
-        classification: internal
-      - id: valid-from
-        type: date
-        required: true
-        classification: internal
-      - id: valid-to
-        type: date
-        required: false
-        classification: internal
-    temporal:
-      startField: valid-from
-      endField: valid-to
-      scopeFields:
-        - asset
-    constraints:
-      - type: temporal-non-overlap
-        scopeFields:
-          - asset
-        startField: valid-from
-        endField: valid-to
-    indexes:
-      - id: placement-valid-from
-        fields: [valid-from]
-  - id: inspection-event
-    primaryDataset: "asset-site-placement"
-    route: inspections
-    mutationMode: create-only
-    fields:
-      - id: asset
-        type: reference
-        target: asset-item
-        required: true
-        classification: internal
-      - id: observed-at
-        type: timestamp
-        required: true
-        classification: internal
-      - id: result
-        type: vocabulary-code
-        vocabulary: inspection-result
-        required: true
-        classification: internal
-accessProfiles:
-  - id: asset-operator
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: unrestricted
-    requiredPurposes:
-      - asset-management
-    permissions:
-      entities:
-        - entity: asset-item
-          rowBoundaries: unrestricted
-          operations:
-            - create
-            - get
-            - list
-            - patch
-            - batch
-          readableFields:
-            - asset-code
-            - label
-            - asset-class
-          writableFields:
-            - asset-code
-            - label
-            - asset-class
-        - entity: asset-site
-          rowBoundaries: unrestricted
-          operations:
-            - create
-            - get
-            - list
-            - patch
-          readableFields:
-            - site-code
-            - label
-          writableFields:
-            - site-code
-            - label
-        - entity: asset-placement
-          rowBoundaries: unrestricted
-          operations:
-            - create
-            - get
-            - list
-            - patch
-          readableFields:
-            - asset
-            - site
-            - valid-from
-            - valid-to
-          writableFields:
-            - asset
-            - site
-            - valid-from
-            - valid-to
-        - entity: inspection-event
-          rowBoundaries: unrestricted
-          operations:
-            - create
-            - get
-            - list
-          readableFields:
-            - asset
-            - observed-at
-            - result
-          writableFields:
-            - asset
-            - observed-at
-            - result
-  - id: site-planner
-    principalClaim: registry_principal
-    requiredScopes: unrestricted
-    requiredPurposes:
-      - site-planning
-    permissions:
-      entities:
-        - entity: asset-item
-          rowBoundaries: unrestricted
-          operations:
-            - get
-            - list
-          readableFields:
-            - asset-code
-            - label
-          filterableFields:
-            - asset-code
-        - entity: asset-site
-          rowBoundaries: unrestricted
-          operations:
-            - get
-            - list
-          readableFields:
-            - site-code
-            - label
-          filterableFields:
-            - site-code
-        - entity: asset-placement
-          rowBoundaries: unrestricted
-          operations:
-            - create
-            - get
-            - list
-            - patch
-          readableFields:
-            - asset
-            - site
-            - valid-from
-            - valid-to
-          writableFields:
-            - asset
-            - site
-            - valid-from
-            - valid-to
-          filterableFields:
-            - asset
-            - site
-            - valid-from
-vocabularies:
-  - id: asset-classification
-    values:
-      - equipment
-      - vehicle
-      - furniture
-  - id: inspection-result
-    values:
-      - passed
-      - failed
+{
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "asset-site-placement",
+    "canonicalBaseIri": "https://asset-site-placement.example.gov",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "sourceRevision": "asset-site-placement-acceptance-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "asset-operator",
+    "classificationCeiling": "internal",
+    "catalog": {
+      "baseUrl": "https://asset-site-placement.example.gov",
+      "title": "Asset Site Placement Catalog",
+      "description": "Portable metadata for the asset site placement registry.",
+      "publisher": {
+        "id": "asset-site-placement-authority",
+        "name": "Asset Site Placement Authority",
+        "iri": "https://asset-site-placement.example.gov/authority"
+      }
+    },
+    "datasets": [
+      {
+        "id": "asset-site-placement",
+        "title": "Asset Site Placement Registry",
+        "description": "Asset placement, site, item, and inspection metadata.",
+        "owner": "Asset Site Placement Authority",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "asset-site-placement-data-service",
+        "title": "Asset Site Placement Catalog",
+        "endpointUrl": "https://asset-site-placement.example.gov",
+        "servesDatasets": [
+          "asset-site-placement"
+        ]
+      }
+    ],
+    "publicService": {
+      "id": "asset-site-placement-service",
+      "title": "Asset Site Placement Catalog"
+    },
+    "distributions": []
+  },
+  "modules": [
+    {
+      "id": "asset-site-placement-core",
+      "version": "0.1.0",
+      "digest": "sha256:8e796da3cf6d67ff440b2a1cdbcd4886f348cabc953df59d6861d3b05bb077a6"
+    }
+  ],
+  "recordTypes": [
+    {
+      "id": "asset-item",
+      "primaryDataset": "asset-site-placement",
+      "route": "assets",
+      "mutationMode": "mutable",
+      "batch": {
+        "maximumItems": 4,
+        "maximumBytes": 16384
+      },
+      "fields": [
+        {
+          "id": "asset-code",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "internal"
+        },
+        {
+          "id": "label",
+          "type": "string",
+          "required": true,
+          "maximumLength": 200,
+          "classification": "internal"
+        },
+        {
+          "id": "asset-class",
+          "type": "vocabulary-code",
+          "vocabulary": "asset-classification",
+          "required": true,
+          "classification": "internal"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "asset-code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "asset-site",
+      "primaryDataset": "asset-site-placement",
+      "route": "sites",
+      "mutationMode": "mutable",
+      "fields": [
+        {
+          "id": "site-code",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "internal"
+        },
+        {
+          "id": "label",
+          "type": "string",
+          "required": true,
+          "maximumLength": 200,
+          "classification": "internal"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "site-code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "asset-placement",
+      "primaryDataset": "asset-site-placement",
+      "route": "placements",
+      "mutationMode": "mutable",
+      "fields": [
+        {
+          "id": "asset",
+          "type": "reference",
+          "target": "asset-item",
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "site",
+          "type": "reference",
+          "target": "asset-site",
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "valid-from",
+          "type": "date",
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "valid-to",
+          "type": "date",
+          "required": false,
+          "classification": "internal"
+        }
+      ],
+      "temporal": {
+        "startField": "valid-from",
+        "endField": "valid-to"
+      },
+      "constraints": [
+        {
+          "type": "temporal-non-overlap",
+          "scopeFields": [
+            "asset"
+          ],
+          "startField": "valid-from",
+          "endField": "valid-to"
+        }
+      ],
+      "indexes": [
+        {
+          "id": "placement-valid-from",
+          "fields": [
+            "valid-from"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "inspection-event",
+      "primaryDataset": "asset-site-placement",
+      "route": "inspections",
+      "mutationMode": "create-only",
+      "fields": [
+        {
+          "id": "asset",
+          "type": "reference",
+          "target": "asset-item",
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "observed-at",
+          "type": "timestamp",
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "result",
+          "type": "vocabulary-code",
+          "vocabulary": "inspection-result",
+          "required": true,
+          "classification": "internal"
+        }
+      ]
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "asset-operator",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": "unrestricted",
+      "requiredPurposes": [
+        "asset-management"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "recordType": "asset-item",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list",
+              "patch",
+              "batch"
+            ],
+            "readableFields": [
+              "asset-code",
+              "label",
+              "asset-class"
+            ],
+            "writableFields": [
+              "asset-code",
+              "label",
+              "asset-class"
+            ]
+          },
+          {
+            "recordType": "asset-site",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list",
+              "patch"
+            ],
+            "readableFields": [
+              "site-code",
+              "label"
+            ],
+            "writableFields": [
+              "site-code",
+              "label"
+            ]
+          },
+          {
+            "recordType": "asset-placement",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list",
+              "patch"
+            ],
+            "readableFields": [
+              "asset",
+              "site",
+              "valid-from",
+              "valid-to"
+            ],
+            "writableFields": [
+              "asset",
+              "site",
+              "valid-from",
+              "valid-to"
+            ]
+          },
+          {
+            "recordType": "inspection-event",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "asset",
+              "observed-at",
+              "result"
+            ],
+            "writableFields": [
+              "asset",
+              "observed-at",
+              "result"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "site-planner",
+      "principalClaim": "registry_principal",
+      "requiredScopes": "unrestricted",
+      "requiredPurposes": [
+        "site-planning"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "recordType": "asset-item",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "asset-code",
+              "label"
+            ],
+            "filterableFields": [
+              "asset-code"
+            ]
+          },
+          {
+            "recordType": "asset-site",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "site-code",
+              "label"
+            ],
+            "filterableFields": [
+              "site-code"
+            ]
+          },
+          {
+            "recordType": "asset-placement",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list",
+              "patch"
+            ],
+            "readableFields": [
+              "asset",
+              "site",
+              "valid-from",
+              "valid-to"
+            ],
+            "writableFields": [
+              "asset",
+              "site",
+              "valid-from",
+              "valid-to"
+            ],
+            "filterableFields": [
+              "asset",
+              "site",
+              "valid-from"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "vocabularies": [
+    {
+      "id": "asset-classification",
+      "values": [
+        "equipment",
+        "vehicle",
+        "furniture"
+      ]
+    },
+    {
+      "id": "inspection-result",
+      "values": [
+        "passed",
+        "failed"
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "asset-site-placement"
+    }
+  ]
+}

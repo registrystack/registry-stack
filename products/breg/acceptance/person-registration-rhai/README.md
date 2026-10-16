@@ -19,15 +19,28 @@ specification or checksum.
 [registry.yaml](registry.yaml) is the complete project. The simple action uses:
 
 ```yaml
-handler:
-  type: rhai
-  script: scripts/register-person.rhai
-  abi: registry.action-handler/v1
+functions:
+  - id: register-person-plan
+    runtime: rhai
+    source: scripts/register-person.rhai
+    entrypoint: plan
+    abi: registry.action-plan/v1
+```
+
+The immediate Action selects that Function through its `plan`:
+
+```yaml
+plan:
+  type: function
+  function: register-person-plan
+  inputs: [identifier, given-name, family-name]
   refusals:
-    - {code: blank-name, label: At least one name part is required.}
+    - code: blank-name
+      label: At least one name part is required.
   writes:
     - id: person
-      target: {entity: person}
+      target:
+        recordType: person
       operation: create
       fields: [identifier, display-name]
 ```
@@ -44,7 +57,7 @@ An HTTP request exceeding a declared bound or this byte limit returns
 `maximumLength` must reduce it; use fixed effects for actions needing point or
 structured inputs.
 
-The [handler](scripts/register-person.rhai) exports `fn handle(ctx)` and reads
+The [handler](scripts/register-person.rhai) exports `fn plan(ctx)` and reads
 logical input IDs such as `ctx.inputs["given-name"]`. An omitted optional input
 has no map key; an explicit JSON `null` has a key with Rhai's unit value `()`.
 The scripts treat both as an empty name part, using this guard before trimming:
@@ -69,7 +82,7 @@ supplies typed `set` values and, for optional patch fields, `clear` field IDs.
 The host owns the target, operation, IDs, authority, validation and transaction.
 There is no database, filesystem, network, clock or stored-record API in Rhai.
 
-Each action declares exactly one of fixed `effects` or `handler`. The handler's
+Each action declares one `plan`, either fixed effects or a named Function. The Function plan's
 `writes` are a ceiling, not CRUD permission. `person-registrar` can invoke the
 actions and receive their result references, but has no ordinary entity write
 grant. `person-reader` independently grants reads; `person-administrator`
@@ -103,13 +116,13 @@ person_project=products/breg/acceptance/person-registration-rhai
 
 for person_case in full-name given-only family-only null-given null-family \
   internal-spaces blank-name omitted-name null-name; do
-  "$bregctl" project planner-test "$person_project" \
+  "$bregctl" project action-test "$person_project" \
     --action register-person \
     --input "$person_project/examples/$person_case.input.json" \
     --expect "$person_project/examples/$person_case.expect.json"
 done
 for person_case in coordinated registration-only patch-only person-only; do
-  "$bregctl" project planner-test "$person_project" \
+  "$bregctl" project action-test "$person_project" \
     --action register-person-with-registration \
     --input "$person_project/examples/$person_case.input.json" \
     --expect "$person_project/examples/$person_case.expect.json"
@@ -141,7 +154,7 @@ If the local check fails, repair the input or source identified by its diagnosti
   authored input IDs, remove the HTTP envelope, and meet the input's type and
   bounds.
 - `breg.action.handler-parse` or `breg.action.handler-entrypoint` identifies script syntax
-  or the missing `fn handle(ctx)` entry point. Correct the script at the reported
+  or the missing `fn plan(ctx)` entry point. Correct the script at the reported
   action path.
 - `action.handler.result` or `action.handler.ceiling` identifies an invalid
   result. Correct the named slot or field, or deliberately update its governed
@@ -256,7 +269,7 @@ with the same identifier is `409 mutation.conflict` because of uniqueness.
 The [second handler](scripts/register-person-with-registration.rhai) always
 emits `person`. When `recordRegistration` is true it emits `registration`,
 linking the newly created person with `{fromEffect: "person"}` and the selected
-existing register with `{fromField: "register"}`. When `updateRegister` is true
+existing register with `{fromInput: "register"}`. When `updateRegister` is true
 it emits the `register` patch setting `last-person` from the created person.
 All selected effects commit together. Setting either flag false omits that
 slot's write and receipt result. No script-supplied raw record ID becomes a
@@ -298,8 +311,7 @@ or failed `requires` return `412 precondition.failed`. Retain the user's form,
 recheck the target, and confirm current input before resubmitting with a refreshed
 condition. Do not silently refresh immediately before submission.
 
-Immediate handlers calculate one atomic invocation. Existing change-request
-planners still compute retained proposals through `ctx.request`; review and
-later apply use frozen effects. Existing webhooks deliver committed events
+Immediate handlers calculate one atomic invocation. Proposal Actions use the same native plan model and `ctx.inputs`; review and
+later application use exact frozen effects. Existing webhooks deliver committed events
 after commit and can retry independently. A failed delivery cannot undo a
 committed registration.

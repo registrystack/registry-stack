@@ -3,9 +3,9 @@ status: frozen
 review_rule: Every row requires its named negative test on the same implementation revision; tests may be split but may not be weakened or deleted.
 invariants:
   - id: V1-I01
-    rule: Only predefined, versioned requirements can be evaluated.
+    rule: Only predefined, versioned Requirement URIs can be evaluated; local definition handles are not public request identities. Optional expectedConfigurationRevision pins the active per-definition revision.
     threat: Caller turns Evidence into an arbitrary fact-query service.
-    enforcement: Request resolver accepts only exact enabled requirement revisions before authorization.
+    enforcement: The closed request accepts Requirement URIs, and the resolver rejects a stale expectedConfigurationRevision before authentication, authority resolution, credentials, or source I/O. URI-only requests return the active revision; independent verifier expectations remain authoritative.
     negative_test: sec-unknown-or-disabled-requirement
   - id: V1-I02
     rule: Callers cannot provide thresholds, expressions, scripts, paths, headers, source fields, relationship types, adapter parameters, or response projections.
@@ -25,7 +25,7 @@ invariants:
   - id: V1-I05
     rule: One authorization decision binds requester, actor kind, optional actor identity, verified client, requirement revision, purpose, all role/profile/origin tuples, authority, and audience. A task-grant path additionally binds immutable grant id, principal, original client and resource, trusted source issuer, deadline, and exact Evidence requirement bound; requires its signed approver handle; and records a scoped keyed approver pseudonym on successful audit events.
     threat: Permission splicing, confused-deputy access across partially authorized dimensions, or approved delegation without accountable approver attribution.
-    enforcement: Exact complete-entitlement match before authorized-material audit, credential resolution, or source access. A present grant is incomplete without its approver claim, and a present invalid grant cannot fall back to a standing profile. Successful grant audit derives the approver pseudonym with the existing scoped audit key. A refusal after successful authentication follows the separate minimal denial-audit invariant.
+    enforcement: Target activation validates every complete grant against package authority-kind, actor-kind, value-origin, audience, subject, selector, purpose, representation and binding ceilings. A dynamic authenticated audience must remain inside the authored ceiling. The process captures one active authority revision before grant matching, and audit binds it and the effective ceiling/grant digest. Exact complete-entitlement match precedes authorized-material audit, credential resolution, or source access. A present grant is incomplete without its approver claim, and a present invalid grant cannot fall back to a standing profile. Successful grant audit derives the approver pseudonym with the existing scoped audit key. A refusal after successful authentication follows the separate minimal denial-audit invariant.
     negative_test: sec-no-entitlement-union
   - id: V1-I06
     rule: Selector profiles and values are provider-lookup inputs, never proof of authority.
@@ -88,9 +88,9 @@ invariants:
     enforcement: Domain-separated keyed derivation includes audience, purpose, role, profile, binding-key version, and complete canonical selector bundle.
     negative_test: sec-subject-binding-scope
   - id: V1-I18
-    rule: Configuration is immutable for the serving process lifetime.
-    threat: Unreviewed hot mutation, partial revisions, rollback, or inconsistent audit provenance.
-    enforcement: One read-only package verified from its SHA256SUMS and one closed runtime file captured at startup; runtime overrides, reload, merge, fallback, and mutation paths do not exist.
+    rule: The package, runtime bindings, and active target authority snapshot are immutable for the serving process lifetime.
+    threat: Unreviewed hot mutation, partial authority activation, inconsistent history, or authorization and audit using different revisions.
+    enforcement: One read-only package verified from its SHA256SUMS and one closed runtime file are captured at startup. Normalized projects additionally load one validated target authority bound to the project, target and exact package digest. Activation validates every complete grant against package ceilings before atomically committing the active snapshot and durable history in one synced state document under a single-writer lock. Failed or partial preparation cannot become active; a new activation takes effect only at a controlled process restart. Every admitted operation retains that captured snapshot through access and release audit. Runtime overrides, hot reload, merge and fallback paths do not exist.
     negative_test: sec-runtime-bundle-mutation-absent
   - id: V1-I19
     rule: One process serves one operator-controlled trust domain.
@@ -168,9 +168,9 @@ invariants:
     enforcement: Optional runtime metricsListener bound to a private address distinct from the evidence listener, serving only GET /metrics; request series labels are drawn from the closed registered route-template set, a fixed method set, a fixed status category, and the reviewed problem-code set, and the source shape-drift series is labeled only by a governed bundle source identifier registered at startup, never from request or response content.
     negative_test: sec-telemetry-bounded-and-operator-private
   - id: V1-I34
-    rule: Only the explicit local assurance profile may omit a requirement fixture reference; production and evidence-grade retain complete fixture validation before the bundle can load.
+    rule: Only the explicit local assurance profile may omit a requirement fixture reference or use focused fixture coverage; production and evidence-grade retain complete fixture validation before the bundle can load.
     threat: An incomplete or absent semantic fixture suite is silently treated as deployable assurance.
-    enforcement: The governed assuranceProfile is required in the closed bundle and Rust requires every production or evidence-grade requirement to reference a captured fixture that passes the existing complete coverage validator. Local changes only that fixture prerequisite.
+    enforcement: The governed assuranceProfile is required in the closed bundle and Rust requires every production or evidence-grade requirement to reference a captured fixture that passes the existing complete coverage validator. Local changes only the fixture prerequisite and category completeness; synthetic data and structural rules still hold at load, and the same evaluator and privacy checks apply when a suite is run.
     negative_test: sec-assurance-profile-fixture-boundary
   - id: V1-I35
     rule: Every assertion encoding, definition response, and audit event carries the governed assurance profile, and verification compares it with an independent relying-procedure expectation.
@@ -284,6 +284,14 @@ invariants:
     negative_test: sec-path-selector-refused-before-source
 
 cross_cutting:
+  target_authority_activation:
+    threat: A partial write, concurrent activation, injected identity digest, or package/target mismatch becomes effective authority or falsifies activation history.
+    enforcement: Compile and validate complete target grants against the package before commit. Derive authorityRevision and authorityDigest from canonical normalized document bytes. A bounded single state document atomically holds ordered history and the active snapshot, under one writer lock with synced write, rename and directory. Startup verifies stored document identities, sequence, target and exact package digest, then captures authority for the process lifetime. Repeated exact activation is idempotent; prepared files are never active.
+    negative_test: sec-target-authority-atomic-activation
+  target_grant_ceilings:
+    threat: A target widens a package definition through actor, authority, value origin, purpose, subject, selector, audience, representation or binding, or combines partial grants into new permission.
+    enforcement: Every activated grant must fit one definition's complete authored ceiling and exact subject-role set. Required actor kinds and value origins cannot become wildcards. The authenticated audience is checked against the authored audience ceiling at request time. Exactly one complete grant authorizes, and the process-captured authorityRevision plus effectiveGrantDigest bind access and terminal release audit; pinning authority does not bypass authenticated task-grant validity or release gates.
+    negative_test: sec-target-grant-ceilings
   holder_bound_entity_reference_prohibited:
     threat: An entity reference is a pointer only the one relying party it was scoped to can resolve. A holder-bound assertion has no such party, so disclosing one would emit an identifier nobody who receives the credential can resolve and that correlates its holder wherever it is presented.
     enforcement: A holder-bound requirement declaring either entity-reference value form is refused during bundle validation, before the listener binds, with a fixed cause that interpolates nothing from the rejected bundle. The refusal is about the mode, not the value form, so the same concept stays configurable on an audience-scoped requirement.

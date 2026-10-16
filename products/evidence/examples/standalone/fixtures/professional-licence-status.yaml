@@ -1,0 +1,93 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+syntheticOnly: true
+common:
+  observedAt: '2026-10-14T00:00:00Z'
+  selectors:
+    licence:
+      profile: record-by-id
+      values:
+        record-id: licence
+cases:
+- id: positive
+  source:
+    total: 1
+    record:
+      record_id: licence
+      status: active
+  expectedValue: active
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: suspended
+  source:
+    total: 1
+    record:
+      record_id: licence
+      status: suspended
+  expectedValue: suspended
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: expired
+  source:
+    total: 1
+    record:
+      record_id: licence
+      status: expired
+  expectedValue: expired
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: no-match
+  source:
+    total: 0
+  expectedLookup: no_match
+  expectedPublicProblem: evidence.unavailable
+  derivationRuns: false
+  signedSuccess: false
+- id: ambiguous
+  source:
+    total: 2
+  expectedLookup: ambiguous
+  expectedPublicProblem: evidence.unavailable
+  derivationRuns: false
+  signedSuccess: false
+- id: source-failure
+  sourceFailure: timeout
+  expectedPublicProblem: source.unavailable
+  signedSuccess: false
+- id: boundary-declared-value
+  source:
+    total: 1
+    record:
+      record_id: licence
+      status: expired
+  expectedValue: expired
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+- id: negative-outside-controlled-values
+  injectedDerivation:
+  - concept_id: urn:example:concept:licence-status:v1
+    value: unreviewed
+  expected: output-gate-rejection
+- id: missing-required-fact
+  source:
+    total: 1
+    record:
+      record_id: licence
+  derivationRuns: false
+  signedSuccess: false
+  expectedPublicProblem: source.unavailable
+- id: anti-reconstruction
+  companionBundle: threshold-ladder
+  expected: bundle-rejection
+privacyExpectation:
+  diagnosticsExclude:
+  - synthetic-address-private-canary
+  evidenceExcludes:
+  - synthetic-address-private-canary
+  evidenceContains:
+  - urn:example:concept:licence-status:v1
+coequalAcceptanceDefinition: true

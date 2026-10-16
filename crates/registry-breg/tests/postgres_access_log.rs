@@ -49,21 +49,21 @@ impl ReadinessProbe for Ready {
 }
 
 fn compiled() -> CompiledRegistry {
-    let permission = json!({"entity":"entry", "operations":["get","list","lookup"],
+    let permission = json!({"recordType":"entry", "operations":["get","list","lookup"],
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
         "rowBoundaries":"unrestricted"});
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "selectorProfiles":[{"id":"by-subject","fields":["subject"]}],
             "accessLog":{"subjectField":"subject","trustedIntermediaries":["evidence-service"],
                 "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"entities":[permission.clone()]}},
-            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"entities":[permission]}}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"records":[permission.clone()]}},
+            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission]}}
         ]
     });
     compile_project(
@@ -75,10 +75,10 @@ fn compiled() -> CompiledRegistry {
 }
 
 fn compiled_relationships() -> CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[
+        "recordTypes":[
             {"id":"case","primaryDataset":"records","route":"cases","mutationMode":"mutable","classification":"restricted",
                 "fields":[{"id":"case-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"}],
                 "readPaths":[{"id":"people","through":"case-person","to":"person","route":"people"}]},
@@ -92,24 +92,24 @@ fn compiled_relationships() -> CompiledRegistry {
                     {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
                 "accessLog":{"subjectField":"subject","exemptions":{
                     "investigator":{"reason":"target-local-policy-canary","delayDays":7},
-                    "relationship-investigator":{"sourceEntity":"case","reason":"relationship-policy-canary","delayDays":7}}}}
+                    "relationship-investigator":{"sourceRecordType":"case","reason":"relationship-policy-canary","delayDays":7}}}}
         ],
         "accessProfiles":[
             {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+                "records":[
+                    {"recordType":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
                 ]
             }},
             {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
-                "entities":[
-                    {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
+                "records":[
+                    {"recordType":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                         "readPaths":[{"path":"people","readableFields":["label"]}]},
-                    {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+                    {"recordType":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
                 ]
             }},
             {"id":"relationship-investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
-                "entities":[
-                    {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
+                "records":[
+                    {"recordType":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                         "readPaths":[{"path":"people","readableFields":["label"]}]}
                 ]
             }}
@@ -848,23 +848,23 @@ async fn a_retention_tick_without_failure_records_its_last_success() {
 }
 
 fn compiled_with_history() -> CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
             {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
+                "records":[
+                    {"recordType":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
                         "revisionAccess":true,"rowBoundaries":"unrestricted"}
                 ]
             }},
             {"id":"steward","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"entry","operations":["create"],"readableFields":["subject","label"],
+                "records":[
+                    {"recordType":"entry","operations":["create"],"readableFields":["subject","label"],
                         "writableFields":["subject","label"],"rowBoundaries":"unrestricted"}
                 ]
             }}

@@ -1,21 +1,22 @@
 # Examples
 
-Use the checked-in profile fixtures as runnable examples.
+Use the checked-in profile fixtures as runnable examples. Run these commands from
+the repository root.
 
 Validate:
 
 ```sh
-cargo run -p registry-manifest-cli -- validate profiles/example-civil-registration/fixtures/metadata.yaml
+cargo run --locked -p registry-manifest-cli -- validate products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
 ```
 
 Render BRegDCAT-AP JSON-LD:
 
 ```sh
-cargo run -p registry-manifest-cli -- render profiles/example-civil-registration/fixtures/metadata.yaml --format bregdcat-ap
+cargo run --locked -p registry-manifest-cli -- render products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --format bregdcat-ap
 ```
 
 Publish a static metadata bundle:
 
 ```sh
-cargo run -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
+cargo run --locked -p registry-manifest-cli -- publish products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
 ```

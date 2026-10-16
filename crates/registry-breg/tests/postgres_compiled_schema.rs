@@ -1834,7 +1834,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
         }));
     }
     let writable_fields = vec!["alpha", "omega"];
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1842,7 +1842,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1854,8 +1854,8 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": writable_fields,
                 "writableFields": writable_fields,
@@ -1873,7 +1873,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
 /// vocabulary varies, so a migration that touched `kind` would show.
 /// One required `text` field with a pattern, bounded by `max_length`.
 fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1881,7 +1881,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1896,8 +1896,8 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
@@ -1912,7 +1912,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
 }
 
 fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1920,7 +1920,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1935,8 +1935,8 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
@@ -1959,7 +1959,7 @@ fn vocabulary_catalog_registry_with_constraints(
     status_values: &[&str],
     constraints: serde_json::Value,
 ) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1971,7 +1971,7 @@ fn vocabulary_catalog_registry_with_constraints(
             {"id": "status", "values": status_values},
             {"id": "kind", "values": ["minor", "major"]}
         ],
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1989,8 +1989,8 @@ fn vocabulary_catalog_registry_with_constraints(
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["status", "kind"],
                 "writableFields": ["status", "kind"],
@@ -2006,11 +2006,11 @@ fn vocabulary_catalog_registry_with_constraints(
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {
               "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
               "fields":[
@@ -2031,9 +2031,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["operations"],
               "permissions":{
-                "entities":[
+                "records":[
                   {
-                    "entity":"entry","operations":["create","get","list","patch"],
+                    "recordType":"entry","operations":["create","get","list","patch"],
                     "readableFields":["tenant","region","label"],
                     "writableFields":["tenant","region","label"],
                     "rowBoundaries":[
@@ -2042,7 +2042,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                     ]
                   },
                   {
-                    "entity":"event","operations":["create","get","list"],
+                    "recordType":"event","operations":["create","get","list"],
                     "readableFields":["tenant"],"writableFields":["tenant"],
                     "rowBoundaries": "unrestricted"
                   }
@@ -2052,8 +2052,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["review"],
-              "permissions":{"entities":[{
-                "entity":"entry","operations":["get","list"],
+              "permissions":{"records":[{
+                "recordType":"entry","operations":["get","list"],
                 "readableFields":["tenant","region","label"],
                 "rowBoundaries":[
                   {"field":"tenant","claim":"tenant_claim","operator":"equals"},
@@ -2071,11 +2071,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
@@ -2090,8 +2090,8 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"household","operations":["create","get","list"],
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],
               "filterableFields":["child-count"],

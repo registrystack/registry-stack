@@ -16,13 +16,16 @@
 //! the wrong thing about the project.
 
 #![cfg(feature = "schema")]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "this test target embeds the public canonical fixtures; the library performs no I/O"
+)]
 
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{
-    formats::check_question,
-    schema::{
-        documents, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE,
-    },
+    project,
+    schema::{documents, PROJECT_SCHEMA_FILE, TARGET_AUTHORITY_SCHEMA_FILE, TARGET_SCHEMA_FILE},
+    target,
 };
 use registry_platform_yaml::Reader;
 use serde_json::Value;
@@ -31,6 +34,13 @@ use serde_json::Value;
 /// members after it, so each departure stays visible.
 const QUESTION_ENVELOPE: &str =
     "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\n";
+
+const NORMALIZED_PROJECT: &str =
+    include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
+const NORMALIZED_TARGET: &str =
+    include_str!("../../../products/evidence/examples/standalone/local-target.yaml");
+const NORMALIZED_AUTHORITY: &str =
+    include_str!("../../../products/evidence/examples/standalone/dev-authority.yaml");
 
 /// A question that satisfies both the schema and the checks, and the base every
 /// rejected document below departs from in exactly one way.
@@ -345,30 +355,37 @@ fn yaml_as_json(document: &str) -> Value {
         .to_json_value()
 }
 
-fn question_as_json(document: &str) -> Value {
-    yaml_as_json(&format!("{QUESTION_ENVELOPE}{document}"))
+fn schema(file: &str) -> JSONSchema {
+    compile(&documents().expect("the schemas generate")[file])
 }
 
-/// Read one authored question the way adopter tooling does: read it through
-/// the shared reader into the closed model, then run the checks. Either step
-/// may turn the document away.
-fn question_is_accepted_by_the_checks(document: &str) -> bool {
-    check_question(
-        "questions/adult-status.yaml",
-        format!("{QUESTION_ENVELOPE}{document}").as_bytes(),
-    )
-    .is_ok()
+fn project_with_boolean_outputs(count: usize) -> Value {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    let outputs = document["assertionDefinitions"]["adult-status"]["outputs"]
+        .as_object_mut()
+        .expect("the normalized project declares outputs");
+    outputs.clear();
+    for index in 1..=count {
+        outputs.insert(
+            format!("output-{index}"),
+            serde_json::json!({
+                "concept": format!("urn:example:concept:output-{index}"),
+                "type": "boolean"
+            }),
+        );
+    }
+    document
 }
 
 #[test]
-fn the_generated_set_is_exactly_the_documents_a_rust_type_stands_behind() {
+fn the_generated_set_is_exactly_the_normalized_authored_documents() {
     let documents = documents().expect("the authoring schemas generate");
     assert_eq!(
         documents.keys().copied().collect::<Vec<_>>(),
         vec![
-            ACCESS_POLICY_SCHEMA_FILE,
-            PROJECT_MARKER_SCHEMA_FILE,
-            QUESTION_SCHEMA_FILE
+            PROJECT_SCHEMA_FILE,
+            TARGET_AUTHORITY_SCHEMA_FILE,
+            TARGET_SCHEMA_FILE
         ],
     );
 }
@@ -431,135 +448,618 @@ fn every_generated_document_is_canonical_pretty_json_with_a_trailing_newline() {
 }
 
 #[test]
-fn the_question_schema_closes_its_shape_and_requires_the_authored_keys() {
+fn the_project_schema_closes_its_shape_and_requires_the_normalized_keys() {
     let documents = documents().expect("the authoring schemas generate");
-    let value: Value = serde_json::from_str(&documents[QUESTION_SCHEMA_FILE])
-        .expect("the question schema is JSON");
+    let value: Value =
+        serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).expect("the project schema is JSON");
     assert_eq!(value.get("additionalProperties"), Some(&Value::Bool(false)));
     let required = value
         .get("required")
         .and_then(Value::as_array)
-        .expect("the question schema names its required keys")
+        .expect("the project schema names its required keys")
         .iter()
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     for key in [
         "apiVersion",
         "kind",
-        "answers",
-        "derivation",
-        "disclosure",
         "id",
-        "purpose",
-        "question",
-        "source",
+        "selectorProfiles",
+        "functions",
+        "sources",
+        "assertionDefinitions",
     ] {
         assert!(
             required.contains(&key),
-            "the question schema does not require {key}"
+            "the project schema does not require {key}"
         );
     }
-    for key in ["governance", "responseFormats", "subject", "subjects"] {
+    for key in ["label", "description"] {
         assert!(
             !required.contains(&key),
-            "the question schema requires {key}, which an author may omit",
+            "the project schema requires {key}, which is presentation only",
         );
     }
 }
 
 #[test]
-fn the_project_marker_schema_names_the_one_project_kind() {
+fn the_project_schema_exposes_presentation_variants_and_function_contracts() {
     let documents = documents().expect("the authoring schemas generate");
-    let document = &documents[PROJECT_MARKER_SCHEMA_FILE];
-    assert!(
-        document.contains("\"EvidenceAuthoringProject\""),
-        "the marker schema does not offer the one project kind this crate names",
-    );
-    let value: Value = serde_json::from_str(document).expect("the marker schema is JSON");
-    assert_eq!(value.get("additionalProperties"), Some(&Value::Bool(false)));
+    let document = &documents[PROJECT_SCHEMA_FILE];
+    for member in [
+        "assertionDefinitions",
+        "selectorProfiles",
+        "label",
+        "description",
+        "source-prepare/v1",
+        "source-extract/v1",
+        "assertion-derive/v1",
+        "search-then-fetch",
+        "search-then-fetch-set",
+        "selectorInputs",
+    ] {
+        assert!(document.contains(member), "schema omits {member}");
+    }
 }
 
 #[test]
-fn the_base_question_satisfies_both_the_schema_and_the_checks() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    assert!(
-        schema.is_valid(&question_as_json(VALID_QUESTION)),
-        "the corpus base must satisfy the schema, or every rejection below proves nothing",
-    );
-    assert!(
-        question_is_accepted_by_the_checks(VALID_QUESTION),
-        "the corpus base must satisfy the checks, or every rejection below proves nothing",
-    );
+fn canonical_project_target_and_authority_satisfy_schema_and_reader() {
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(NORMALIZED_PROJECT)));
+    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .expect("the canonical project reads")
+        .value;
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&yaml_as_json(NORMALIZED_TARGET)));
+    target::read_target("local-target.yaml", NORMALIZED_TARGET.as_bytes())
+        .expect("the target reads");
+    assert!(schema(TARGET_AUTHORITY_SCHEMA_FILE).is_valid(&yaml_as_json(NORMALIZED_AUTHORITY)));
+    target::read_authority(
+        "dev-authority.yaml",
+        NORMALIZED_AUTHORITY.as_bytes(),
+        &project,
+    )
+    .expect("the authority reads");
 }
 
 #[test]
-fn a_question_the_schema_turns_away_is_turned_away_by_the_checks() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    for (departure, document) in REJECTED_QUESTIONS {
+fn target_service_requires_the_runtime_public_origin() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["service"]
+        .as_object_mut()
+        .expect("the normalized target declares a service")
+        .remove("publicOrigin");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("a target without the runtime's public origin is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("`publicOrigin`"))
+        .expect("the missing public origin is diagnosed");
+    assert_eq!(diagnostic.code, "config.missing-key");
+    assert_eq!(diagnostic.path, "/service");
+}
+
+#[test]
+fn target_assurance_profile_is_the_runtime_closed_vocabulary() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["assuranceProfile"] = serde_json::json!("high-assurance");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown runtime assurance profile is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/assuranceProfile")
+        .expect("the unknown assurance profile has an exact path");
+    assert_eq!(diagnostic.code, "config.unknown-variant");
+}
+
+#[test]
+fn the_target_schema_and_reader_close_nested_deployment_blocks() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["listener"]["legacyPort"] = serde_json::json!(8080);
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown nested deployment member is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/listener/legacyPort")
+        .expect("the nested unknown member has an exact path");
+    assert_eq!(diagnostic.code, "config.unknown-key");
+}
+
+#[test]
+fn the_target_model_retains_complete_production_deployment_options() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["assuranceProfile"] = serde_json::json!("production");
+    document["package"]["expectedDigest"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    document["listener"] = serde_json::json!({
+        "bind":"0.0.0.0:8080", "networkExposure":"container-private",
+        "tlsTermination":"operator-controlled-upstream", "trustProxyIdentityHeaders":false,
+        "maximumRequestBytes":65536, "maximumConcurrentRequests":64,
+        "requestTimeoutMilliseconds":10000, "shutdownGraceMilliseconds":30000
+    });
+    document["authentication"]["oidc"]["allowedClients"] = serde_json::json!(["service-client"]);
+    document["authentication"]["oidc"]["assertionIssuers"] =
+        serde_json::json!({"service-client":["urn:example:issuer:grants"]});
+    document["authentication"]["oidc"]["claims"] = serde_json::json!({
+        "actorKind":"actor", "purpose":"purpose", "grantId":"grant_id",
+        "grantSourceIssuer":"grant_source", "grantClient":"grant_client",
+        "grantResource":"grant_resource", "grantExp":"grant_exp",
+        "grantBounds":"grant_bounds", "approver":"approver"
+    });
+    document["authentication"]["oidc"]["actorClaim"] = serde_json::json!("actor");
+    document["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
+    document["authentication"]["oidc"]["revokedKeyIds"] = serde_json::json!([]);
+    document["connections"] = serde_json::json!({
+        "none":{"origin":"http://127.0.0.1:8081","authentication":{"type":"none"}},
+        "basic":{"origin":"https://basic.invalid","authentication":{"type":"basic","usernameRef":"secret:file/user","passwordRef":"secret:file/password"}},
+        "bearer":{"origin":"https://bearer.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/token","scheme":"Bearer"}},
+        "authorization":{"origin":"https://authorization.invalid","authentication":{"type":"static-authorization","tokenRef":"secret:file/token"}},
+        "api-key":{"origin":"https://api.invalid","authentication":{"type":"static-api-key","headerName":"X-Api-Key","valueRef":"secret:file/api-key"}},
+        "oauth-secret":{"origin":"https://oauth.invalid","authentication":{"type":"oauth2-client-credentials","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientSecretRef":"secret:file/client-secret","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","credentialPlacement":"basic-header","maximumCacheSeconds":300,"assumedLifetimeSeconds":300},"tlsTrustProfile":"private-ca","maximumConcurrency":8,"admissionTimeoutMilliseconds":2000,"tokenTimeoutMilliseconds":2000},
+        "oauth-jwt":{"origin":"https://jwt.invalid","authentication":{"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientAssertionKeyRef":"secret:file/client-key","clientAssertionAudience":"urn:example:issuer","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","maximumCacheSeconds":300,"assumedLifetimeSeconds":300}}
+    });
+    document["secretProviders"]["environment"] = serde_json::json!({});
+    document["signer"] = serde_json::json!({
+        "type":"transit", "algorithm":"ES256", "publicJwkFile":"public-keys/active.jwk.json",
+        "unixSocketPath":"/run/evidence/transit.sock", "mount":"transit",
+        "keyName":"evidence-signing", "keyVersion":7, "attemptTimeoutMilliseconds":2000
+    });
+    document["audit"] = serde_json::json!({
+        "hashKeyRef":"secret:file/audit-hmac-key", "hashKeyVersion":1,
+        "destination":"file", "path":"/var/lib/evidence/audit.jsonl",
+        "rotateBytes":104857600, "retentionDays":90
+    });
+    document["publication"] = serde_json::json!({
+        "serviceId":"urn:example:service:evidence", "title":"Evidence",
+        "description":"Governed Evidence service", "endpointUrl":"https://evidence.invalid",
+        "jurisdictions":["urn:example:jurisdiction"],
+        "publisherId":"urn:example:publisher", "operatorId":"urn:example:operator"
+    });
+    document["responseFormats"] = serde_json::json!([
+        "signed-jws",
+        "unsigned-json",
+        "sd-jwt-vc",
+        "sd-jwt-vc-batch"
+    ]);
+    document["outboundTls"] = serde_json::json!({
+        "systemRoots":true,
+        "trustProfiles":{"private-ca":{"caBundleFile":"/etc/evidence/private-ca.pem"}}
+    });
+    document["extracts"] =
+        serde_json::json!({"registry-snapshot":{"path":"/var/lib/evidence/registry.sqlite"}});
+
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect("the complete retained target surface reads");
+}
+
+#[test]
+fn target_admission_gates_are_exact_in_schema_and_reader() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["authentication"]["oidc"]["requiredScopes"] = serde_json::json!("everything");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    let report = target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown admission keyword is refused");
+    assert_eq!(
+        report.diagnostics()[0].path,
+        "/authentication/oidc/requiredScopes"
+    );
+}
+
+fn assert_target_value_refused(document: &Value, pointer: &str) {
+    assert!(
+        !schema(TARGET_SCHEMA_FILE).is_valid(document),
+        "target schema accepted an invalid value at {pointer}",
+    );
+    let report = target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(document).expect("target renders"),
+    )
+    .expect_err("the target reader refuses the invalid scalar or collection");
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path == pointer),
+        "the refusal did not retain {pointer}: {}",
+        report.render_human(),
+    );
+    assert!(!report.render_human().contains("TARGET-PRIVATE-CANARY"));
+}
+
+#[test]
+fn target_secret_references_use_one_shared_syntax_at_every_retained_position() {
+    let base = yaml_as_json(NORMALIZED_TARGET);
+    let variants = [
+        (
+            serde_json::json!({"type":"basic","usernameRef":"secret:env/SOURCE_USER","passwordRef":"secret:file/password"}),
+            vec!["usernameRef", "passwordRef"],
+        ),
+        (
+            serde_json::json!({"type":"bearer","tokenRef":"secret:file/token"}),
+            vec!["tokenRef"],
+        ),
+        (
+            serde_json::json!({"type":"static-authorization","tokenRef":"secret:file/token"}),
+            vec!["tokenRef"],
+        ),
+        (
+            serde_json::json!({"type":"static-api-key","headerName":"X-Api-Key","valueRef":"secret:file/api-key"}),
+            vec!["valueRef"],
+        ),
+        (
+            serde_json::json!({"type":"oauth2-client-credentials","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:env/CLIENT_ID","clientSecretRef":"secret:file/client-secret","credentialPlacement":"basic-header","maximumCacheSeconds":300}),
+            vec!["clientIdRef", "clientSecretRef"],
+        ),
+        (
+            serde_json::json!({"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:env/CLIENT_ID","clientAssertionKeyRef":"secret:file/client-key","maximumCacheSeconds":300}),
+            vec!["clientIdRef", "clientAssertionKeyRef"],
+        ),
+    ];
+    for (authentication, members) in variants {
+        let mut valid = base.clone();
+        valid["connections"]["probe"] =
+            serde_json::json!({"origin":"https://source.invalid", "authentication":authentication});
+        assert!(schema(TARGET_SCHEMA_FILE).is_valid(&valid));
+        target::read_target("target.yaml", &serde_json::to_vec(&valid).unwrap())
+            .expect("valid shared references read");
+        for member in members {
+            let mut invalid = valid.clone();
+            invalid["connections"]["probe"]["authentication"][member] =
+                serde_json::json!("TARGET-PRIVATE-CANARY");
+            assert_target_value_refused(
+                &invalid,
+                &format!("/connections/probe/authentication/{member}"),
+            );
+        }
+    }
+    for pointer in [
+        "/signer/privateKeyRef",
+        "/audit/hashKeyRef",
+        "/subjectBinding/secretRef",
+    ] {
+        for invalid in [
+            "TARGET-PRIVATE-CANARY",
+            "secret:file/../escape",
+            "secret:env/lowercase",
+            "secret:file/nested/key",
+        ] {
+            let mut document = base.clone();
+            *document
+                .pointer_mut(pointer)
+                .expect("canonical reference exists") = serde_json::json!(invalid);
+            assert_target_value_refused(&document, pointer);
+        }
+    }
+}
+
+#[test]
+fn target_digest_syntax_is_checked_before_runtime_delegation() {
+    for invalid in [
+        "TARGET-PRIVATE-CANARY".to_owned(),
+        format!("sha512:{}", "a".repeat(64)),
+        format!("sha256:{}", "A".repeat(64)),
+        format!("sha256:{}", "a".repeat(63)),
+        format!("sha256:{}", "a".repeat(65)),
+    ] {
+        let mut document = yaml_as_json(NORMALIZED_TARGET);
+        document["package"]["expectedDigest"] = serde_json::json!(invalid);
+        assert_target_value_refused(&document, "/package/expectedDigest");
+    }
+}
+
+#[test]
+fn target_identifiers_claim_names_and_protocol_constants_keep_their_meaning() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["service"]["issuer"] = serde_json::json!("urn:Example:Issuer:é");
+    document["authentication"]["oidc"]["claims"] =
+        serde_json::json!({"grantSourceIssuer":"Grant_Source.Issuer-1"});
+    document["authentication"]["oidc"]["assertionIssuers"] =
+        serde_json::json!({"urn:Example.Client:1":["urn:Example:Issuer:1"]});
+    document["authentication"]["oidc"]["algorithms"] =
+        serde_json::json!(["ES256", "EdDSA", "RS256"]);
+    document["authentication"]["oidc"]["tokenTypes"] =
+        serde_json::json!(["application/at+jwt", "at+jwt"]);
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    let target = target::read_target("target.yaml", &serde_json::to_vec(&document).unwrap())
+        .expect("external identifiers and exact protocol values read")
+        .value;
+    let (_, issuer) = target.service.governed_values().unwrap();
+    assert_eq!(issuer["uri"], "urn:Example:Issuer:é");
+    let governed = target.authentication.governed_value().unwrap();
+    assert_eq!(
+        governed["oidc"]["claims"]["grantSourceIssuer"],
+        "Grant_Source.Issuer-1"
+    );
+    assert_eq!(
+        governed["oidc"]["assertionIssuers"]["urn:Example.Client:1"][0],
+        "urn:Example:Issuer:1"
+    );
+    assert_eq!(
+        governed["oidc"]["algorithms"],
+        document["authentication"]["oidc"]["algorithms"]
+    );
+    assert_eq!(
+        governed["oidc"]["tokenTypes"],
+        document["authentication"]["oidc"]["tokenTypes"]
+    );
+
+    for invalid in [
+        "relative-identifier".to_owned(),
+        "urn:example:with space".to_owned(),
+        "urn:example:with\u{2000}space".to_owned(),
+        format!("urn:{}", "a".repeat(509)),
+    ] {
+        let mut document = document.clone();
+        document["service"]["issuer"] = serde_json::json!(invalid);
+        assert_target_value_refused(&document, "/service/issuer");
+    }
+    for member in [
+        "actorKind",
+        "purpose",
+        "grantId",
+        "grantSourceIssuer",
+        "grantClient",
+        "grantResource",
+        "grantExp",
+        "grantBounds",
+        "approver",
+    ] {
+        for invalid in [
+            "claim name".to_owned(),
+            "1claim".to_owned(),
+            "claim/name".to_owned(),
+            "a".repeat(129),
+        ] {
+            let mut document = document.clone();
+            document["authentication"]["oidc"]["claims"][member] = serde_json::json!(invalid);
+            assert_target_value_refused(
+                &document,
+                &format!("/authentication/oidc/claims/{member}"),
+            );
+        }
+    }
+    let mut invalid = document;
+    invalid["authentication"]["oidc"]["algorithms"] = serde_json::json!(["es256"]);
+    assert_target_value_refused(&invalid, "/authentication/oidc/algorithms/0");
+}
+
+#[test]
+fn target_assertion_issuer_admission_is_bounded_and_empty_connections_grant_none() {
+    let mut valid = yaml_as_json(NORMALIZED_TARGET);
+    valid["connections"] = serde_json::json!({});
+    valid["authentication"]["oidc"]["assertionIssuers"] = Value::Object(
+        (0..32)
+            .map(|client| {
+                (
+                    format!("urn:Client:{client}"),
+                    serde_json::json!((0..8)
+                        .map(|issuer| format!("issuer-{issuer}"))
+                        .collect::<Vec<_>>()),
+                )
+            })
+            .collect(),
+    );
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&valid));
+    let decoded = target::read_target("target.yaml", &serde_json::to_vec(&valid).unwrap())
+        .expect("explicit empty HTTP binding map and exact admission bounds read");
+    assert!(decoded.value.connections.is_empty());
+    for invalid in [
+        serde_json::json!({}),
+        serde_json::json!({"client":[]}),
+        serde_json::json!({"client":[""]}),
+        serde_json::json!({"client":["issuer","issuer"]}),
+        serde_json::json!({"client":["a".repeat(513)]}),
+        serde_json::json!({"a".repeat(129):["issuer"]}),
+        Value::Object(
+            (0..33)
+                .map(|client| (format!("client-{client}"), serde_json::json!(["issuer"])))
+                .collect(),
+        ),
+        serde_json::json!({"client":(0..9).map(|issuer| format!("issuer-{issuer}")).collect::<Vec<_>>()}),
+    ] {
+        let mut document = valid.clone();
+        document["authentication"]["oidc"]["assertionIssuers"] = invalid;
+        assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
         assert!(
-            !schema.is_valid(&question_as_json(document)),
-            "the schema accepts {departure}, so this case tests nothing",
+            target::read_target("target.yaml", &serde_json::to_vec(&document).unwrap()).is_err()
+        );
+    }
+    let mut omitted = valid;
+    omitted.as_object_mut().unwrap().remove("connections");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&omitted));
+    let refusal = target::read_target("target.yaml", &serde_json::to_vec(&omitted).unwrap())
+        .expect_err("connection choice must remain explicit");
+    assert_eq!(refusal.diagnostics()[0].code, "config.missing-key");
+}
+
+#[test]
+fn every_retired_question_corpus_case_is_refused_as_a_normalized_project() {
+    let schema = schema(PROJECT_SCHEMA_FILE);
+    for (departure, document) in
+        std::iter::once(&("the former valid base", VALID_QUESTION)).chain(REJECTED_QUESTIONS.iter())
+    {
+        let document = format!("{QUESTION_ENVELOPE}{document}");
+        assert!(
+            !schema.is_valid(&yaml_as_json(&document)),
+            "the normalized schema accepts {departure}",
         );
         assert!(
-            !question_is_accepted_by_the_checks(document),
-            "the schema turns away {departure} but adopter tooling accepts it",
+            project::read_project("evidence.yaml", document.as_bytes()).is_err(),
+            "the normalized reader accepts {departure}",
         );
     }
 }
 
 #[test]
-fn a_marker_the_schema_turns_away_is_turned_away_by_the_parser() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[PROJECT_MARKER_SCHEMA_FILE]);
+fn retired_parallel_authoring_documents_are_refused_as_normalized_projects() {
+    let schema = schema(PROJECT_SCHEMA_FILE);
     for (departure, document) in REJECTED_MARKERS {
         assert!(
             !schema.is_valid(&yaml_as_json(document)),
-            "the schema accepts {departure}, so this case tests nothing",
+            "the normalized schema accepts {departure}",
         );
         assert!(
-            registry_evidence_authoring::parse_project_marker(
-                "evidence-project.yaml",
-                document.as_bytes()
-            )
-            .is_err(),
-            "the schema turns away {departure} but the marker parser accepts it",
+            project::read_project("evidence.yaml", document.as_bytes()).is_err(),
+            "the normalized reader accepts {departure}",
         );
+    }
+    for document in [
+        "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\n",
+        "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {}\n",
+        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: old\nquestions: [old]\n",
+    ] {
+        assert!(!schema.is_valid(&yaml_as_json(document)));
+        assert!(project::read_project("evidence.yaml", document.as_bytes()).is_err());
     }
 }
 
 #[test]
-fn a_question_the_schema_accepts_may_still_be_turned_away_by_the_checks() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    // A capitalized purpose is a string of the right type in the right
-    // place, so the schema has nothing to say about it. The form does.
-    let document = VALID_QUESTION.replace("purpose: age-check", "purpose: AgeCheck");
+fn a_missing_source_passes_shape_validation_and_is_diagnosed_at_its_reference() {
+    let document =
+        NORMALIZED_PROJECT.replacen("source: person-record", "source: missing-source", 1);
     assert!(
-        schema.is_valid(&question_as_json(&document)),
-        "the asymmetry case must satisfy the schema, or it does not show the asymmetry",
+        schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)),
+        "cross-member references are semantic",
     );
-    assert!(
-        !question_is_accepted_by_the_checks(&document),
-        "the checks must still turn this document away; the schema is structural, not semantic",
+    let report = project::read_project("evidence.yaml", document.as_bytes()).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.acquisition-source")
+        .expect("the missing source is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/assertionDefinitions/adult-status/acquisition/source"
+    );
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+}
+
+#[test]
+fn a_bad_typed_value_is_rejected_by_schema_and_reader_at_the_authored_field() {
+    let document = NORMALIZED_PROJECT.replacen(
+        "maximumAggregateBytes: 64",
+        "maximumAggregateBytes: \"64\"",
+        1,
+    );
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+    let report = project::read_project("evidence.yaml", document.as_bytes()).unwrap_err();
+    let diagnostic = &report.diagnostics()[0];
+    assert_eq!(
+        diagnostic.path,
+        "/selectorProfiles/record-by-id/maximumAggregateBytes"
+    );
+    assert_eq!(diagnostic.source.as_ref().unwrap().file, "evidence.yaml");
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+}
+
+#[test]
+fn source_function_refs_are_closed_while_derivation_calls_expose_bindings() {
+    let document = NORMALIZED_PROJECT.replacen(
+        "extract:\n      function: extract-person",
+        "extract:\n      function: extract-person\n      parameters: {}",
+        1,
+    );
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+    assert!(project::read_project("evidence.yaml", document.as_bytes()).is_err());
+
+    let document = NORMALIZED_PROJECT.replacen(
+        "derive:\n      function: derive-adult-status",
+        "derive:\n      function: derive-adult-status\n      parameters:\n        threshold: 18\n      selectorInputs: []",
+        1,
+    );
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+}
+
+#[test]
+fn a_definition_cannot_declare_an_empty_output_set() {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["assertionDefinitions"]["adult-status"]["outputs"] = serde_json::json!({});
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&document));
+    let bytes = serde_json::to_vec(&document).expect("the project renders");
+    assert!(project::read_project("evidence.yaml", &bytes).is_err());
+}
+
+#[test]
+fn project_output_ceiling_matches_the_runtime_requirement_ceiling() {
+    let maximum = project_with_boolean_outputs(project::MAX_OUTPUTS_PER_ASSERTION);
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&maximum));
+    let bytes = serde_json::to_vec(&maximum).expect("the project renders");
+    project::read_project("evidence.yaml", &bytes)
+        .expect("the runtime requirement ceiling is accepted by authoring");
+
+    let over_limit = project_with_boolean_outputs(project::MAX_OUTPUTS_PER_ASSERTION + 1);
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&over_limit));
+    let bytes = serde_json::to_vec(&over_limit).expect("the project renders");
+    let report = project::read_project("evidence.yaml", &bytes)
+        .expect_err("one output beyond the runtime requirement ceiling is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.output-count")
+        .expect("the output ceiling is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/assertionDefinitions/adult-status/outputs"
+    );
+    assert_eq!(
+        diagnostic.message,
+        "declare between one and 16 public Outputs"
     );
 }
 
 #[test]
-fn an_access_policy_the_schema_turns_away_is_turned_away_by_the_reader() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[ACCESS_POLICY_SCHEMA_FILE]);
-    let accepted = yaml_as_json(
-        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
-         kind: EvidenceAccessPolicy\nid: readers\nquestions: [record-status]\n",
+fn authority_references_are_checked_without_unioning_grants() {
+    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .unwrap()
+        .value;
+    let document = NORMALIZED_AUTHORITY.replacen(
+        "definition: adult-status",
+        "definition: missing-definition",
+        1,
     );
-    assert!(schema.is_valid(&accepted));
-    for refused in [
-        "kind: EvidenceAccessPolicy\nid: readers\nquestions: []\n",
-        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: readers\nquestions: []\nextra: 1\n",
-        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nquestions: []\n",
+    assert!(schema(TARGET_AUTHORITY_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+    let report =
+        target::read_authority("dev-authority.yaml", document.as_bytes(), &project).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.authority.definition")
+        .expect("the missing definition is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/accessProfiles/standalone-service/grants/0/definition"
+    );
+}
+
+#[test]
+fn retired_target_documents_are_refused() {
+    for document in [
+        "apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1\nkind: EvidenceTargetGovernance\nassuranceProfile: local\n",
+        "apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\ngovernance: {}\nruntime: {}\n",
     ] {
-        assert!(!schema.is_valid(&yaml_as_json(refused)), "{refused}");
+        assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&yaml_as_json(document)));
+        assert!(target::read_target("local-target.yaml", document.as_bytes()).is_err());
     }
 }

@@ -22,11 +22,9 @@ use registry_breg::contract::{
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::model::{
-    ChangeRequestOperation, CompiledChangeRequestMutation, CompiledChangeRequestTargetBinding,
-    CompiledChangeRequestValue, CompiledMetadataInventory, CompiledQueryFilterOperator,
-    CompiledQueryKind, CompiledQuerySortDirection, CompiledQueryTemporalSemantics,
-    CompiledRevisionKind, HttpMethod, MAX_REVISION_HISTORY_RECORDS, REQUEST_BREG_STATE_QUERY_FIELD,
-    REQUEST_EFFECT_DIGEST_QUERY_FIELD, REQUEST_PROPOSAL_VERSION_QUERY_FIELD,
+    CompiledMetadataInventory, CompiledQueryFilterOperator, CompiledQueryKind,
+    CompiledQuerySortDirection, CompiledQueryTemporalSemantics, CompiledRevisionKind,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use registry_manifest_core::{compile_manifest, AccessRights, FieldType, MetadataManifest};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
@@ -72,7 +70,7 @@ fn compile_json_with_assets(
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
 }
 
-const MULTI_DATASET_PROJECT: &[u8] = br#"{
+const MULTI_DATASET_PROJECT: &[u8] = br#"{"datasets":[{"id": "people"}, {"id": "residences"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"multi-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test/multi"},
@@ -88,7 +86,7 @@ const MULTI_DATASET_PROJECT: &[u8] = br#"{
             "dataServices":[{"id":"registry-api","title":"Registry API","endpointUrl":"https://registry.example.test/v1","servesDatasets":["people","residences"]}],
             "distributions":[{"id":"people-json","dataset":"people","accessService":"registry-api","mediaType":"application/json"}]
           },
-          "entities":[
+          "recordTypes":[
             {"id":"person","primaryDataset":"people","route":"people","mutationMode":"mutable","classification":"restricted","fields":[{"id":"name","type":"string","maximumLength":100,"classification":"restricted"}]},
             {"id":"residence","primaryDataset":"residences","route":"residences","mutationMode":"mutable","classification":"internal","fields":[
               {"id":"place","type":"string","maximumLength":100,"classification":"internal"},
@@ -96,9 +94,9 @@ const MULTI_DATASET_PROJECT: &[u8] = br#"{
             ]}
           ],
           "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":["registry.read"],"permissions":{
-            "entities":[
-              {"entity":"person","operations":["get","list"],"readableFields":["name"], "rowBoundaries": "unrestricted"},
-              {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"], "rowBoundaries": "unrestricted"}
+            "records":[
+              {"recordType":"person","operations":["get","list"],"readableFields":["name"], "rowBoundaries": "unrestricted"},
+              {"recordType":"residence","operations":["get","list"],"readableFields":["place","resident"], "rowBoundaries": "unrestricted"}
             ]
           }}]
         }"#;
@@ -234,7 +232,7 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
 #[test]
 fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
     let mut project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "protected-records"}, {"id": "public-records"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"classified-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://catalog.example.test"},
@@ -256,7 +254,7 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
               {"id":"protected-json","dataset":"protected-records","accessService":"protected-api","downloadUrl":"https://protected.example.test/private.ndjson","title":"Protected distribution title"}
             ]
           },
-          "entities":[
+          "recordTypes":[
             {"id":"public-record","primaryDataset":"public-records","route":"public-records","mutationMode":"create-only","classification":"public","fields":[
               {"id":"label","type":"string","maximumLength":64,"classification":"public"},
               {"id":"protected-link","type":"reference","target":"protected-record","classification":"public"}
@@ -266,8 +264,8 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
             ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"entities":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": "unrestricted"}]}},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"entities":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"], "rowBoundaries": "unrestricted"}]}}
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"records":[{"recordType":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": "unrestricted"}]}},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"records":[{"recordType":"protected-record","operations":["get"],"readableFields":["protected-title"], "rowBoundaries": "unrestricted"}]}}
           ]
         }"#,
     )
@@ -389,7 +387,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "breg.manifest-projection.entity-dataset-dangling"));
+        .any(|diagnostic| diagnostic.code == "breg.record-type.dataset-unknown"));
 
     let mut missing = multi_dataset_project();
     missing.entities[0].primary_dataset.clear();
@@ -486,7 +484,7 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"missing-identity","version":"1","defaultLanguage":"en"},
-          "entities":[{"id":"record","route":"records","mutationMode":"create-only"}]
+          "recordTypes":[{"id":"record","route":"records","mutationMode":"create-only"}]
         }"#,
     )
     .expect("omissions reach the compiler diagnostic domain");
@@ -503,11 +501,11 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
     )));
     assert!(project_codes.contains(&(
         "breg.manifest-projection.entity-primary-dataset-required",
-        "entities[].primaryDataset"
+        "recordTypes[].primaryDataset"
     )));
 
     let module = parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"missing-membership","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create-only"}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"missing-membership","version":"1","recordTypes":[{"id":"record","route":"records","mutationMode":"create-only"}]}"#,
     )
     .expect("module omission reaches the compiler diagnostic domain");
     let project = parse_project_json(
@@ -523,7 +521,7 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
         .expect_err("module entity membership is required for compilation");
     assert!(module.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.manifest-projection.entity-primary-dataset-required"
-            && diagnostic.path == "entities[].primaryDataset"
+            && diagnostic.path == "recordTypes[].primaryDataset"
     }));
 }
 
@@ -548,626 +546,9 @@ fn derived_sql_asset(path: &str, sql: &str) -> ModuleAssetSource {
     }
 }
 
-fn add_retention_mode(mut source: Vec<u8>, mode: &str) -> Vec<u8> {
-    let text = String::from_utf8(source).expect("fixture is UTF-8");
-    source = text
-        .replacen(
-            r#""changeRequest":{"#,
-            &format!(r#""changeRequest":{{"retention":{{"mode":"{mode}"}},"#),
-            1,
-        )
-        .into_bytes();
-    source
-}
-
-#[allow(clippy::too_many_arguments)]
-fn change_request_correction_project(
-    registry_id: &str,
-    package_entry: &str,
-    extra_entity: &str,
-    request_reason_classification: &str,
-    target_label_classification: &str,
-    _review_boundaries: &str,
-    apply_boundaries: &str,
-    reviewer_scopes: &str,
-) -> Vec<u8> {
-    let extra_entity = if extra_entity.is_empty() {
-        String::new()
-    } else {
-        format!(",{}", extra_entity)
-    };
-    format!(
-        r#"{{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}}{package_entry},
-          "entities":[{{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
-            "fields":[{{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}]
-          }},{{
-            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
-            "changeControl":{{"requiredFor":["patch"]}},
-            "fields":[
-              {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"label","type":"string","maximumLength":64,"classification":"{target_label_classification}"}}
-            ]
-          }},{{
-            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
-            "fields":[
-              {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
-              {{"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"{request_reason_classification}"}}
-            ],
-            "changeRequest":{{
-              "effects":[{{
-                "target":{{"fromField":"placement"}},
-                "operation":"patch",
-                "set":{{"site":{{"fromField":"proposed-site"}}}},
-                "clear":["label"]
-              }}],
-              "review":{{"type":"required","authority":"casework-main","policyId":"placement-correction"}},
-              "onApproved":{{"mode":"manual"}}
-            }}
-          }}{extra_entity}],
-          "accessProfiles":[{{
-            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-              "rowBoundaries": "unrestricted", "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
-              "requestPresence":[{{"rowBoundaries": "unrestricted", "requestType":"placement-correction-request"}}]
-            }}]}}
-          }},{{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":{reviewer_scopes},"permissions":{{"entities":[{{
-              "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","list","submit-request"],"readableFields":["placement","proposed-site","reason"]
-            }}]}}
-          }},{{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-              "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","apply-request"],"readableFields":["placement"],
-              "applyTargets":[{{"entity":"placement","rowBoundaries":{apply_boundaries}}}]
-            }}]}}
-          }}]
-        }}"#
-    )
-    .into_bytes()
-}
-
-#[test]
-fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
-    let compiled = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"change-request-correction","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
-            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
-          },{
-            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
-            "changeControl":{"requiredFor":["patch"]},
-            "fields":[
-              {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
-            ]
-          },{
-            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
-              {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{
-              "effects":[{
-                "target":{"fromField":"placement"},
-                "operation":"patch",
-                "set":{"site":{"fromField":"proposed-site"}},
-                "clear":["label"]
-              }],
-              "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
-              "onApproved":{"mode":"manual"}
-            }
-          }],
-          "accessProfiles":[{
-            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
-              "requestPresence":[{"requestType":"placement-correction-request", "rowBoundaries": "unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request","operations":["get","list","submit-request"],"readableFields":["placement","proposed-site","reason"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request","operations":["get","apply-request"],"readableFields":["placement"],
-              "applyTargets":[{"entity":"placement","rowBoundaries":"unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect("typed correction request compiles");
-
-    let request = compiled.entities()["placement-correction-request"]
-        .change_request
-        .as_ref()
-        .expect("request plan is compiled");
-    assert_eq!(request.effects.len(), 1);
-    assert!(request.contract_fingerprint.starts_with("sha256:"));
-    assert_eq!(
-        request.target_entities,
-        BTreeSet::from(["placement".to_owned()])
-    );
-    assert_eq!(request.maximum_targets, 16);
-    assert_eq!(request.maximum_field_mutations, 128);
-    assert_eq!(request.maximum_snapshot_bytes, 2_097_152);
-    assert!(request
-        .actions
-        .iter()
-        .any(|action| action.operation == ChangeRequestOperation::ApplyRequest));
-    assert!(matches!(
-        &request.review,
-        registry_breg::model::CompiledChangeRequestReview::Required(requirement)
-            if requirement.authority == "casework-main"
-                && requirement.policy_id == "placement-correction"
-    ));
-    let effect = &request.effects[0];
-    assert!(matches!(
-        effect.target.binding,
-        CompiledChangeRequestTargetBinding::Existing { ref from_field }
-            if from_field == "placement"
-    ));
-    assert!(effect.mutations.iter().any(|mutation| matches!(
-        mutation,
-        CompiledChangeRequestMutation::Set {
-            field,
-            value: CompiledChangeRequestValue::FromField { field: source }
-        } if field == "site" && source == "proposed-site"
-    )));
-    assert!(effect.mutations.iter().any(|mutation| matches!(
-        mutation,
-        CompiledChangeRequestMutation::Clear { field } if field == "label"
-    )));
-    assert!(request.apply_permissions.iter().any(|grant| {
-        grant.profile_id == "request-applier" && grant.target_entity_id == "placement"
-    }));
-    assert!(request.presence_permissions.iter().any(|grant| {
-        grant.profile_id == "placement-reader" && grant.target_entity_id == "placement"
-    }));
-}
-
-#[test]
-fn change_request_routes_compile_to_finite_action_inventory() {
-    let compiled = compile_json(&change_request_correction_project(
-        "change-request-routes",
-        "",
-        "",
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ))
-    .expect("change-request routes compile");
-
-    let route = |id: &str| {
-        compiled
-            .routes()
-            .routes
-            .iter()
-            .find(|route| route.id == id)
-            .unwrap_or_else(|| panic!("route {id} exists"))
-    };
-    let submit = route("records.placement-correction-request.request.submit");
-    assert_eq!(submit.method, HttpMethod::Post);
-    assert_eq!(submit.operation, Operation::SubmitRequest);
-    assert_eq!(
-        submit.path,
-        "/v1/records/placement-correction-requests/{record_id}/actions/submit"
-    );
-    assert_eq!(submit.access_profiles, vec!["request-reviewer".to_owned()]);
-
-    let apply = route("records.placement-correction-request.request.apply");
-    assert_eq!(apply.operation, Operation::ApplyRequest);
-    assert_eq!(apply.access_profiles, vec!["request-applier".to_owned()]);
-
-    let access = compiled
-        .access()
-        .entries
-        .iter()
-        .find(|entry| entry.route_id == "records.placement-correction-request.request.apply")
-        .expect("apply route has exact access entry");
-    assert_eq!(access.operation, Operation::ApplyRequest);
-    assert_eq!(
-        access.profile_ids,
-        BTreeSet::from(["request-applier".to_owned()])
-    );
-}
-
-#[test]
-fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() {
-    let compiled = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
-            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
-          },{
-            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
-            "changeControl":{"requiredFor":["patch"]},
-            "fields":[
-              {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
-            ]
-          },{
-            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
-              {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{
-              "effects":[{
-                "target":{"fromField":"placement"},
-                "operation":"patch",
-                "set":{"site":{"fromField":"proposed-site"}},
-                "clear":["label"]
-              }],
-              "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
-              "onApproved":{"mode":"manual"}
-            }
-          }],
-          "accessProfiles":[{
-            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
-              "requestPresence":[{"requestType":"placement-correction-request", "rowBoundaries": "unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"submitter","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request","operations":["create","patch","submit-request","revise-request","cancel-request"],"readableFields":["placement","proposed-site","reason"],"writableFields":["placement","proposed-site","reason"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request","operations":["get","list"],"readableFields":["placement","proposed-site","reason"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"supervisor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request","operations":["get"],"readableFields":["placement","proposed-site","reason"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"applier","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"placement-correction-request","operations":["apply-request"],"readableFields":["placement"],
-              "applyTargets":[{"entity":"placement","rowBoundaries":"unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect("change request OpenAPI fixture compiles");
-
-    let openapi = compiled
-        .artifacts()
-        .get("generated/openapi.json")
-        .expect("OpenAPI is generated");
-    let value = parse_json_strict(&openapi.bytes).expect("OpenAPI is strict JSON");
-    let submit_request = &value["paths"]
-        ["/v1/records/placement-correction-requests/{record_id}/actions/submit"]["post"];
-    assert_eq!(
-        query_parameter_names(&submit_request["parameters"]),
-        [
-            "Idempotency-Key",
-            "If-Match",
-            "accessProfile",
-            "record_id",
-            "traceparent"
-        ]
-    );
-    assert_eq!(
-        submit_request["x-registry-requestAction"],
-        json!({
-            "operation": "submit-request",
-            "method": "post",
-            "path": "/v1/records/placement-correction-requests/{record_id}/actions/submit",
-            "requestEntity": "placement-correction-request",
-            "requiredPreconditions": ["Idempotency-Key", "If-Match"],
-            "inputSchema": "placement-correction-request-submit-request-input",
-            "responseSchema": "ChangeRequestActionResponse",
-            "proposalBinding": {
-                "versionField": "proposalVersion",
-                "digestField": "effectDigest",
-                "recordPrecondition": "If-Match",
-                "idempotencyHeader": "Idempotency-Key"
-            },
-            "targetEntities": ["placement"]
-        })
-    );
-    assert_eq!(
-        submit_request["requestBody"]["content"]["application/json"]["schema"],
-        json!({"$ref": "#/components/schemas/placement-correction-request-submit-request-input"})
-    );
-    assert_eq!(
-        submit_request["responses"]["200"]["content"]["application/json"]["schema"],
-        json!({"$ref": "#/components/schemas/ChangeRequestActionResponse"})
-    );
-    assert_eq!(
-        submit_request["responses"]["409"]["content"]["application/problem+json"]["examples"]
-            ["mutation.conflict"]["value"]["code"],
-        "mutation.conflict"
-    );
-    assert!(submit_request["responses"]["200"]["headers"]
-        .get("ETag")
-        .is_none());
-
-    let apply_request = &value["paths"]
-        ["/v1/records/placement-correction-requests/{record_id}/actions/apply"]["post"];
-    assert_eq!(
-        apply_request["x-registry-requestAction"]["requiredPreconditions"],
-        json!([
-            "Idempotency-Key",
-            "If-Match",
-            "proposalVersion",
-            "effectDigest"
-        ])
-    );
-    let apply_input =
-        &value["components"]["schemas"]["placement-correction-request-apply-request-input"];
-    assert_eq!(apply_input["additionalProperties"], false);
-    assert_eq!(
-        apply_input["required"],
-        json!(["proposalVersion", "effectDigest"])
-    );
-    assert_eq!(
-        apply_input["properties"]["proposalVersion"]["maximum"],
-        u32::MAX
-    );
-    assert_eq!(
-        apply_input["properties"]["effectDigest"]["pattern"],
-        "^sha256:[0-9a-f]{64}$"
-    );
-    let revise_input =
-        &value["components"]["schemas"]["placement-correction-request-revise-request-input"];
-    assert_eq!(revise_input["required"], json!(["rebase"]));
-    assert_eq!(revise_input["properties"]["rebase"]["type"], "boolean");
-    assert_eq!(
-        value["components"]["schemas"]["ChangeRequestActionResponse"]["properties"]["request"]
-            ["properties"]["effectDigest"]["pattern"],
-        "^sha256:[0-9a-f]{64}$"
-    );
-    assert_eq!(
-        value["components"]["schemas"]["placement"]["x-registry-changeControl"]
-            ["directWriteRestriction"],
-        "controlled_operations_require_compiled_change_request_application"
-    );
-    assert_eq!(
-        value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
-            ["bounds"]["maximumTargets"],
-        16
-    );
-    assert_eq!(
-        value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
-            ["review"],
-        json!({"type":"required","authority":"casework-main","policyId":"placement-correction"})
-    );
-    assert_eq!(
-        value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
-            ["onApproved"],
-        json!({"mode":"manual"})
-    );
-}
-
-#[test]
-fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
-    let compiled_request = |source: Vec<u8>| {
-        let compiled = compile_json(&source).expect("project compiles");
-        compiled.entities()["placement-correction-request"]
-            .change_request
-            .as_ref()
-            .expect("request plan exists")
-            .clone()
-    };
-    let base_request = compiled_request(change_request_correction_project(
-        "change-request-fingerprint",
-        "",
-        "",
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ));
-    let base = base_request.contract_fingerprint;
-    assert_eq!(
-        base_request.retention_mode,
-        registry_breg::model::CompiledChangeRequestRetentionMode::Retain
-    );
-    let unrelated = compiled_request(change_request_correction_project(
-        "change-request-fingerprint",
-        ",\"package\":{\"sourceRevision\":\"unrelated\"}",
-        r#"{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create-only","fields":[{"id":"label","type":"string","maximumLength":16,"classification":"internal"}]}"#,
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ))
-    .contract_fingerprint;
-    assert_eq!(base, unrelated);
-
-    let operator_erase = compiled_request(add_retention_mode(
-        change_request_correction_project(
-            "change-request-fingerprint",
-            "",
-            "",
-            "internal",
-            "internal",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-        ),
-        "operator-erase",
-    ));
-    assert_eq!(
-        operator_erase.retention_mode,
-        registry_breg::model::CompiledChangeRequestRetentionMode::OperatorErase
-    );
-    assert_eq!(
-        base, operator_erase.contract_fingerprint,
-        "manual retention policy does not reinterpret frozen proposal effects"
-    );
-
-    let request_schema_changed = compiled_request(change_request_correction_project(
-        "change-request-fingerprint",
-        "",
-        "",
-        "restricted",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ))
-    .contract_fingerprint;
-    assert_ne!(base, request_schema_changed);
-
-    let target_schema_changed = compiled_request(change_request_correction_project(
-        "change-request-fingerprint",
-        "",
-        "",
-        "internal",
-        "restricted",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ))
-    .contract_fingerprint;
-    assert_ne!(base, target_schema_changed);
-
-    let reviewer_scope_changed = compiled_request(change_request_correction_project(
-        "change-request-fingerprint",
-        "",
-        "",
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "[\"change-review\"]",
-    ))
-    .contract_fingerprint;
-    assert_eq!(base, reviewer_scope_changed);
-
-    let apply_boundary_changed = compiled_request(change_request_correction_project(
-        "change-request-fingerprint",
-        "",
-        "",
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "[{\"field\":\"site\",\"claim\":\"site\",\"operator\":\"equals\"}]",
-        "\"unrestricted\"",
-    ))
-    .contract_fingerprint;
-    assert_ne!(base, apply_boundary_changed);
-}
-
-#[test]
-fn change_request_retention_mode_is_a_strict_enum() {
-    let failure = parse_project_json(&add_retention_mode(
-        change_request_correction_project(
-            "change-request-retention-enum",
-            "",
-            "",
-            "internal",
-            "internal",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-        ),
-        "ttl",
-    ))
-    .expect_err("unknown retention mode is refused");
-
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.path.contains("changeRequest")));
-}
-
-#[test]
-fn change_request_review_type_selects_its_form() {
-    let review = "project.entities[2].changeRequest.review";
-    let project = |written: &str| {
-        let source = String::from_utf8(change_request_correction_project(
-            "change-request-review-form",
-            "",
-            "",
-            "internal",
-            "internal",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-        ))
-        .expect("fixture is UTF-8")
-        .replacen(
-            r#""review":{"type":"required","authority":"casework-main","policyId":"placement-correction"}"#,
-            &format!(r#""review":{written}"#),
-            1,
-        );
-        parse_project_yaml(source.as_bytes())
-    };
-    for accepted in [
-        r#"{"type":"none"}"#,
-        r#"{"type":"required","authority":"casework-main","policyId":"placement-correction"}"#,
-    ] {
-        project(accepted).expect("each review form is read");
-    }
-    for (written, code, path) in [
-        (
-            r#"{"type":"none","policyId":"placement-correction"}"#,
-            "config.unknown-key",
-            format!("{review}.policyId"),
-        ),
-        (
-            r#"{"type":"required","authority":"casework-main"}"#,
-            "config.missing-key",
-            review.to_owned(),
-        ),
-        (
-            r#"{"type":"none","reviewer":"casework-main"}"#,
-            "config.unknown-key",
-            format!("{review}.reviewer"),
-        ),
-        (
-            r#"{"type":"skip"}"#,
-            "config.unknown-variant",
-            format!("{review}.type"),
-        ),
-        (
-            r#"{"mode":"none"}"#,
-            "config.missing-key",
-            review.to_owned(),
-        ),
-        (
-            r#"{"authority":"casework-main","policyId":"placement-correction"}"#,
-            "config.missing-key",
-            review.to_owned(),
-        ),
-    ] {
-        let failure = project(written).expect_err("a malformed review is refused");
-        let refused = failure
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
-            .collect::<Vec<_>>();
-        assert_eq!(refused, vec![(code, path.as_str())], "{failure:?}");
-    }
-}
-
 #[test]
 fn constraint_unions_refuse_at_the_member_inside_the_form() {
-    let constraint = "project.entities[0].constraints[0]";
+    let constraint = "project.recordTypes[0].constraints[0]";
     for (written, code, path) in [
         (
             r#"{"type":"compare","left":"left","operator":"less-than","right":"right","field":"left"}"#,
@@ -1196,11 +577,11 @@ fn constraint_unions_refuse_at_the_member_inside_the_form() {
         ),
     ] {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"constraint-unions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[
                   {{"id":"left","type":"int64","classification":"internal"}},
@@ -1221,715 +602,13 @@ fn constraint_unions_refuse_at_the_member_inside_the_form() {
     }
 }
 
-fn correction_with_target_access_requirements() -> serde_json::Value {
-    let mut source: serde_json::Value = serde_json::from_slice(&change_request_correction_project(
-        "request-target-requirements",
-        "",
-        "",
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ))
-    .unwrap();
-    let boundary = serde_json::json!({"field":"site","claim":"allowed_sites","operator":"in"});
-    source["entities"][1]["accessRequirements"] = serde_json::json!({
-        "requiredScopes":["target:manage"],
-        "allowedPurposes":["target-management"],
-        "rowBoundaries":[boundary.clone()]
-    });
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
-        profile["requiredScopes"] = serde_json::json!(["target:manage"]);
-        profile["requiredPurposes"] = serde_json::json!(["target-management"]);
-    }
-    source["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
-        serde_json::json!([boundary.clone()]);
-    source["accessProfiles"][2]["permissions"]["entities"][0]["applyTargets"][0]["rowBoundaries"] =
-        serde_json::json!([boundary]);
-    source
-}
-
-#[test]
-fn change_request_review_and_apply_cannot_omit_target_access_requirements() {
-    let source = correction_with_target_access_requirements();
-    compile_json(&serde_json::to_vec(&source).unwrap())
-        .expect("explicit requirements are satisfied");
-    for (profile_index, target_path, surface) in [(
-        2,
-        "/permissions/entities/0/applyTargets/0/rowBoundaries",
-        "applyTargets",
-    )] {
-        for (path, replacement, code) in [
-            (
-                "/requiredScopes",
-                serde_json::json!("unrestricted"),
-                "breg.access.requirements-scope-missing",
-            ),
-            (
-                "/requiredPurposes",
-                serde_json::json!(["unrelated"]),
-                "breg.access.requirements-purpose-widened",
-            ),
-            (
-                target_path,
-                serde_json::json!("unrestricted"),
-                "breg.access.requirements-row-boundary-missing",
-            ),
-            (
-                target_path,
-                serde_json::json!([{"field":"site","claim":"different_sites","operator":"in"}]),
-                "breg.access.requirements-row-boundary-missing",
-            ),
-        ] {
-            let mut changed = source.clone();
-            *changed["accessProfiles"][profile_index]
-                .pointer_mut(path)
-                .unwrap() = replacement;
-            let failure = compile_json(&serde_json::to_vec(&changed).unwrap())
-                .expect_err("request target grants cannot weaken mandatory entity requirements");
-            assert!(
-                failure
-                    .diagnostics()
-                    .iter()
-                    .any(|d| d.code == code && d.path.contains(surface)),
-                "{surface} {path}: {failure:?}"
-            );
-        }
-        let mut unnarrowed = source.clone();
-        unnarrowed["accessProfiles"][profile_index]
-            .as_object_mut()
-            .unwrap()
-            .remove("requiredPurposes");
-        let failure = compile_json(&serde_json::to_vec(&unnarrowed).unwrap())
-            .expect_err("a profile that names no purpose cannot widen the required ones");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|d| d.code == "breg.access.requirements-purpose-widened"
-                    && d.path.contains(surface)),
-            "{surface}: {failure:?}"
-        );
-    }
-}
-
-#[test]
-fn change_request_fingerprint_covers_request_and_target_access_requirements() {
-    let fingerprint = |source: &serde_json::Value| {
-        compile_json(&serde_json::to_vec(source).unwrap())
-            .unwrap()
-            .entities()["placement-correction-request"]
-            .change_request
-            .as_ref()
-            .unwrap()
-            .contract_fingerprint
-            .clone()
-    };
-    let mut source = correction_with_target_access_requirements();
-    source["entities"][1]
-        .as_object_mut()
-        .unwrap()
-        .remove("accessRequirements");
-    let base = fingerprint(&source);
-    for entity_index in [1, 2] {
-        let mut changed = source.clone();
-        changed["entities"][entity_index]["accessRequirements"] =
-            serde_json::json!({"requiredScopes":["target:manage"]});
-        assert_ne!(
-            base,
-            fingerprint(&changed),
-            "relevant requirements change the proposal contract"
-        );
-    }
-    source["entities"][0]["accessRequirements"] =
-        serde_json::json!({"requiredScopes":["site:read"]});
-    assert_eq!(
-        base,
-        fingerprint(&source),
-        "unaffected entity requirements do not reinterpret effects"
-    );
-}
-
-#[test]
-fn change_request_presence_cannot_omit_request_access_requirements() {
-    let mut source = correction_with_target_access_requirements();
-    let boundary =
-        serde_json::json!({"field":"placement","claim":"allowed_placements","operator":"in"});
-    source["entities"][1]["accessRequirements"]["allowedPurposes"] =
-        serde_json::json!(["target-management", "non-review"]);
-    source["entities"][2]["accessRequirements"] = serde_json::json!({
-        "requiredScopes":["request:read"],
-        "allowedPurposes":["target-management"],
-        "rowBoundaries":[boundary.clone()]
-    });
-    for (index, profile) in source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .enumerate()
-    {
-        profile["requiredScopes"] = serde_json::json!(["target:manage", "request:read"]);
-        if index > 0 {
-            profile["permissions"]["entities"][0]["rowBoundaries"] =
-                serde_json::json!([boundary.clone()]);
-        }
-    }
-    source["accessProfiles"][0]["permissions"]["entities"][0]["requestPresence"][0]
-        ["rowBoundaries"] = serde_json::json!([boundary]);
-    compile_json(&serde_json::to_vec(&source).unwrap())
-        .expect("presence explicitly satisfies request requirements");
-    for (path, replacement, code) in [
-        (
-            "/requiredScopes",
-            serde_json::json!(["target:manage"]),
-            "breg.access.requirements-scope-missing",
-        ),
-        (
-            "/requiredPurposes",
-            serde_json::json!(["non-review"]),
-            "breg.access.requirements-purpose-widened",
-        ),
-        (
-            "/permissions/entities/0/requestPresence/0/rowBoundaries",
-            serde_json::json!("unrestricted"),
-            "breg.access.requirements-row-boundary-missing",
-        ),
-        (
-            "/permissions/entities/0/requestPresence/0/rowBoundaries",
-            serde_json::json!([{"field":"placement","claim":"different_placements","operator":"in"}]),
-            "breg.access.requirements-row-boundary-missing",
-        ),
-    ] {
-        let mut changed = source.clone();
-        *changed["accessProfiles"][0].pointer_mut(path).unwrap() = replacement;
-        let failure = compile_json(&serde_json::to_vec(&changed).unwrap())
-            .expect_err("target admission alone cannot authorize protected request existence");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|d| d.code == code && d.path.contains("requestPresence")),
-            "{path}: {failure:?}"
-        );
-    }
-}
-
-#[test]
-fn change_request_multi_record_create_and_patch_orders_reserved_references() {
-    let compiled = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"change-request-registration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
-            "fields":[{"id":"display-name","type":"string","maximumLength":200,"required":true,"classification":"internal"}]
-          },{
-            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
-            "fields":[
-              {"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
-              {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"}
-            ]
-          },{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"contact-person","type":"reference","target":"person","classification":"internal"}]
-          },{
-            "id":"registration-request","primaryDataset":"test-dataset","route":"registration-requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"},
-              {"id":"name","type":"string","maximumLength":200,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{
-              "effects":[
-                {"id":"person","target":{"entity":"person"},"operation":"create","set":{"display-name":{"fromField":"name"}}},
-                {"id":"membership","target":{"entity":"membership"},"operation":"create","set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
-                {"target":{"fromField":"household"},"operation":"patch","set":{"contact-person":{"fromEffect":"person"}}}
-              ],
-              "review":{"type":"required","authority":"casework-main","policyId":"registration"},
-              "onApproved":{"mode":"manual"}
-            }
-          }],
-          "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"registration-request","operations":["get","list","submit-request","apply-request"],"readableFields":["household","name"],
-              "applyTargets":[{"entity":"person", "rowBoundaries": "unrestricted"},{"entity":"membership", "rowBoundaries": "unrestricted"},{"entity":"household", "rowBoundaries": "unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect("multi-record request compiles");
-
-    let request = compiled.entities()["registration-request"]
-        .change_request
-        .as_ref()
-        .expect("request plan is compiled");
-    assert_eq!(
-        request
-            .effects
-            .iter()
-            .map(|effect| effect.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["person", "effect-3", "membership"],
-        "reserved person identity is compiled before dependent writes"
-    );
-    assert!(request
-        .effects
-        .iter()
-        .find(|effect| effect.id == "membership")
-        .expect("membership create exists")
-        .depends_on
-        .contains("person"));
-    assert!(matches!(
-        request.effects[0].target.binding,
-        CompiledChangeRequestTargetBinding::ReservedCreate { ref effect } if effect == "person"
-    ));
-    assert_eq!(
-        request.target_entities,
-        [
-            "household".to_owned(),
-            "membership".to_owned(),
-            "person".to_owned()
-        ]
-        .into_iter()
-        .collect()
-    );
-}
-
-#[test]
-fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
-    let source = |grant_ops: &str, apply_targets: &str| {
-        format!(
-            r#"{{
-              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-              "kind":"BRegProject",
-              "project":{{"id":"change-request-refusals","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
-                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
-                "fields":[{{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}]
-              }},{{
-                "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
-                "fields":[{{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}]
-              }},{{
-                "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable",
-                "fields":[
-                  {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
-                  {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}
-                ],
-                "changeRequest":{{"effects":[{{"target":{{"fromField":"placement"}},"operation":"patch","set":{{"site":{{"fromField":"site"}}}}}}],
-                  "review":{{"type":"required","authority":"casework-main","policyId":"correction-review"}},"onApproved":{{"mode":"manual"}}}}
-              }}],
-              "accessProfiles":[{{
-                "id":"target-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"placement","operations":{grant_ops},"readableFields":["site"],"writableFields":["site"]}}]}}
-              }},{{
-                "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"correction-request","operations":["get","submit-request","apply-request"],"readableFields":["placement","site"],
-                  "applyTargets":{apply_targets}
-                }}]}}
-              }}]
-            }}"#
-        )
-    };
-
-    let direct = compile_json(
-        source(
-            r#"["get","patch"]"#,
-            r#"[{"entity":"placement","rowBoundaries":"unrestricted"}]"#,
-        )
-        .as_bytes(),
-    )
-    .expect_err("controlled targets cannot retain direct patch access");
-    assert!(direct
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-control.direct-write-grant"));
-
-    let partial_apply = compile_json(source(r#"["get"]"#, r#"[]"#).as_bytes())
-        .expect_err("apply grants must cover every target entity");
-    assert!(partial_apply
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.apply-targets-incomplete"));
-}
-
-#[test]
-fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_misuse() {
-    let base = |effect: &str, request_fields: &str, target_fields: &str| {
-        format!(
-            r#"{{
-              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-              "kind":"BRegProject",
-              "project":{{"id":"change-request-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
-                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{{"requiredFor":["patch","create"]}},
-                "fields":[{target_fields}]
-              }},{{
-                "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
-                "fields":[{request_fields}],
-                "changeRequest":{{"effects":[{effect}],"review":{{"type":"required","authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
-              }}],
-              "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-                  "rowBoundaries": "unrestricted", "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target","value","optional-value"],
-                  "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"record"}}]
-                }}]}}
-              }}]
-            }}"#
-        )
-    };
-    let request_fields = r#"
-      {"id":"target","type":"reference","target":"record","required":true,"classification":"internal"},
-      {"id":"value","type":"string","maximumLength":32,"required":true,"classification":"internal"},
-      {"id":"optional-value","type":"string","maximumLength":32,"classification":"internal"}
-    "#;
-    let target_fields = r#"
-      {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"},
-      {"id":"parent","type":"reference","target":"record","classification":"internal"}
-    "#;
-
-    let ambiguous_target = compile_json(
-        base(
-            r#"{"target":{"entity":"record","fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("effect targets must be unambiguous");
-    assert!(ambiguous_target
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-target-invalid"));
-
-    let nullable_set = compile_json(
-        base(
-            r#"{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"optional-value"}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("nullable set source is refused");
-    assert!(nullable_set
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-value-nullable"));
-
-    let missing_set_source = compile_json(
-        base(
-            r#"{"target":{"fromField":"target"},"operation":"patch","set":{"label":{}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("set mappings must declare an explicit source");
-    assert!(missing_set_source
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-value-invalid"));
-
-    let ambiguous_set_source = compile_json(
-        base(
-            r#"{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value","fromEffect":"created"}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("set mappings cannot declare multiple sources");
-    assert!(ambiguous_set_source
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-value-invalid"));
-
-    let clear_required = compile_json(
-        base(
-            r#"{"target":{"fromField":"target"},"operation":"patch","clear":["label"]}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("required target fields cannot be cleared");
-    assert!(clear_required
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-clear-required"));
-
-    let overlap = compile_json(
-        base(
-            r#"{"id":"first","target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}},
-               {"id":"second","target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("overlapping target writes are refused");
-    assert!(overlap
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-overlapping-write"));
-
-    let cycle = compile_json(
-        base(
-            r#"{"id":"first","target":{"entity":"record"},"operation":"create","set":{"parent":{"fromEffect":"second"}}},
-               {"id":"second","target":{"entity":"record"},"operation":"create","set":{"parent":{"fromEffect":"first"}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("reserved-create dependency cycles are refused");
-    assert!(cycle
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-dependency-cycle"));
-
-    let wrong_reserved_type = compile_json(
-        base(
-            r#"{"id":"created","target":{"entity":"record"},"operation":"create","set":{"label":{"fromEffect":"created"}}}"#,
-            request_fields,
-            target_fields,
-        )
-        .as_bytes(),
-    )
-    .expect_err("reserved ids can populate only reference fields");
-    assert!(
-        wrong_reserved_type
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code
-                == "breg.change-request.effect-value-reference-required")
-    );
-}
-
-#[test]
-fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_plan_bounds() {
-    let uncontrolled = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"uncontrolled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
-            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-          },{
-            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
-          }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target","label"],
-              "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect_err("change requests cannot claim uncontrolled target mutations");
-    assert!(uncontrolled
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-uncontrolled-target"));
-
-    let tombstone_request = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"request-tombstone","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-          },{
-            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable","tombstone":true,
-            "fields":[
-              {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
-          }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"request","operations":["get","tombstone","submit-request","apply-request"],"readableFields":["target","label"],
-              "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect_err("request entities cannot expose ordinary tombstone");
-    assert!(tombstone_request
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.tombstone-forbidden"));
-
-    let mut effects = Vec::new();
-    let mut target_fields = Vec::new();
-    let mut request_fields = Vec::new();
-    for index in 0..129 {
-        let id = format!("field-{index}");
-        target_fields.push(format!(
-            r#"{{"id":"{id}","type":"string","maximumLength":8,"classification":"internal"}}"#
-        ));
-        request_fields.push(format!(
-            r#"{{"id":"{id}","type":"string","maximumLength":8,"required":true,"classification":"internal"}}"#
-        ));
-    }
-    request_fields.push(
-        r#"{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}"#
-            .to_owned(),
-    );
-    effects.push(format!(
-        r#"{{"target":{{"fromField":"target"}},"operation":"patch","set":{{{}}}}}"#,
-        (0..129)
-            .map(|index| format!(r#""field-{index}":{{"fromField":"field-{index}"}}"#))
-            .collect::<Vec<_>>()
-            .join(",")
-    ));
-    let bounded = format!(
-        r#"{{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{{"id":"request-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
-            "fields":[{}]}},{{"id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
-            "fields":[{}],
-            "changeRequest":{{"effects":[{}],"review":{{"type":"required","authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
-          }}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target"],
-            "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"target"}}]}}]}}}}]
-        }}"#,
-        target_fields.join(","),
-        request_fields.join(","),
-        effects.join(",")
-    );
-    let too_many_fields = compile_json(bounded.as_bytes())
-        .expect_err("field-mutation ceiling is enforced at compile time");
-    assert!(too_many_fields
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.bounds-field-mutations"));
-}
-
-#[test]
-fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls() {
-    let misplaced_lifecycle = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"misplaced-lifecycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
-            "fields":[{"id":"label","type":"string","maximumLength":32,"classification":"internal"}]}],
-          "accessProfiles":[{"id":"operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get","submit-request"],"readableFields":["label"], "rowBoundaries": "unrestricted"}]}}]
-        }"#,
-    )
-    .expect_err("request lifecycle operations are available only on request entities");
-    assert!(misplaced_lifecycle
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable"));
-
-    let unsupported_control = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"unsupported-control","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{"requiredFor":["tombstone"]},
-            "fields":[{"id":"label","type":"string","maximumLength":32,"classification":"internal"}]}],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"}]}}]
-        }"#,
-    )
-    .expect_err("change control is bounded to create and patch operations");
-    assert!(unsupported_control
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-control.operation-unsupported"));
-
-    let self_controlled_request = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"self-controlled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-          },{
-            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[
-              {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
-          }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target","label"],
-            "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}], "rowBoundaries": "unrestricted"}]}}]
-        }"#,
-    )
-    .expect_err("request entities cannot also be target-controlled entities");
-    assert!(self_controlled_request
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.change-control-conflict"));
-
-    let nested_request_target = compile_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"nested-request-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-          },{
-            "id":"inner-request","primaryDataset":"test-dataset","route":"inner-requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"type":"required","authority":"casework-main","policyId":"inner-review"},"onApproved":{"mode":"manual"}}
-          },{
-            "id":"outer-request","primaryDataset":"test-dataset","route":"outer-requests","mutationMode":"mutable",
-            "fields":[
-              {"id":"inner","type":"reference","target":"inner-request","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-            ],
-            "changeRequest":{"effects":[{"target":{"fromField":"inner"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"type":"required","authority":"casework-main","policyId":"outer-review"},"onApproved":{"mode":"manual"}}
-          }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-            "entity":"inner-request","operations":["get","submit-request","apply-request"],"readableFields":["target","label"],
-            "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
-            "rowBoundaries": "unrestricted"
-          },{
-            "entity":"outer-request","operations":["get","submit-request","apply-request"],"readableFields":["inner","label"],
-            "applyTargets":[{"entity":"inner-request", "rowBoundaries": "unrestricted"}],
-            "rowBoundaries": "unrestricted"
-          }]}}]
-        }"#,
-    )
-    .expect_err("request effects cannot target nested request entities");
-    assert!(nested_request_target
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-nested-request-target"));
-}
-
 #[test]
 fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories() {
-    let project = br#"{
+    let project = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"household-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
         "fields":[
           {"id":"household-code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -1962,8 +641,8 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         ]
       }],
       "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
-          "entity":"household","operations":["get","lookup","list"],
+        "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{
+          "recordType":"household","operations":["get","lookup","list"],
           "readableFields":["household-code","child-count","single-headed"],
           "filterableFields":["child-count","single-headed"],
           "sortableFields":["child-count"],
@@ -2088,19 +767,19 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
 #[test]
 fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","maximumLength":32,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
-            "id":"viewer","principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"household","operations":["get"],
+            "id":"viewer","principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"household","operations":["get"],
               "readableFields":["household-code"],
               "rowBoundaries":[{"field":"id","claim":"household_id","operator":"equals"}]
             }]}
@@ -2134,11 +813,11 @@ fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
 
 #[test]
 fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
-    let project = br#"{
+    let project = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"derived-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
         "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
         "derived":[{
@@ -2170,7 +849,7 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid"
-            && diagnostic.path == "entities[household].derived[demographics].sql"
+            && diagnostic.path == "recordTypes[household].derived[demographics].sql"
             && !diagnostic.message.contains("childCount")));
 
     let wildcard = compile_json_with_assets(
@@ -2199,7 +878,7 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
 #[test]
 fn module_digest_can_bind_explicit_sql_assets() {
     let module = parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     let yaml_only = module_digest(&module);
@@ -2231,17 +910,17 @@ fn module_digest_can_bind_explicit_sql_assets() {
 fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     let source = |batch: &str, operations: &str| {
         format!(
-            r#"{{
+            r#"{{"datasets":[{{"id":"test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"batch-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable"{batch},
                 "fields":[{{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
-                "id":"writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-                  "rowBoundaries": "unrestricted", "entity":"record","operations":{operations},
+                "id":"writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{
+                  "rowBoundaries": "unrestricted", "recordType":"record","operations":{operations},
                   "readableFields":["label"],"writableFields":["label"]
                 }}]}}
               }}]
@@ -2254,7 +933,7 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     assert!(missing
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "breg.entity.batch-required"));
+        .any(|diagnostic| diagnostic.code == "breg.record-type.batch-required"));
 
     for batch in [
         r#", "batch":{"maximumItems":0,"maximumBytes":1}"#,
@@ -2566,14 +1245,14 @@ fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"source"},
-          "entities":[]
+          "recordTypes":[]
         });
         project["package"][key] = value.clone();
         let bytes = serde_json::to_vec(&project).expect("project serializes");
         for (failure, code) in [
             (
                 parse_project_json(&bytes).expect_err("a deployment key is refused"),
-                "breg.source.shape-invalid",
+                "config.unknown-key",
             ),
             (
                 parse_project_yaml(&bytes).expect_err("a deployment key is refused in YAML"),
@@ -2616,7 +1295,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
             json!({"id":"api","title":"API","endpointUrl":"https://registry.example.test"}),
         ),
     ] {
-        let mut project = json!({
+        let mut project = json!({"datasets":[{"id": "neutral"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2629,7 +1308,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
             "datasets":[{"id":"neutral","title":"Dataset"}],
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://registry.example.test","servesDatasets":["neutral"]}]
           },
-          "entities":[]
+          "recordTypes":[]
         });
         parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
             .expect("the projection parses without a singular key");
@@ -2638,7 +1317,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
         for (failure, code) in [
             (
                 parse_project_json(&bytes).expect_err("a singular projection key is refused"),
-                "breg.source.shape-invalid",
+                "config.unknown-key",
             ),
             (
                 parse_project_yaml(&bytes)
@@ -2668,12 +1347,12 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
 fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts() {
     let compiled = compile_project(
         &parse_project_json(
-            br#"{
+            br#"{"datasets":[{"id": "test-dataset"}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "package":{"sourceRevision":"source"},
-              "entities":[{
+              "recordTypes":[{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
               }],
@@ -2681,8 +1360,8 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
                 "id":"reader",
                 "principalClaim":"principal",
                 "requiredScopes":"unrestricted",
-                "permissions":{"entities":[{
-                  "entity":"record",
+                "permissions":{"records":[{
+                  "recordType":"record",
                   "operations":["get"],
                   "readableFields":["code"],
                   "rowBoundaries": "unrestricted"
@@ -2715,11 +1394,11 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
 #[test]
 fn project_access_profiles_use_the_entity_access_vocabulary() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[
               {"id":"case-code","type":"string","maximumLength":32,"classification":"internal"},
@@ -2732,8 +1411,8 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
             "principalClaim":"sub",
             "requiredScopes":["records.read"],
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case-file",
+            "permissions":{"records":[{
+              "recordType":"case-file",
               "operations":["get","list"],
               "readableFields":["case-code","status"],
               "filterableFields":["status"],
@@ -2778,11 +1457,11 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
 #[test]
 fn root_project_entity_access_profiles_are_compile_time_errors() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}],
             "accessProfiles":[{
@@ -2803,19 +1482,21 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "breg.access-profile.project-entity-local-forbidden")
+        .find(|diagnostic| {
+            diagnostic.code == "breg.access-profile.project-record-type-local-forbidden"
+        })
         .expect("root entity-local profile refusal is reported");
-    assert_eq!(diagnostic.path, "project.entities[].accessProfiles");
+    assert_eq!(diagnostic.path, "project.recordTypes[].accessProfiles");
 }
 
 #[test]
 fn module_entity_access_profiles_remain_supported_for_module_composition() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"module-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
@@ -2826,7 +1507,7 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
     let module = parse_module_json(
         br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core",
           "version":"1",
-          "entities":[{
+          "recordTypes":[{
             "id":"module-record","primaryDataset":"test-dataset","route":"module-records","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}],
             "accessProfiles":[{
@@ -2838,8 +1519,8 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
               "rowBoundaries": "unrestricted"
             }]
           }],
-          "extendEntities":[{
-            "entity":"case-file",
+          "extendRecordTypes":[{
+            "recordType":"case-file",
             "accessProfiles":[{
               "id":"extension-reader",
               "principalClaim":"sub",
@@ -2866,11 +1547,11 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
 #[test]
 fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
     let failure = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
@@ -2879,14 +1560,14 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
             "principalClaim":"sub",
             "requiredScopes":"unrestricted",
             "purposes":["case-management"],
-            "permissions":{"entities":[{"entity":"case-file","operations":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]}
+            "permissions":{"records":[{"recordType":"case-file","operations":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]}
           }]
         }"#,
     )
     .expect_err("legacy purposes key is no longer part of the authoring contract");
 
     let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
+    assert_eq!(diagnostic.code, "config.unknown-key");
     assert_eq!(diagnostic.path, "project.accessProfiles[0].purposes");
 }
 
@@ -2894,18 +1575,18 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
 /// written permissions.
 fn permission_refusals(permissions: &str) -> Vec<(String, String)> {
     let source = format!(
-        r#"{{
+        r#"{{"datasets":[{{"id": "test-dataset"}}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{
+          "recordTypes":[{{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}}]
           }}],
-          "actions":[{{
+          "actions":[{{"execution":{{"mode":"immediate"}},
             "id":"create-case-file",
             "inputs":[{{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}}],
-            "effects":[{{"id":"case","target":{{"entity":"case-file"}},"operation":"create","set":{{"case-code":{{"fromField":"case-code"}}}}}}]
+            "plan":{{"type":"fixed","effects":[{{"id":"case","target":{{"recordType":"case-file"}},"operation":"create","set":{{"case-code":{{"fromInput":"case-code"}}}}}}]}}
           }}],
           "accessProfiles":[{{
             "id":"operator",
@@ -2938,12 +1619,12 @@ fn unknown_keys(group: &str, members: &[&str]) -> Vec<(String, String)> {
 #[test]
 fn project_access_grants_reject_the_legacy_action_vocabulary() {
     let refused = permission_refusals(
-        r#"{"entities":[{"entity":"case-file","actions":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]}"#,
+        r#"{"records":[{"recordType":"case-file","actions":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]}"#,
     );
     assert!(
         refused.contains(&(
             "config.unknown-key".to_owned(),
-            "project.accessProfiles[0].permissions.entities[0].actions".to_owned()
+            "project.accessProfiles[0].permissions.records[0].actions".to_owned()
         )),
         "{refused:?}"
     );
@@ -2953,45 +1634,45 @@ fn project_access_grants_reject_the_legacy_action_vocabulary() {
 fn entity_access_grants_reject_action_target_and_result_fields() {
     for (extra, member) in [
         (
-            r#","targets":[{"entity":"case-file","rowBoundaries":"unrestricted"}]"#,
+            r#","targets":[{"recordType":"case-file","rowBoundaries":"unrestricted"}]"#,
             "targets",
         ),
         (r#","results":["created"]"#, "results"),
     ] {
         let refused = permission_refusals(&format!(
-            r#"{{"entities":[{{
-              "rowBoundaries": "unrestricted", "entity":"case-file",
+            r#"{{"records":[{{
+              "rowBoundaries": "unrestricted", "recordType":"case-file",
               "operations":["get"],
               "readableFields":["case-code"]{extra}
             }}]}}"#
         ));
-        assert_eq!(refused, unknown_keys("entities", &[member]));
+        assert_eq!(refused, unknown_keys("records", &[member]));
     }
 }
 
 #[test]
 fn project_access_grants_reject_mixed_entity_and_action_targets() {
     let mixed = r#"{
-      "entity":"case-file",
+      "recordType":"case-file",
       "action":"create-case-file",
       "operations":["invoke"],
-      "targets":[{"entity":"case-file","rowBoundaries":"unrestricted"}],
+      "targets":[{"recordType":"case-file","rowBoundaries":"unrestricted"}],
       "rowBoundaries": "unrestricted"
     }"#;
     assert_eq!(
-        permission_refusals(&format!(r#"{{"entities":[{mixed}]}}"#)),
-        unknown_keys("entities", &["action", "targets"])
+        permission_refusals(&format!(r#"{{"records":[{mixed}]}}"#)),
+        unknown_keys("records", &["action", "targets"])
     );
     assert_eq!(
         permission_refusals(&format!(r#"{{"actions":[{mixed}]}}"#)),
-        unknown_keys("actions", &["entity", "rowBoundaries"])
+        unknown_keys("actions", &["recordType", "rowBoundaries"])
     );
 }
 
 #[test]
 fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
     let failure = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "neutral"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
@@ -3011,7 +1692,7 @@ fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
     )
     .expect_err("unknown projection members are refused");
 
-    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
+    assert_eq!(failure.diagnostics()[0].code, "config.unknown-key");
     assert_eq!(
         failure.diagnostics()[0].path,
         "project.manifestProjection.catalog.publisher.privateKey"
@@ -3064,10 +1745,15 @@ fn a_read_project_or_module_serializes_to_source_the_reader_reads_again() {
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg"),
         &mut files,
     );
-    assert!(
-        files.len() > 40,
-        "the product ships its projects and modules"
-    );
+    for canonical in [
+        "examples/minimal/registry.yaml",
+        "acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml",
+    ] {
+        assert!(
+            files.iter().any(|path| path.ends_with(canonical)),
+            "the product ships its canonical project and module: {canonical}"
+        );
+    }
     for path in files {
         let bytes = fs::read(&path).expect("the shipped source file reads");
         let display = path.display();
@@ -3170,6 +1856,8 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                     id: lock.id.clone(),
                     version: lock.version.clone(),
                     dependencies: Vec::new(),
+                    functions: Vec::new(),
+                    value_types: Default::default(),
                     entities: Vec::new(),
                     extend_entities: Vec::new(),
                     actions: Vec::new(),
@@ -3229,7 +1917,7 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
 #[test]
 fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "public-slice"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
@@ -3241,7 +1929,7 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
             "datasets":[{"id":"public-slice","title":"Public Slice Dataset","status":"active"}],
             "dataServices":[{"id":"public-slice-api","title":"Public Slice API","endpointUrl":"https://public-slice.example.test/v1","servesDatasets":["public-slice"]}]
           },
-          "entities":[
+          "recordTypes":[
             {"id":"visible-target","primaryDataset":"public-slice","route":"visible-targets","mutationMode":"create-only","classification":"public",
              "fields":[{"id":"label","type":"string","maximumLength":64,"classification":"public"}]},
             {"id":"hidden-target","primaryDataset":"public-slice","route":"hidden-targets","mutationMode":"create-only","classification":"restricted",
@@ -3256,10 +1944,10 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
           ],
           "accessProfiles":[{
             "id":"operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-              "entities":[
-                {"entity":"visible-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
-                {"entity":"hidden-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
-                {"entity":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"], "rowBoundaries": "unrestricted"}
+              "records":[
+                {"recordType":"visible-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
+                {"recordType":"hidden-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
+                {"recordType":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"], "rowBoundaries": "unrestricted"}
               ]
             }
           }]
@@ -3301,7 +1989,7 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
 #[test]
 fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "public-slice"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
@@ -3320,7 +2008,7 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
               {"id":"secret-record","conceptUri":"https://example.test/SecretRecord"}
             ]
           },
-          "entities":[
+          "recordTypes":[
             {"id":"record","primaryDataset":"public-slice","route":"records","mutationMode":"create-only","classification":"public",
              "fields":[
                {"id":"name","type":"string","maximumLength":64,"classification":"public"},
@@ -3331,8 +2019,8 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
              "fields":[{"id":"name","type":"string","maximumLength":64,"classification":"restricted"}]}
           ],
           "accessProfiles":[
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get"],"readableFields":["name","profile"], "rowBoundaries": "unrestricted"}]}},
-            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"secret-record","operations":["get"],"readableFields":["name"], "rowBoundaries": "unrestricted"}]}}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"record","operations":["get"],"readableFields":["name","profile"], "rowBoundaries": "unrestricted"}]}},
+            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"secret-record","operations":["get"],"readableFields":["name"], "rowBoundaries": "unrestricted"}]}}
           ]
         }"#,
     )
@@ -3356,7 +2044,7 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
 /// in full only by `authorization.archived-status`, which sits above the
 /// projection's classification ceiling.
 fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::RegistryProject {
-    let project = json!({
+    let project = json!({"datasets":[{"id": "narrowed-codes"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"narrowed-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://narrowed-codes.example.test"},
@@ -3370,7 +2058,7 @@ fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::Regi
         "vocabularies":[{"id":"authorization-status","schemeIri":"https://narrowed-codes.example.test/vocab/authorization-status","concepts":concepts}]
       },
       "vocabularies":[{"id":"authorization-status","values":["pending","active","suspended","cancelled","revoked"]}],
-      "entities":[
+      "recordTypes":[
         {"id":"authorization","primaryDataset":"narrowed-codes","route":"authorizations","mutationMode":"create-only","classification":"public",
          "fields":[
            {"id":"status","type":"vocabulary-code","vocabulary":"authorization-status","values":["pending","active","suspended","cancelled"],"classification":"public"},
@@ -3381,9 +2069,9 @@ fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::Regi
       ],
       "accessProfiles":[{
         "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-          "entities":[
-            {"entity":"authorization","operations":["get"],"readableFields":["status","archived-status"],"rowBoundaries":"unrestricted"},
-            {"entity":"authorization-request","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}
+          "records":[
+            {"recordType":"authorization","operations":["get"],"readableFields":["status","archived-status"],"rowBoundaries":"unrestricted"},
+            {"recordType":"authorization-request","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}
           ]
         }
       }]
@@ -3468,7 +2156,7 @@ fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses
 
 #[test]
 fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
-    let project = json!({
+    let project = json!({"datasets":[{"id": "protected-cases"}, {"id": "public-cases"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
@@ -3491,15 +2179,15 @@ fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
         ]}]
       },
       "vocabularies":[{"id":"case-status","values":["open","sealed-by-court"]}],
-      "entities":[
+      "recordTypes":[
         {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
         {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"}]}
       ],
       "accessProfiles":[
-        {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"entities":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
-        {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"entities":[{"entity":"protected-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}}
+        {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"records":[{"recordType":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
+        {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"records":[{"recordType":"protected-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}}
       ]
     });
     let project = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
@@ -3572,7 +2260,7 @@ fn manifest_projection_omits_physical_runtime_and_security_terms() {
 #[test]
 fn independent_additive_modules_are_order_independent() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -3581,13 +2269,13 @@ fn independent_additive_modules_are_order_independent() {
             {"id":"alpha","version":"1"},
             {"id":"beta","version":"1"}
           ],
-          "entities":[{
+          "recordTypes":[{
             "id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"object","operations":["create","get","list","patch"],
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"object","operations":["create","get","list","patch"],
               "readableFields":["code"],"writableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}
@@ -3597,7 +2285,7 @@ fn independent_additive_modules_are_order_independent() {
     .expect("project parses");
     let alpha = parse_module_json(
         br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"alpha","version":"1","dependencies":["core"],
-          "extendEntities":[{"entity":"object","fields":[
+          "extendRecordTypes":[{"recordType":"object","fields":[
             {"id":"alpha-field","type":"boolean","classification":"internal"}
           ]}]
         }"#,
@@ -3605,7 +2293,7 @@ fn independent_additive_modules_are_order_independent() {
     .expect("alpha module parses");
     let beta = parse_module_json(
         br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"beta","version":"1","dependencies":["core"],
-          "extendEntities":[{"entity":"object","fields":[
+          "extendRecordTypes":[{"recordType":"object","fields":[
             {"id":"beta-field","type":"int64","classification":"internal"}
           ]}]
         }"#,
@@ -3627,19 +2315,19 @@ fn independent_additive_modules_are_order_independent() {
 #[test]
 fn project_access_profile_required_scopes_compile_into_each_grant() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"scope-bound-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
             "id":"operator","principalClaim":"registry_principal",
             "requiredScopes":["registry:record:operate"],
-            "permissions":{"entities":[{
-              "entity":"record","operations":["get"],"readableFields":["code"],
+            "permissions":{"records":[{
+              "recordType":"record","operations":["get"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}
           }]
@@ -3669,7 +2357,7 @@ fn strict_parse_refuses_unknown_and_duplicate_members_without_echoing_values() {
         }"#,
     )
     .expect_err("unknown member is refused");
-    assert_eq!(unknown.diagnostics()[0].code, "breg.source.shape-invalid");
+    assert_eq!(unknown.diagnostics()[0].code, "config.unknown-key");
     assert!(unknown.diagnostics()[0].path.starts_with("project.project"));
     let rendered = serde_json::to_string(&unknown).expect("diagnostic serializes");
     assert!(!rendered.contains("do-not-echo"));
@@ -3718,11 +2406,11 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
         ),
     ] {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id":"test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"closed-query-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 {member}
               }}]
@@ -3730,7 +2418,7 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
         );
         let failure = parse_project_json(source.as_bytes())
             .expect_err("deferred query features remain outside the strict authoring grammar");
-        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
+        assert_eq!(failure.diagnostics()[0].code, "config.unknown-key");
         assert!(failure.diagnostics()[0].path.ends_with(key));
         let rendered = format!(
             "{failure:?}\n{failure}\n{}",
@@ -3771,7 +2459,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: ${AUTHORED_BASE_IRI}
-entities:
+recordTypes:
   - id: case
     title: "Case ${AUTHORED_TITLE:-default}"
 "#,
@@ -3793,7 +2481,7 @@ entities:
         br#"
 apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
 kind: BRegModule
-entities:
+recordTypes:
   - id: case
     fields:
       - id: label
@@ -3803,7 +2491,10 @@ entities:
     .expect_err("an environment expression in an authored module is refused");
     let diagnostic = &module.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.substitution-not-allowed");
-    assert_eq!(diagnostic.path, "module.entities[0].fields[0].description");
+    assert_eq!(
+        diagnostic.path,
+        "module.recordTypes[0].fields[0].description"
+    );
 }
 
 #[test]
@@ -3904,7 +2595,7 @@ fn integer_members_are_read_within_their_stated_bounds() {
             for (key, value) in written.as_object().expect("a field is a mapping") {
                 field[key] = value.clone();
             }
-            source["entities"][0]["fields"][0] = field;
+            source["recordTypes"][0]["fields"][0] = field;
         }
     };
     let set = |pointer: &'static str, written: Value| {
@@ -3919,13 +2610,13 @@ fn integer_members_are_read_within_their_stated_bounds() {
             "asset-site-placement",
             Box::new(field(json!({"type": "string", "maximumLength": 0}))),
             "config.out-of-range",
-            "project.entities[0].fields[0].maximumLength",
+            "project.recordTypes[0].fields[0].maximumLength",
         ),
         (
             "asset-site-placement",
             Box::new(field(json!({"type": "text", "maximumLength": 10_000_001}))),
             "config.out-of-range",
-            "project.entities[0].fields[0].maximumLength",
+            "project.recordTypes[0].fields[0].maximumLength",
         ),
         (
             "asset-site-placement",
@@ -3933,13 +2624,13 @@ fn integer_members_are_read_within_their_stated_bounds() {
                 json!({"type": "string", "minimumLength": 1_000_001, "maximumLength": 64}),
             )),
             "config.out-of-range",
-            "project.entities[0].fields[0].minimumLength",
+            "project.recordTypes[0].fields[0].minimumLength",
         ),
         (
             "asset-site-placement",
             Box::new(field(json!({"type": "string", "maximumLength": 1_000_001}))),
             "config.invalid-value",
-            "project.entities[0].fields[0]",
+            "project.recordTypes[0].fields[0]",
         ),
         (
             "asset-site-placement",
@@ -3947,7 +2638,7 @@ fn integer_members_are_read_within_their_stated_bounds() {
                 json!({"type": "decimal", "precision": 39, "scale": 0}),
             )),
             "config.out-of-range",
-            "project.entities[0].fields[0].precision",
+            "project.recordTypes[0].fields[0].precision",
         ),
         (
             "asset-site-placement",
@@ -3955,7 +2646,7 @@ fn integer_members_are_read_within_their_stated_bounds() {
                 json!({"type": "decimal", "precision": 0, "scale": 0}),
             )),
             "config.invalid-value",
-            "project.entities[0].fields[0]",
+            "project.recordTypes[0].fields[0]",
         ),
         (
             "asset-site-placement",
@@ -3963,13 +2654,13 @@ fn integer_members_are_read_within_their_stated_bounds() {
                 json!({"type": "decimal", "precision": 10, "scale": 39}),
             )),
             "config.out-of-range",
-            "project.entities[0].fields[0].scale",
+            "project.recordTypes[0].fields[0].scale",
         ),
         (
             "asset-site-placement",
             Box::new(field(json!({"type": "crs84-point", "precision": 10}))),
             "config.invalid-value",
-            "project.entities[0].fields[0]",
+            "project.recordTypes[0].fields[0]",
         ),
         (
             "asset-site-placement",
@@ -3977,25 +2668,25 @@ fn integer_members_are_read_within_their_stated_bounds() {
                 json!({"type": "structured", "maximumBytes": 1_048_577, "schema": {"type": "object"}}),
             )),
             "config.out-of-range",
-            "project.entities[0].fields[0].maximumBytes",
+            "project.recordTypes[0].fields[0].maximumBytes",
         ),
         (
             "asset-site-placement",
-            Box::new(set("/entities/0/batch/maximumItems", json!(101))),
+            Box::new(set("/recordTypes/0/batch/maximumItems", json!(101))),
             "config.out-of-range",
-            "project.entities[0].batch.maximumItems",
+            "project.recordTypes[0].batch.maximumItems",
         ),
         (
             "asset-site-placement",
-            Box::new(set("/entities/0/batch/maximumItems", json!(0))),
+            Box::new(set("/recordTypes/0/batch/maximumItems", json!(0))),
             "config.out-of-range",
-            "project.entities[0].batch.maximumItems",
+            "project.recordTypes[0].batch.maximumItems",
         ),
         (
             "asset-site-placement",
-            Box::new(set("/entities/0/batch/maximumBytes", json!(2_097_153))),
+            Box::new(set("/recordTypes/0/batch/maximumBytes", json!(2_097_153))),
             "config.out-of-range",
-            "project.entities[0].batch.maximumBytes",
+            "project.recordTypes[0].batch.maximumBytes",
         ),
         (
             "farmer-landholding-evidence",
@@ -4014,12 +2705,6 @@ fn integer_members_are_read_within_their_stated_bounds() {
             )),
             "config.out-of-range",
             "project.actions[0].evidence[0].maximumObservationAgeSeconds",
-        ),
-        (
-            "request-attachments",
-            Box::new(set("/entities/1/attachments/0/maximumBytes", json!(0))),
-            "config.out-of-range",
-            "project.entities[1].attachments[0].maximumBytes",
         ),
         (
             "facility",
@@ -4063,13 +2748,13 @@ fn a_set_written_as_a_list_refuses_a_repeated_item_when_the_project_is_read() {
     let cases = [
         (
             "asset-site-placement",
-            "/accessProfiles/0/permissions/entities/0/operations",
-            "project.accessProfiles[0].permissions.entities[0].operations[5]",
+            "/accessProfiles/0/permissions/records/0/operations",
+            "project.accessProfiles[0].permissions.records[0].operations[5]",
         ),
         (
             "asset-site-placement",
-            "/accessProfiles/0/permissions/entities/0/readableFields",
-            "project.accessProfiles[0].permissions.entities[0].readableFields[3]",
+            "/accessProfiles/0/permissions/records/0/readableFields",
+            "project.accessProfiles[0].permissions.records[0].readableFields[3]",
         ),
         (
             "asset-site-placement",
@@ -4078,8 +2763,8 @@ fn a_set_written_as_a_list_refuses_a_repeated_item_when_the_project_is_read() {
         ),
         (
             "person-registration-rhai",
-            "/entities/0/hooks/0/projection",
-            "project.entities[0].hooks[0].projection[1]",
+            "/recordTypes/0/hooks/0/projection",
+            "project.recordTypes[0].hooks[0].projection[1]",
         ),
     ];
     for (project, pointer, path) in cases {
@@ -4127,7 +2812,7 @@ fn module_with_profile_member(member: &str, value: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id": "memo-core", "version": "1",
-        "entities": [{
+        "recordTypes": [{
             "id": "memo", "primaryDataset": "test-dataset", "route": "memos",
             "mutationMode": "mutable", "classification": "internal",
             "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}],
@@ -4151,7 +2836,7 @@ fn project_with_authored_index_fields(count: usize) -> Vec<u8> {
     let ids = (0..count)
         .map(|index| format!("key-{index}"))
         .collect::<Vec<_>>();
-    let person = &mut source["entities"][0];
+    let person = &mut source["recordTypes"][0];
     person["fields"]
         .as_array_mut()
         .expect("the entity declares fields")
@@ -4183,7 +2868,10 @@ fn an_authored_index_declares_at_most_31_fields() {
         .expect_err("a 32-field index leaves no key column for the record identifier");
     assert_eq!(
         refusals(&failure),
-        vec![("breg.index.fields-too-many", "entities[].indexes[].fields")]
+        vec![(
+            "breg.index.fields-too-many",
+            "recordTypes[].indexes[].fields"
+        )]
     );
     assert_eq!(
         failure.diagnostics()[0].message,
@@ -4207,7 +2895,7 @@ fn provenance_fields_are_read_as_a_set_in_a_project_and_a_module() {
         refusals(&failure),
         vec![(
             "config.duplicate-item",
-            "module.entities[0].accessProfiles[0].provenanceFields[2]"
+            "module.recordTypes[0].accessProfiles[0].provenanceFields[2]"
         )],
         "{failure:?}"
     );
@@ -4217,7 +2905,7 @@ fn provenance_fields_are_read_as_a_set_in_a_project_and_a_module() {
     let mut source: Value =
         serde_norway::from_slice(&fs::read(fixture).expect("the fixture is readable"))
             .expect("the fixture is YAML");
-    source["accessProfiles"][0]["permissions"]["entities"][0]["provenanceFields"] =
+    source["accessProfiles"][0]["permissions"]["records"][0]["provenanceFields"] =
         json!(["reasonText", "reasonText"]);
     let failure = parse_project_yaml(
         serde_norway::to_string(&source)
@@ -4229,7 +2917,7 @@ fn provenance_fields_are_read_as_a_set_in_a_project_and_a_module() {
         refusals(&failure),
         vec![(
             "config.duplicate-item",
-            "project.accessProfiles[0].permissions.entities[0].provenanceFields[1]"
+            "project.accessProfiles[0].permissions.records[0].provenanceFields[1]"
         )],
         "{failure:?}"
     );
@@ -4246,7 +2934,7 @@ fn a_module_profile_task_grant_issuer_is_read_as_a_url() {
         refusals(&failure),
         vec![(
             "config.invalid-value",
-            "module.entities[0].accessProfiles[0].taskGrant.sourceIssuer"
+            "module.recordTypes[0].accessProfiles[0].taskGrant.sourceIssuer"
         )],
         "{failure:?}"
     );
@@ -4266,7 +2954,7 @@ fn a_repeated_entity_id_is_refused_at_the_second_id_when_the_file_is_read() {
         )
         .expect("the fixture is YAML");
         let entities = source
-            .pointer_mut("/entities")
+            .pointer_mut("/recordTypes")
             .and_then(Value::as_array_mut)
             .expect("the fixture lists entities");
         let first = entities[0].clone();
@@ -4292,7 +2980,7 @@ fn a_repeated_entity_id_is_refused_at_the_second_id_when_the_file_is_read() {
         refused(&failure),
         vec![(
             "config.duplicate-id".to_owned(),
-            format!("project.entities[{last}].id")
+            format!("project.recordTypes[{last}].id")
         )],
         "{failure:?}"
     );
@@ -4304,7 +2992,7 @@ fn a_repeated_entity_id_is_refused_at_the_second_id_when_the_file_is_read() {
         refused(&failure),
         vec![(
             "config.duplicate-id".to_owned(),
-            format!("module.entities[{last}].id")
+            format!("module.recordTypes[{last}].id")
         )],
         "{failure:?}"
     );
@@ -4326,7 +3014,7 @@ fn an_entity_two_files_contribute_is_refused_by_the_compiler() {
         failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "breg.entity.id-duplicate"),
+            .any(|diagnostic| diagnostic.code == "breg.record-type.id-duplicate"),
         "{:?}",
         failure.diagnostics()
     );
@@ -4386,29 +3074,29 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities: do-not-echo
+recordTypes: do-not-echo
 "#,
     )
     .expect_err("a wrongly typed YAML member is refused");
     let diagnostic = &wrong_yaml_type.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.invalid-type");
-    assert_eq!(diagnostic.path, "project.entities");
+    assert_eq!(diagnostic.path, "project.recordTypes");
     assert!(diagnostic.message.contains("expected a list"));
     assert!(!diagnostic.message.contains("do-not-echo"));
 
     let unknown_enum_value = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"append_only"}]
+          "recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"append_only"}]
         }"#,
     )
     .expect_err("an unknown enum value is refused");
     let diagnostic = &unknown_enum_value.diagnostics()[0];
-    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
-    assert_eq!(diagnostic.path, "project.entities[0].mutationMode");
-    assert!(diagnostic.message.contains("unknown variant `append_only`"));
+    assert_eq!(diagnostic.code, "config.unknown-variant");
+    assert_eq!(diagnostic.path, "project.recordTypes[0].mutationMode");
+    assert!(!diagnostic.message.contains("append_only"));
     assert!(diagnostic.message.contains("create-only"));
 
     let malformed_json =
@@ -4422,11 +3110,11 @@ entities: do-not-echo
 #[test]
 fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_ddl_and_schema() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[
               {"id":"amount","type":"decimal","precision":6,"scale":2,"minimum":"-10.00","maximum":"9999.99","classification":"internal"},
@@ -4441,8 +3129,8 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"reading","operations":["create","get","list","patch"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"reading","operations":["create","get","list","patch"],
               "readableFields":["amount","location","payload"],
               "writableFields":["amount","location","payload"],
               "rowBoundaries": "unrestricted"
@@ -4500,28 +3188,28 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
 #[test]
 fn scalar_field_sources_reject_incompatible_type_options_during_strict_parse() {
     let failure = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[{"id":"flag","type":"boolean","precision":2,"classification":"internal"}]
           }]
         }"#,
     )
     .expect_err("type-incompatible option is refused during parse");
-    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
+    assert_eq!(failure.diagnostics()[0].code, "config.invalid-value");
 }
 
 #[test]
 fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_lists() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"create-only"},
             {
               "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
@@ -4600,11 +3288,11 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
     ];
     for (field, canary) in refused {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[{field}]
               }}]
@@ -4612,7 +3300,14 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
         );
         let failure = parse_project_json(source.as_bytes())
             .expect_err("unapproved scalar or reference-list forms fail strict parsing");
-        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
+        assert_eq!(
+            failure.diagnostics()[0].code,
+            if canary == "reference-target-list-canary" {
+                "config.expected-string"
+            } else {
+                "config.unknown-variant"
+            }
+        );
         let rendered = format!(
             "{failure:?}\n{failure}\n{}",
             serde_json::to_string(&failure).expect("diagnostic serializes")
@@ -4660,15 +3355,15 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
 
     for (field, code) in cases {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
-              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}}}]
+              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"reading","operations":["get"],"readableFields":["{}"]}}]}}}}]
             }}"#,
             if field.contains("\"amount\"") {
                 "amount"
@@ -4708,17 +3403,17 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
             "payload"
         };
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
               "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-                  "entity":"reading","operations":["get"],
+                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{
+                  "recordType":"reading","operations":["get"],
                   "readableFields":["{field_id}"],
                   "rowBoundaries":[{{"field":"{field_id}","claim":"claim","operator":"equals"}}]
                 }}]}}
@@ -4737,11 +3432,11 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
 #[test]
 fn geojson_and_bbox_compile_only_for_direct_current_lists() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-authoring","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -4751,7 +3446,7 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
               {"id":"scope","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "geojson":{"geometryField":"location"},
-            "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+            "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{
               "id":"scope-time",
               "type":"temporal-non-overlap",
@@ -4761,8 +3456,8 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"site","operations":["get","list"],"readableFields":["code","location","valid-from","valid-to","scope"],
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"site","operations":["get","list"],"readableFields":["code","location","valid-from","valid-to","scope"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
               "rowBoundaries": "unrestricted"
             }]}
@@ -4814,17 +3509,17 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
     }
 
     let ordinary = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"ordinary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"entry","operations":["list"],"readableFields":["code"],
+            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"entry","operations":["list"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}
           }]
@@ -4854,59 +3549,59 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
             r#""geojson":{"geometryField":"missing"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.geojson.geometry-field-unknown",
-            "entities[].geojson.geometryField",
+            "recordTypes[].geojson.geometryField",
         ),
         (
             r#""geojson":{"geometryField":"code"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.geojson.geometry-field-type-unsupported",
-            "entities[].geojson.geometryField",
+            "recordTypes[].geojson.geometryField",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-maximum-longitude-span-degrees-invalid",
-            "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+            "recordTypes[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":361,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-maximum-longitude-span-degrees-invalid",
-            "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+            "recordTypes[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":181}}"#,
             "breg.access-profile.spatial-queries-bbox-maximum-latitude-span-degrees-invalid",
-            "entities[].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
+            "recordTypes[].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{}"#,
             "breg.access-profile.spatial-queries-empty",
-            "entities[].accessProfiles[].spatialQueries",
+            "recordTypes[].accessProfiles[].spatialQueries",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-geometry-not-readable",
-            "entities[].accessProfiles[].readableFields",
+            "recordTypes[].accessProfiles[].readableFields",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["get"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-list-required",
-            "entities[].accessProfiles[].spatialQueries.bbox",
+            "recordTypes[].accessProfiles[].spatialQueries.bbox",
         ),
     ];
 
     for (geojson, grant, code, path) in cases {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id":"test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"spatial-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {{"id":"code","type":"string","maximumLength":32,"classification":"internal"}},
@@ -4915,8 +3610,8 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
                 {geojson}
               }}],
               "accessProfiles":[{{
-                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-                  "rowBoundaries": "unrestricted", "entity":"site",{grant}
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{
+                  "rowBoundaries": "unrestricted", "recordType":"site",{grant}
                 }}]}}
               }}]
             }}"#
@@ -4936,18 +3631,18 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
 #[test]
 fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
     let strict_failure = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-strict","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
             "fields":[{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}],
             "geojson":{"geometryField":"location"}
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"site","operations":["list"],"readableFields":["location"],
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"site","operations":["list"],"readableFields":["location"],
               "spatialQueries":{"bbox":{"geometryField":"location","maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
               "rowBoundaries": "unrestricted"
             }]}
@@ -4955,10 +3650,7 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
         }"#,
     )
     .expect_err("bbox does not accept duplicate geometry declaration");
-    assert_eq!(
-        strict_failure.diagnostics()[0].code,
-        "breg.source.shape-invalid"
-    );
+    assert_eq!(strict_failure.diagnostics()[0].code, "config.unknown-key");
 
     for (member, code, message_fragment) in [
         (
@@ -4973,17 +3665,17 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
         ),
     ] {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id":"test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "fields":[{{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
-                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-                  "rowBoundaries": "unrestricted", "entity":"site","operations":["list"],"readableFields":["location"],{member}
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{
+                  "rowBoundaries": "unrestricted", "recordType":"site","operations":["list"],"readableFields":["location"],{member}
                 }}]}}
               }}]
             }}"#
@@ -5003,12 +3695,12 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
 #[test]
 fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"module-spatial","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"maps","version":"1"}],
-          "entities":[{
+          "recordTypes":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
@@ -5017,8 +3709,8 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
             ]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"site","operations":["list"],"readableFields":["code","location"],
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"site","operations":["list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
               "rowBoundaries": "unrestricted"
             }]}
@@ -5028,7 +3720,7 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     .expect("project parses");
     let module = parse_module_json(
         br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"maps","version":"1",
-          "extendEntities":[{"entity":"site","geojson":{"geometryField":"location"}}]
+          "extendRecordTypes":[{"recordType":"site","geojson":{"geometryField":"location"}}]
         }"#,
     )
     .expect("module parses");
@@ -5049,7 +3741,7 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     });
     let conflicting = parse_module_json(
         br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"maps","version":"1",
-          "extendEntities":[{"entity":"site","geojson":{"geometryField":"alternate"}}]
+          "extendRecordTypes":[{"recordType":"site","geojson":{"geometryField":"alternate"}}]
         }"#,
     )
     .expect("conflicting module parses");
@@ -5064,17 +3756,20 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.extension.geojson-conflict")
         .expect("conflict diagnostic is reported");
-    assert_eq!(diagnostic.path, "entities[id=site].geojson.geometryField");
+    assert_eq!(
+        diagnostic.path,
+        "recordTypes[id=site].geojson.geometryField"
+    );
 }
 
 #[test]
 fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape_hatches() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {"id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only"},
             {
               "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
@@ -5099,7 +3794,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
                 {"id":"valid-from","type":"timestamp","validTimeRole":"valid-from","required":true,"classification":"internal"},
                 {"id":"valid-to","type":"timestamp","validTimeRole":"valid-to","classification":"internal"}
               ],
-              "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+              "temporal":{"startField":"valid-from","endField":"valid-to"},
               "constraints":[
                 {"id":"composite-key","type":"unique","fields":["jurisdiction","code"]},
                 {"id":"active-code","type":"unique","fields":["code"],"when":[
@@ -5274,11 +3969,11 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         ),
     ] {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[
                   {{"id":"left","type":"int64","classification":"internal"}},
@@ -5290,7 +3985,14 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         );
         let failure = parse_project_json(source.as_bytes())
             .expect_err("SQL and general expression forms fail strict parsing");
-        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
+        assert_eq!(
+            failure.diagnostics()[0].code,
+            if constraint.contains("\"kind\"") {
+                "config.missing-key"
+            } else {
+                "config.unknown-key"
+            }
+        );
         let rendered = format!(
             "{failure:?}\n{failure}\n{}",
             serde_json::to_string(&failure).expect("diagnostic serializes")
@@ -5299,18 +4001,18 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
     }
 
     let cascade = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
             "fields":[{"id":"cascade-reference-canary","type":"reference","target":"record","onDelete":"cascade","classification":"internal"}]
           }]
         }"#,
     )
     .expect_err("reference deletion behavior is closed to restrict");
-    assert_eq!(cascade.diagnostics()[0].code, "breg.source.shape-invalid");
+    assert_eq!(cascade.diagnostics()[0].code, "config.unknown-variant");
     let rendered = format!(
         "{cascade:?}\n{cascade}\n{}",
         serde_json::to_string(&cascade).expect("diagnostic serializes")
@@ -5321,11 +4023,11 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
 #[test]
 fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
     let unknown_member = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -5340,20 +4042,17 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
         }"#,
     )
     .expect_err("predicate members are closed");
-    assert_eq!(
-        unknown_member.diagnostics()[0].code,
-        "breg.source.shape-invalid"
-    );
+    assert_eq!(unknown_member.diagnostics()[0].code, "config.unknown-key");
     assert!(!serde_json::to_string(&unknown_member)
         .expect("diagnostic serializes")
         .contains("record_lifecycle"));
 
     let arbitrary_lifecycle = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
             "constraints":[{
@@ -5366,17 +4065,17 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
     .expect_err("lifecycle predicates have no caller-provided value");
     assert_eq!(
         arbitrary_lifecycle.diagnostics()[0].code,
-        "breg.source.shape-invalid"
+        "config.unknown-key"
     );
 }
 
 #[test]
 fn partial_unique_typed_literals_are_canonical_for_each_supported_field_type() {
-    let source = br#"{
+    let source = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
           {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -5445,11 +4144,11 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
 
     for (field, predicate, code) in cases {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
@@ -5495,11 +4194,11 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
 
     for (when, code) in cases {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
@@ -5520,11 +4219,11 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
 
 #[test]
 fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
-    let left = br#"{
+    let left = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
           {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -5541,11 +4240,11 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
         }]
       }]
     }"#;
-    let right = br#"{
+    let right = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
           {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -5565,6 +4264,21 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
 
     let left = compile_json(left).expect("left order compiles");
     let right = compile_json(right).expect("right order compiles");
+    assert_eq!(
+        left.ddl(),
+        right.ddl(),
+        "equivalent predicate order keeps DDL"
+    );
+    assert_eq!(
+        left.entities(),
+        right.entities(),
+        "equivalent predicate order keeps compiled Record semantics"
+    );
+    assert_eq!(
+        left.revision(),
+        right.revision(),
+        "equivalent predicate order keeps the governed registry revision"
+    );
     assert_eq!(left, right);
     let statement = left
         .ddl()
@@ -5584,11 +4298,11 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
 #[test]
 fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"a","version":"1"},{"id":"b","version":"1"}],
-          "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","fields":[
+          "recordTypes":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
             {"id":"ended-on","type":"date","classification":"internal"}
           ]}]
@@ -5596,13 +4310,13 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
     )
     .expect("project parses");
     let a = parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"a","version":"1","extendEntities":[{"entity":"entry","constraints":[{
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"a","version":"1","extendRecordTypes":[{"recordType":"entry","constraints":[{
           "type":"unique","fields":["code"],"when":[{"type":"active-lifecycle"},{"type":"field-is-null","field":"ended-on"}]
         }]}]}"#,
     )
     .expect("module parses");
     let b = parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"b","version":"1","extendEntities":[{"entity":"entry","constraints":[{
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"b","version":"1","extendRecordTypes":[{"recordType":"entry","constraints":[{
           "type":"unique","fields":["code"],"when":[{"type":"field-is-null","field":"ended-on"},{"type":"active-lifecycle"}]
         }]}]}"#,
     )
@@ -5620,11 +4334,11 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
 
 #[test]
 fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
-    let source = br#"{
+    let source = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"constraint-processing","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"public",
         "fields":[
           {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -5639,7 +4353,7 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
           {"id":"temporal-end","type":"date","classification":"public"},
           {"id":"temporal-scope","type":"string","maximumLength":32,"required":true,"classification":"public"}
         ],
-        "temporal":{"startField":"temporal-start","endField":"temporal-end","scopeFields":["temporal-scope"]},
+        "temporal":{"startField":"temporal-start","endField":"temporal-end"},
         "constraints":[
           {"type":"unique","fields":["unique-field"]},
           {"type":"unique","fields":["partial-field"],"when":[{"type":"field-is-not-null","field":"predicate-field"}]},
@@ -5650,8 +4364,8 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
         ]
       }],
       "accessProfiles":[{
-        "id":"reader","principalClaim":"principal","requiredScopes":["records.read"],"default":true,"permissions":{"entities":[{
-          "entity":"record","operations":["get"],"readableFields":["label"],
+        "id":"reader","principalClaim":"principal","requiredScopes":["records.read"],"default":true,"permissions":{"records":[{
+          "recordType":"record","operations":["get"],"readableFields":["label"],
           "rowBoundaries": "unrestricted"
         }]}
       }],
@@ -5684,11 +4398,11 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
 
 #[test]
 fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
-    let source = br#"{
+    let source = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"public",
         "fields":[
           {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -5700,8 +4414,8 @@ fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
         }]
       }],
       "accessProfiles":[{
-        "id":"reader","principalClaim":"principal","requiredScopes":["entries.read"],"default":true,"permissions":{"entities":[{
-          "entity":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"],
+        "id":"reader","principalClaim":"principal","requiredScopes":["entries.read"],"default":true,"permissions":{"records":[{
+          "recordType":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"],
           "rowBoundaries": "unrestricted"
         }]}
       }],
@@ -5773,7 +4487,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
         .expect("paths is an object")
         .values()
         .flat_map(|entry| entry.as_object().expect("path item is an object").values())
-        .filter(|operation| operation.get("x-registry-entity").is_some())
+        .filter(|operation| operation.get("x-registry-recordType").is_some())
         .map(|operation| {
             operation["operationId"]
                 .as_str()
@@ -5789,7 +4503,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     assert_eq!(generated_compiled_operation_ids, compiled_operation_ids);
     let review_completion = &value["paths"]["/v1/review-completions"]["post"];
     assert_eq!(review_completion["operationId"], "receiveReviewCompletion");
-    assert!(review_completion.get("x-registry-entity").is_none());
+    assert!(review_completion.get("x-registry-recordType").is_none());
     assert_eq!(
         value["components"]["securitySchemes"]["bearerAuth"],
         json!({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"})
@@ -5812,10 +4526,11 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "mutation.conflict",
             "precondition.failed",
             "precondition.required",
+            "proposal.rejected",
+            "proposal.submission_expired",
             "query.cursor_invalid",
             "query.invalid",
             "request.invalid",
-            "request.plan_refused",
             "request.timeout",
             "resource.not_found",
             "runtime.field_encryption.unavailable",
@@ -5900,7 +4615,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "properties": {
                 "recordIdentifier": {"type": "string", "format": "uuid"},
                 "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
-                "domainData": {"$ref": "#/components/schemas/asset-item"}
+                "domainData": {"type":"object","additionalProperties":false,"properties":value["components"]["schemas"]["asset-item"]["properties"].clone()}
             }
         })
     );
@@ -5964,11 +4679,11 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
 #[test]
 fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"business-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"business-record","primaryDataset":"test-dataset","route":"business-records","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
@@ -5981,8 +4696,8 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":["records.read"],
-            "permissions":{"entities":[{
-              "entity":"business-record",
+            "permissions":{"records":[{
+              "recordType":"business-record",
               "operations":["get","list"],
               "readableFields":["code","business-note"],
               "rowBoundaries": "unrestricted"
@@ -5992,8 +4707,8 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
             "requiredPurposes":["business"],
-            "permissions":{"entities":[{
-              "entity":"business-record",
+            "permissions":{"records":[{
+              "recordType":"business-record",
               "operations":["create","get"],
               "readableFields":["code","business-note"],
               "writableFields":["code","draft-note"],
@@ -6062,11 +4777,11 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
 #[test]
 fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"logical-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"},
@@ -6203,17 +4918,17 @@ fn compiled_metadata_inventory_is_bijective_canonical_schema_bound_and_determini
 #[test]
 fn compiler_produces_both_revision_routes_when_explicitly_configured() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create-only","classification":"internal",
             "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"auditor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"entry","operations":["revisions"],"revisionAccess":true,"readableFields":["code"],
+            "id":"auditor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"entry","operations":["revisions"],"revisionAccess":true,"readableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}
           }]
@@ -6295,17 +5010,17 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
 fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_false() {
     for (operations, revision_access) in [(r#"["get"]"#, "true"), (r#"["revisions"]"#, "false")] {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id": "test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create-only","classification":"public",
                 "fields":[{{"id":"code","type":"string","maximumLength":32,"classification":"public"}}]
               }}],
               "accessProfiles":[{{
-                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":["entries.read"],"permissions":{{"entities":[{{
-                  "rowBoundaries": "unrestricted", "entity":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":["entries.read"],"permissions":{{"records":[{{
+                  "rowBoundaries": "unrestricted", "recordType":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
                 }}]}}
               }}]
             }}"#
@@ -6359,23 +5074,23 @@ fn unresolved_reference_is_value_free_and_fails_before_ddl() {
 #[test]
 fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"core","version":"1"},{"id":"a","version":"1"},{"id":"b","version":"1"}],
-          "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable","fields":[
+          "recordTypes":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
           ]}],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect("project parses");
     let a = parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"a","version":"1","dependencies":["core"],"extendEntities":[{"entity":"object","fields":[{"id":"collision","type":"boolean","classification":"internal"}]}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"a","version":"1","dependencies":["core"],"extendRecordTypes":[{"recordType":"object","fields":[{"id":"collision","type":"boolean","classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     let b = parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"b","version":"1","dependencies":["core"],"extendEntities":[{"entity":"object","fields":[{"id":"collision","type":"int64","classification":"internal"}]}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"b","version":"1","dependencies":["core"],"extendRecordTypes":[{"recordType":"object","fields":[{"id":"collision","type":"int64","classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     for modules in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
@@ -6391,10 +5106,10 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
 #[test]
 fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create-only","fields":[
               {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]},
@@ -6403,9 +5118,9 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
             ]}
           ],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-            "entities":[
-              {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
-              {"entity":"case_file_record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
+            "records":[
+              {"recordType":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
+              {"recordType":"case_file_record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
             ]
           }}]
         }"#,
@@ -6429,10 +5144,10 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
 #[test]
 fn entity_ids_that_share_one_sql_name_are_refused() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create-only","fields":[
               {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]},
@@ -6441,9 +5156,9 @@ fn entity_ids_that_share_one_sql_name_are_refused() {
             ]}
           ],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-            "entities":[
-              {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
-              {"entity":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
+            "records":[
+              {"recordType":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
+              {"recordType":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
             ]
           }}]
         }"#,
@@ -6456,8 +5171,8 @@ fn entity_ids_that_share_one_sql_name_are_refused() {
         .diagnostics()
         .iter()
         .any(
-            |diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate"
-                && diagnostic.path == "entities[].id"
+            |diagnostic| diagnostic.code == "breg.record-type.sql-name-duplicate"
+                && diagnostic.path == "recordTypes[].id"
         ));
 }
 
@@ -6479,7 +5194,7 @@ fn temporal_non_overlap_refuses_a_nullable_scope_field() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.constraint.temporal-scope-nullable")
         .expect("nullable temporal scope has a stable diagnostic");
-    assert_eq!(diagnostic.path, "entities[].constraints[].scopeFields");
+    assert_eq!(diagnostic.path, "recordTypes[].constraints[].scopeFields");
     assert!(!serde_json::to_string(diagnostic)
         .expect("diagnostic serializes")
         .contains("asset-placement"));
@@ -6525,7 +5240,7 @@ fn temporal_non_overlap_refuses_structured_and_crs84_point_scope_fields() {
             .collect::<Vec<_>>();
         assert_eq!(diagnostics.len(), 1);
         let diagnostic = diagnostics[0];
-        assert_eq!(diagnostic.path, "entities[].constraints[].scopeFields");
+        assert_eq!(diagnostic.path, "recordTypes[].constraints[].scopeFields");
         assert_eq!(
             diagnostic.message,
             "a temporal non-overlap scope field must use a supported scalar type"
@@ -6845,11 +5560,11 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
 #[test]
 fn temporal_validity_compiles_without_non_overlap_constraint() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-open","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -6860,8 +5575,8 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
             "temporal":{"startField":"valid-from","endField":"valid-to"}
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"membership","operations":["list"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"membership","operations":["list"],
               "readableFields":["person","role","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
             }]}
@@ -6885,13 +5600,13 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
 }
 
 #[test]
-fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
-    let failure = compile_json(
-        br#"{
+fn temporal_scope_fields_predecessor_spelling_is_refused() {
+    let failure = parse_project_json(
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-bridge","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -6905,28 +5620,28 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"membership","operations":["list"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"membership","operations":["list"],
               "readableFields":["person","household","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
             }]}
           }]
         }"#,
     )
-    .expect_err("deprecated bridge scope must not silently override the constraint scope");
+    .expect_err("temporal scopeFields is no longer an authoring member");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.temporal.scope-fields-deprecated-mismatch"
-            && diagnostic.path == "entities[].temporal.scopeFields"
+        diagnostic.code == "config.unknown-key"
+            && diagnostic.path.ends_with(".temporal.scopeFields")
     }));
 }
 
 #[test]
 fn snapshot_operation_is_authenticated_stored_field_history_contract() {
-    let project = br#"{
+    let project = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"household-code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -6941,8 +5656,8 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         }]
       }],
       "accessProfiles":[{
-        "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-          "entity":"household","operations":["list","snapshot","revisions"],"revisionAccess":true,
+        "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+          "recordType":"household","operations":["list","snapshot","revisions"],"revisionAccess":true,
           "readableFields":["household-code","administrative-area","valid-from","valid-to","member-count"],
           "filterableFields":["administrative-area","member-count"],
           "sortableFields":["member-count"],
@@ -7148,17 +5863,17 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
 #[test]
 fn snapshot_operation_rejects_unauthorized_provenance() {
     let provenance = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"record","operations":["snapshot"],"readableFields":["code"],
+            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"record","operations":["snapshot"],"readableFields":["code"],
               "provenanceFields":["kind"],
               "rowBoundaries": "unrestricted"
             }]}
@@ -7175,11 +5890,11 @@ fn snapshot_operation_rejects_unauthorized_provenance() {
 #[test]
 fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
@@ -7189,8 +5904,8 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
             "temporal":{"startField":"valid-from","endField":"valid-to"}
           }],
           "accessProfiles":[{
-            "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"record","operations":["snapshot"],"allowCount":true,
+            "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"record","operations":["snapshot"],"allowCount":true,
               "readableFields":["code","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
             }]}
@@ -7229,123 +5944,6 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
     );
 }
 
-#[test]
-fn change_request_entity_fields_cannot_shadow_server_owned_query_state_api_names() {
-    for reserved_field in [
-        r#"{"id":"breg-state","type":"string","maximumLength":32,"required":true,"classification":"internal"}"#,
-        r#"{"id":"proposal-version","type":"int64","required":true,"classification":"internal"}"#,
-        r#"{"id":"digest","apiName":"effectDigest","type":"string","maximumLength":71,"classification":"internal"}"#,
-    ] {
-        let project = change_request_correction_project(
-            "change-request-reserved-query-name",
-            "",
-            "",
-            "internal",
-            "internal",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-            "\"unrestricted\"",
-        );
-        let mut source = String::from_utf8(project).expect("fixture is UTF-8");
-        source = source.replace(
-            r#"{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}"#,
-            &format!(
-                r#"{{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}},{}"#,
-                reserved_field
-            ),
-        );
-        let failure = compile_json(source.as_bytes())
-            .expect_err("server-owned request query field names are reserved");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "breg.change-request.field-api-name-reserved"),
-            "diagnostics: {:?}",
-            failure.diagnostics()
-        );
-    }
-}
-
-#[test]
-fn change_request_list_queries_gain_breg_state_filters_without_business_field_duplication() {
-    let compiled = compile_json(&change_request_correction_project(
-        "change-request-work-queue",
-        "",
-        "",
-        "internal",
-        "internal",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-        "\"unrestricted\"",
-    ))
-    .expect("change-request queue fixture compiles");
-
-    let request_list = compiled
-        .queries()
-        .operations
-        .iter()
-        .find(|operation| {
-            operation.id == "records.placement-correction-request.request-reviewer.list"
-        })
-        .expect("request reviewer list query compiles");
-    assert_eq!(request_list.kind, CompiledQueryKind::List);
-    assert_eq!(
-        request_list.projection_fields,
-        ["placement", "proposed-site", "reason"],
-        "server-owned state is not duplicated into business projection fields"
-    );
-    assert!(request_list.filter_fields.iter().any(|field| {
-        field.field == REQUEST_BREG_STATE_QUERY_FIELD
-            && field
-                .operators
-                .contains(&CompiledQueryFilterOperator::Equals)
-            && field.operators.contains(&CompiledQueryFilterOperator::In)
-    }));
-    assert!(request_list.filter_fields.iter().any(|field| {
-        field.field == REQUEST_PROPOSAL_VERSION_QUERY_FIELD
-            && field
-                .operators
-                .contains(&CompiledQueryFilterOperator::Range)
-    }));
-    assert!(request_list.filter_fields.iter().any(|field| {
-        field.field == REQUEST_EFFECT_DIGEST_QUERY_FIELD
-            && field
-                .operators
-                .contains(&CompiledQueryFilterOperator::IsNull)
-            && field
-                .operators
-                .contains(&CompiledQueryFilterOperator::IsNotNull)
-    }));
-    assert!(request_list
-        .sort_fields
-        .iter()
-        .any(|field| field.field == REQUEST_BREG_STATE_QUERY_FIELD));
-    assert!(request_list
-        .sort_fields
-        .iter()
-        .any(|field| field.field == REQUEST_PROPOSAL_VERSION_QUERY_FIELD));
-    assert!(request_list
-        .sort_fields
-        .iter()
-        .any(|field| field.field == REQUEST_EFFECT_DIGEST_QUERY_FIELD));
-
-    let target_list = compiled
-        .queries()
-        .operations
-        .iter()
-        .find(|operation| operation.id == "records.placement.placement-reader.list")
-        .expect("target list query compiles");
-    assert!(!target_list
-        .filter_fields
-        .iter()
-        .any(|field| field.field == REQUEST_BREG_STATE_QUERY_FIELD));
-    assert!(!target_list
-        .sort_fields
-        .iter()
-        .any(|field| field.field == REQUEST_BREG_STATE_QUERY_FIELD));
-}
-
 fn query_parameter_names(parameters: &Value) -> Vec<String> {
     let mut names = parameters
         .as_array()
@@ -7375,19 +5973,19 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
         ),
     ] {
         let source = format!(
-            r#"{{
+            r#"{{"datasets":[{{"id":"test-dataset"}}],
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "recordTypes":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{{"type":"object","additionalProperties":false}}}}
                 ]
               }}],
               "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-                  "rowBoundaries": "unrestricted", "entity":"entry","operations":["list"],"readableFields":["payload"],{member}
+                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{
+                  "rowBoundaries": "unrestricted", "recordType":"entry","operations":["list"],"readableFields":["payload"],{member}
                 }}]}}
               }}]
             }}"#
@@ -7420,17 +6018,17 @@ fn temporal_queries_require_profile_readable_boundary_fields() {
         .expect_err("temporal query cannot process hidden boundary fields");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.query.temporal-field-not-readable"
-            && diagnostic.path == "entities[].accessProfiles[].readableFields"
+            && diagnostic.path == "recordTypes[].accessProfiles[].readableFields"
     }));
 }
 
 #[test]
 fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     let left = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
@@ -7438,8 +6036,8 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"entry","operations":["list"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"entry","operations":["list"],
               "readableFields":["code","count"],"filterableFields":["count","code"],"sortableFields":["count","code"],
               "rowBoundaries": "unrestricted"
             }]}
@@ -7448,10 +6046,10 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     )
     .expect("left source parses");
     let right = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"count","type":"int64","classification":"internal"},
@@ -7459,8 +6057,8 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"entry","operations":["list"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"entry","operations":["list"],
               "readableFields":["count","code"],"filterableFields":["code","count"],"sortableFields":["code","count"],
               "rowBoundaries": "unrestricted"
             }]}
@@ -7484,10 +6082,10 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
 #[test]
 fn duplicate_routes_fail_before_artifact_generation() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {"id":"first-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create-only","fields":[
               {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]},
@@ -7496,9 +6094,9 @@ fn duplicate_routes_fail_before_artifact_generation() {
             ]}
           ],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-            "entities":[
-              {"entity":"first-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
-              {"entity":"second-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
+            "records":[
+              {"recordType":"first-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
+              {"recordType":"second-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
             ]
           }}]
         }"#,
@@ -7510,9 +6108,9 @@ fn duplicate_routes_fail_before_artifact_generation() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "breg.entity.route-duplicate")
+        .find(|diagnostic| diagnostic.code == "breg.record-type.route-duplicate")
         .expect("duplicate route has a stable diagnostic");
-    assert_eq!(diagnostic.path, "entities[].route");
+    assert_eq!(diagnostic.path, "recordTypes[].route");
     let rendered = serde_json::to_string(&failure).expect("failure serializes");
     for authored_value in ["hidden-route-value", "first-record", "second-record"] {
         assert!(!rendered.contains(authored_value));
@@ -7522,15 +6120,15 @@ fn duplicate_routes_fail_before_artifact_generation() {
 #[test]
 fn production_refuses_a_digest_present_lock_without_module_source() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"revision-1"},
           "modules":[{"id":"missing-module","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],
-          "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create-only","fields":[
+          "recordTypes":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create-only","fields":[
             {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
           ]}],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect("project parses");
@@ -7551,14 +6149,14 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
 
 #[test]
 fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
-    let project_source = br#"{
+    let project_source = br#"{"datasets":[{"id": "neutral"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
       "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
       "package":{"sourceRevision":"revision-1"},
       "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"id":"neutral-authority","name":"Neutral Publisher"}},"publicService":{"id":"neutral-service","title":"Neutral service"},"datasets":[{"id":"neutral","title":"Neutral Dataset"}],"dataServices":[{"id":"neutral-api","title":"Neutral API","endpointUrl":"https://neutral.example.test","servesDatasets":["neutral"]}]},
       "modules":[{"id":"core","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]
     }"#;
-    let module_source = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[
+    let module_source = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[
         {"id":"alpha-record","primaryDataset":"neutral","route":"alpha-records","mutationMode":"create-only","fields":[
           {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
         ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]},
@@ -7606,11 +6204,11 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
 
 fn selector_project(fields: &str) -> Vec<u8> {
     format!(
-        r#"{{
+        r#"{{"datasets":[{{"id": "test-dataset"}}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"selector-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{
+          "recordTypes":[{{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[
               {{"id":"code","type":"string","maximumLength":32,"classification":"internal"}},
@@ -7620,8 +6218,8 @@ fn selector_project(fields: &str) -> Vec<u8> {
             "selectorProfiles":[{{"id":"by-code","fields":{fields}}}]
           }}],
           "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{{"entities":[{{
-              "rowBoundaries": "unrestricted", "entity":"record","operations":["get"],"readableFields":["code","area"]
+            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{{"records":[{{
+              "rowBoundaries": "unrestricted", "recordType":"record","operations":["get"],"readableFields":["code","area"]
             }}]}}
           }}]
         }}"#
@@ -7638,7 +6236,7 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
         .iter()
         .find(|item| item.code == "breg.selector-profile.fields-unknown")
         .unwrap_or_else(|| panic!("the unknown selector field is named: {failure:?}"));
-    assert_eq!(diagnostic.path, "entities[].selectorProfiles[].fields");
+    assert_eq!(diagnostic.path, "recordTypes[].selectorProfiles[].fields");
     assert!(
         diagnostic.message.contains("`missing-field`"),
         "{diagnostic:?}"
@@ -7682,17 +6280,17 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
 #[test]
 fn entity_classification_defaults_while_field_classification_stays_explicit() {
     let compiled = compile_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"record","operations":["get"],"readableFields":["code"],
+            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"record","operations":["get"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}
           }]
@@ -7709,11 +6307,11 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
     );
 
     let failure = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":32}]
           }]
@@ -7721,11 +6319,11 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
     )
     .expect_err("a field never inherits its classification from the entity");
     let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
+    assert_eq!(diagnostic.code, "config.missing-key");
     assert!(
         diagnostic
             .message
-            .contains("missing field `classification`"),
+            .contains("the required member `classification` is missing"),
         "{diagnostic:?}"
     );
 }
@@ -7753,10 +6351,10 @@ fn structured_root_arrays_preserve_schema_and_closed_nested_object_validation() 
         (json!({"type":"array"}), false),
         (json!({"type":"array","items":true}), false),
     ] {
-        let source = json!({
+        let source = json!({"datasets":[{"id": "test-dataset"}],
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"array-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-            "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
+            "recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[{"id":"codes","type":"structured","required":true,"classification":"internal","maximumBytes":512,"schema":schema}]}]
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -7942,16 +6540,7 @@ fn a_module_read_as_json_opens_with_the_same_header() {
 
     assert_eq!(
         refusals(headed(None, None).expect_err("a module without a header is refused")),
-        [
-            (
-                "breg.source.shape-invalid".to_owned(),
-                "module.apiVersion".to_owned()
-            ),
-            (
-                "breg.source.shape-invalid".to_owned(),
-                "module.kind".to_owned()
-            ),
-        ]
+        [("config.missing-envelope".to_owned(), "module".to_owned())]
     );
     assert_eq!(
         refusals(
@@ -7962,7 +6551,7 @@ fn a_module_read_as_json_opens_with_the_same_header() {
             .expect_err("another apiVersion is refused")
         ),
         [(
-            "breg.module.api-version-unsupported".to_owned(),
+            "config.unsupported-api-version".to_owned(),
             "module.apiVersion".to_owned()
         )]
     );
@@ -7971,10 +6560,7 @@ fn a_module_read_as_json_opens_with_the_same_header() {
             headed(Some(MODULE_API_VERSION), Some("BRegProject"))
                 .expect_err("another kind is refused")
         ),
-        [(
-            "breg.module.kind-unsupported".to_owned(),
-            "module.kind".to_owned()
-        )]
+        [("config.wrong-kind".to_owned(), "module.kind".to_owned())]
     );
 }
 
@@ -8036,19 +6622,19 @@ fn bounded_field_project(
     maximum_bytes: &str,
 ) -> Vec<u8> {
     let (fields, derived, inputs) = bounded_fields(minimum_length, maximum_length, maximum_bytes);
-    serde_json::to_vec(&json!({
+    serde_json::to_vec(&json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"field-bounds","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://registry.example.test/field-bounds"},
-        "entities":[{
+        "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
             "mutationMode":"mutable","fields":fields,"derived":derived
         }],
-        "actions":[{
+        "actions":[{"execution":{"mode":"immediate"},
             "id":"create-case-file","inputs":inputs,
-            "effects":[{"id":"case","target":{"entity":"case-file"},"operation":"create",
-                "set":{"case-code":{"fromField":"case-code"}}}]
+            "plan":{"type":"fixed","effects":[{"id":"case","target":{"recordType":"case-file"},"operation":"create",
+                "set":{"case-code":{"fromInput":"case-code"}}}]}
         }]
     }))
     .expect("the project serializes")
@@ -8064,15 +6650,15 @@ fn bounded_field_module(
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule",
         "id":"field-bounds","version":"1",
-        "entities":[{
+        "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
             "mutationMode":"mutable","fields":fields,"derived":derived
         }],
-        "extendEntities":[{"entity":"ledger","fields":fields,"derived":derived}],
-        "actions":[{
+        "extendRecordTypes":[{"recordType":"ledger","fields":fields,"derived":derived}],
+        "actions":[{"execution":{"mode":"immediate"},
             "id":"create-case-file","inputs":inputs,
-            "effects":[{"id":"case","target":{"entity":"case-file"},"operation":"create",
-                "set":{"case-code":{"fromField":"case-code"}}}]
+            "plan":{"type":"fixed","effects":[{"id":"case","target":{"recordType":"case-file"},"operation":"create",
+                "set":{"case-code":{"fromInput":"case-code"}}}]}
         }]
     }))
     .expect("the module serializes")
@@ -8174,19 +6760,19 @@ fn field_bounds_are_written_as_minimum_length_maximum_length_and_maximum_bytes()
     // The project is written back with the same members it was read from.
     let written = serde_json::to_value(&project).expect("the project serializes");
     assert_eq!(
-        written["entities"][0]["fields"][0]["minimumLength"],
+        written["recordTypes"][0]["fields"][0]["minimumLength"],
         json!(2)
     );
     assert_eq!(
-        written["entities"][0]["fields"][0]["maximumLength"],
+        written["recordTypes"][0]["fields"][0]["maximumLength"],
         json!(32)
     );
     assert_eq!(
-        written["entities"][0]["fields"][2]["maximumBytes"],
+        written["recordTypes"][0]["fields"][2]["maximumBytes"],
         json!(512)
     );
     assert_eq!(
-        written["entities"][0]["fields"][2]["schema"]["properties"]["label"]["maxLength"],
+        written["recordTypes"][0]["fields"][2]["schema"]["properties"]["label"]["maxLength"],
         json!(16),
         "a structured field's schema keeps its JSON Schema keywords"
     );
@@ -8211,9 +6797,9 @@ fn field_bounds_are_written_as_minimum_length_maximum_length_and_maximum_bytes()
 fn the_short_field_bound_names_are_refused_in_a_project_with_their_replacement_named() {
     let failure = parse_project_yaml(&bounded_field_project("minLength", "maxLength", "maxBytes"))
         .expect_err("a project that abbreviates its field bounds is refused");
-    let mut expected = retired_bounds("project.entities[0].fields", STORED_FIELD_BOUNDS);
+    let mut expected = retired_bounds("project.recordTypes[0].fields", STORED_FIELD_BOUNDS);
     expected.extend(retired_bounds(
-        "project.entities[0].derived[0].fields",
+        "project.recordTypes[0].derived[0].fields",
         &[(0, "maxLength")],
     ));
     expected.extend(retired_bounds(
@@ -8227,17 +6813,17 @@ fn the_short_field_bound_names_are_refused_in_a_project_with_their_replacement_n
 fn the_short_field_bound_names_are_refused_in_a_module_with_their_replacement_named() {
     let failure = parse_module_yaml(&bounded_field_module("minLength", "maxLength", "maxBytes"))
         .expect_err("a module that abbreviates its field bounds is refused");
-    let mut expected = retired_bounds("module.entities[0].fields", STORED_FIELD_BOUNDS);
+    let mut expected = retired_bounds("module.recordTypes[0].fields", STORED_FIELD_BOUNDS);
     expected.extend(retired_bounds(
-        "module.entities[0].derived[0].fields",
+        "module.recordTypes[0].derived[0].fields",
         &[(0, "maxLength")],
     ));
     expected.extend(retired_bounds(
-        "module.extendEntities[0].fields",
+        "module.extendRecordTypes[0].fields",
         STORED_FIELD_BOUNDS,
     ));
     expected.extend(retired_bounds(
-        "module.extendEntities[0].derived[0].fields",
+        "module.extendRecordTypes[0].derived[0].fields",
         &[(0, "maxLength")],
     ));
     expected.extend(retired_bounds(
@@ -8247,63 +6833,53 @@ fn the_short_field_bound_names_are_refused_in_a_module_with_their_replacement_na
     assert_retired_bounds_refused(&removed_key_refusals(&failure), expected);
 }
 
-/// One entity hook and one action handler, each tagged by `tag`.
-fn tagged_handlers(tag: &str) -> (Value, Value) {
+/// A hook handler tagged by the written union member.
+fn tagged_handlers(tag: &str) -> Value {
     let mut hook_handler = json!({"destinationId":"case-intake"});
     hook_handler[tag] = json!("url");
-    let mut action_handler = json!({
-        "script":"handlers/create-case-file.rhai","abi":"registry.action-handler/v1",
-        "writes":[{"id":"case","target":{"entity":"case-file"},"operation":"create",
-            "fields":["case-code"]}]
-    });
-    action_handler[tag] = json!("rhai");
-    (
-        json!([{"id":"notify-intake","phase":"after","trigger":"created",
-            "projection":["case-code"],"handler":hook_handler}]),
-        action_handler,
-    )
+    json!([{"id":"notify-intake","phase":"after","trigger":"created", "projection":["case-code"],"handler":hook_handler}])
 }
 
 fn tagged_handler_project(tag: &str) -> Vec<u8> {
-    let (hooks, handler) = tagged_handlers(tag);
-    serde_json::to_vec(&json!({
+    let hooks = tagged_handlers(tag);
+    serde_json::to_vec(&json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"handler-tags","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://registry.example.test/handler-tags"},
-        "entities":[{
+        "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
             "mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maximumLength":32,
                 "classification":"internal"}],
             "hooks":hooks
-        }],
-        "actions":[{"id":"create-case-file","inputs":[],"handler":handler}]
+        }]
     }))
     .expect("the project serializes")
 }
 
 fn tagged_handler_module(tag: &str) -> Vec<u8> {
-    let (hooks, handler) = tagged_handlers(tag);
+    let hooks = tagged_handlers(tag);
     serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule",
         "id":"handler-tags","version":"1",
-        "entities":[{
+        "recordTypes":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
             "mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maximumLength":32,
                 "classification":"internal"}],
             "hooks":hooks
         }],
-        "extendEntities":[{"entity":"ledger","hooks":hooks}],
-        "actions":[{"id":"create-case-file","inputs":[],"handler":handler}]
+        "extendRecordTypes":[{"recordType":"ledger","hooks":hooks}]
     }))
     .expect("the module serializes")
 }
 
 fn assert_handler_kind_refused(failure: &CompileFailure, expected: &[&str]) {
     let removed = removed_key_refusals(failure);
+    let mut expected = expected.to_vec();
+    expected.sort();
     assert_eq!(
         removed
             .iter()
@@ -8326,11 +6902,9 @@ fn a_handler_is_tagged_by_type_in_a_project_and_a_module() {
         .expect("a project that tags its handlers by `type` is read");
     let written = serde_json::to_value(&project).expect("the project serializes");
     assert_eq!(
-        written["entities"][0]["hooks"][0]["handler"],
+        written["recordTypes"][0]["hooks"][0]["handler"],
         json!({"type":"url","destinationId":"case-intake"})
     );
-    assert_eq!(written["actions"][0]["handler"]["type"], json!("rhai"));
-    assert!(written["actions"][0]["handler"].get("kind").is_none());
 
     parse_module_yaml(&tagged_handler_module("type"))
         .expect("a module that tags its handlers by `type` is read");
@@ -8340,13 +6914,7 @@ fn a_handler_is_tagged_by_type_in_a_project_and_a_module() {
 fn a_handler_tagged_by_kind_is_refused_in_a_project_with_its_replacement_named() {
     let failure = parse_project_yaml(&tagged_handler_project("kind"))
         .expect_err("a project that tags a handler by `kind` is refused");
-    assert_handler_kind_refused(
-        &failure,
-        &[
-            "project.actions[0].handler.kind",
-            "project.entities[0].hooks[0].handler.kind",
-        ],
-    );
+    assert_handler_kind_refused(&failure, &["project.recordTypes[0].hooks[0].handler.kind"]);
 }
 
 #[test]
@@ -8356,9 +6924,8 @@ fn a_handler_tagged_by_kind_is_refused_in_a_module_with_its_replacement_named() 
     assert_handler_kind_refused(
         &failure,
         &[
-            "module.actions[0].handler.kind",
-            "module.entities[0].hooks[0].handler.kind",
-            "module.extendEntities[0].hooks[0].handler.kind",
+            "module.recordTypes[0].hooks[0].handler.kind",
+            "module.extendRecordTypes[0].hooks[0].handler.kind",
         ],
     );
 }
@@ -8389,7 +6956,7 @@ fn consent_record_project(member: &str, value: Value) -> Vec<u8> {
         "kind":"BRegProject",
         "project":{"id":"consent-duration","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://registry.example.test/consent-duration"},
-        "entities":[consent_record_entity(member, value)]
+        "recordTypes":[consent_record_entity(member, value)]
     }))
     .expect("the project serializes")
 }
@@ -8399,7 +6966,7 @@ fn consent_record_module(member: &str, value: Value) -> Vec<u8> {
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule",
         "id":"consent-duration","version":"1",
-        "entities":[consent_record_entity(member, value)]
+        "recordTypes":[consent_record_entity(member, value)]
     }))
     .expect("the module serializes")
 }
@@ -8417,7 +6984,7 @@ fn a_consent_record_states_its_longest_duration_in_whole_days() {
     // The project is written back with the member it was read from.
     let written = serde_json::to_value(&project).expect("the project serializes");
     assert_eq!(
-        written["entities"][0]["consentRecord"]["validity"],
+        written["recordTypes"][0]["consentRecord"]["validity"],
         json!({"from":"effective-at","until":"expires-at","maximumDurationDays":365})
     );
 
@@ -8454,7 +7021,7 @@ fn the_iso_8601_consent_duration_is_refused_in_a_project_with_its_replacement_na
             .iter()
             .map(|(path, _)| path.as_str())
             .collect::<Vec<_>>(),
-        ["project.entities[0].consentRecord.validity.maxDuration"]
+        ["project.recordTypes[0].consentRecord.validity.maxDuration"]
     );
     assert!(
         removed[0].1.contains("`maximumDurationDays`"),
@@ -8478,7 +7045,7 @@ fn the_iso_8601_consent_duration_is_refused_in_a_module_with_its_replacement_nam
             .iter()
             .map(|(path, _)| path.as_str())
             .collect::<Vec<_>>(),
-        ["module.entities[0].consentRecord.validity.maxDuration"]
+        ["module.recordTypes[0].consentRecord.validity.maxDuration"]
     );
     assert!(
         removed[0].1.contains("`maximumDurationDays`"),
@@ -8592,12 +7159,11 @@ where
 #[test]
 fn an_enumerated_word_is_read_in_kebab_case_and_refused_in_snake_case() {
     use registry_breg::contract::{
-        ChangeRequestCurrentDatePredicateSource, ChangeRequestRetentionModeSource, EventTrigger,
-        LookupValueOrigin, ManifestProjectionDatasetStatus, MutationMode,
-        RequestMetadataFieldSource, ValidTimeRole, WebhookAuthenticationProfile,
+        CurrentDatePredicateSource, LookupValueOrigin, ManifestProjectionDatasetStatus,
+        MutationMode, ProposalRetentionMode, ValidTimeRole, WebhookAuthenticationProfile,
     };
     use registry_breg::model::{
-        ActionRouteKind, CompiledChangeRequestRetentionMode, CompiledCurrentDateRelation,
+        ActionRouteKind, CompiledCurrentDateRelation, CompiledProposalRetentionMode,
         CompiledQueryTemporalSemantics, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
     };
 
@@ -8612,19 +7178,15 @@ fn an_enumerated_word_is_read_in_kebab_case_and_refused_in_snake_case() {
         };
     }
     words! {
-        Operation: "submit-request", "revise-request", "cancel-request", "apply-request";
-        ChangeRequestOperation: "submit-request", "revise-request", "cancel-request", "apply-request";
         ComparisonOperator: "less-than", "less-than-or-equal", "greater-than", "greater-than-or-equal";
-        ChangeRequestCurrentDatePredicateSource: "on-or-after", "on-or-before";
+        CurrentDatePredicateSource: "on-or-after", "on-or-before";
         CompiledCurrentDateRelation: "on-or-after", "on-or-before";
-        ChangeRequestRetentionModeSource: "operator-erase";
-        CompiledChangeRequestRetentionMode: "operator-erase";
-        EventTrigger: "request-lifecycle";
+        ProposalRetentionMode: "operator-erase";
+        CompiledProposalRetentionMode: "operator-erase";
         MutationMode: "create-only";
         ValidTimeRole: "valid-from", "valid-to";
         LookupValueOrigin: "verified-claim";
         ManifestProjectionDatasetStatus: "under-development";
-        RequestMetadataFieldSource: "actor-reference", "review-state";
         WebhookAuthenticationProfile: "hmac-sha256-v1";
         ActionRouteKind: "target-conditions";
         CompiledQueryFilterOperator: "is-null", "is-not-null";
@@ -8637,11 +7199,7 @@ fn an_enumerated_word_is_read_in_kebab_case_and_refused_in_snake_case() {
 
 #[test]
 fn a_union_variant_is_named_in_kebab_case_and_refused_in_snake_case() {
-    use registry_breg::contract::{ChangeRequestSelectorSource, EventConditionSource};
-    use registry_breg::model::{
-        CompiledActionValue, CompiledChangeRequestEvidenceExpected,
-        CompiledChangeRequestPredicateExpected, CompiledChangeRequestSelector,
-    };
+    use registry_breg::model::CompiledPlanValue;
 
     fn check<T: serde::de::DeserializeOwned>(tag: &str, new: &str, rest: Value) {
         let name = std::any::type_name::<T>();
@@ -8686,41 +7244,8 @@ fn a_union_variant_is_named_in_kebab_case_and_refused_in_snake_case() {
     check::<UniqueWhenPredicate>("type", "field-is-null", json!({"field": "state"}));
     check::<UniqueWhenPredicate>("type", "field-is-not-null", json!({"field": "state"}));
     check::<UniqueWhenPredicate>("type", "active-lifecycle", json!({}));
-    check::<EventConditionSource>(
-        "type",
-        "request-lifecycle",
-        json!({"toStates": ["submitted"]}),
-    );
-    check::<ChangeRequestSelectorSource>("type", "request-field", json!({"field": "a"}));
-    check::<ChangeRequestSelectorSource>(
-        "type",
-        "target-field",
-        json!({"target": "a", "field": "b"}),
-    );
-    check::<CompiledChangeRequestSelector>("type", "request-field", json!({"field": "a"}));
-    check::<CompiledChangeRequestSelector>(
-        "type",
-        "target-field",
-        json!({"target": "a", "field": "b"}),
-    );
-    check::<CompiledChangeRequestPredicateExpected>("kind", "request-field", json!({"field": "a"}));
-    check::<CompiledChangeRequestPredicateExpected>(
-        "kind",
-        "current-date",
-        json!({"relation": "on-or-after"}),
-    );
-    check::<CompiledChangeRequestPredicateExpected>("kind", "at-least", json!({"value": 1}));
-    check::<CompiledChangeRequestPredicateExpected>("kind", "at-most", json!({"value": 1}));
-    check::<CompiledChangeRequestEvidenceExpected>("kind", "request-field", json!({"field": "a"}));
-    check::<CompiledChangeRequestTargetBinding>("kind", "reserved-create", json!({"effect": "a"}));
-    check::<CompiledChangeRequestValue>("kind", "from-field", json!({"field": "a"}));
-    check::<CompiledChangeRequestValue>(
-        "kind",
-        "from-effect",
-        json!({"effect": "a", "target_entity_id": "b"}),
-    );
-    check::<CompiledActionValue>("kind", "from-input", json!({"input": "a"}));
-    check::<CompiledActionValue>(
+    check::<CompiledPlanValue>("kind", "from-input", json!({"input": "a"}));
+    check::<CompiledPlanValue>(
         "kind",
         "from-effect",
         json!({"effect": "a", "target_entity_id": "b"}),
@@ -8731,9 +7256,7 @@ fn a_union_variant_is_named_in_kebab_case_and_refused_in_snake_case() {
 // or `afterIsNull`, and `null` is never a comparison literal.
 #[test]
 fn an_unset_value_is_stated_explicitly_and_a_null_literal_is_refused() {
-    use registry_breg::contract::{
-        ActionRequirementSource, ChangeRequestPredicateSource, EventConditionSource,
-    };
+    use registry_breg::contract::{ActionRequirementSource, EventConditionSource};
 
     fn reads<T: serde::de::DeserializeOwned + serde::Serialize>(document: Value) {
         let name = std::any::type_name::<T>();
@@ -8752,8 +7275,6 @@ fn an_unset_value_is_stated_explicitly_and_a_null_literal_is_refused() {
         );
     }
 
-    reads::<ChangeRequestPredicateSource>(json!({"field": "note", "isNull": true}));
-    reads::<ChangeRequestPredicateSource>(json!({"field": "note", "equals": "open"}));
     reads::<ActionRequirementSource>(json!({"input": "subject", "field": "note", "isNull": true}));
     reads::<ActionRequirementSource>(json!({"input": "subject", "field": "note", "equals": 3}));
     reads::<EventConditionSource>(json!({
@@ -8763,10 +7284,6 @@ fn an_unset_value_is_stated_explicitly_and_a_null_literal_is_refused() {
         "afterEquals": {"state": true}
     }));
 
-    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "equals": null}));
-    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "isNull": false}));
-    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "isNull": null}));
-    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "equals": ["open"]}));
     refuses::<ActionRequirementSource>(
         json!({"input": "subject", "field": "note", "equals": null}),
     );
@@ -8791,23 +7308,11 @@ fn an_unset_value_is_stated_explicitly_and_a_null_literal_is_refused() {
         written,
         json!({"type": "fields", "changed": [], "beforeEquals": {}, "afterEquals": {"state": "open"}})
     );
-    let predicate = serde_json::to_value(
-        serde_json::from_value::<ChangeRequestPredicateSource>(
-            json!({"field": "note", "equals": "open"}),
-        )
-        .expect("a predicate is read"),
-    )
-    .expect("a predicate serializes");
-    assert_eq!(predicate, json!({"field": "note", "equals": "open"}));
 }
 
 #[test]
 fn a_union_is_tagged_by_type_and_refused_under_its_earlier_tag() {
-    use registry_breg::contract::{
-        ChangeRequestReviewSource, ChangeRequestSelectorSource, EventConditionSource,
-    };
-    use registry_breg::model::{CompiledChangeRequestReview, CompiledChangeRequestSelector};
-
+    use registry_breg::contract::EventConditionSource;
     fn check<T: serde::de::DeserializeOwned>(earlier: &str, word: &str, rest: Value) {
         let name = std::any::type_name::<T>();
         let document = |tag: &str| {
@@ -8853,59 +7358,6 @@ fn a_union_is_tagged_by_type_and_refused_under_its_earlier_tag() {
     check::<UniqueWhenPredicate>("kind", "field-is-not-null", json!({"field": "state"}));
     check::<UniqueWhenPredicate>("kind", "active-lifecycle", json!({}));
     check::<EventConditionSource>("kind", "fields", json!({"changed": ["state"]}));
-    check::<EventConditionSource>(
-        "kind",
-        "request-lifecycle",
-        json!({"toStates": ["submitted"]}),
-    );
-    check::<ChangeRequestSelectorSource>("source", "request-field", json!({"field": "a"}));
-    check::<ChangeRequestSelectorSource>(
-        "source",
-        "target-field",
-        json!({"target": "a", "field": "b"}),
-    );
-    check::<CompiledChangeRequestSelector>("source", "request-field", json!({"field": "a"}));
-    check::<CompiledChangeRequestSelector>(
-        "source",
-        "target-field",
-        json!({"target": "a", "field": "b"}),
-    );
-    // A review named its form by the members present: `mode`, or `authority`
-    // with `policyId`.
-    check::<ChangeRequestReviewSource>("mode", "none", json!({}));
-    check::<CompiledChangeRequestReview>("mode", "none", json!({}));
-    let required = json!({"authority": "casework-main", "policyId": "correction-review"});
-    for (name, read) in [
-        (
-            "ChangeRequestReviewSource",
-            (|value| serde_json::from_value::<ChangeRequestReviewSource>(value).map(|_| ()))
-                as fn(Value) -> serde_json::Result<()>,
-        ),
-        ("CompiledChangeRequestReview", |value| {
-            serde_json::from_value::<CompiledChangeRequestReview>(value).map(|_| ())
-        }),
-    ] {
-        let mut tagged = required.clone();
-        tagged["type"] = json!("required");
-        if let Err(error) = read(tagged) {
-            panic!("{name} reads `type: required`: {error}");
-        }
-        let Err(error) = read(required.clone()) else {
-            panic!("{name} refuses a review with no `type`");
-        };
-        assert!(
-            error.to_string().contains("`type`"),
-            "{name} names `type` when it refuses a review without one: {error}"
-        );
-    }
-    assert_eq!(
-        serde_json::to_value(
-            serde_json::from_value::<CompiledChangeRequestReview>(json!({"type": "none"}))
-                .expect("the compiled review reads `type: none`")
-        )
-        .expect("the compiled review serializes"),
-        json!({"type": "none"})
-    );
 }
 
 #[test]
@@ -8913,8 +7365,7 @@ fn an_identifier_is_read_in_the_local_grammar_and_refused_outside_it() {
     use registry_breg::action_evidence_contracts::{ActionEvidenceSource, EvidenceProviderSource};
     use registry_breg::contract::{
         AccessLogSource, ActionEffectSource, ActionHandlerWriteSource, ActionInputSource,
-        ActionSource, AttachmentSlotSource, ChangeRequestEffectSource, ChangeRequestEvidenceSource,
-        ChangeRequestGuardTargetSource, DerivedFieldSource, DerivedSource, EntitySource,
+        ActionSource, AttachmentSlotSource, DerivedFieldSource, DerivedSource, EntitySource,
         EventConditionSource, FieldSource, HookSource, IndexSource, LookupPermissionSource,
         ManifestProjectionApplicationProfileSource, ManifestProjectionDataServiceSource,
         ManifestProjectionDatasetSource, ManifestProjectionDistributionSource,
@@ -8966,9 +7417,6 @@ fn an_identifier_is_read_in_the_local_grammar_and_refused_outside_it() {
         ActionInputSource,
         ActionSource,
         AttachmentSlotSource,
-        ChangeRequestEffectSource,
-        ChangeRequestEvidenceSource,
-        ChangeRequestGuardTargetSource,
         DerivedFieldSource,
         DerivedSource,
         EntitySource,
@@ -9007,7 +7455,6 @@ fn an_identifier_is_read_in_the_local_grammar_and_refused_outside_it() {
 
     check::<AccessLogSource>(|id| json!({"exemptions": {id: {}}}));
     check::<ActionEffectSource>(|id| json!({"set": {id: {}}}));
-    check::<ChangeRequestEffectSource>(|id| json!({"set": {id: {}}}));
     check::<EventConditionSource>(|id| json!({"type": "fields", "beforeEquals": {id: true}}));
     check::<EventConditionSource>(|id| json!({"type": "fields", "afterEquals": {id: true}}));
     check::<LookupPermissionSource>(|id| json!({"claimMapping": {id: "claim"}}));

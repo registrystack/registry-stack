@@ -1,5 +1,24 @@
 contract: registry.evidence.security-test-traceability/v1
 entries:
+  - id: sec-target-authority-atomic-activation
+    tests:
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_idempotent_and_keeps_durable_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: activation_retry_requires_durable_state_and_parent_entries}
+      - {file: crates/registry-evidence/src/authority.rs, name: invalid_or_out_of_ceiling_authority_never_replaces_active_snapshot}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_serializes_concurrent_writers}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_snapshot_is_process_pinned_and_package_bound}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_storage_rejects_symlinks_and_unsafe_permissions}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_reader_rejects_old_envelopes_and_duplicate_members}
+  - id: sec-target-grant-ceilings
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: target_audience_ceiling_refuses_before_source_effects}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: release_audit_binds_activated_authority_revision_and_effective_grants}
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_authority_binding_is_complete_and_coherent_across_phases}
+      - {file: crates/registry-evidence/src/authority.rs, name: target_grants_cannot_widen_any_definition_ceiling}
+      - {file: crates/registry-evidence/src/source.rs, name: normalized_source_plans_compile_without_grants_and_after_target_narrowing}
+      - {file: crates/registry-evidence/src/source.rs, name: connected_sources_keep_package_and_target_concurrency_ceilings}
+      - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}
+      - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
   - id: sec-oid4vci-offer-request-contract
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: selector_values_outside_the_published_contract_create_no_exchange}
@@ -22,6 +41,7 @@ entries:
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_is_deterministic_and_profile_valid}
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_never_advertises_impossible_capability_combinations}
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_preserves_evidence_type_profile_correlation}
+      - {file: crates/registry-evidence/src/discovery.rs, name: provider_publication_never_exceeds_definition_representations}
       - {file: crates/registry-evidence/src/discovery.rs, name: every_maintained_acceptance_bundle_publishes_exact_valid_bytes}
       - {file: crates/registry-evidence/src/config.rs, name: publication_public_text_matches_shared_profile_and_schema_and_always_renders}
       - {file: crates/registry-evidence/src/config.rs, name: publication_uri_bounds_count_unicode_characters_and_always_render}
@@ -34,7 +54,9 @@ entries:
       - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks}
       - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
-      - {file: crates/registry-evidence/src/bundle.rs, name: strict_assurance_rejects_partial_fixture_suites}
+      - {file: crates/registry-evidence/src/bundle.rs, name: fixture_coverage_follows_bundle_assurance_profile}
+      - {file: crates/registry-evidence/src/fixture.rs, name: focused_coverage_is_local_only}
+      - {file: crates/registry-evidence/src/fixture.rs, name: focused_local_coverage_preserves_structural_and_private_refusals}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
   - id: sec-admission-clients-and-scopes
     tests:
@@ -52,7 +74,9 @@ entries:
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}
   - id: sec-unknown-or-disabled-requirement
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: configuration_revision_pin_precedes_authority_and_uri_only_uses_active_revision}
   - id: sec-caller-query-material-rejected
     tests:
       - {file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}
@@ -83,7 +107,9 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: invalid_grant_refusal_keeps_only_a_valid_identifier_pseudonym}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
   - id: sec-selector-possession-no-authority
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: configuration_revision_pin_precedes_authority_and_uri_only_uses_active_revision}
   - id: sec-caller-grant-reference-rejected
     tests: [{file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}]
   - id: sec-selector-shape-not-callable
@@ -168,8 +194,10 @@ entries:
     tests: [{file: crates/registry-evidence/src/binding.rs, name: every_subject_binding_scope_component_is_cryptographically_bound}]
   - id: sec-runtime-bundle-mutation-absent
     tests:
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_snapshot_is_process_pinned_and_package_bound}
       - {file: crates/registry-evidence/src/bundle.rs, name: package_digest_binds_paths_and_exact_bytes_deterministically}
-      - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
+      - {file: crates/registry-evidence/src/bundle.rs, name: authority_activation_package_loading_honors_the_runtime_expected_digest}
+      - {file: crates/registry-evidence/src/bundle.rs, name: definition_projection_excludes_connection_bindings_and_covers_selected_behavior}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_package_capture}
   - id: sec-mutually-distrustful-configuration
     tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]

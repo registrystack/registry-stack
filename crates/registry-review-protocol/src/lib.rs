@@ -1,4 +1,4 @@
-//! Runtime-free wire contract between review producers and Registry Casework.
+//! Runtime-free wire contract between review producers and review providers.
 //!
 //! This crate deliberately contains no policy evaluator, persistence, HTTP
 //! client, source adapter, credential, or business-operation implementation.
@@ -17,12 +17,18 @@ pub const MAXIMUM_IDENTIFIER_BYTES: usize = 128;
 pub const MAXIMUM_REFERENCE_BYTES: usize = 256;
 pub const MAXIMUM_CONTEXT_BYTES: usize = 64 * 1024;
 pub const MAXIMUM_RESULT_BYTES: usize = 16 * 1024;
+/// Upper bound for the reason a decision gives the subject's owner, matching
+/// the bound Casework keeps on the private reason a reviewer records.
+pub const MAXIMUM_PUBLIC_REASON_BYTES: usize = 2_000;
 pub const MAXIMUM_JSON_DEPTH: usize = 32;
 pub const MAXIMUM_JSON_NODES: usize = 4096;
 pub const MAXIMUM_PORTABLE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const REVIEW_REQUESTS_PATH: &str = "/v1/review-requests";
 pub const REVIEW_RESULTS_FEED_PATH: &str = "/v1/review-results";
 pub const REVIEW_COMPLETIONS_PATH: &str = "/v1/review-completions";
+pub const REVIEW_PROFILE_HEADER: &str = "registry-review-profile";
+pub const REVIEW_VALIDATION_PATH_HEADER: &str = "registry-review-validation-path";
+pub const REVIEW_VALIDATION_REASON_HEADER: &str = "registry-review-validation-reason";
 
 #[must_use]
 pub fn review_request_path(request_id: Uuid) -> String {
@@ -41,6 +47,16 @@ pub fn review_cancel_path(request_id: Uuid) -> String {
 
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ContentDigest(String);
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ContentDigest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ContentDigest".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type":"string","pattern":"^sha256:[0-9a-f]{64}$","minLength":71,"maxLength":71})
+    }
+}
 
 impl ContentDigest {
     pub fn parse(value: &str) -> Result<Self, ProtocolError> {
@@ -109,6 +125,7 @@ impl<'de> Deserialize<'de> for ContentDigest {
 pub type SubmissionDigest = ContentDigest;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBinding {
     pub source: String,
@@ -129,6 +146,7 @@ impl SubjectBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PolicyBinding {
     pub id: String,
@@ -136,7 +154,83 @@ pub struct PolicyBinding {
     pub digest: ContentDigest,
 }
 
+/// Select the trusted provider's current policy, or require one exact binding.
+/// The selector stays in the submission identity; acceptance records the concrete binding.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", schemars(extend("dependentRequired" = {"version": ["digest"], "digest": ["version"]})))]
+pub struct PolicySelection {
+    pub id: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_pin",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub version: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_pin",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "ContentDigest"))]
+    pub digest: Option<ContentDigest>,
+}
+
+fn deserialize_present_pin<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl PolicySelection {
+    pub fn current(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: None,
+            digest: None,
+        }
+    }
+
+    pub fn check(&self) -> Result<(), ProtocolError> {
+        check_bounded_text(&self.id, MAXIMUM_IDENTIFIER_BYTES)?;
+        match (&self.version, &self.digest) {
+            (None, None) => Ok(()),
+            (Some(version), Some(_)) => check_bounded_text(version, MAXIMUM_IDENTIFIER_BYTES),
+            _ => Err(ProtocolError::PolicySelection),
+        }
+    }
+
+    /// An omitted pin delegates version selection, never policy identity or authority.
+    pub fn matches(&self, binding: &PolicyBinding) -> bool {
+        self.check().is_ok()
+            && binding.check().is_ok()
+            && self.id == binding.id
+            && match (&self.version, &self.digest) {
+                (None, None) => true,
+                (Some(version), Some(digest)) => {
+                    version == &binding.version && digest == &binding.digest
+                }
+                _ => false,
+            }
+    }
+}
+
+impl From<PolicyBinding> for PolicySelection {
+    fn from(binding: PolicyBinding) -> Self {
+        Self {
+            id: binding.id,
+            version: Some(binding.version),
+            digest: Some(binding.digest),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HumanIdentity {
     pub issuer: String,
@@ -151,6 +245,7 @@ impl HumanIdentity {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceContextBinding {
     pub reference: String,
@@ -170,15 +265,21 @@ impl PolicyBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
-    tag = "strategy",
+    tag = "mode",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
 pub enum ReviewContext {
-    Submitted { snapshot: Value },
-    Source { binding: SourceContextBinding },
+    Submitted {
+        #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_CONTEXT_BYTES,"x-maximum-json-depth"=MAXIMUM_JSON_DEPTH,"x-maximum-json-nodes"=MAXIMUM_JSON_NODES)))]
+        snapshot: Value,
+    },
+    CurrentSource {
+        binding: SourceContextBinding,
+    },
 }
 
 impl ReviewContext {
@@ -192,16 +293,17 @@ impl ReviewContext {
                     return Err(ProtocolError::ContextTooLarge);
                 }
             }
-            Self::Source { binding } => binding.check()?,
+            Self::CurrentSource { binding } => binding.check()?,
         }
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCreateRequest {
-    pub kind: String,
+    pub policy: PolicySelection,
     pub subject: SubjectBinding,
     pub requester_reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,6 +314,7 @@ pub struct ReviewCreateRequest {
         deserialize_with = "deserialize_present_value",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_RESULT_BYTES)))]
     pub result_constraints: Option<Value>,
 }
 
@@ -226,7 +329,7 @@ where
 
 impl ReviewCreateRequest {
     pub fn check(&self) -> Result<(), ProtocolError> {
-        check_bounded_text(&self.kind, MAXIMUM_IDENTIFIER_BYTES)?;
+        self.policy.check()?;
         check_bounded_text(&self.requester_reference, MAXIMUM_REFERENCE_BYTES)?;
         if let Some(initiator) = &self.initiator {
             initiator.check()?;
@@ -249,6 +352,7 @@ impl ReviewCreateRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionIdentity<'a> {
     pub producer: &'a str,
@@ -273,6 +377,7 @@ pub fn submission_digest(
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequestAccepted {
     pub request_id: Uuid,
@@ -282,6 +387,7 @@ pub struct ReviewRequestAccepted {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewRequestLifecycle {
     Reviewing,
@@ -294,6 +400,7 @@ pub enum ReviewRequestLifecycle {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequestView {
     pub request_id: Uuid,
@@ -309,6 +416,7 @@ pub struct ReviewRequestView {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewResultStatus {
     Approved,
@@ -320,6 +428,7 @@ pub enum ReviewResultStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResult {
     pub result_id: Uuid,
@@ -330,7 +439,14 @@ pub struct ReviewResult {
     pub status: ReviewResultStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// Text the decision gives for release to the subject's owner. It is
+    /// distinct from the reviewer's private reason, which never leaves
+    /// Casework.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+    pub public_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_RESULT_BYTES)))]
     pub result: Option<Value>,
     pub completed_at: DateTime<Utc>,
     pub available_until: DateTime<Utc>,
@@ -351,6 +467,9 @@ impl ReviewResult {
         if let Some(outcome) = &self.outcome {
             check_bounded_text(outcome, MAXIMUM_IDENTIFIER_BYTES)?;
         }
+        if let Some(public_reason) = &self.public_reason {
+            check_public_reason(public_reason)?;
+        }
         if let Some(result) = &self.result {
             if !result.is_object() {
                 return Err(ProtocolError::ResultShape);
@@ -359,15 +478,21 @@ impl ReviewResult {
                 return Err(ProtocolError::ResultTooLarge);
             }
         }
+        // Every decided status names the policy outcome that settled it; a
+        // closed request was never decided, so it carries no decision text.
         match self.status {
-            ReviewResultStatus::Approved
-            | ReviewResultStatus::Cancelled
-            | ReviewResultStatus::Superseded
-                if self.outcome.is_some() || self.result.is_some() =>
+            ReviewResultStatus::Cancelled | ReviewResultStatus::Superseded
+                if self.outcome.is_some()
+                    || self.public_reason.is_some()
+                    || self.result.is_some() =>
             {
                 Err(ProtocolError::TerminalPayload)
             }
-            ReviewResultStatus::Rejected
+            ReviewResultStatus::Approved if self.result.is_some() => {
+                Err(ProtocolError::TerminalPayload)
+            }
+            ReviewResultStatus::Approved
+            | ReviewResultStatus::Rejected
             | ReviewResultStatus::ChangesRequested
             | ReviewResultStatus::Answered
                 if self.outcome.is_none() =>
@@ -380,6 +505,7 @@ impl ReviewResult {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResultFeedEntry {
     pub event_id: Uuid,
@@ -389,6 +515,7 @@ pub struct ReviewResultFeedEntry {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResultFeedPage {
     pub items: Vec<ReviewResultFeedEntry>,
@@ -417,6 +544,7 @@ impl ReviewResultLookup {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCancelRequest {
     pub subject: SubjectBinding,
@@ -431,6 +559,7 @@ impl ReviewCancelRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "outcome",
     rename_all = "kebab-case",
@@ -443,6 +572,7 @@ pub enum ReviewCancelResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCompletion {
     #[serde(rename = "type")]
@@ -454,6 +584,7 @@ pub struct ReviewCompletion {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReviewCompletionType {
     #[serde(rename = "review.completed")]
     ReviewCompleted,
@@ -501,6 +632,11 @@ fn check_json_complexity(value: &Value) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// Checks the text a decision gives for release to the subject's owner.
+pub fn check_public_reason(value: &str) -> Result<(), ProtocolError> {
+    check_bounded_text(value, MAXIMUM_PUBLIC_REASON_BYTES).map_err(|_| ProtocolError::PublicReason)
+}
+
 fn check_bounded_text(value: &str, maximum: usize) -> Result<(), ProtocolError> {
     if value.trim().is_empty() || value.len() > maximum || value.chars().any(char::is_control) {
         Err(ProtocolError::Text)
@@ -511,6 +647,8 @@ fn check_bounded_text(value: &str, maximum: usize) -> Result<(), ProtocolError> 
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ProtocolError {
+    #[error("a policy pin requires both version and digest")]
+    PolicySelection,
     #[error("digest must be a lowercase sha256 digest")]
     Digest,
     #[error("a required text value is empty, unbounded, or contains controls")]
@@ -533,6 +671,10 @@ pub enum ProtocolError {
     JsonIntegerRange,
     #[error("the terminal status does not permit the supplied outcome or result")]
     TerminalPayload,
+    #[error(
+        "publicReason must be non-blank text of at most 2000 UTF-8 bytes without control characters"
+    )]
+    PublicReason,
     #[error("result availability must end after completion")]
     Availability,
     #[error("a correlation identifier cannot be the nil UUID")]
@@ -550,7 +692,12 @@ mod tests {
 
     fn request() -> ReviewCreateRequest {
         ReviewCreateRequest {
-            kind: "registry-correction".to_owned(),
+            policy: PolicyBinding {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"policy"),
+            }
+            .into(),
             subject: SubjectBinding {
                 source: "registry".to_owned(),
                 subject_type: "change-request".to_owned(),
@@ -563,13 +710,105 @@ mod tests {
                 issuer: "https://issuer.example".to_owned(),
                 subject: "person-2".to_owned(),
             }),
-            context: ReviewContext::Source {
+            context: ReviewContext::CurrentSource {
                 binding: SourceContextBinding {
                     reference: "proposal-7".to_owned(),
                 },
             },
             result_constraints: None,
         }
+    }
+
+    #[test]
+    fn policy_selection_freezes_the_original_selector_in_submission_identity() {
+        let strict = request();
+        let binding = PolicyBinding {
+            id: strict.policy.id.clone(),
+            version: "1".into(),
+            digest: ContentDigest::for_bytes(b"policy"),
+        };
+        let mut current = strict.clone();
+        current.policy = PolicySelection::current(&binding.id);
+        assert_eq!(
+            serde_json::to_value(&current.policy).unwrap(),
+            json!({"id": binding.id})
+        );
+        assert!(current.check().is_ok());
+        assert!(current.policy.matches(&binding));
+        assert_ne!(
+            submission_digest("producer", "registry", &current).unwrap(),
+            submission_digest("producer", "registry", &strict).unwrap()
+        );
+        let mut changed = binding.clone();
+        changed.version = "2".into();
+        changed.digest = ContentDigest::for_bytes(b"next policy");
+        assert!(current.policy.matches(&changed));
+        assert!(!strict.policy.matches(&changed));
+        changed.id = "another-policy".into();
+        assert!(!current.policy.matches(&changed));
+        for partial in [
+            json!({"id": "review", "version": "1"}),
+            json!({"id": "review", "digest": binding.digest}),
+        ] {
+            let partial: PolicySelection = serde_json::from_value(partial).unwrap();
+            assert_eq!(partial.check(), Err(ProtocolError::PolicySelection));
+            assert!(!partial.matches(&binding));
+        }
+        for invalid in [
+            json!({"id":"review","version":null}),
+            json!({"id":"review","digest":null}),
+            json!({"id":"review","pin":{}}),
+        ] {
+            assert!(serde_json::from_value::<PolicySelection>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn expected_policy_is_required_and_changes_submission_identity() {
+        let original = request();
+        let value = serde_json::to_value(&original).unwrap();
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("policy");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(missing.clone()).is_err());
+        missing["kind"] = json!(original.policy.id);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(missing).is_err());
+        let mut unknown = value.clone();
+        unknown["kind"] = json!(original.policy.id);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(unknown).is_err());
+        let mut unknown_policy_field = value.clone();
+        unknown_policy_field["policy"]["other"] = json!(true);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(unknown_policy_field).is_err());
+
+        let digest = submission_digest("producer-a", "registry", &original).unwrap();
+        for (field, changed) in [
+            ("id", json!("other-policy")),
+            ("version", json!("2")),
+            ("digest", json!(ContentDigest::for_bytes(b"changed-policy"))),
+        ] {
+            let mut changed_value = value.clone();
+            changed_value["policy"][field] = changed;
+            let changed: ReviewCreateRequest = serde_json::from_value(changed_value).unwrap();
+            assert_ne!(
+                submission_digest("producer-a", "registry", &changed).unwrap(),
+                digest,
+                "submission digest must bind policy {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_request_validates_the_complete_policy_binding() {
+        for field in ["id", "version"] {
+            for invalid in [String::new(), "x".repeat(MAXIMUM_IDENTIFIER_BYTES + 1)] {
+                let mut value = serde_json::to_value(request()).unwrap();
+                value["policy"][field] = json!(invalid);
+                let request: ReviewCreateRequest = serde_json::from_value(value).unwrap();
+                assert!(request.check().is_err(), "invalid policy {field}");
+            }
+        }
+        let mut value = serde_json::to_value(request()).unwrap();
+        value["policy"]["digest"] = json!("not-a-digest");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(value).is_err());
     }
 
     #[test]
@@ -637,7 +876,11 @@ mod tests {
         assert_eq!(explicit_null.result_constraints, Some(Value::Null));
 
         let omitted: ReviewCreateRequest = serde_json::from_value(json!({
-            "kind": "registry-correction",
+            "policy": {
+                "id": "registry-correction",
+                "version": "1",
+                "digest": ContentDigest::for_bytes(b"policy").to_string()
+            },
             "subject": {
                 "source": "registry",
                 "type": "change-request",
@@ -647,7 +890,7 @@ mod tests {
             },
             "requesterReference": "source-request-7",
             "context": {
-                "strategy": "source",
+                "mode": "current-source",
                 "binding": {"reference": "proposal-7"}
             }
         }))
@@ -655,10 +898,9 @@ mod tests {
         assert_eq!(omitted.result_constraints, None);
     }
 
-    #[test]
-    fn approved_result_cannot_carry_a_custom_outcome_or_payload() {
+    fn decided_result(status: ReviewResultStatus, outcome: Option<&str>) -> ReviewResult {
         let completed_at = Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap();
-        let result = ReviewResult {
+        ReviewResult {
             result_id: Uuid::from_u128(0x1),
             request_id: Uuid::nil(),
             subject: request().subject,
@@ -668,13 +910,84 @@ mod tests {
                 digest: ContentDigest::for_bytes(b"policy"),
             },
             submission_digest: ContentDigest::for_bytes(b"submission"),
-            status: ReviewResultStatus::Approved,
-            outcome: Some("approved".to_owned()),
-            result: Some(json!({"approved": true})),
+            status,
+            outcome: outcome.map(str::to_owned),
+            public_reason: None,
+            result: None,
             completed_at,
             available_until: completed_at + chrono::Duration::days(30),
-        };
+        }
+    }
+
+    #[test]
+    fn approved_result_names_its_outcome_but_carries_no_payload() {
+        let mut result = decided_result(ReviewResultStatus::Approved, Some("approved"));
+        assert!(result.check().is_ok());
+        result.result = Some(json!({"approved": true}));
         assert_eq!(result.check(), Err(ProtocolError::TerminalPayload));
+    }
+
+    #[test]
+    fn every_decided_result_requires_an_outcome() {
+        for status in [
+            ReviewResultStatus::Approved,
+            ReviewResultStatus::Rejected,
+            ReviewResultStatus::ChangesRequested,
+            ReviewResultStatus::Answered,
+        ] {
+            assert_eq!(
+                decided_result(status, None).check(),
+                Err(ProtocolError::TerminalPayload),
+                "{status:?}"
+            );
+            assert!(decided_result(status, Some("outcome")).check().is_ok());
+        }
+    }
+
+    #[test]
+    fn closed_results_carry_no_outcome_or_public_reason() {
+        for status in [
+            ReviewResultStatus::Cancelled,
+            ReviewResultStatus::Superseded,
+        ] {
+            assert!(decided_result(status, None).check().is_ok());
+            assert_eq!(
+                decided_result(status, Some("approved")).check(),
+                Err(ProtocolError::TerminalPayload)
+            );
+            let mut result = decided_result(status, None);
+            result.public_reason = Some("Closed by the producer.".to_owned());
+            assert_eq!(result.check(), Err(ProtocolError::TerminalPayload));
+        }
+    }
+
+    #[test]
+    fn decided_results_carry_a_bounded_public_reason() {
+        let mut result = decided_result(ReviewResultStatus::Rejected, Some("rejected"));
+        result.public_reason = Some("The submitted address could not be verified.".to_owned());
+        assert!(result.check().is_ok());
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["publicReason"],
+            json!("The submitted address could not be verified.")
+        );
+        result.public_reason = Some("x".repeat(MAXIMUM_PUBLIC_REASON_BYTES));
+        assert!(result.check().is_ok());
+        for refused in [
+            "x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1),
+            "   ".to_owned(),
+            "line\u{0}break".to_owned(),
+        ] {
+            result.public_reason = Some(refused);
+            assert_eq!(result.check(), Err(ProtocolError::PublicReason));
+        }
+        assert!(ProtocolError::PublicReason
+            .to_string()
+            .contains(&MAXIMUM_PUBLIC_REASON_BYTES.to_string()));
+        result.public_reason = None;
+        assert!(serde_json::to_value(&result)
+            .unwrap()
+            .get("publicReason")
+            .is_none());
     }
 
     #[test]
@@ -692,6 +1005,7 @@ mod tests {
             submission_digest: ContentDigest::for_bytes(b"submission"),
             status: ReviewResultStatus::ChangesRequested,
             outcome: None,
+            public_reason: None,
             result: None,
             completed_at,
             available_until: completed_at + chrono::Duration::days(30),
@@ -713,7 +1027,8 @@ mod tests {
             },
             submission_digest: ContentDigest::for_bytes(b"submission"),
             status: ReviewResultStatus::Approved,
-            outcome: None,
+            outcome: Some("approved".to_owned()),
+            public_reason: None,
             result: None,
             completed_at,
             available_until: completed_at + chrono::Duration::days(30),
@@ -739,6 +1054,7 @@ mod tests {
                 submission_digest: ContentDigest::for_bytes(b"submission"),
                 status: ReviewResultStatus::ChangesRequested,
                 outcome: Some("needs-correction".to_owned()),
+                public_reason: None,
                 result: Some(payload),
                 completed_at,
                 available_until: completed_at + chrono::Duration::days(30),
@@ -796,6 +1112,7 @@ mod tests {
             submission_digest: submission_digest("producer", "registry", &request()).unwrap(),
             status: ReviewResultStatus::Cancelled,
             outcome: None,
+            public_reason: None,
             result: None,
             completed_at: Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap(),
             available_until: Utc.with_ymd_and_hms(2026, 9, 20, 0, 0, 0).unwrap(),
@@ -857,5 +1174,70 @@ mod tests {
         }
         .check()
         .is_ok());
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn schemas_follow_the_wire_shape() {
+        let digest = serde_json::to_value(schemars::schema_for!(ContentDigest)).unwrap();
+        assert_eq!(digest["type"], "string");
+        assert_eq!(digest["pattern"], "^sha256:[0-9a-f]{64}$");
+
+        let create = serde_json::to_value(schemars::schema_for!(ReviewCreateRequest)).unwrap();
+        assert_eq!(create["additionalProperties"], false);
+        let required = create["required"].as_array().unwrap();
+        for field in ["policy", "subject", "requesterReference", "context"] {
+            assert!(required.contains(&json!(field)), "{field} is not required");
+        }
+        assert!(!required.contains(&json!("initiator")));
+        assert!(!required.contains(&json!("resultConstraints")));
+
+        let result = serde_json::to_value(schemars::schema_for!(ReviewResult)).unwrap();
+        let status = &result["$defs"]["ReviewResultStatus"];
+        assert_eq!(
+            status["enum"],
+            json!([
+                "approved",
+                "rejected",
+                "changes-requested",
+                "answered",
+                "cancelled",
+                "superseded"
+            ])
+        );
+
+        let cancel = serde_json::to_value(schemars::schema_for!(ReviewCancelResponse)).unwrap();
+        let outcomes: Vec<_> = cancel["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|branch| branch["properties"]["outcome"]["const"].clone())
+            .collect();
+        assert_eq!(outcomes, [json!("cancelled"), json!("already-terminal")]);
+    }
+}
+
+#[cfg(test)]
+mod policy_binding_tests {
+    use super::*;
+    #[test]
+    fn expected_policy_is_required_and_old_kind_or_strategy_wire_is_refused() {
+        let value = serde_json::json!({"policy":{"id":"review","version":"1","digest":ContentDigest::for_bytes(b"policy")},"subject":{"source":"source","type":"subject","id":"1","version":"1","digest":ContentDigest::for_bytes(b"subject")},"requesterReference":"request","context":{"mode":"submitted","snapshot":{}}});
+        let request: ReviewCreateRequest = serde_json::from_value(value.clone()).unwrap();
+        request.check().unwrap();
+        let mut retired = value.clone();
+        retired.as_object_mut().unwrap().remove("policy");
+        retired["kind"] = serde_json::json!("review");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(retired).is_err());
+        let mut retired = value;
+        retired["context"] = serde_json::json!({"strategy":"submitted","snapshot":{}});
+        assert!(serde_json::from_value::<ReviewCreateRequest>(retired).is_err());
+        let original = submission_digest("producer", "source", &request).unwrap();
+        let mut changed = request;
+        changed.policy.version = Some("2".into());
+        assert_ne!(
+            original,
+            submission_digest("producer", "source", &changed).unwrap()
+        );
     }
 }

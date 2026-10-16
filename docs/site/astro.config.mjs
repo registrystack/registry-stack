@@ -70,9 +70,11 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasRender = Boolean(selectedDocset.products?.['registry-render']);
   const hasMessaging = Boolean(selectedDocset.products?.['registry-messaging']);
   const hasBregServices = Boolean(selectedDocset.products?.['registry-breg-services']);
+  const hasCoordinator = Boolean(selectedDocset.products?.['registry-coordinator']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   const currentHasMessaging = Boolean(currentDocset.products?.['registry-messaging']);
+  const currentHasCoordinator = Boolean(currentDocset.products?.['registry-coordinator']);
   /** @param {string} path */
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */
@@ -93,7 +95,9 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasRender,
     hasMessaging,
     hasBregServices,
+    hasCoordinator,
     currentHasMessaging,
+    currentHasCoordinator,
     selectedDocset,
     internalRedirect,
     currentDocsetRedirect,
@@ -111,7 +115,9 @@ const {
   hasRender,
   hasMessaging,
   hasBregServices,
+  hasCoordinator,
   currentHasMessaging,
+  currentHasCoordinator,
   selectedDocset,
   internalRedirect,
   currentDocsetRedirect,
@@ -140,7 +146,7 @@ const disabledSitemap = {
 };
 const caseworkOpenApiSchema = {
   base: 'reference/apis/casework',
-  schema: './openapi/registry-casework.openapi.json',
+  schema: './openapi/registry-casework.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -149,7 +155,7 @@ const caseworkOpenApiSchema = {
 };
 const schedulingOpenApiSchema = {
   base: 'reference/apis/scheduling',
-  schema: './openapi/registry-scheduling.openapi.json',
+  schema: './openapi/registry-scheduling.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -172,7 +178,7 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
 }
 const messagingOpenApiSchema = {
   base: 'reference/apis/messaging',
-  schema: './openapi/registry-messaging.openapi.json',
+  schema: './openapi/registry-messaging.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -194,6 +200,35 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
   if (hasMessaging) return {};
   return Object.fromEntries(messagingRoutes.flatMap((route) => {
     const target = currentDocsetRedirect(currentHasMessaging ? route : '/');
+    return [
+      [route, target],
+      [`${route.slice(0, -1)}.md`, target],
+    ];
+  }));
+}
+const coordinatorOpenApiSchema = {
+  base: 'reference/apis/coordinator',
+  schema: './openapi/registry-coordinator.render.openapi.json',
+  sidebar: {
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+// The Coordinator pages follow the Messaging rule: a docset that does not
+// publish the Coordinator gates its pages out and redirects their routes, to
+// the same route of the current docset when that docset publishes the
+// Coordinator and to its home page otherwise.
+const coordinatorRoutes = productRoutes('registry-coordinator');
+/**
+ * @param {boolean} hasCoordinator
+ * @param {boolean} currentHasCoordinator
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function coordinatorRedirects(hasCoordinator, currentHasCoordinator, currentDocsetRedirect) {
+  if (hasCoordinator) return {};
+  return Object.fromEntries(coordinatorRoutes.flatMap((route) => {
+    const target = currentDocsetRedirect(currentHasCoordinator ? route : '/');
     return [
       [route, target],
       [`${route.slice(0, -1)}.md`, target],
@@ -242,6 +277,7 @@ export default defineConfig({
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
     ...messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect),
+    ...coordinatorRedirects(hasCoordinator, currentHasCoordinator, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -280,7 +316,7 @@ export default defineConfig({
     // Retired lab tutorials land on the homepage or the Relay retirement record.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
     '/tutorials/query-a-spatial-registry-from-qgis/': internalRedirect('/start/breg-quickstart/'),
-    '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
+    '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/connect-an-institution-source/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
@@ -359,7 +395,7 @@ export default defineConfig({
         starlightOpenAPI([
           {
             base: 'reference/apis/evidence',
-            schema: './openapi/registry-evidence.openapi.json',
+            schema: './openapi/registry-evidence.render.openapi.json',
             sidebar: {
               label: 'API operations',
               collapsed: true,
@@ -369,6 +405,7 @@ export default defineConfig({
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
+          ...[coordinatorOpenApiSchema].filter(() => hasCoordinator),
         ]),
       ],
       defaultLocale: 'root',
@@ -455,9 +492,7 @@ export default defineConfig({
               label: 'Source examples',
               collapsed: true,
               items: [
-                { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
-                { label: 'OpenCRVS: birth certificate', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
-                { label: 'DHIS2: immunization summary', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+                { label: 'Compose a BReg lookup', slug: 'tutorials/evidence-from-breg' },
                 { label: 'FHIR R4: patient coverage', slug: 'tutorials/issue-fhir-evidence-as-vcs' },
               ],
             },
@@ -577,12 +612,12 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/casework' },
-            { label: 'Decide your first work item', slug: 'tutorials/first-casework' },
-            { label: 'Review BReg changes in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
+            { label: 'Decide your first review request', slug: 'tutorials/first-casework' },
+            { label: 'Pair BReg review context', slug: 'tutorials/review-breg-changes-in-casework' },
             { label: 'How Casework works', slug: 'explanation/how-casework-works' },
             { label: 'Author a policy', slug: 'configure/casework' },
             { label: 'Deploy Casework', slug: 'operate/casework' },
-            { label: 'Retain, erase, and settle', slug: 'operate/casework-retention' },
+            { label: 'Retention and audit', slug: 'operate/casework-retention' },
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
             ...openAPISidebarGroups.slice(1, 2),
             { label: 'Client API reference', slug: 'reference/client-api' },
@@ -625,6 +660,25 @@ export default defineConfig({
               2 + Number(hasCasework) + Number(hasScheduling),
             ),
             { label: 'Client API reference', slug: 'reference/client-api' },
+          ],
+        }] : []),
+        ...(hasCoordinator ? [{
+          label: 'Registry Coordinator',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'start/coordinator' },
+            { label: 'Review an application and send a notice', slug: 'tutorials/review-an-application-and-send-a-notice' },
+            { label: 'Author a flow', slug: 'configure/coordinator' },
+            { label: 'Deploy Coordinator', slug: 'operate/coordinator' },
+            { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
+            { label: 'API contract', slug: 'reference/apis/registry-coordinator' },
+            // The Coordinator operations follow Evidence, Casework, Scheduling,
+            // and Messaging in the OpenAPI plugin list, and only the products
+            // this docset carries are registered there.
+            ...openAPISidebarGroups.slice(
+              1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging),
+              2 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging),
+            ),
           ],
         }] : []),
         {

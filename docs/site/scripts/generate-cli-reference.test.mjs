@@ -129,7 +129,19 @@ test('wraps a docset-gated product group of the index in a DocsetProduct region'
   // no trace of it in a docset that does not publish the product.
   assert.doesNotMatch(index.replace(region[0], '\n'), /messaging/iu);
   // Only gated groups are wrapped.
-  assert.equal(index.match(/<DocsetProduct /gu).length, 2);
+  assert.equal(index.match(/<DocsetProduct /gu).length, 3);
+});
+
+test('wraps the Registry Coordinator group of the index in a DocsetProduct region', () => {
+  const index = renderCatalog(fixtureCatalog(), fixtureReviewMetadata()).get('index.mdx');
+  const region = index.match(
+    /\n<DocsetProduct product="registry-coordinator">\n([\s\S]*?)\n<\/DocsetProduct>\n/u,
+  );
+  assert.ok(region, 'the Registry Coordinator group must sit in a DocsetProduct region');
+  assert.match(region[1], /^## Registry Coordinator$/mu);
+  assert.match(region[1], /\(\.\/coordinator\/\)/u);
+  assert.match(region[1], /\(\.\/coordinatorctl\/\)/u);
+  assert.doesNotMatch(index.replace(region[0], '\n'), /coordinator/iu);
 });
 
 test('wraps the Base Registry Engine citizen gateway group of the index in a DocsetProduct region', () => {
@@ -349,4 +361,27 @@ test('the docs check generates missing outputs before validating CLI parity', as
   assert.ok(
     sourceSteps.indexOf('npm run generate') < sourceSteps.indexOf('npm run check:cli-reference'),
   );
+});
+
+test('new unreviewed binaries stay draft while reviewed pages stay current', () => {
+  const catalog = fixtureCatalog();
+  catalog.binaries.find((binary) => binary.name === 'coordinatorctl').subcommands.push(command('start', 'coordinatorctl'));
+  const excluded = ['coordinator', 'coordinatorctl'];
+  const metadata = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-10-06',
+    unreviewed_binaries: excluded,
+  });
+  const pages = renderCatalog(catalog, metadata);
+  assert.match(pages.get('breg.mdx'), /status: current/u);
+  assert.doesNotMatch(pages.get('breg.mdx'), /draft: true/u);
+  assert.match(pages.get('coordinatorctl.mdx'), /status: draft\ndraft: true/u);
+  assert.match(pages.get('coordinatorctl.mdx'), /last_reviewed: "unreviewed"/u);
+  assert.match(pages.get('coordinatorctl/start.mdx'), /status: draft\ndraft: true/u);
+  assert.doesNotMatch(pages.get('index.mdx'), /\.\/coordinator(?:ctl)?\//u);
+  assert.match(pages.get('index.mdx'), /\.\/breg\//u);
+
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: null }, catalog), /array of strings/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['unknown'] }, catalog), /unknown binary/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['coordinator', 'coordinator'] }, catalog), /duplicates/u);
 });

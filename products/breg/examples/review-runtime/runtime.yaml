@@ -17,8 +17,8 @@ signIn:
 registry:
   baseUrl: https://registry.example.test/
   resource: urn:breg:citizen-address-correction
-  entity: address-correction-request
-  targetField: address
+  action: correct-address
+  targetInput: address
   accessProfile: citizen-review
 audit:
   hashKeyRef: secret:file/audit-key
