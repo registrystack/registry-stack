@@ -191,7 +191,8 @@ read.
 `onDeclaredRefusal` routes only a validated owner-declared no-effect
 refusal. Its output is `{refusalCode}`. Operational failures stay failures, and a later refusal cannot resolve an earlier
 uncertain effect. The success and refusal outputs are available only along their respective
-routes. A join reached through both has no single output shape.
+routes. A join reached through both has no single output shape. Omit `onDeclaredRefusal` and a
+declared refusal fails the run with `product-refused`, like any other refusal.
 
 Standalone Casework review is independent of BReg. Its submission includes an expected
 `PolicyBinding`; the accepted request and eventual result must agree with that exact policy,

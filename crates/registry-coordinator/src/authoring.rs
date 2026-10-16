@@ -423,6 +423,7 @@ enum AuthoredStep {
         /// The next Step on the successful completion route.
         next: LocalId,
         /// A separate Step taken only for a validated package-declared business refusal.
+        /// Omit it to fail the run with `product-refused` on a declared refusal too.
         #[serde(default)]
         on_declared_refusal: Option<LocalId>,
         /// An optional human title; it changes neither stable identity nor behavior revision.

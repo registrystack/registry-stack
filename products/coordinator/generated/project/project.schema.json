@@ -410,7 +410,7 @@
             },
             "onDeclaredRefusal": {
               "$ref": "#/$defs/LocalId",
-              "description": "A separate Step taken only for a validated package-declared business refusal."
+              "description": "A separate Step taken only for a validated package-declared business refusal.\nOmit it to fail the run with `product-refused` on a declared refusal too."
             },
             "operation": {
               "$ref": "#/$defs/LocalId",
