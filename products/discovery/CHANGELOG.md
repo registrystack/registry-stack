@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: the Discovery Node.js binding and the `@registrystack/client`
+  facade no longer export `validateSelection`, and the Python binding no
+  longer exports `validate_selection`. Both were deprecated aliases for the
+  structural check, and the name read like a trust decision. Migration: call
+  `validateSelectionStructure` in Node.js and `validate_selection_structure`
+  in Python; the behavior is unchanged.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries
