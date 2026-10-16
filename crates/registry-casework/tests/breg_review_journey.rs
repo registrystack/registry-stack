@@ -146,7 +146,8 @@ fn project(root: &std::path::Path, idp: &MockIdp, context: &BregContextExport) -
             "context":{"mode":"current-source","provider":"facility","contract":context.contract},
             "stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
             "retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
-            "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}},
+            "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},
+                "rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}}}},
         "trustedProducers":{"facility-registry":{"profile":"requester","issuer":idp.issuer(),
             "subject":"facility-review-producer","trustedInitiatorIssuer":idp.issuer(),
             "sourceNamespaces":[SOURCE],"reviewPolicies":["facility-address-review"],"retention":{"receiptRetentionDays":7}}}
@@ -515,6 +516,7 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         .unwrap();
     admin.execute("INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('review','reviewers',1)", &[]).await.unwrap();
     admin.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('reviewers',$1,'reviewer-one','staff')", &[&idp.issuer()]).await.unwrap();
+    admin.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('reviewers',$1,'supervisor-one','supervisor')", &[&idp.issuer()]).await.unwrap();
     let service = CaseworkService::new(
         store.clone(),
         project.clone(),
@@ -775,6 +777,62 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         );
     let applied = author.read_proposal(&proposal).await.unwrap().value;
     assert_eq!(applied.state(), BRegProposalState::Applied);
+    // A decided task stays listed while BReg still shows the applied
+    // Proposal to the reader, although it is no longer reviewable there.
+    let supervisor = minted(
+        &idp,
+        json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),
+        "supervisor-one",
+        "casework-human",
+        "casework:supervisor registry:proposal:review",
+        "human",
+        Some("facility-review"),
+    );
+    let decided_list = |path: &'static str, token: String, profile: &'static str| {
+        let url = casework_url.join(path).unwrap();
+        async move {
+            let response = reqwest::Client::new()
+                .get(url)
+                .bearer_auth(&token)
+                .header("registry-casework-profile", profile)
+                .header("registry-source-profile", "proposal-reviewer")
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let page: Value = response.json().await.unwrap();
+            assert_eq!(status, StatusCode::OK, "{page}");
+            page
+        }
+    };
+    let own = decided_list(
+        "v1/review-tasks/own-decisions?queue=review",
+        human.clone(),
+        "staff",
+    )
+    .await;
+    assert!(
+        own["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["taskId"] == id),
+        "the reviewer's own decision stays listed after BReg applied: {own}"
+    );
+    let supervised = decided_list(
+        "v1/review-tasks/supervision?queue=review",
+        supervisor.clone(),
+        "supervisor",
+    )
+    .await;
+    assert!(
+        supervised["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["taskId"] == id),
+        "the supervisor still sees the decided task after BReg applied: {supervised}"
+    );
     let (_, pending_proposal) = start_proposal(&fixture, &breg_url, &idp, 2).await;
     let pending_id = Uuid::parse_str(pending_proposal.id()).unwrap();
     let row = fixture.database.admin.query_one("SELECT create_request FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&pending_id]).await.unwrap();
@@ -919,6 +977,158 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
                     && task["requestId"] != replacement_id.to_string()
             ),
         "neither the superseded task nor forged binding is visible: {page}"
+    );
+    let (_, rejected_proposal) = start_proposal(&fixture, &breg_url, &idp, 3).await;
+    let rejected_id = Uuid::parse_str(rejected_proposal.id()).unwrap();
+    for _ in 0..12 {
+        registry_breg::review_store::run_review_authority_once_for_test(
+            &fixture.pool,
+            &authorities,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap();
+        let row = fixture.database.admin.query_one("SELECT state FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&rejected_id]).await.unwrap();
+        if row.get::<_, String>(0) == "accepted" {
+            break;
+        }
+    }
+    let row = fixture.database.admin.query_one("SELECT state,accepted_binding FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&rejected_id]).await.unwrap();
+    assert_eq!(row.get::<_, String>(0), "accepted");
+    let rejected_accepted: registry_review_client::ReviewRequestAccepted =
+        serde_json::from_value(row.get(1)).unwrap();
+    let page = reqwest::Client::new()
+        .get(
+            casework_url
+                .join("v1/review-tasks?queue=review&limit=25")
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let page: Value = page.json().await.unwrap();
+    let rejected_task = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["requestId"] == rejected_accepted.request_id.to_string())
+        .expect("the third native Proposal is reviewable");
+    let rejected_task_id = rejected_task["taskId"].as_str().unwrap().to_owned();
+    let claimed = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!("v1/review-tasks/{rejected_task_id}/claim"))
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .header(
+            "if-match",
+            format!("\"{}\"", rejected_task["revision"].as_i64().unwrap()),
+        )
+        .header("idempotency-key", "native-reject-claim")
+        .send()
+        .await
+        .unwrap();
+    let claim_status = claimed.status();
+    let claimed: Value = claimed.json().await.unwrap();
+    assert_eq!(claim_status, StatusCode::OK, "{claimed}");
+    let decided = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!("v1/review-tasks/{rejected_task_id}/decisions"))
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .header(
+            "if-match",
+            format!("\"{}\"", claimed["revision"].as_i64().unwrap()),
+        )
+        .header("idempotency-key", "native-reject")
+        .json(&json!({"decision":{"type":"reject","outcome":"rejected",
+            "reason":"the address does not match the survey","publicReason":"address not confirmed"}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+    for _ in 0..8 {
+        registry_breg::review_store::run_review_authority_once_for_test(
+            &fixture.pool,
+            &authorities,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap();
+        if author
+            .read_proposal(&rejected_proposal)
+            .await
+            .unwrap()
+            .value
+            .state()
+            == BRegProposalState::Rejected
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        author
+            .read_proposal(&rejected_proposal)
+            .await
+            .unwrap()
+            .value
+            .state(),
+        BRegProposalState::Rejected
+    );
+    // The rejected Proposal is no longer reviewable at BReg; the reviewer
+    // still annotates the settled request and reads its history.
+    let note = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!(
+                    "v1/review-requests/{}/notes",
+                    rejected_accepted.request_id
+                ))
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .header("idempotency-key", "native-reject-note")
+        .json(&json!({"audience":"reviewers","note":"survey copy filed"}))
+        .send()
+        .await
+        .unwrap();
+    let note_status = note.status();
+    let note_body = note.text().await.unwrap();
+    assert!(note_status.is_success(), "{note_status} {note_body}");
+    let history = reqwest::Client::new()
+        .get(
+            casework_url
+                .join(&format!(
+                    "v1/review-requests/{}/history",
+                    rejected_accepted.request_id
+                ))
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    let history_status = history.status();
+    let history: Value = history.json().await.unwrap();
+    assert_eq!(history_status, StatusCode::OK, "{history}");
+    assert!(
+        !history["items"].as_array().unwrap().is_empty(),
+        "{history}"
     );
     casework_server.abort();
     breg_server.abort();

@@ -4067,6 +4067,255 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
         .is_empty());
 }
 
+/// A source stops calling its subject reviewable once it acted on the
+/// outcome. Decided work stays readable while the source still shows it to
+/// the caller, and vanishes, without disclosing that it exists, once the
+/// source conceals it. Open work still needs a reviewable subject.
+#[tokio::test]
+async fn decided_review_stays_readable_while_its_source_still_shows_it() {
+    let fixture = fixture().await;
+    let mut policy = project("decided-visible");
+    policy.review_policies[0].stages.truncate(1);
+    current_source(&mut policy);
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        policy,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn ReviewContextProvider>],
+    )
+    .unwrap();
+    let mut created = Vec::new();
+    for index in 0..2 {
+        let mut input = request(
+            &format!("decided-visible-{index}"),
+            &format!("DECIDED-{index}"),
+        );
+        input.context = ReviewContext::CurrentSource {
+            binding: SourceContextBinding {
+                reference: format!("registry:record:decided-visible-{index}"),
+            },
+        };
+        let accepted = service
+            .create_review_request(
+                &fixture.producer,
+                bind_request(&service, input),
+                &format!("create-decided-visible-{index}"),
+            )
+            .await
+            .unwrap()
+            .accepted;
+        created.push((
+            accepted.request_id,
+            task_id(&fixture, accepted.request_id, 0).await,
+        ));
+    }
+    let (request_id, decided) = created[0];
+    let (_, open) = created[1];
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            decided,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-decided-visible",
+        )
+        .await
+        .unwrap();
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            decided,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    public_reason: Some("The record could not be matched.".to_owned()),
+                    reason: Some("retained reason".to_owned()),
+                    result: Some(json!({"correction": "bounded correction"})),
+                },
+            },
+            Some("staff"),
+            "human-bearer",
+            2,
+            "decide-decided-visible",
+        )
+        .await
+        .unwrap();
+    // The source acted on the outcome: it still shows the subject to the
+    // caller but no longer offers it for review.
+    *fixture.source_state.lock().unwrap() = false;
+
+    let own = service
+        .own_review_decisions(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        own.items.iter().map(|row| row.task_id).collect::<Vec<_>>(),
+        [decided]
+    );
+    let supervised = service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            None,
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supervised
+            .items
+            .iter()
+            .map(|row| row.task_id)
+            .collect::<Vec<_>>(),
+        [decided],
+        "open work the source no longer offers stays out of supervision"
+    );
+    let read = service
+        .review_task(&fixture.reviewer_a, decided, Some("staff"), "human-bearer")
+        .await
+        .unwrap();
+    assert_eq!(read.state, ReviewTaskState::Decided);
+    let history = service
+        .review_history(
+            &fixture.reviewer_a,
+            request_id,
+            Some("staff"),
+            "human-bearer",
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert!(!history.items.is_empty());
+    service
+        .add_review_note(
+            &fixture.reviewer_a,
+            request_id,
+            Some("staff"),
+            "human-bearer",
+            ReviewNoteRequest {
+                audience: ReviewHistoryAudience::Reviewers,
+                note: "after the decision".to_owned(),
+            },
+            "note-decided-visible",
+        )
+        .await
+        .unwrap();
+    // Commands keep requiring a reviewable subject.
+    assert!(service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            decided,
+            Some("staff"),
+            "human-bearer",
+            3,
+            "reclaim-decided-visible",
+        )
+        .await
+        .is_err());
+    assert!(matches!(
+        service
+            .claim_review_task(
+                &fixture.reviewer_a,
+                open,
+                Some("staff"),
+                "human-bearer",
+                1,
+                "claim-open-not-reviewable",
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        service
+            .review_task(&fixture.reviewer_a, open, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+
+    // Concealment at the source still hides the decided work entirely.
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    assert!(service
+        .own_review_decisions(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            None,
+            10,
+        )
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    assert!(service
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("review"),
+            None,
+            None,
+            10,
+        )
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    assert!(matches!(
+        service
+            .review_task(&fixture.reviewer_a, decided, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        service
+            .review_history(
+                &fixture.reviewer_a,
+                request_id,
+                Some("staff"),
+                "human-bearer",
+                None,
+                100,
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        service
+            .add_review_note(
+                &fixture.reviewer_a,
+                request_id,
+                Some("staff"),
+                "human-bearer",
+                ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Reviewers,
+                    note: "while concealed".to_owned(),
+                },
+                "note-concealed",
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
 #[tokio::test]
 async fn review_decisions_are_audited_after_the_decision_commits() {
     let fixture = fixture().await;

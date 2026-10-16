@@ -232,6 +232,35 @@ struct ReviewRequestRecord {
     context: Option<registry_casework_core::ReviewContext>,
 }
 
+/// What a current source must answer before Casework discloses review work.
+/// The source stops offering a subject for review once it acts on the
+/// outcome, so decided or settled work requires only that the source still
+/// shows the subject to this caller; a concealed subject stays hidden.
+/// Open work, and every command, still requires a reviewable subject.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceDisclosure {
+    Reviewable,
+    Visible,
+}
+
+impl SourceDisclosure {
+    fn for_request(record: &ReviewRequestRecord) -> Self {
+        if record.lifecycle == ReviewRequestLifecycle::Reviewing {
+            Self::Reviewable
+        } else {
+            Self::Visible
+        }
+    }
+
+    fn for_task(record: &ReviewRequestRecord, task_decided: bool) -> Self {
+        if task_decided {
+            Self::Visible
+        } else {
+            Self::for_request(record)
+        }
+    }
+}
+
 impl CaseworkService {
     pub async fn erase_expired_reviews(&self) -> Result<u64, ReviewRuntimeError> {
         self.store.erase_expired_reviews_at(Utc::now()).await
@@ -513,8 +542,14 @@ impl CaseworkService {
             if issued.is_none() {
                 let preflight = async {
                     let record = self.store.review_request_for_task(anchor).await?;
-                    self.preflight_review_inbox_source(&record, source_profile_id, token)
-                        .await
+                    let decided = self.store.review_task_decided(anchor).await?;
+                    self.preflight_review_inbox_source(
+                        &record,
+                        SourceDisclosure::for_task(&record, decided),
+                        source_profile_id,
+                        token,
+                    )
+                    .await
                 };
                 // Preflight only the supplied task anchor, never every store
                 // scan cursor. One fixed anchor allowance outside the candidate
@@ -577,9 +612,18 @@ impl CaseworkService {
             let prepared_length = prepared.len();
             let mut checks = stream::iter(prepared)
                 .map(|(task, record)| async move {
+                    let disclosure = SourceDisclosure::for_task(
+                        &record,
+                        matches!(task.state, ReviewTaskState::Decided),
+                    );
                     let result = tokio::time::timeout_at(
                         deadline_at,
-                        self.preflight_review_inbox_source(&record, source_profile_id, token),
+                        self.preflight_review_inbox_source(
+                            &record,
+                            disclosure,
+                            source_profile_id,
+                            token,
+                        ),
                     )
                     .await;
                     (task, result)
@@ -792,7 +836,7 @@ impl CaseworkService {
     ) -> Result<ReviewTask, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
         match self
-            .preflight_review_source(task_id, source_profile_id, token)
+            .preflight_review_task_read_source(task_id, source_profile_id, token)
             .await
         {
             Err(
@@ -1106,7 +1150,7 @@ impl CaseworkService {
             .review_history(actor, request_id, requester.as_ref(), cursor, limit)
             .await?;
         if requester.is_none() {
-            self.preflight_review_request_source(request_id, source_profile_id, token)
+            self.preflight_review_request_read_source(request_id, source_profile_id, token)
                 .await?;
             self.store.recheck_review_access(actor, request_id).await?;
         }
@@ -1175,7 +1219,7 @@ impl CaseworkService {
             None
         };
         if producer.is_none() {
-            self.preflight_review_request_source(request_id, source_profile_id, token)
+            self.preflight_review_request_read_source(request_id, source_profile_id, token)
                 .await?;
         }
         self.store
@@ -1253,6 +1297,25 @@ impl CaseworkService {
             .await
     }
 
+    /// A task read requires a reviewable subject only while the task is open.
+    async fn preflight_review_task_read_source(
+        &self,
+        task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<(), ReviewRuntimeError> {
+        let record = self.store.review_request_for_task(task_id).await?;
+        ensure_review_result_retained(&record)?;
+        let decided = self.store.review_task_decided(task_id).await?;
+        self.preflight_review_disclosure(
+            &record,
+            SourceDisclosure::for_task(&record, decided),
+            source_profile_id,
+            token,
+        )
+        .await
+    }
+
     async fn preflight_review_request_source(
         &self,
         request_id: Uuid,
@@ -1264,12 +1327,50 @@ impl CaseworkService {
             .await
     }
 
+    /// A request read requires a reviewable subject only while the request
+    /// is still under review.
+    async fn preflight_review_request_read_source(
+        &self,
+        request_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<(), ReviewRuntimeError> {
+        let record = self.store.review_request_record(request_id).await?;
+        self.preflight_review_disclosure(
+            &record,
+            SourceDisclosure::for_request(&record),
+            source_profile_id,
+            token,
+        )
+        .await
+    }
+
     async fn preflight_review_record_source(
         &self,
         record: &ReviewRequestRecord,
         source_profile_id: Option<&str>,
         token: &str,
     ) -> Result<(), ReviewRuntimeError> {
+        self.preflight_review_disclosure(
+            record,
+            SourceDisclosure::Reviewable,
+            source_profile_id,
+            token,
+        )
+        .await
+    }
+
+    /// Every disclosure asks the current source again. A concealed subject,
+    /// a moved binding, or any source failure refuses the read; only the
+    /// reviewable requirement depends on `disclosure`.
+    async fn preflight_review_disclosure(
+        &self,
+        record: &ReviewRequestRecord,
+        disclosure: SourceDisclosure,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<(), ReviewRuntimeError> {
+        let require_reviewable = disclosure == SourceDisclosure::Reviewable;
         match &record.policy.context {
             ReviewContextPolicy::Submitted => {
                 if source_profile_id.is_some() {
@@ -1303,7 +1404,7 @@ impl CaseworkService {
                 .await
                 .map_err(|_| ReviewRuntimeError::SourceUnavailable)?
                 .map_err(map_review_source_error)?;
-                if view.identity != identity || !view.reviewable {
+                if view.identity != identity || (require_reviewable && !view.reviewable) {
                     return Err(ReviewRuntimeError::NotFound);
                 }
                 record
@@ -1314,7 +1415,7 @@ impl CaseworkService {
                     .await
                     .map_err(|_| ReviewRuntimeError::SourceUnavailable)?
                     .map_err(map_review_source_error)?;
-                if status.identity != identity || !status.reviewable {
+                if status.identity != identity || (require_reviewable && !status.reviewable) {
                     return Err(ReviewRuntimeError::NotFound);
                 }
                 Ok(())
@@ -1325,6 +1426,7 @@ impl CaseworkService {
     async fn preflight_review_inbox_source(
         &self,
         record: &ReviewRequestRecord,
+        disclosure: SourceDisclosure,
         source_profile_id: Option<&str>,
         token: &str,
     ) -> Result<(), ReviewRuntimeError> {
@@ -1339,7 +1441,7 @@ impl CaseworkService {
         ) {
             return Ok(());
         }
-        self.preflight_review_record_source(record, source_profile_id, token)
+        self.preflight_review_disclosure(record, disclosure, source_profile_id, token)
             .await
     }
 
@@ -2213,6 +2315,20 @@ impl PostgresStore {
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
         request_from_row(&row)
+    }
+
+    /// Whether a task is decided or closed. Both states are final, so a read
+    /// that relaxes its source check on this answer cannot race a reopening.
+    async fn review_task_decided(&self, task_id: Uuid) -> Result<bool, ReviewRuntimeError> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT state IN ('decided','closed') FROM casework_review_tasks WHERE task_id=$1",
+                &[&task_id],
+            )
+            .await?
+            .ok_or(ReviewRuntimeError::NotFound)?;
+        Ok(row.get(0))
     }
 
     async fn review_request_record(
