@@ -135,7 +135,8 @@ test('returned Proposal cursors are usable for explicit bounded continuation', a
     }
     for (const cursor of [id, 'x'.repeat(512)]) {
       value = {items: [], nextCursor: cursor};
-      await assert.rejects(client.listProposals(collection, '{}'), error => error.kind === 'invalid-request');
+      const emptyPage = await client.listProposals(collection, '{}');
+      assert.equal(emptyPage.nextCursor, cursor);
       value = {items: [proposal], nextCursor: cursor};
       await assert.rejects(client.listProposals(collection, JSON.stringify({cursor})), error => error.kind === 'invalid-request');
       const page = await client.listProposals(collection, '{}');

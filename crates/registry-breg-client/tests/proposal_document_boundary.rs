@@ -1533,11 +1533,14 @@ async fn proposal_pages_require_progress_without_interpreting_opaque_cursors() {
             assert_eq!(fixture.requests.load(Ordering::SeqCst), count + 1);
         }
         fixture.answer(json!({"items":[],"nextCursor":cursor}));
-        assert!(fixture
+        let empty_page = fixture
             .client
             .list_proposals(&collection, &Default::default())
             .await
-            .is_err());
+            .expect("an empty bounded scan can advance its cursor")
+            .value;
+        assert!(empty_page.items.is_empty());
+        assert_eq!(empty_page.next_cursor.as_deref(), Some(cursor.as_str()));
         // A nonempty page may carry an opaque token unrelated to its final ID.
         fixture.answer(json!({"items":[proposal("draft")],"nextCursor":cursor}));
         let page = fixture

@@ -957,6 +957,9 @@ impl PostgresRecordMutationService {
         // ceiling. Leave room for the rest of the Proposal and keep pages
         // below the maintained client's 8 MiB response ceiling.
         const MAXIMUM_PAGE_BYTES: usize = 4 * 1024 * 1024;
+        // A turn match needs the full authorized projection. Bound how many
+        // candidates one page projects so sparse filters have bounded work.
+        const MAXIMUM_SCANNED_PROPOSALS: usize = 8;
         let mut page_bytes = 0usize;
         let action_ids = authorities
             .iter()
@@ -965,7 +968,8 @@ impl PostgresRecordMutationService {
         let mut after = query.after;
         let mut items = Vec::new();
         let mut has_more = false;
-        'pages: loop {
+        let mut continuation = None;
+        'page: {
             if tokio::time::Instant::now() >= deadline {
                 return Err(MutationError::Unavailable);
             }
@@ -975,16 +979,16 @@ impl PostgresRecordMutationService {
                 .query(
                     "SELECT proposal_id,action_id FROM registry_internal.registry_proposal_state
                 WHERE action_id=ANY($1) AND ($2::uuid IS NULL OR proposal_id>$2)
-                ORDER BY proposal_id LIMIT 200",
+                ORDER BY proposal_id LIMIT 9",
                     &[&action_ids, &after],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             if candidates.is_empty() {
-                break;
+                break 'page;
             }
             let count = candidates.len();
-            for candidate in candidates {
+            for candidate in candidates.into_iter().take(MAXIMUM_SCANNED_PROPOSALS) {
                 let id: Uuid = candidate.get(0);
                 let action_id: String = candidate.get(1);
                 after = Some(id);
@@ -1079,7 +1083,7 @@ impl PostgresRecordMutationService {
                             .commit()
                             .await
                             .map_err(|_| MutationError::Unavailable)?;
-                        break 'pages;
+                        break 'page;
                     }
                     let value_bytes = serde_json::to_vec(&value)
                         .map_err(|_| MutationError::Unavailable)?
@@ -1096,7 +1100,7 @@ impl PostgresRecordMutationService {
                             .commit()
                             .await
                             .map_err(|_| MutationError::Unavailable)?;
-                        break 'pages;
+                        break 'page;
                     }
                     page_bytes += value_bytes;
                     items.push(value);
@@ -1106,8 +1110,10 @@ impl PostgresRecordMutationService {
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
             }
-            if count < 200 {
-                break;
+            if count > MAXIMUM_SCANNED_PROPOSALS {
+                has_more = true;
+                continuation = after;
+                break 'page;
             }
         }
         let mut value = json!({"items":items});
@@ -1120,7 +1126,9 @@ impl PostgresRecordMutationService {
             return Err(MutationError::PreconditionFailed);
         }
         if has_more {
-            if let Some(id) = value["items"]
+            if let Some(id) = continuation {
+                value["nextCursor"] = json!(id);
+            } else if let Some(id) = value["items"]
                 .as_array()
                 .and_then(|items| items.last())
                 .and_then(|item| item.get("id"))

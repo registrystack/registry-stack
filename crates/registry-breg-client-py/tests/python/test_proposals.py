@@ -163,8 +163,8 @@ class ProposalPageTests(unittest.TestCase):
                 self.assertEqual(len(requests), count + 1)
             for cursor in [ID, 'x' * 512]:
                 value = {'items': [], 'nextCursor': cursor}
-                with self.assertRaises(BaseRegistryClientError):
-                    client.list_proposals(collection, {})
+                empty_page = client.list_proposals(collection, {})
+                self.assertEqual(empty_page.next_cursor, cursor)
                 value = {'items': [PROPOSAL], 'nextCursor': cursor}
                 with self.assertRaises(BaseRegistryClientError):
                     client.list_proposals(collection, {'cursor': cursor})

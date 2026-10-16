@@ -1240,9 +1240,7 @@ impl BaseRegistryClient {
         let mut page: BRegProposalPage = serde_json::from_value(value).map_err(|_| refusal())?;
         if page.items.len() > query.limit.unwrap_or(50) as usize
             || page.next_cursor.as_ref().is_some_and(|cursor| {
-                !valid_cursor(cursor)
-                    || page.items.is_empty()
-                    || query.cursor.as_ref() == Some(cursor)
+                !valid_cursor(cursor) || query.cursor.as_ref() == Some(cursor)
             })
         {
             return Err(refusal());
@@ -2513,6 +2511,22 @@ mod tests {
                 .await
                 .is_ok());
         }
+        *response.lock().unwrap() = json!({"items":[],"nextCursor":ID});
+        let page = client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .unwrap()
+            .value;
+        assert!(page.items.is_empty());
+        assert_eq!(page.next_cursor.as_deref(), Some(ID));
+        *response.lock().unwrap() = json!({"items":[]});
+        let terminal = client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .unwrap()
+            .value;
+        assert!(terminal.items.is_empty());
+        assert!(terminal.next_cursor.is_none());
         server.abort();
     }
 
