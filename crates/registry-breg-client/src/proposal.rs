@@ -435,6 +435,13 @@ impl BRegProposal {
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
             || self.state == BRegProposalState::Draft && self.decision.is_some()
+            || self.turn.is_some_and(|turn| match self.state {
+                BRegProposalState::Draft => turn != BRegProposalTurn::Party,
+                BRegProposalState::Submitted => false,
+                BRegProposalState::Applied
+                | BRegProposalState::Cancelled
+                | BRegProposalState::Rejected => turn != BRegProposalTurn::Nobody,
+            })
             || self
                 .decision
                 .as_ref()

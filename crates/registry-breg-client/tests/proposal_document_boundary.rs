@@ -352,6 +352,51 @@ async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_rea
 }
 
 #[tokio::test]
+async fn proposal_turn_follows_its_lifecycle_state() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let with_turn = |state: &str, turn: &str| {
+        let mut value = proposal(state);
+        value["turn"] = json!(turn);
+        value
+    };
+    // A draft is the party's to finish and a closed Proposal is nobody's;
+    // only a submitted Proposal's turn depends on review and application.
+    for (state, turn) in [
+        ("draft", "party"),
+        ("submitted", "party"),
+        ("submitted", "official"),
+        ("submitted", "nobody"),
+        ("applied", "nobody"),
+        ("cancelled", "nobody"),
+        ("rejected", "nobody"),
+    ] {
+        fixture.answer(with_turn(state, turn));
+        assert!(
+            fixture.client.get_proposal(&binding, ID).await.is_ok(),
+            "{state}/{turn}"
+        );
+    }
+    let mut accepted = vec![];
+    for (state, turn) in [
+        ("draft", "official"),
+        ("draft", "nobody"),
+        ("applied", "party"),
+        ("applied", "official"),
+        ("cancelled", "party"),
+        ("cancelled", "official"),
+        ("rejected", "party"),
+        ("rejected", "official"),
+    ] {
+        fixture.answer(with_turn(state, turn));
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("{state}/{turn}"));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
 async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_tombstones() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
