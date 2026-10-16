@@ -1002,6 +1002,148 @@ async fn caseload_preview_apply_is_atomic_revision_fenced_and_recoverable() {
         result
     );
 }
+/// Seconds between a staffing preview's `applied_at` and its `expires_at`.
+async fn applied_retention_seconds(f: &Fixture, preview_id: Uuid) -> f64 {
+    f.db.query_one("SELECT extract(epoch FROM expires_at-applied_at)::float8 FROM casework_review_staffing_previews WHERE preview_id=$1",&[&preview_id]).await.unwrap().get(0)
+}
+/// Move a staffing preview's stored times back by `minutes`, as if it had
+/// been previewed and applied that long ago.
+async fn age_staffing_preview(f: &Fixture, preview_id: Uuid, minutes: i32) {
+    f.db.execute("UPDATE casework_review_staffing_previews SET expires_at=expires_at-make_interval(mins=>$2),applied_at=applied_at-make_interval(mins=>$2) WHERE preview_id=$1",&[&preview_id,&minutes]).await.unwrap();
+}
+async fn staffing_preview_exists(f: &Fixture, preview_id: Uuid) -> bool {
+    f.db.query_one(
+        "SELECT count(*) FROM casework_review_staffing_previews WHERE preview_id=$1",
+        &[&preview_id],
+    )
+    .await
+    .unwrap()
+    .get::<_, i64>(0)
+        == 1
+}
+#[tokio::test]
+async fn applied_caseload_preview_replays_for_a_day_across_directory_changes() {
+    let f = Fixture::new(project_value(false, false)).await;
+    for id in ["one", "two"] {
+        let accepted = f.create(id).await;
+        f.claim(f.task(accepted.request_id).await, "a").await;
+    }
+    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let preview = f
+        .service
+        .preview_review_caseload(
+            &supervisor,
+            None,
+            "",
+            ReviewCaseloadMoveRequest {
+                from: actor("a", CaseworkRole::Staff).principal,
+                to: actor("b", CaseworkRole::Staff).principal,
+                queue: None,
+                reason: "Cover absence".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let apply = ReviewCaseloadApplyRequest {
+        preview_id: preview.preview_id,
+    };
+    let result = f
+        .service
+        .apply_review_caseload(&supervisor, None, "", apply.clone())
+        .await
+        .unwrap();
+    let lifetime = applied_retention_seconds(&f, preview.preview_id).await;
+    assert!((lifetime - 86_400.0).abs() < 5.0, "{lifetime}");
+    // An hour later the 15-minute preview window is long gone, the Directory
+    // has moved on, and the lost response is still recoverable.
+    age_staffing_preview(&f, preview.preview_id, 60).await;
+    f.db.execute(
+        "UPDATE casework_meta SET directory_revision=directory_revision+1",
+        &[],
+    )
+    .await
+    .unwrap();
+    f.service.erase_expired_review_staffing().await.unwrap();
+    assert!(staffing_preview_exists(&f, preview.preview_id).await);
+    let holders = f.holders().await;
+    assert_eq!(
+        f.service
+            .apply_review_caseload(&supervisor, None, "", apply.clone())
+            .await
+            .unwrap(),
+        result
+    );
+    assert_eq!(holders, f.holders().await);
+    assert_eq!(
+        f.audit.responses("review-caseload-moved").last().unwrap()["outcome"],
+        "replayed"
+    );
+    // After the recovery window the result is gone, and the sweep erases it.
+    age_staffing_preview(&f, preview.preview_id, 24 * 60).await;
+    assert!(matches!(
+        f.service
+            .apply_review_caseload(&supervisor, None, "", apply)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    f.service.erase_expired_review_staffing().await.unwrap();
+    assert!(!staffing_preview_exists(&f, preview.preview_id).await);
+}
+#[tokio::test]
+async fn unapplied_caseload_preview_expires_after_fifteen_minutes() {
+    let f = Fixture::new(project_value(false, false)).await;
+    let accepted = f.create("one").await;
+    f.claim(f.task(accepted.request_id).await, "a").await;
+    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let preview = f
+        .service
+        .preview_review_caseload(
+            &supervisor,
+            None,
+            "",
+            ReviewCaseloadMoveRequest {
+                from: actor("a", CaseworkRole::Staff).principal,
+                to: actor("b", CaseworkRole::Staff).principal,
+                queue: None,
+                reason: "Cover absence".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let window = (preview.expires_at - Utc::now()).num_seconds();
+    assert!((14 * 60..=15 * 60).contains(&window), "{window}");
+    let before = f.holders().await;
+    let apply = || {
+        f.service.apply_review_caseload(
+            &supervisor,
+            None,
+            "",
+            ReviewCaseloadApplyRequest {
+                preview_id: preview.preview_id,
+            },
+        )
+    };
+    // A pending apply stays fenced by the Directory revision it previewed.
+    f.db.execute(
+        "UPDATE casework_meta SET directory_revision=directory_revision+1",
+        &[],
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        apply().await,
+        Err(ReviewRuntimeError::RevisionConflict)
+    ));
+    assert_eq!(before, f.holders().await);
+    age_staffing_preview(&f, preview.preview_id, 16).await;
+    assert!(matches!(
+        apply().await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert_eq!(before, f.holders().await);
+    f.service.erase_expired_review_staffing().await.unwrap();
+    assert!(!staffing_preview_exists(&f, preview.preview_id).await);
+}
 #[tokio::test]
 async fn source_visibility_and_directory_authority_are_both_live_at_caseload_apply() {
     let f = Fixture::new(project_value(true, false)).await;
@@ -1197,6 +1339,60 @@ async fn due_order_holdings_and_pinned_subject_clock_recompute() {
         .unwrap();
     assert_eq!(applied.tasks[0].deadline_at, Some(deadline));
     assert_eq!(applied.tasks[0].revision, 3);
+}
+#[tokio::test]
+async fn applied_clock_recompute_replays_for_a_day_across_directory_changes() {
+    let f = Fixture::new(project_value(false, false)).await;
+    let accepted = f.create("clock").await;
+    let task = f.task(accepted.request_id).await;
+    let admin = actor("admin", CaseworkRole::Administrator);
+    let preview = f
+        .service
+        .preview_review_clock_recompute(
+            &admin,
+            None,
+            "",
+            ReviewClockRecomputeRequest {
+                task_ids: vec![task],
+            },
+        )
+        .await
+        .unwrap();
+    let apply = ReviewClockRecomputeApplyRequest {
+        preview_id: preview.preview_id,
+    };
+    let applied = f
+        .service
+        .apply_review_clock_recompute(&admin, None, "", apply.clone())
+        .await
+        .unwrap();
+    let lifetime = applied_retention_seconds(&f, preview.preview_id).await;
+    assert!((lifetime - 86_400.0).abs() < 5.0, "{lifetime}");
+    age_staffing_preview(&f, preview.preview_id, 60).await;
+    f.db.execute(
+        "UPDATE casework_meta SET directory_revision=directory_revision+1",
+        &[],
+    )
+    .await
+    .unwrap();
+    f.service.erase_expired_review_staffing().await.unwrap();
+    assert!(staffing_preview_exists(&f, preview.preview_id).await);
+    let holders = f.holders().await;
+    assert_eq!(
+        f.service
+            .apply_review_clock_recompute(&admin, None, "", apply)
+            .await
+            .unwrap(),
+        applied
+    );
+    assert_eq!(holders, f.holders().await);
+    assert_eq!(
+        f.audit
+            .responses("review-clocks-recomputed")
+            .last()
+            .unwrap()["outcome"],
+        "replayed"
+    );
 }
 #[tokio::test]
 async fn activation_refuses_rebinding_a_producer_with_open_requests() {

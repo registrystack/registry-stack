@@ -228,6 +228,9 @@ tasks, optionally restricted to one queue, with a maximum of 100 tasks. It
 has no subset, limit or continuation parameter. Apply moves that exact
 revision-fenced set atomically. Use individual authorized task assignments
 for a selected subset; those assignments are independent transactions.
+Apply a caseload or clock recompute preview within 15 minutes. Once applied,
+a retry with the same preview answers the same result for 24 hours, even if
+the Directory changed since, so a lost response can be recovered.
 
 Supervisory discovery deliberately omits holder identities and due dates.
 It is an accountability view, not a team holdings board. Use the Directory
