@@ -221,8 +221,8 @@ may be another page. `attention=true` selects effective states `attention` and `
 `attention=false` excludes both. Continue with the same filters and cursor; each page
 reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
-fits: `registry_stack_client::coordinator` in Rust or the `coordinator`
-namespace of the unified Node.js and Python clients.
+fits. The Rust client and its Node.js and Python bindings are built from source;
+they are not part of the unified client packages.
 Refusals of that API, the request edge and the Casework wake-up route
 use an RFC 9457 problem document whose `code` comes from one closed
 `family.reason` vocabulary with one status each. A refusal names no submitted

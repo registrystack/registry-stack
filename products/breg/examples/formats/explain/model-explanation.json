@@ -1561,7 +1561,7 @@
       "protocol": "id.registrystack.org/protocols/review/v1"
     }
   ],
-  "revision": "sha256:230a8a5874e151f14fe26b81cfb6236c29d0539940a5f92c9d7b860f0ac56dbb",
+  "revision": "sha256:a2e6b2e8399568f73c4c32d843cdc59fd05037eae78b783e1f17f363d04f646b",
   "statisticalDatasets": [],
   "version": "0.1.0"
 }

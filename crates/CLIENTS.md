@@ -148,16 +148,16 @@ further setup.
 On macOS, AWS-LC FIPS is a dynamic library, and System Integrity Protection
 strips `DYLD_*` variables from protected executables such as `/bin/sh`, which
 `npm test` runs through, and the system `python3`. Prepare the runtime library
-path in the shell from the repository root first, then run the Node tests
-directly with `node --test` instead of `npm test`, as
-`.github/workflows/macos-contributor.yml` does. The Python bootstraps preload
-the library from the helper's `REGISTRY_CARGO_RUNTIME_LIBRARY_PATH`.
+path in the shell from the repository root first. The Node test script restores
+the path from the helper's `REGISTRY_CARGO_RUNTIME_LIBRARY_PATH` on the child
+that imports the addon, and the Python bootstraps preload the same library.
 
 ```sh
+product=discovery # or evidence, breg, casework, messaging, scheduling, coordinator
 . scripts/cargo-runtime-library-path.sh
-registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
-(cd crates/registry-<product>-client-node && npm run build:debug && node --test __test__/*.test.js)
-(cd crates/registry-<product>-client-py && python3 -m unittest discover -s tests/python -v)
+registry_prepare_cargo_runtime "$PWD" --locked -p "registry-${product}-client-node"
+(cd "crates/registry-${product}-client-node" && npm run build:debug && npm test)
+(cd "crates/registry-${product}-client-py" && python3 -m unittest discover -s tests/python -v)
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages

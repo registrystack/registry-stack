@@ -260,6 +260,19 @@ async fn my_details_are_labelled_registry_data_for_the_caller_only() {
 }
 
 #[tokio::test]
+async fn gateway_fixture_tolerates_workspace_load() {
+    let fixture = Fixture::start().await;
+    fixture
+        .registry
+        .delay_next_response(std::time::Duration::from_secs(6));
+    let caller = fixture.caller(CITIZEN_A);
+
+    let value = fixture.call(&caller, GET_MY_DETAILS, json!({})).await;
+
+    assert_eq!(value["isError"], false, "{value}");
+}
+
+#[tokio::test]
 async fn no_linked_record_or_more_than_one_creates_nothing() {
     let fixture = Fixture::start().await;
     fixture.registry.add_address(

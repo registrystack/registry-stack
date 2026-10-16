@@ -66,6 +66,15 @@ fn the_aligned_example_reads_and_lists_named_items_in_id_order() {
 }
 
 #[test]
+fn a_serialized_project_reads_back_as_authored_configuration() {
+    let project = read(EXAMPLE).expect("the aligned example reads");
+    let serialized = serde_norway::to_string(&project).expect("the project serializes as YAML");
+
+    let restored = read(&serialized).expect("serialized project reads through the authored reader");
+    assert_eq!(restored, project);
+}
+
+#[test]
 fn the_served_policy_takes_the_renamed_keys_and_lists_named_items_by_id() {
     let project = read(EXAMPLE).unwrap();
     let closure = project.compile_policy("regional-review").unwrap();

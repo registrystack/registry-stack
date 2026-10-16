@@ -845,6 +845,21 @@ class ReportTest(unittest.TestCase):
 
 
 class PlanTest(unittest.TestCase):
+    def test_macos_check_child_restores_the_cargo_runtime_library_path(self) -> None:
+        with (
+            unittest.mock.patch.object(runner.sys, "platform", "darwin"),
+            unittest.mock.patch.dict(
+                runner.os.environ,
+                {
+                    "REGISTRY_CARGO_RUNTIME_LIBRARY_PATH": "/cargo/fips",
+                    "DYLD_LIBRARY_PATH": "/caller/runtime",
+                },
+                clear=True,
+            ),
+        ):
+            environment = runner.check_environment(Path("/checks"))
+        self.assertEqual(environment["DYLD_LIBRARY_PATH"], "/cargo/fips:/caller/runtime")
+
     def case(self, **changes):
         value = {
             "id": "demo-case",

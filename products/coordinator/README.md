@@ -11,9 +11,10 @@ Coordinator is pre-1.0. Use one source version's binaries, packages, configurati
 layout together. The current protected state schema is version 4, with no in-place migration
 from earlier pilot layouts.
 
-Build the Coordinator service and operator CLI from source using the deployment runbook.
-Their release binaries and container image are not yet distributed; the unified client
-packages include the Coordinator client independently.
+Build the Coordinator service, operator CLI, client, and client bindings from source using
+the deployment runbook and the client crate instructions. The release binaries and container
+image are not yet distributed, and the Coordinator client is not part of the unified Rust,
+Node.js, or Python packages.
 
 ## Create and check a project
 

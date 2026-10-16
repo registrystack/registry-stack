@@ -453,7 +453,7 @@ async fn cancelled_unknown_decision_requires_review_then_releases_only_its_resto
     assert!(h.output_values(run).await.is_empty());
     assert_eq!(
         h.store
-            .retain_terminal(Utc::now(), 100, &operator)
+            .retain_terminal(h.retention_cutoff().await, 100, &operator)
             .await
             .unwrap(),
         0

@@ -61,6 +61,9 @@
   names the applier. Once neither the review result nor the application
   receipt is retained, the read answers 410 `proposal.submission_expired`.
   A non-canonical or unknown version is concealed like an unknown Proposal.
+- Published Proposal schemas now reject a decision `publicReason` that is
+  whitespace-only or contains control characters, matching the client
+  contract for reviewer text.
 - BREAKING: the Proposal list takes `limit` (1 to 100, default 50) for its
   page size and refuses `top` with `query.invalid` naming `limit`. An
   ingestion run listing takes `cursor` and answers `nextCursor`, and refuses

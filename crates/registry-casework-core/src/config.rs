@@ -119,7 +119,7 @@ pub struct CaseworkProject {
     #[serde(
         default,
         deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        serialize_with = "serialize_project_review_policies"
     )]
     #[cfg_attr(
         feature = "schema",
@@ -149,7 +149,7 @@ pub struct CaseworkProject {
     #[serde(
         default,
         deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        serialize_with = "serialize_project_clocks"
     )]
     #[cfg_attr(
         feature = "schema",
@@ -168,6 +168,78 @@ pub struct CaseworkProject {
         schemars(schema_with = "crate::typed::id_keyed_schema::<crate::TaskTemplate>")
     )]
     pub task_templates: Vec<crate::TaskTemplate>,
+}
+
+/// Serialize one project collection in its authored, ID-keyed form. Some of
+/// its item types deliberately serialize nested collections as arrays for the
+/// served HTTP contract; a `CaseworkProject` must instead write those nested
+/// collections in the mapping form its authored reader accepts.
+fn serialize_project_collection<S, T>(
+    items: &[T],
+    nested_id_keyed_members: &[&str],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    T: Serialize + Identified,
+{
+    use serde::ser::Error as _;
+
+    let mut authored = BTreeMap::new();
+    for item in items {
+        let mut value = serde_json::to_value(item).map_err(S::Error::custom)?;
+        let members = value
+            .as_object_mut()
+            .ok_or_else(|| S::Error::custom("an ID-keyed project item must serialize as a map"))?;
+        members.remove("id");
+        for member in nested_id_keyed_members {
+            let Some(nested) = members.get_mut(*member) else {
+                continue;
+            };
+            let serde_json::Value::Array(entries) = std::mem::take(nested) else {
+                return Err(S::Error::custom(format!(
+                    "the nested project collection `{member}` must serialize as a list"
+                )));
+            };
+            let mut keyed = serde_json::Map::new();
+            for mut entry in entries {
+                let entry_members = entry.as_object_mut().ok_or_else(|| {
+                    S::Error::custom(format!(
+                        "an item in the nested project collection `{member}` must serialize as a map"
+                    ))
+                })?;
+                let id = entry_members
+                    .remove("id")
+                    .and_then(|id| id.as_str().map(str::to_owned))
+                    .ok_or_else(|| {
+                        S::Error::custom(format!(
+                            "an item in the nested project collection `{member}` must carry an id"
+                        ))
+                    })?;
+                keyed.insert(id, entry);
+            }
+            *nested = serde_json::Value::Object(keyed);
+        }
+        authored.insert(item.id(), value);
+    }
+    authored.serialize(serializer)
+}
+
+fn serialize_project_review_policies<S>(
+    policies: &[ReviewPolicy],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serialize_project_collection(policies, &["outcomes"], serializer)
+}
+
+fn serialize_project_clocks<S>(clocks: &[ClockPolicy], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serialize_project_collection(clocks, &["reminders"], serializer)
 }
 
 /// The pointer to a named item of an id-keyed collection (CFG-ID-5).

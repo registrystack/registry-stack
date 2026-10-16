@@ -1046,7 +1046,8 @@ rateLimits:
                 ScopeToken::new("address-correction:self").expect("scope")
             ])
             .expect("scopes"),
-            attempt_timeout_milliseconds: BoundedU64::new(5_000).expect("timeout"),
+            // Use the runtime budget so loaded test runners do not impose a tighter deadline.
+            attempt_timeout_milliseconds: default_attempt_timeout(),
         };
         let exchange = ExchangeConfig {
             token_endpoint: Url::new(token_endpoint).expect("token endpoint"),

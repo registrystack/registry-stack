@@ -1,9 +1,9 @@
 # Registry Coordinator client
 
-A bounded server-side client for Registry Coordinator's HTTP contract. The
-public Rust facade exposes it as `registry_stack_client::coordinator`; the
-public Node.js and Python packages expose it as their `coordinator`
-namespace. Browser apps call their own authorized server routes.
+A bounded server-side client for Registry Coordinator's HTTP contract. Build
+this crate and its Node.js or Python binding from source; they are not part of
+the unified Rust, Node.js, or Python client packages. Browser apps call their
+own authorized server routes.
 
 The operations are `workflow`, `start`, `list`, `status`, `inspect`, `reconcile`,
 `retry_same`, and `cancel`. The operator routes (doctor, holds, execution
