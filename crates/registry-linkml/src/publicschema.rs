@@ -389,6 +389,12 @@ pub fn featured(class: &ClassDef) -> bool {
     class.annotations.get("featured").map(String::as_str) == Some("true")
 }
 
+/// True when PublicSchema declares the class to be a value carried inline
+/// rather than a record relationship target.
+pub fn inline_only(class: &ClassDef) -> bool {
+    class.annotations.get("inline_only").map(String::as_str) == Some("true")
+}
+
 /// The convergence evidence behind `item`, when PublicSchema records any.
 pub fn convergence(item: &impl Labeled) -> Result<Option<Convergence>, ConventionError> {
     json_annotation(item, "convergence_json")
@@ -513,6 +519,14 @@ mod tests {
         assert!(featured(&class(&[("featured", "true")])));
         assert!(!featured(&class(&[("featured", "false")])));
         assert!(!featured(&class(&[])));
+    }
+
+    #[test]
+    fn inline_only_is_the_literal_true() {
+        assert!(inline_only(&class(&[("inline_only", "true")])));
+        assert!(!inline_only(&class(&[("inline_only", "false")])));
+        assert!(!inline_only(&class(&[("inline_only", "value")])));
+        assert!(!inline_only(&class(&[])));
     }
 
     #[test]

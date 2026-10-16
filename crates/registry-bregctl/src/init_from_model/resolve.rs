@@ -747,7 +747,7 @@ fn field_kind(
             }
             let scalar = scalar_kind(name)?;
             if slot.multivalued {
-                list_of(scalar_schema(name)?)
+                list_of(scalar_schema(name)?, LIST_MAX_BYTES)
             } else {
                 scalar
             }
@@ -760,7 +760,7 @@ fn field_kind(
                 None => definition.values.len() <= INLINE_VOCABULARY_THRESHOLD,
             };
             if slot.multivalued {
-                list_of(enum_schema(definition, inline))
+                list_of(enum_schema(definition, inline), LIST_MAX_BYTES)
             } else if inline {
                 FieldKind::VocabularyCode {
                     vocabulary: kebab_case(name),
@@ -773,15 +773,28 @@ fn field_kind(
             }
         }
         Range::Class(name) => {
-            if slot.multivalued {
-                return Err(format!(
-                    "it holds many `{name}` values; model that relationship as its own entity carrying a reference back to this one"
-                ));
-            }
             let candidates: Vec<&EntityIndex> = index
                 .iter()
                 .filter(|entry| fits_range(model, &entry.class, name))
                 .collect();
+            if slot.multivalued {
+                let class = &model.classes[name];
+                if !publicschema::inline_only(class) {
+                    return Err(format!(
+                        "it holds many `{name}` values; model that relationship as its own entity carrying a reference back to this one"
+                    ));
+                }
+                if property.target.is_some() || !candidates.is_empty() {
+                    return Err(format!(
+                        "`{name}` is an inline-only value, but this selection names a record target for it; remove `target` and leave its concept unselected to carry the values inline"
+                    ));
+                }
+                let object = value_object_schema(model, class)?;
+                return Ok(ResolvedKind {
+                    kind: list_of(object.schema, OBJECT_MAX_BYTES),
+                    classification: object.classification,
+                });
+            }
             if let Some(target) = &property.target {
                 return candidates
                     .iter()
@@ -989,9 +1002,9 @@ fn code_max_length(definition: &EnumDef) -> u32 {
         .clamp(CODE_MAX_LENGTH, VOCABULARY_CODE_MAX_LENGTH)
 }
 
-fn list_of(items: Value) -> FieldKind {
+fn list_of(items: Value, max_bytes: u32) -> FieldKind {
     FieldKind::Structured {
-        max_bytes: LIST_MAX_BYTES,
+        max_bytes,
         schema: json!({
             "type": "object",
             "additionalProperties": false,
@@ -1009,6 +1022,56 @@ fn list_of(items: Value) -> FieldKind {
 struct InlineObject {
     schema: Value,
     classification: Classification,
+}
+
+/// A complete flat value, explicitly identified as inline-only by the model.
+/// Unlike the legacy single-value projection below, a list item must not
+/// silently omit identity, nested relationships, or a possible subtype's
+/// shape. Refusing class-valued members also refuses cycles without following
+/// a recursive graph. Required item members remain required even though the
+/// generated record field itself is optional.
+fn value_object_schema(model: &Model, class: &ClassDef) -> Result<InlineObject, String> {
+    let descendants = model
+        .concrete_descendants(&class.name)
+        .map_err(|error| error.to_string())?;
+    if class.is_abstract || descendants.iter().any(|child| child.name != class.name) {
+        return Err(format!(
+            "`{}` has no single concrete value shape; author its value schema explicitly in a native project",
+            class.name
+        ));
+    }
+    let slots = model
+        .induced_slots(&class.name)
+        .map_err(|error| error.to_string())?;
+    for slot in &slots {
+        if slot.identifier {
+            return Err(format!(
+                "`{}` declares an identifying property; model it as its own entity carrying a reference back to this one",
+                class.name
+            ));
+        }
+        if matches!(slot.range, Range::Class(_)) || publicschema::bespoke_type(slot).is_some() {
+            return Err(format!(
+                "`{}` has a nested or bespoke value in `{}`; only complete scalar and enumerated inline values can be derived as lists; author this shape explicitly in a native project",
+                class.name, slot.name
+            ));
+        }
+    }
+    let mut object = object_schema(model, class).ok_or_else(|| {
+        format!(
+            "`{}` has no supported complete value shape; author its value schema explicitly in a native project",
+            class.name
+        )
+    })?;
+    let required: Vec<&str> = slots
+        .iter()
+        .filter(|slot| slot.required)
+        .map(|slot| slot.name.as_str())
+        .collect();
+    if !required.is_empty() {
+        object.schema["required"] = json!(required);
+    }
+    Ok(object)
 }
 
 /// `None` when the concept has nothing scalar to carry.
@@ -1817,15 +1880,219 @@ mod tests {
 
     #[test]
     fn a_property_holding_many_concepts_is_refused_with_the_way_out() {
-        let error = refused(
+        for body in [
             "recordTypes:\n  - concept: Location\n    properties:\n      - name: geocodes\n",
+            "recordTypes:\n  - concept: PracticeRole\n    properties:\n      - name: profession_code\n      - name: practice_sites\n",
+            "recordTypes:\n  - concept: PracticeRole\n    properties:\n      - name: practice_sites\n        target: service-point\n  - concept: ServicePoint\n",
+        ] {
+            let error = refused(body);
+            assert_eq!(error.code, "init.selection.property-unsupported");
+            assert!(
+                error.message.contains("as its own entity"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    const VALUE_LIST_SELECTION: &str = "recordTypes:\n  - concept: ProfessionalLicense\n    properties:\n      - name: profession_code\n  - concept: WaterUseAuthorization\n    properties:\n      - name: authorized_water_quantity\n";
+
+    #[test]
+    fn inline_value_lists_keep_required_members_and_bound_each_complete_item() {
+        let plan = resolved(VALUE_LIST_SELECTION);
+        let FieldKind::Structured { max_bytes, schema } =
+            &field(&plan, "professional-license", "profession-code").kind
+        else {
+            panic!("a value list is structured");
+        };
+        assert_eq!(*max_bytes, OBJECT_MAX_BYTES);
+        assert_eq!(
+            schema["properties"]["values"]["items"]["required"],
+            json!(["code_value", "code_scheme"])
         );
-        assert_eq!(error.code, "init.selection.property-unsupported");
-        assert!(
-            error.message.contains("as its own entity"),
-            "{}",
-            error.message
+        let code = json!({"code_value": "2221", "code_scheme": "https://example.test/isco"});
+        assert!(accepts(
+            schema,
+            json!({"values": [code.clone(), {
+                "code_value": "NURSE", "code_scheme": "https://example.test/local",
+                "code_label": "Nurse", "code_meaning": "https://example.test/nurse"
+            }]})
+        ));
+        assert!(accepts(schema, json!({"values": []})));
+        assert!(accepts(schema, json!({"values": vec![code.clone(); 50]})));
+        for invalid in [
+            json!({"values": vec![code.clone(); 51]}),
+            json!({}),
+            json!([code]),
+            json!({"values": ["2221"]}),
+            json!({"values": [{"code_value": "2221"}]}),
+            json!({"values": [{"code_scheme": "https://example.test/isco"}]}),
+            json!({"values": [{"code_value": 2221, "code_scheme": "scheme"}]}),
+            json!({"values": [{"code_value": "2221", "code_scheme": null}]}),
+            json!({"values": [{"code_value": "2221", "code_scheme": "scheme", "extra": true}]}),
+            json!({"values": [], "extra": true}),
+            json!({"values": [{"code_value": "x".repeat(256), "code_scheme": "scheme"}]}),
+            json!({"values": [{"code_value": "2221", "code_scheme": "x".repeat(2049)}]}),
+        ] {
+            assert!(!accepts(schema, invalid));
+        }
+
+        let FieldKind::Structured { schema, .. } = &field(
+            &plan,
+            "water-use-authorization",
+            "authorized-water-quantity",
+        )
+        .kind
+        else {
+            panic!("a numeric and enumerated value list is structured too");
+        };
+        assert_eq!(
+            schema["properties"]["values"]["items"]["required"],
+            json!(["quantity_value", "unit_code", "unit_scheme"])
         );
+        assert!(accepts(
+            schema,
+            json!({"values": [
+                {"quantity_value": 12.5, "unit_code": "m3", "unit_scheme": "ucum"},
+                {"quantity_value": 24, "unit_code": "MTQ", "unit_scheme": "unece_rec20"}
+            ]})
+        ));
+        for invalid in [
+            json!({"quantity_value": "12.5", "unit_code": "m3", "unit_scheme": "ucum"}),
+            json!({"quantity_value": 12.5, "unit_code": "m3", "unit_scheme": "unknown"}),
+            json!({"quantity_value": 12.5, "unit_code": "m3"}),
+        ] {
+            assert!(!accepts(schema, json!({"values": [invalid]})));
+        }
+        for property in ["profession_code", "authorized_water_quantity"] {
+            assert!(property_support(model(), &model().slots[property], &[]).is_ok());
+        }
+    }
+
+    #[test]
+    fn value_lists_raise_classification_for_the_property_and_every_item_member() {
+        let plan = resolved(
+            "recordTypes:\n  - concept: DrivingEntitlement\n    properties:\n      - name: driving_condition_codes\n",
+        );
+        assert_eq!(
+            field(&plan, "driving-entitlement", "driving-condition-codes").classification,
+            Classification::Restricted
+        );
+        assert_eq!(plan.classification_ceiling, Classification::Restricted);
+        let selected = selection(VALUE_LIST_SELECTION);
+        for protected in ["profession_code", "code_label"] {
+            let mut model = model().clone();
+            model
+                .slots
+                .get_mut(protected)
+                .unwrap()
+                .annotations
+                .insert("sensitivity".to_owned(), "sensitive".to_owned());
+            let plan = resolve(&selected, &model).expect("a classified value list resolves");
+            assert_eq!(
+                field(&plan, "professional-license", "profession-code").classification,
+                Classification::Restricted,
+                "{protected}"
+            );
+            assert_eq!(plan.classification_ceiling, Classification::Restricted);
+        }
+        let mut model = model().clone();
+        model
+            .slots
+            .get_mut("code_label")
+            .unwrap()
+            .annotations
+            .insert("sensitivity".to_owned(), "unknown".to_owned());
+        assert!(resolve(&selected, &model).is_err());
+    }
+
+    #[test]
+    fn value_lists_refuse_record_targets_and_do_not_hide_ambiguous_selections() {
+        for targets in [
+            "      - name: profession_code\n        target: missing\n",
+            "      - name: profession_code\n  - concept: CodedValue\n",
+            "      - name: profession_code\n  - concept: CodedValue\n    id: first\n  - concept: CodedValue\n    id: second\n",
+            "      - name: profession_code\n        target: coded-value\n  - concept: CodedValue\n",
+        ] {
+            let error = refused(&format!(
+                "recordTypes:\n  - concept: ProfessionalLicense\n    properties:\n{targets}"
+            ));
+            assert_eq!(error.code, "init.selection.property-unsupported");
+            assert_eq!(error.path, "/recordTypes/0/properties/0");
+            assert!(error.message.contains("inline-only"));
+        }
+        assert!(property_support(
+            model(),
+            &model().slots["profession_code"],
+            &["CodedValue".to_owned()]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn value_lists_require_explicit_inline_metadata_and_a_complete_flat_shape() {
+        let selected = selection(VALUE_LIST_SELECTION);
+        let check_refusal = |model: &Model| {
+            let error = resolve(&selected, model).expect_err("unsupported value shape is refused");
+            assert_eq!(error.code, "init.selection.property-unsupported");
+            assert_eq!(error.path, "/recordTypes/0/properties/0");
+        };
+        for annotation in [None, Some("false"), Some("invalid")] {
+            let mut model = model().clone();
+            let annotations = &mut model.classes.get_mut("CodedValue").unwrap().annotations;
+            annotations.remove("inline_only");
+            if let Some(value) = annotation {
+                annotations.insert("inline_only".to_owned(), value.to_owned());
+            }
+            check_refusal(&model);
+        }
+        // A self-cycle, a record relationship and an unsupported scalar may
+        // not disappear from an otherwise usable item schema.
+        for range in [
+            Range::Class("CodedValue".to_owned()),
+            Range::Class("Person".to_owned()),
+            Range::Type("unsupported".to_owned()),
+        ] {
+            let mut model = model().clone();
+            model.slots.get_mut("code_label").unwrap().range = range;
+            check_refusal(&model);
+        }
+        let mut identified = model().clone();
+        identified.slots.get_mut("code_value").unwrap().identifier = true;
+        check_refusal(&identified);
+        let mut bespoke = model().clone();
+        bespoke
+            .slots
+            .get_mut("code_label")
+            .unwrap()
+            .annotations
+            .insert("bespoke_type".to_owned(), "unknown".to_owned());
+        check_refusal(&bespoke);
+        let mut empty = model().clone();
+        empty.classes.get_mut("CodedValue").unwrap().slots.clear();
+        check_refusal(&empty);
+        let mut abstract_value = model().clone();
+        abstract_value
+            .classes
+            .get_mut("CodedValue")
+            .unwrap()
+            .is_abstract = true;
+        check_refusal(&abstract_value);
+        let mut polymorphic = model().clone();
+        let mut descendant = polymorphic.classes["CodedValue"].clone();
+        descendant.name = "SpecializedValue".to_owned();
+        descendant.is_a = Some("CodedValue".to_owned());
+        polymorphic
+            .classes
+            .insert(descendant.name.clone(), descendant);
+        check_refusal(&polymorphic);
+        let mut inheritance_cycle = model().clone();
+        inheritance_cycle
+            .classes
+            .get_mut("CodedValue")
+            .unwrap()
+            .is_a = Some("CodedValue".to_owned());
+        check_refusal(&inheritance_cycle);
     }
 
     #[test]

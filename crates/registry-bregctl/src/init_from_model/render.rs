@@ -1209,11 +1209,16 @@ fn readme(plan: &Plan) -> String {
     );
     let _ = writeln!(
         out,
-        "- A property whose value is another selected concept became a `reference` to that \
-         entity. One whose value is a concept that was not selected, and that the model \
-         treats as a value rather than a record, became a `structured` field carrying that \
-         value inline under a closed schema. A property with many values became a \
-         `structured` field carrying a bounded list."
+        "- A single-valued property whose value is another selected concept became a \
+         `reference` to that entity. With its concept unselected, its scalar and enumerated \
+         members became a closed `structured` object; nested concepts were left out. \
+         Multivalued scalars and enumerations became bounded `structured` lists. A \
+         multivalued class is accepted only when the model marks it `inline_only: true`, \
+         it has one complete scalar/enumerated shape without identity or nested concepts, \
+         and no selected record target. Every item retains its required members. Lists \
+         use an object with a `values` array and at most 50 items. The whole field is bounded \
+         to 4096 bytes for scalar/enumerated lists or 16384 bytes for value-object lists. \
+         Other multivalued relationships require their own records."
     );
     let _ = writeln!(
         out,

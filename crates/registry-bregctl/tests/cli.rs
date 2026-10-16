@@ -2446,6 +2446,126 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 }
 
 #[test]
+fn init_from_publicschema_derives_complete_value_lists_deterministically() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let selection = root.join("selection.yaml");
+    fs::write(
+        &selection,
+        r#"apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
+model: publicschema
+registry:
+  id: licensed-professions
+  title: Licensed professions
+recordTypes:
+  - concept: Person
+    properties:
+      - name: given_name
+      - name: family_name
+  - concept: ProfessionalLicense
+    properties:
+      - name: registered_subject
+      - name: valid_from
+      - name: valid_to
+      - name: profession_code
+  - concept: PracticeRole
+    properties:
+      - name: person
+        target: person
+      - name: profession_code
+  - concept: WaterUseAuthorization
+    properties:
+      - name: authorized_water_quantity
+"#,
+    )
+    .unwrap();
+    let checked = bregctl(&["check", "--file", path(&selection)]);
+    assert!(checked.status.success(), "{checked:?}");
+    let first = root.join("first");
+    let initialized = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&first),
+        "--from",
+        "publicschema",
+        "--selection",
+        path(&selection),
+    ]);
+    assert!(initialized.status.success(), "{initialized:?}");
+    let report = json_stdout(&initialized);
+    let registry = fs::read_to_string(first.join("registry.yaml")).unwrap();
+    assert!(registry.contains("conceptUri: https://publicschema.org/ProfessionalLicense"));
+    assert!(registry.contains("type: reference, target: person"));
+    let source: Value = serde_norway::from_str(&registry).unwrap();
+    for (entity_id, field_id, required) in [
+        (
+            "professional-license",
+            "profession-code",
+            json!(["code_value", "code_scheme"]),
+        ),
+        (
+            "water-use-authorization",
+            "authorized-water-quantity",
+            json!(["quantity_value", "unit_code", "unit_scheme"]),
+        ),
+    ] {
+        let entity = source["recordTypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entity| entity["id"] == entity_id)
+            .unwrap();
+        let field = entity["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["id"] == field_id)
+            .unwrap();
+        assert_eq!(field["type"], "structured");
+        assert_eq!(field["maximumBytes"], 16384);
+        assert_eq!(
+            field["schema"]["properties"]["values"]["items"]["required"],
+            required
+        );
+    }
+    let project = parse_project_yaml(registry.as_bytes()).unwrap();
+    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
+        compile_project(&project, &[], profile).expect("the native project compiles");
+    }
+    let checked = bregctl(&["check", path(&first)]);
+    assert!(checked.status.success(), "{checked:?}");
+    let readme = fs::read_to_string(first.join("README.md")).unwrap();
+    let pin = registry_linkml::publicschema::pin().unwrap();
+    assert!(readme.contains(&pin.license));
+    assert!(readme.contains(&pin.license_url));
+    assert!(readme.contains(&pin.commit));
+    assert!(readme.contains("inline_only: true"));
+
+    // The echoed, pinned selection can reproduce the whole native project
+    // in a fresh directory without updating or owning the first project.
+    let second = root.join("second");
+    let regenerated = bregctl(&[
+        "init",
+        path(&second),
+        "--from",
+        "publicschema",
+        "--selection",
+        path(&first.join("model/selection.yaml")),
+    ]);
+    assert!(regenerated.status.success(), "{regenerated:?}");
+    for artifact in report["artifacts"].as_array().unwrap() {
+        let relative = artifact["path"].as_str().unwrap();
+        assert_eq!(
+            fs::read(first.join(relative)).unwrap(),
+            fs::read(second.join(relative)).unwrap(),
+            "{relative}"
+        );
+    }
+}
+
+#[test]
 fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("derived");
