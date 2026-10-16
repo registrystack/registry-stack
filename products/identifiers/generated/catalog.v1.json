@@ -4060,11 +4060,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "859d0ab8425b5af0e914d8ee5226248f39d5436392c39b21eb6ce45e9dc67a27"
+        "sha256": "ddc60cd3c06746fdffe4ceaeceb3acfa0db8d38aade5c99fbabc756e13cc01c0"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "8a850beb3bfcc11aebaf986fc90ceab0291e4189d9e8bc2b10d2e838867b77a0",
+        "sha256": "3538e178fd3b21ed3e8b59c1596dee65d98e216e5a4a6862fb1fd64527cc22d1",
         "mediaType": "application/schema+json"
       }
     },
