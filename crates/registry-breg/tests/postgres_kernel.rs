@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(feature = "runtime")]
+#![cfg(feature = "postgres-test")]
 
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;

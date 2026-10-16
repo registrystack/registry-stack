@@ -16,6 +16,10 @@ publish = false
 name = "authoring-schema"
 required-features = ["schema"]
 
+[[test]]
+name = "authoring_schema"
+required-features = ["schema"]
+
 [lints]
 workspace = true
 
