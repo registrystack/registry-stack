@@ -4,7 +4,9 @@
 The Coordinator composes products only through their public product clients.
 Its runtime may reach product clients, product cores, `registry-record` and
 shared platform primitives, and nothing else of the workspace: never another
-product's runtime, adopter tooling, supporting service or binding. Its client
+product's runtime, adopter tooling, supporting service or binding. A core named
+below is reached only through its product client, never as a direct dependency
+of the runtime. Its client
 reaches the runtime over the public HTTP contract only and links shared
 platform primitives alone. No crate outside the Coordinator depends on a
 Coordinator crate unless it is named below.
@@ -38,6 +40,13 @@ COORDINATOR_CLIENTS = (
 # with the product client that carries it.
 CLIENT_SUPPORT = {
     "registry-review-protocol": "the review handoff contract registry-casework-client carries",
+}
+
+# Product cores the runtime reaches only through their product client. The
+# core is in the runtime's forward closure through that client, so only the
+# runtime's own edges can show a direct dependency.
+CLIENT_ONLY_CORES = {
+    "registry-casework-core": "registry-casework-client",
 }
 
 # The unified Rust facade. It carries no Coordinator client and is never a
@@ -116,6 +125,12 @@ def violations(metadata: dict) -> list[str]:
                 failures.append(
                     f"{name} reaches package(s) outside product clients, product cores, "
                     f"registry-record and registry-platform-*: {', '.join(refused)}"
+                )
+            direct = sorted(names[item] for item in every.get(package_id, set()))
+            for core in (item for item in direct if item in CLIENT_ONLY_CORES):
+                failures.append(
+                    f"{name} depends on {core} directly; "
+                    f"reach it through {CLIENT_ONLY_CORES[core]}"
                 )
         elif name in COORDINATOR_CLIENTS:
             refused = sorted(item for item in reached if not client_may_reach(item))

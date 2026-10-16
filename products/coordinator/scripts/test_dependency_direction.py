@@ -176,6 +176,25 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(MODULE.violations(metadata()), [])
 
+    def test_a_direct_casework_core_dependency_is_refused(self):
+        for kind in (None, "dev", "build"):
+            with self.subTest(kind=kind):
+                self.assertIn(
+                    "registry-coordinator depends on registry-casework-core directly; "
+                    "reach it through registry-casework-client",
+                    failures(runtime=[*INTENDED["runtime"], ("casework-core", kind)]),
+                )
+
+    def test_casework_core_through_its_client_is_accepted(self):
+        self.assertIn("casework-core", INTENDED["casework-client"])
+        self.assertEqual(MODULE.violations(metadata()), [])
+
+    def test_client_only_cores_are_named_with_their_client(self):
+        self.assertEqual(
+            MODULE.CLIENT_ONLY_CORES,
+            {"registry-casework-core": "registry-casework-client"},
+        )
+
 
 class ClientTests(unittest.TestCase):
     def test_client_reaches_only_shared_platform_primitives(self):
