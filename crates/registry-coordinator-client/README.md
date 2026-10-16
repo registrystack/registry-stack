@@ -35,7 +35,9 @@ caller may read, newest admission first. `list_page` also accepts the opaque
 cursor returned as `next_cursor`, an exact state, and an attention filter.
 Pass a cursor unchanged with the same caller and filters. Attention means the
 effective states `attention` and `failed`; the state filter exposes all eight
-closed runtime states individually.
+closed runtime states individually. A returned page must match the requested
+filters and list distinct runs in strictly descending `(admittedAt, runId)`
+order, the order its cursor continues from.
 
 The computed Workflow revision identifies execution semantics, including the typed input,
 graph, declared outcomes, used Operation and Function revisions, and host execution contracts.

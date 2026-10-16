@@ -226,6 +226,9 @@ impl CoordinatorClient {
                         attention != matches!(run.state.as_str(), "attention" | "failed")
                     })
             })
+            || value.runs.windows(2).any(|pair| {
+                (pair[0].admitted_at, pair[0].run_id) <= (pair[1].admitted_at, pair[1].run_id)
+            })
             || value.next_cursor.as_deref().is_some_and(|cursor| {
                 !valid_cursor(cursor)
                     || value.runs.len() != query.limit as usize
