@@ -1310,14 +1310,15 @@ impl BaseRegistryClient {
         let link = proposal
             .links
             .get(operation)
-            .filter(|link| {
-                link.method == "POST"
-                    && link
-                        .availability
-                        .as_ref()
-                        .is_none_or(|availability| availability.available)
-            })
+            .filter(|link| link.method == "POST")
             .ok_or_else(refusal)?;
+        if let Some(availability) = link
+            .availability
+            .as_ref()
+            .filter(|availability| !availability.available)
+        {
+            return Err(unavailable(availability));
+        }
         validate_body(operation, &body)?;
         if operation == "apply"
             && (body["submissionVersion"].as_u64() != Some(u64::from(proposal.submission_version))
@@ -1909,6 +1910,57 @@ fn validate_link(link: &BRegProposalLink) -> Result<(), BaseRegistryClientError>
         return Err(refusal());
     }
     Ok(())
+}
+/// Refuse a transition whose link BReg marked unavailable, naming the reason
+/// and recovery the link carries in their wire spelling. The pairs are the
+/// ones `valid_availability` admits, so every decoded link reaches one.
+fn unavailable(availability: &BRegAvailability) -> BaseRegistryClientError {
+    use BRegAvailabilityReason as Reason;
+    use BRegRecoveryHint as Recovery;
+    macro_rules! named {
+        ($reason:literal, $recovery:literal) => {
+            concat!(
+                "the Base Registry Engine Proposal link is unavailable: reason ",
+                $reason,
+                ", recovery ",
+                $recovery
+            )
+        };
+    }
+    BaseRegistryClientError::invalid_request(match (availability.reason, availability.recovery) {
+        (Some(Reason::PendingReview), Some(Recovery::Refresh)) => {
+            named!("pending-review", "refresh")
+        }
+        (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
+            named!("review-rejected", "receipt-only")
+        }
+        (Some(Reason::ReviewRejected), Some(Recovery::Revise)) => {
+            named!("review-rejected", "revise")
+        }
+        (Some(Reason::ReviewChangesRequested), Some(Recovery::Revise)) => {
+            named!("review-changes-requested", "revise")
+        }
+        (Some(Reason::ReviewEnded), Some(Recovery::Revise)) => named!("review-ended", "revise"),
+        (Some(Reason::StaleRevision), Some(Recovery::ReceiptOnly)) => {
+            named!("stale-revision", "receipt-only")
+        }
+        (Some(Reason::AlreadyApplied), Some(Recovery::ReceiptOnly)) => {
+            named!("already-applied", "receipt-only")
+        }
+        (Some(Reason::ContractChanged), Some(Recovery::Refresh)) => {
+            named!("contract-changed", "refresh")
+        }
+        (Some(Reason::ContractChanged), Some(Recovery::CorrectInput)) => {
+            named!("contract-changed", "correct-input")
+        }
+        (Some(Reason::DependencyOutage), Some(Recovery::Retry)) => {
+            named!("dependency-outage", "retry")
+        }
+        (Some(Reason::InvalidInput), Some(Recovery::CorrectInput)) => {
+            named!("invalid-input", "correct-input")
+        }
+        _ => return refusal(),
+    })
 }
 fn refusal() -> BaseRegistryClientError {
     BaseRegistryClientError::invalid_request(
@@ -3241,6 +3293,25 @@ mod tests {
                 .executable
         );
         assert_eq!(restored.as_bytes(), attempt.as_bytes());
+    }
+    #[test]
+    fn unavailable_transition_refusal_names_the_link_reason_and_recovery() {
+        let client = client("https://registry.example/");
+        let mut pending = document();
+        pending["links"]["apply"]["availability"] = json!({"available":false,
+            "observedRevision":2,"reason":"pending-review","recovery":"refresh"});
+        let error = client
+            .prepare_proposal(
+                &proposal(&client, pending),
+                "apply",
+                json!({"submissionVersion":1,"effectDigest":REVISION}),
+                &BRegIdempotencyKey::parse("early-apply").unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), "invalid-request");
+        let message = error.to_string();
+        assert!(message.contains("pending-review"), "{message}");
+        assert!(message.contains("refresh"), "{message}");
     }
     #[test]
     fn committed_recovery_retains_original_condition_body_key_and_contract() {
