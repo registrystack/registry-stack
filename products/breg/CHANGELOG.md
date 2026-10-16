@@ -24,6 +24,12 @@
   `record` field whose optional reference input was omitted or whose
   optional Record field is empty, as the published context schema already
   declared. The review-context read refused such a Proposal before.
+- The Rust, Node.js and Python clients refuse a Proposal transition whose
+  link is unavailable with a message naming the link's `reason` and
+  `recovery`, for example `reason pending-review, recovery refresh` for an
+  Apply prepared before the Review is decided. The refusal kind stays
+  `invalid-request`; only the message changed from the generic "contract or
+  attempt is invalid".
 
 - BREAKING: retention windows other than the audit journal's live in a
   top-level `retention` block, the shape Scheduling and Messaging use.
