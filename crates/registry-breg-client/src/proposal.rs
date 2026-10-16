@@ -435,6 +435,11 @@ impl BRegProposal {
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
             || self.state == BRegProposalState::Draft && self.decision.is_some()
+            // Only a rejected review result ends a Proposal in rejected.
+            || self.state == BRegProposalState::Rejected
+                && self.decision.as_ref().is_some_and(|decision| {
+                    decision.status != BRegProposalDecisionStatus::Rejected
+                })
             || self.turn.is_some_and(|turn| match self.state {
                 BRegProposalState::Draft => turn != BRegProposalTurn::Party,
                 BRegProposalState::Submitted => false,

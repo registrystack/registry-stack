@@ -574,6 +574,42 @@ async fn proposal_turn_follows_its_lifecycle_state() {
 }
 
 #[tokio::test]
+async fn proposal_decision_follows_its_lifecycle_state_in_current_and_list_reads() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let reads = |state: &str, status: &str| {
+        let mut value = proposal(state);
+        value["decision"] = json!({"status":status,"decidedAt":"2026-10-01T10:00:00.000000Z"});
+        (value.clone(), json!({"items":[value]}))
+    };
+    // Only a rejected review result ends a Proposal in rejected. A submitted
+    // or cancelled Proposal may carry any recorded decision.
+    let mut wrong = vec![];
+    for state in ["submitted", "cancelled", "rejected"] {
+        for status in ["approved", "rejected", "changes-requested", "answered"] {
+            let expected = state != "rejected" || status == "rejected";
+            let (current, list) = reads(state, status);
+            fixture.answer(current);
+            if fixture.client.get_proposal(&binding, ID).await.is_ok() != expected {
+                wrong.push(format!("current {state}/{status}"));
+            }
+            fixture.answer(list);
+            if fixture
+                .client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .is_ok()
+                != expected
+            {
+                wrong.push(format!("list {state}/{status}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
+}
+
+#[tokio::test]
 async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_tombstones() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
