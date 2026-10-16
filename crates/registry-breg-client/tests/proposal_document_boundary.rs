@@ -226,6 +226,49 @@ async fn submission_read_refuses_an_incoherent_application() {
 }
 
 #[tokio::test]
+async fn current_submission_read_is_bound_to_the_disclosed_effect_digest() {
+    let fixture = Fixture::start().await;
+    let other = format!("sha256:{}", "b".repeat(64));
+    let submission = |version: u32, digest: &str| {
+        json!({"id":ID,"actionId":"correct","submissionVersion":version,"current":true,
+            "effectDigest":digest,"review":null,"application":null})
+    };
+    let held = fixture.proposal(proposal("submitted")).await;
+    fixture.answer(submission(1, DIGEST));
+    assert!(fixture
+        .client
+        .read_proposal_submission(&held, 1)
+        .await
+        .is_ok());
+    fixture.answer(submission(1, &other));
+    assert!(fixture
+        .client
+        .read_proposal_submission(&held, 1)
+        .await
+        .is_err());
+
+    // An earlier submission froze different effects of its own.
+    let mut later = proposal("submitted");
+    later["submissionVersion"] = json!(2);
+    let held = fixture.proposal(later).await;
+    fixture.answer(submission(1, &other));
+    assert!(fixture
+        .client
+        .read_proposal_submission(&held, 1)
+        .await
+        .is_ok());
+
+    // A Proposal that discloses no digest has nothing to compare against.
+    let held = fixture.proposal(proposal("cancelled")).await;
+    fixture.answer(submission(1, &other));
+    assert!(fixture
+        .client
+        .read_proposal_submission(&held, 1)
+        .await
+        .is_ok());
+}
+
+#[tokio::test]
 async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_reads() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
