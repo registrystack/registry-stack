@@ -210,12 +210,13 @@ migration bought does not hold for the copies that remain.
 ## Cryptography and FIPS posture
 
 The cryptography behind field encryption is the FIPS build of AWS-LC: `aws-lc-rs` built with its
-`fips` feature, linking `aws-lc-fips-sys`, which binds AWS-LC-FIPS 3.0.x. It is always on, and there
+`fips` feature, linking `aws-lc-fips-sys`, which binds AWS-LC-FIPS 4.x. It is always on, and there
 is no non-FIPS fallback path. Runtime paths, including the ones the JWT library uses, select the
 FIPS backend through unified features, while the non-FIPS `aws-lc-sys` crate remains an
 unreferenced but supply-chain-relevant build dependency. Upstream documents that the bound module
 has completed FIPS validation testing by an accredited lab and directs consumers to NIST CMVP for
-certification status. Registry Stack does not claim certification of itself.
+certification status; AWS-LC lists AWS-LC-FIPS v4.0 among its modules in process at CMVP, not among
+its awarded certificates. Registry Stack does not claim certification of itself.
 
 {/* Evidence: crates/registry-platform-crypto/Cargo.toml, the aws-lc-rs workspace dependency;
     Cargo.lock, the locked aws-lc-fips-sys backend beside the unreferenced aws-lc-sys;
