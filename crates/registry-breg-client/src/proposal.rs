@@ -1378,6 +1378,13 @@ impl BaseRegistryClient {
             || current.action_revision != proposal.action_revision
             || current.revision < proposal.revision
             || current.submission_version < proposal.submission_version
+            // One submission version freezes one set of effects.
+            || current.submission_version == proposal.submission_version
+                && current
+                    .effect_digest
+                    .as_ref()
+                    .zip(proposal.effect_digest.as_ref())
+                    .is_some_and(|(current, held)| current != held)
         {
             return Err(refusal());
         }
@@ -1414,6 +1421,13 @@ impl BaseRegistryClient {
             || submission.action_id != proposal.action_id
             || submission.submission_version != version
             || !digest(&submission.effect_digest)
+            // A submission's frozen effects never change, so the current one
+            // must name the digest the Proposal discloses.
+            || version == proposal.submission_version
+                && proposal
+                    .effect_digest
+                    .as_ref()
+                    .is_some_and(|digest| digest != &submission.effect_digest)
             || submission
                 .review
                 .as_ref()
