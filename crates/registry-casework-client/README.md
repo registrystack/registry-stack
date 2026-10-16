@@ -40,7 +40,9 @@ content or retrieve the separate audited accountability record.
 Pass review-task `next_cursor` values unchanged with the same caller, profiles
 and query filters. A continuation is an opaque snapshot cursor valid for at most 15 minutes.
 Changes to holdings, membership or current visibility can invalidate it.
-On `410 review.result-expired`, restart without the cursor. Task rows remain
+On `410 review.result-expired`, restart without the cursor. A page
+whose `status` is not `complete` always carries `next_cursor`; the client
+refuses one without it as a malformed response. Task rows remain
 subject to current source visibility, Casework membership and retention.
 
 Producer, human-review, and Directory calls take a bearer token and explicit
