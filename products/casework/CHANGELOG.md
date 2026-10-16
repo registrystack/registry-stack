@@ -111,6 +111,10 @@
   subset or continuation. Individual task assignments remain separate operations.
   Supervisory discovery intentionally omits holder identities and due dates;
   it does not replace a team holdings board.
+- A caseload or clock recompute preview must be applied within 15 minutes.
+  An applied preview answers the same result to a retry with the same preview
+  for 24 hours, even after a Directory change, so a lost apply response is
+  recoverable.
 - Authorized ReviewTask reads and supervisory rows expose optional
   `staffingDiagnostic: no-cover-available` after an assignment or absence
   recompute finds no eligible cover. Responsibility changes and task closure

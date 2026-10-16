@@ -333,15 +333,18 @@ impl CaseworkService {
             .await?;
         let mut client = self.store.client().await?;
         let tx = client.transaction().await?;
-        if lock_staffing_directory(&tx).await? != directory_revision {
-            return Err(ReviewRuntimeError::RevisionConflict);
-        }
+        let current_directory = lock_staffing_directory(&tx).await?;
+        // An applied preview answers its stored result even after the
+        // Directory moved on; only a pending apply is fenced by revision.
         if let Some(response) =
             lock_staffing_preview(&tx, actor, request.preview_id, "caseload").await?
         {
             audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(tx).await?;
             return Ok(serde_json::from_value(response)?);
+        }
+        if current_directory != directory_revision {
+            return Err(ReviewRuntimeError::RevisionConflict);
         }
         validate_caseload_set(&tx, actor, &movement, &tasks).await?;
         let now = Utc::now();
@@ -383,12 +386,14 @@ async fn lock_staffing_preview(
     let row=tx.query_opt("SELECT response FROM casework_review_staffing_previews WHERE preview_id=$1 AND kind=$2 AND issuer=$3 AND subject=$4 AND profile_id=$5 AND expires_at>now() FOR UPDATE",&[&id,&kind,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id]).await?.ok_or(ReviewRuntimeError::ResultExpired)?;
     Ok(row.get(0))
 }
+/// Store the applied result and keep it for 24 hours, so a retry of the same
+/// preview after a lost response recovers the committed outcome.
 async fn finish_staffing_preview(
     tx: &Transaction<'_>,
     id: Uuid,
     response: &Value,
 ) -> Result<(), ReviewRuntimeError> {
-    tx.execute("UPDATE casework_review_staffing_previews SET applied_at=now(),response=$2 WHERE preview_id=$1",&[&id,&response]).await?;
+    tx.execute("UPDATE casework_review_staffing_previews SET applied_at=now(),response=$2,expires_at=now()+interval '24 hours' WHERE preview_id=$1",&[&id,&response]).await?;
     Ok(())
 }
 
@@ -614,15 +619,18 @@ impl CaseworkService {
             .await?;
         let mut client = self.store.client().await?;
         let tx = client.transaction().await?;
-        if lock_staffing_directory(&tx).await? != directory_revision {
-            return Err(ReviewRuntimeError::RevisionConflict);
-        }
+        let current_directory = lock_staffing_directory(&tx).await?;
+        // An applied preview answers its stored result even after the
+        // Directory moved on; only a pending apply is fenced by revision.
         if let Some(response) =
             lock_staffing_preview(&tx, actor, request.preview_id, "clock").await?
         {
             audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(tx).await?;
             return Ok(serde_json::from_value(response)?);
+        }
+        if current_directory != directory_revision {
+            return Err(ReviewRuntimeError::RevisionConflict);
         }
         let task_ids = tasks.iter().map(|t| t.task_id).collect::<Vec<_>>();
         tx.query("SELECT request_id FROM casework_review_requests WHERE request_id IN(SELECT request_id FROM casework_review_tasks WHERE task_id=ANY($1)) ORDER BY request_id FOR UPDATE",&[&task_ids]).await?;
