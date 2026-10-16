@@ -57,8 +57,11 @@
 - `GET /v1/proposals/{id}/submissions/{version}` reads one submitted
   version of a Proposal under Proposal Get authority: its frozen effect
   digest, its review result, and its application status as separate members,
-  with `current` marking the latest version. The application member never
-  names the applier. Once neither the review result nor the application
+  with `current` marking the latest version. A profile holding the supplemental
+  `get-application-actor` Proposal operation receives the stored keyed
+  `appliedBy` pseudonym and `appliedAt` on this read and Proposal Get. Both
+  remain absent from Proposal List and from reads without the operation. No
+  response carries the raw issuer or subject. Once neither the review result nor the application
   receipt is retained, the read answers 410 `proposal.submission_expired`.
   A non-canonical or unknown version is concealed like an unknown Proposal.
 - Published Proposal schemas now reject a decision `publicReason` that is

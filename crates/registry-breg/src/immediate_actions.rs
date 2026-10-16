@@ -2546,6 +2546,17 @@ fn compile_execution(
                     "Proposal grants require operations and one entry per Action",
                 ));
             }
+            if grant
+                .operations
+                .contains(&ProposalOperation::GetApplicationActor)
+                && !grant.operations.contains(&ProposalOperation::Get)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.application-actor-grant-invalid",
+                    "accessProfiles[].permissions.proposals[].operations",
+                    "get-application-actor is a supplemental disclosure grant and requires get in the same Proposal grant",
+                ));
+            }
             let mut targets = Vec::new();
             let mut seen = BTreeSet::new();
             for target in &grant.targets {

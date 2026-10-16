@@ -22,6 +22,9 @@ pub(crate) fn append_proposal_openapi(
                     })
             };
             for operation in &grant.operations {
+                if *operation == ProposalOperation::GetApplicationActor {
+                    continue;
+                }
                 if !permitted(*operation) {
                     continue;
                 }
@@ -132,6 +135,7 @@ pub(crate) fn append_proposal_openapi(
                 "/v1/proposals/{proposal_id}/review-status".to_owned(),
                 "get",
             ),
+            ProposalOperation::GetApplicationActor => continue,
             _ => (
                 format!("/v1/proposals/{{proposal_id}}/{}", operation.as_str()),
                 "post",
@@ -208,9 +212,16 @@ fn proposal_submission_schema() -> Value {
         "state":{"enum":["pending","approved","rejected","changes-requested","answered","cancelled","superseded","expired"]},
         "resultId":{"type":"string","format":"uuid"},"completedAt":{"type":"string","format":"date-time"},
         "availableUntil":{"type":"string","format":"date-time"}}});
-    let mut application = proposal_schema()["properties"]["applicationStatus"].clone();
-    application["properties"]["applicationId"] = json!({"type":"string","format":"uuid"});
-    application["required"] = json!(["state"]);
+    let mut application_status = proposal_schema()["properties"]["applicationStatus"].clone();
+    application_status["properties"]["state"] = json!({"enum":[
+        "awaiting-review","pending","applying","blocked","cancelled","rejected"
+    ]});
+    let mut applied_receipt = json!({"type":"object","additionalProperties":false,
+    "required":["state","applicationId"],"properties":{
+        "state":{"const":"applied"},
+        "applicationId":{"type":"string","format":"uuid"}
+    }});
+    append_application_actor_schema(&mut applied_receipt);
     json!({"type":"object","additionalProperties":false,
         "required":["id","actionId","submissionVersion","current","effectDigest","review","application"],
         "properties":{"id":{"type":"string","format":"uuid"},"actionId":{"type":"string"},
@@ -218,8 +229,20 @@ fn proposal_submission_schema() -> Value {
             "current":{"type":"boolean"},
             "effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
             "review":{"anyOf":[review,{"type":"null"}]},
-            "application":{"anyOf":[application,{"type":"null"}]},
+            "application":{"anyOf":[applied_receipt,application_status,{"type":"null"}]},
             "decision":crate::artifacts::proposal_decision_schema()}})
+}
+
+fn proposal_get_schema() -> Value {
+    let mut schema = proposal_schema();
+    append_application_actor_schema(&mut schema["properties"]["application"]);
+    schema
+}
+
+fn append_application_actor_schema(application: &mut Value) {
+    application["properties"]["appliedBy"] = json!({"type":"string","pattern":"^hmac-sha256:[0-9a-f]{64}$","description":"Keyed actor pseudonym, present with appliedAt only when the selected profile holds get-application-actor."});
+    application["properties"]["appliedAt"] = json!({"type":"string","format":"date-time","description":"Application time, present with appliedBy only when the selected profile holds get-application-actor."});
+    application["dependentRequired"] = json!({"appliedBy":["appliedAt"],"appliedAt":["appliedBy"]});
 }
 
 fn merge_operation(
@@ -283,8 +306,13 @@ fn operation_document(
         );
         parameters.push(json!({"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string"}}));
     }
+    let response_schema = if id == "proposals.get" {
+        proposal_get_schema()
+    } else {
+        proposal_schema()
+    };
     let mut document = json!({"operationId":id,"x-registry-accessProfiles":profiles,"parameters":parameters,
-        "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":proposal_schema()}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}});
+        "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":response_schema}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}});
     if method != "get" && !collection {
         document["responses"]["409"] = json!({"description":"The Proposal was rejected, or the idempotency key was reused with a different request"});
     }
@@ -309,4 +337,93 @@ fn review_document_schema(context: bool) -> Value {
         properties["requestId"] = json!({"type":"string","format":"uuid"});
     }
     json!({"type":"object","additionalProperties":false,"required":["id","actionId","actionRevision","submissionVersion","revision","effectDigest","subject","context","reviewable"],"properties":properties})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn application_actor_document() -> Value {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        json!({
+            "id":"00000000-0000-4000-8000-000000000001",
+            "actionId":"correct-name",
+            "actionRevision":digest,
+            "submissionVersion":1,
+            "revision":2,
+            "state":"applied",
+            "turn":"nobody",
+            "effectDigest":digest,
+            "application":{
+                "applicationId":"00000000-0000-4000-8000-000000000002",
+                "submissionVersion":1,
+                "effectDigest":digest,
+                "appliedBy":format!("hmac-sha256:{}", "b".repeat(64)),
+                "appliedAt":"2026-10-16T01:02:03Z",
+                "resultLinks":[],
+            },
+            "links":{},
+        })
+    }
+
+    fn response_schema(operation: &Value) -> Value {
+        operation["responses"]["200"]["content"]["application/json"]["schema"].clone()
+    }
+
+    fn accepts(schema: &Value, value: &Value) -> bool {
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(schema)
+            .unwrap()
+            .is_valid(value)
+    }
+
+    #[test]
+    fn application_actor_schema_is_limited_to_get_and_submission() {
+        let profiles = BTreeSet::from(["reader".to_owned()]);
+        let disclosed = application_actor_document();
+        let get = operation_document("proposals.get", "get", &profiles, false);
+        let apply = operation_document("proposals.apply", "post", &profiles, false);
+
+        assert!(accepts(&response_schema(&get), &disclosed));
+        assert!(!accepts(&proposal_schema(), &disclosed));
+        assert!(!accepts(&response_schema(&apply), &disclosed));
+
+        for field in ["appliedBy", "appliedAt"] {
+            let mut partial = disclosed.clone();
+            partial["application"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                !accepts(&response_schema(&get), &partial),
+                "missing {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn submission_application_actor_requires_an_applied_receipt() {
+        let schema = &proposal_submission_schema()["properties"]["application"];
+        let actor = format!("hmac-sha256:{}", "b".repeat(64));
+
+        assert!(accepts(
+            schema,
+            &json!({
+                "state":"applied",
+                "applicationId":"00000000-0000-4000-8000-000000000002",
+                "appliedBy":actor,
+                "appliedAt":"2026-10-16T01:02:03Z",
+            }),
+        ));
+        assert!(!accepts(
+            schema,
+            &json!({
+                "state":"pending",
+                "mode":"manual",
+                "appliedBy":format!("hmac-sha256:{}", "b".repeat(64)),
+                "appliedAt":"2026-10-16T01:02:03Z",
+            }),
+        ));
+    }
 }

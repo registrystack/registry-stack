@@ -954,6 +954,7 @@ export interface BRegProposalAttachment {
 }
 export interface BRegProposalApplication {
   readonly applicationId: string; readonly submissionVersion: number; readonly effectDigest: string
+  readonly appliedBy?: string; readonly appliedAt?: string
   readonly resultLinks: ReadonlyArray<{readonly recordType: string; readonly recordId: string; readonly revision: number}>
 }
 export interface BRegProposalApplicationStatus {
@@ -979,7 +980,7 @@ export interface BRegProposalDecision { readonly status: 'approved' | 'rejected'
 export interface BRegProposalSubmission {
   readonly id: string; readonly actionId: string; readonly submissionVersion: number; readonly current: boolean; readonly effectDigest: string
   readonly review: NonNullable<BRegProposalReviewDocument['result']> | null
-  readonly application: (Omit<BRegProposalApplicationStatus, 'mode'> & {readonly mode?: BRegProposalApplicationStatus['mode']; readonly applicationId?: string}) | null
+  readonly application: (Omit<BRegProposalApplicationStatus, 'mode'> & {readonly mode?: BRegProposalApplicationStatus['mode']; readonly applicationId?: string; readonly appliedBy?: string; readonly appliedAt?: string}) | null
   readonly decision?: BRegProposalDecision
 }
 export interface BRegProposalDocument { readonly id: string; readonly actionId: string; readonly actionRevision: string; readonly submissionVersion: number; readonly revision: number; readonly state: 'draft' | 'submitted' | 'cancelled' | 'applied' | 'rejected'; readonly turn?: BRegProposalTurn; readonly decision?: BRegProposalDecision; readonly title?: string; readonly input?: JsonObject; readonly blockedReason?: 'package-changed'; readonly effectDigest?: string; readonly application?: BRegProposalApplication; readonly applicationStatus?: BRegProposalApplicationStatus; readonly links: Readonly<Partial<Record<BRegProposalTransition | 'self' | 'reviewContext' | 'reviewStatus', BRegProposalLink>>>; readonly attachments?: Readonly<Record<string, BRegProposalAttachment>> }

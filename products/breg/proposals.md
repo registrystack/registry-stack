@@ -92,7 +92,8 @@ and the Action's declared capability; commit-time Evidence cannot change effects
 Profiles declare `permissions.records`, `permissions.actions`, and
 `permissions.proposals` independently. Start authorizes creation of a draft;
 Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply each
-need their own grant. List requires List authority and conceals other owners'
+need their own grant. `get-application-actor` is a supplemental disclosure
+grant and must appear with Get in the same Proposal grant. List requires List authority and conceals other owners'
 and jurisdictions' work before filters or counts. Record and changes projections
 in review context also require current Record disclosure. Frozen input and
 document projections use their declared review-context grants and current
@@ -285,9 +286,15 @@ earlier version can still arrive after BReg has moved on.
 
 The application receipt records who applied the Proposal, as a keyed actor
 pseudonym scoped to the database and issuer, and when. The audit journal
-records the same pseudonym on the application request. No Proposal read
-serves either value, and the pseudonym names a person only to whoever holds
-the audit hash key and can recompute it for a known issuer and subject.
+records the same pseudonym on the application request. A profile holding both
+`get` and `get-application-actor` receives `appliedBy` and `appliedAt` in the
+application member of Proposal Get and the per-version submission read. Both
+members are absent without that supplemental operation, and Proposal List
+omits them even for a holder. No response carries the raw issuer or subject.
+The pseudonym lets a holder link Proposals applied by the same actor within
+one database and issuer. A holder who knows the applier of one Proposal from
+another source can associate that actor with other matching pseudonyms. An
+audit hash-key holder can also recompute it for a known issuer and subject.
 
 Mutation refusals intentionally share a generic 412 for unavailable authority
 and failed preconditions. To show or test why Apply is unavailable, first read

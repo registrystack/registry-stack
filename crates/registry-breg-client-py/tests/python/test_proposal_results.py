@@ -22,6 +22,7 @@ def document():
     return {'id': ID, 'actionId': 'correct', 'actionRevision': DIGEST, 'submissionVersion': 2, 'revision': 8, 'state': 'applied',
             'effectDigest': DIGEST, 'links': {'self': {'method': 'GET', 'path': '/v1/proposals/' + ID, 'accessProfile': 'reader', 'operation': 'get'}},
             'application': {'applicationId': ID, 'submissionVersion': 2, 'effectDigest': DIGEST,
+                            'appliedBy': 'hmac-sha256:' + 'a' * 64, 'appliedAt': '2026-10-16T01:02:03.000004Z',
                             'resultLinks': [{'recordType': 'person', 'recordId': TARGET, 'revision': 4}]}}
 
 
@@ -99,6 +100,7 @@ class ProposalResultTests(unittest.TestCase):
     def test_authorized_result_references_are_inert_and_redacted(self):
         proposal = self.client.get_proposal(self.binding, ID)
         self.assertEqual(proposal.document['application']['resultLinks'], [{'recordType': 'person', 'recordId': TARGET, 'revision': 4}])
+        self.assertEqual(proposal.document['application']['appliedBy'], 'hmac-sha256:' + 'a' * 64)
         for secret in [ID, TARGET, 'person']:
             self.assertNotIn(secret, repr(proposal))
         count = len(self.requests)
@@ -119,7 +121,9 @@ class ProposalResultTests(unittest.TestCase):
         held = self.client.get_proposal(self.binding, ID)
         attempt = self.client.prepare_proposal(held, 'apply', {'submissionVersion': 2, 'effectDigest': DIGEST}, 'canonical-application')
         canonical = '123e4567-e89b-42d3-a456-426614174000'
-        receipt = dict(copy.deepcopy(self.value), state='applied', revision=9, application=dict(document()['application'], applicationId=canonical))
+        lifecycle_application = copy.deepcopy(document()['application'])
+        del lifecycle_application['appliedBy'], lifecycle_application['appliedAt']
+        receipt = dict(copy.deepcopy(self.value), state='applied', revision=9, application=dict(lifecycle_application, applicationId=canonical))
         receipt['links']['apply']['availability'] = {'available': False, 'observedRevision': 9, 'reason': 'already-applied', 'recovery': 'receipt-only'}
         for application_id in [canonical.upper(), canonical.replace('-', ''), '00000000-0000-0000-0000-000000000000']:
             self.value = copy.deepcopy(receipt)

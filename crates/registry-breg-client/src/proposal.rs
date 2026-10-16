@@ -236,6 +236,10 @@ pub struct BRegProposalApplication {
     pub application_id: String,
     pub submission_version: u32,
     pub effect_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
     pub result_links: Vec<BRegProposalResultReference>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -344,6 +348,10 @@ pub struct BRegProposalSubmissionApplication {
     pub automatic_retry: Option<BRegProposalAutomaticRetry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
 }
 impl fmt::Debug for BRegProposalSubmission {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -498,6 +506,10 @@ impl BRegProposal {
                     .as_ref()
                     .is_none_or(|digest| digest != &application.effect_digest)
                 || application.result_links.len() > 16
+                || !valid_application_actor(
+                    application.applied_by.as_deref(),
+                    application.applied_at.as_deref(),
+                )
                 || application.result_links.iter().any(|reference| {
                     !identifier(&reference.record_type)
                         || crate::client::validate_record_uuid(&reference.record_id).is_err()
@@ -610,6 +622,11 @@ impl BRegProposal {
             }
         }
         Ok(())
+    }
+    fn discloses_application_actor(&self) -> bool {
+        self.application.as_ref().is_some_and(|application| {
+            application.applied_by.is_some() || application.applied_at.is_some()
+        })
     }
     pub fn id(&self) -> &str {
         &self.id
@@ -1137,7 +1154,8 @@ impl BaseRegistryClient {
         };
         let current =
             BRegProposal::from_slice(response.value.as_bytes()).map_err(|_| invalid_receipt())?;
-        if current.id != prior.id
+        if current.discloses_application_actor()
+            || current.id != prior.id
             || current.action_id != prior.action_id
             || current.action_revision != prior.action_revision
             || !transition_progress(
@@ -1247,10 +1265,11 @@ impl BaseRegistryClient {
         }
         for item in &mut page.items {
             item.validate()?;
-            if query
-                .action
-                .as_ref()
-                .is_some_and(|action| action != &item.action_id)
+            if item.discloses_application_actor()
+                || query
+                    .action
+                    .as_ref()
+                    .is_some_and(|action| action != &item.action_id)
                 || query.state.is_some_and(|state| state != item.state)
                 || query.turn.is_some_and(|turn| Some(turn) != item.turn)
             {
@@ -1354,7 +1373,7 @@ impl BaseRegistryClient {
         };
         let proposal =
             BRegProposal::from_slice(response.value.as_bytes()).map_err(|_| invalid_receipt())?;
-        if !transition_successor(&evidence, &proposal) {
+        if proposal.discloses_application_actor() || !transition_successor(&evidence, &proposal) {
             return Err(invalid_receipt());
         }
         Ok(BRegComplete {
@@ -1654,17 +1673,40 @@ fn valid_submission_application(application: &BRegProposalSubmissionApplication)
                 && application.reason.is_none()
                 && application.recovery.is_none()
                 && application.automatic_retry.is_none()
+                && valid_application_actor(
+                    application.applied_by.as_deref(),
+                    application.applied_at.as_deref(),
+                )
         }
         (BRegProposalApplicationState::Applied, None) | (_, Some(_)) => false,
-        (state, None) => application.mode.is_some_and(|mode| {
-            valid_application_shape(
-                state,
-                mode,
-                application.reason,
-                application.recovery,
-                application.automatic_retry.as_ref(),
-            )
-        }),
+        (state, None) => {
+            application.applied_by.is_none()
+                && application.applied_at.is_none()
+                && application.mode.is_some_and(|mode| {
+                    valid_application_shape(
+                        state,
+                        mode,
+                        application.reason,
+                        application.recovery,
+                        application.automatic_retry.as_ref(),
+                    )
+                })
+        }
+    }
+}
+
+fn valid_application_actor(applied_by: Option<&str>, applied_at: Option<&str>) -> bool {
+    match (applied_by, applied_at) {
+        (None, None) => true,
+        (Some(actor), Some(at)) => {
+            actor.strip_prefix("hmac-sha256:").is_some_and(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            }) && proposal_instant(at).is_some()
+        }
+        _ => false,
     }
 }
 
@@ -2531,6 +2573,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn application_actor_is_rejected_from_list_and_lifecycle_receipts() {
+        let mut applied = transition_document("apply", "applied", 1, 3);
+        applied["application"]["appliedBy"] = json!(format!("hmac-sha256:{}", "b".repeat(64)));
+        applied["application"]["appliedAt"] = json!("2026-10-16T01:02:03Z");
+        let (client, response, server) =
+            proposal_response_client(json!({"items":[applied.clone()]})).await;
+        let collection = BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["author"]}),
+            &client.source_binding(),
+            REVISION,
+            "author",
+        )
+        .unwrap();
+        assert!(client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .is_err());
+
+        let prior = proposal(&client, transition_document("apply", "submitted", 1, 2));
+        let attempt = client
+            .prepare_proposal(
+                &prior,
+                "apply",
+                json!({"submissionVersion":1,"effectDigest":REVISION}),
+                &BRegIdempotencyKey::parse("actor-lifecycle").unwrap(),
+            )
+            .unwrap();
+        *response.lock().unwrap() = applied;
+        assert!(client.execute_proposal(&attempt).await.is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn promoted_review_status_refuses_display_fields_like_uuid_status_reads() {
         let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
             "submissionVersion":1,"revision":2,"effectDigest":REVISION,
@@ -3095,13 +3170,24 @@ mod tests {
         }
     }
     #[test]
-    fn application_receipts_refuse_internal_actor_and_reason_projections() {
+    fn application_receipts_accept_only_the_authorized_actor_pair() {
         let mut value = document();
         value["state"] = json!("applied");
         value["effectDigest"] = json!(REVISION);
         value["application"] = json!({"applicationId":ID,"submissionVersion":1,"effectDigest":REVISION,"resultLinks":[]});
         assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
-        for field in ["appliedBy", "appliedAt", "reason", "reasonPresent"] {
+        value["application"]["appliedBy"] = json!(format!("hmac-sha256:{}", "a".repeat(64)));
+        value["application"]["appliedAt"] = json!("2026-10-16T01:02:03.000004Z");
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for field in ["appliedBy", "appliedAt"] {
+            let mut partial = value.clone();
+            partial["application"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(BRegProposal::from_slice(&serde_json::to_vec(&partial).unwrap()).is_err());
+        }
+        for field in ["reason", "reasonPresent"] {
             let mut widened = value.clone();
             widened["application"][field] = json!("private-canary");
             assert!(BRegProposal::from_slice(&serde_json::to_vec(&widened).unwrap()).is_err());

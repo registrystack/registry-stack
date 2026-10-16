@@ -58,7 +58,7 @@ traceability:
   - {id: BREG-SEC-55, state: enforced, negativeId: BREG-NEG-55, negativeTest: {path: crates/registry-breg/src/attachment_verification.rs, name: malformed_oversized_and_failed_verdicts_remain_unavailable}}
   - {id: BREG-SEC-56, state: enforced, negativeId: BREG-NEG-56, negativeTest: {path: crates/registry-breg/tests/postgres_proposal.rs, name: attachment_binding_integrity_and_detail_erasure_preserve_record_history}}
   - {id: BREG-SEC-57, state: enforced, negativeId: BREG-NEG-57, negativeTest: {path: crates/registry-breg/tests/postgres_proposal_s3.rs, name: s3_integrity_binding_quarantine_and_authority_refusals_precede_transport}}
-  - {id: BREG-SEC-58, state: enforced, negativeId: BREG-NEG-58, negativeTest: {path: crates/registry-breg/src/mutation/proposal.rs, name: public_application_projection_never_discloses_internal_actor_reason_or_timestamps}}
+  - {id: BREG-SEC-58, state: enforced, negativeId: BREG-NEG-58, negativeTest: {path: crates/registry-breg/src/mutation/proposal.rs, name: public_application_projection_omits_actor_without_disclosure_and_internal_reason}}
   - {id: BREG-SEC-59, state: enforced, negativeId: BREG-NEG-59, negativeTest: {path: crates/registry-breg-client/tests/http_boundary.rs, name: caller_scoped_tokens_are_isolated_across_concurrent_requests}}
   - {id: BREG-SEC-60, state: enforced, negativeId: BREG-NEG-60, negativeTest: {path: crates/registry-breg/tests/postgres_proposal.rs, name: prepared_lifecycle_recovery_uses_current_authority_and_the_original_exact_condition}}
   - {id: BREG-SEC-63, state: enforced, negativeId: BREG-NEG-63, negativeTest: {path: crates/registry-breg/src/mutation/proposal.rs, name: proposal_actor_is_keyed_database_and_issuer_scoped_but_stable_across_activation}}
@@ -177,3 +177,4 @@ traceability:
   - {"id": "BREG-SEC-176", "state": "enforced", "negativeId": "BREG-NEG-176", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "review_context_refuses_active_action_mapping_for_a_retained_submission"}}
   - {"id": "BREG-SEC-177", "state": "enforced", "negativeId": "BREG-NEG-177", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "submission_read_reports_each_version_separately_and_is_gone_after_its_windows"}}
   - {"id": "BREG-SEC-178", "state": "enforced", "negativeId": "BREG-NEG-178", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "review_rejection_is_terminal_and_changes_requested_returns_to_the_party"}}
+  - {"id": "BREG-SEC-179", "state": "enforced", "negativeId": "BREG-NEG-179", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "application_actor_requires_its_dedicated_get_grant_and_is_issuer_scoped"}}

@@ -383,6 +383,128 @@ async fn signed_proposal_start_and_lifecycle_receipts_reject_sibling_grants() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_grant_get_requires_the_exact_application_actor_bound() {
+    let status = Arc::new(Status {
+        active: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let checker = status.clone();
+    let mut project = source(false);
+    project["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("apply"));
+    project["accessProfiles"][1]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("get-application-actor"));
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(project),
+        clerk(),
+        move |service| service.with_task_status(checker),
+    )
+    .await;
+    let (_, target) = seed(&fixture).await;
+    let (code, draft, etag) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"Applied"}}),
+        Some("actor-bound-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (code, submitted, etag) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
+        json!({}),
+        Some("actor-bound-submit"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{submitted}");
+    let (code, applied, _) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/apply?accessProfile=clerk"),
+        json!({
+            "submissionVersion": submitted["submissionVersion"],
+            "effectDigest": submitted["effectDigest"],
+        }),
+        Some("actor-bound-apply"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{applied}");
+
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&fixture.registry, &idp).await;
+    let missing_actor_bound = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(token(
+                7,
+                json!([
+                    {"collection":format!("proposal:{id}"),"operations":["get"]},
+                    {"collection":"proposal:00000000-0000-4000-8000-000000000099","operations":["get-application-actor"]}
+                ]),
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    for suffix in ["", "/submissions/1"] {
+        let (code, concealed, _) = send(
+            &missing_actor_bound,
+            Method::GET,
+            &format!("/v1/proposals/{id}{suffix}?accessProfile=task-reviewer"),
+            Value::Null,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{concealed}");
+        assert!(
+            concealed.pointer("/application/appliedBy").is_none(),
+            "{concealed}"
+        );
+        assert!(
+            concealed.pointer("/application/appliedAt").is_none(),
+            "{concealed}"
+        );
+    }
+
+    let disclosed = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(token(
+                8,
+                json!([{"collection":format!("proposal:{id}"),"operations":["get","get-application-actor"]}]),
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    for suffix in ["", "/submissions/1"] {
+        let (code, value, _) = send(
+            &disclosed,
+            Method::GET,
+            &format!("/v1/proposals/{id}{suffix}?accessProfile=task-reviewer"),
+            Value::Null,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{value}");
+        assert!(value.pointer("/application/appliedBy").is_some(), "{value}");
+        assert!(value.pointer("/application/appliedAt").is_some(), "{value}");
+    }
+    assert!(status.calls.load(Ordering::SeqCst) >= 4);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_context_requires_record_grant_and_current_membership() {
     let status = Arc::new(Status {
         active: AtomicBool::new(true),

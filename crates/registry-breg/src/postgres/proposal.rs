@@ -725,7 +725,13 @@ impl PostgresRecordMutationService {
                 .await?;
             let value = self
                 .coordinator
-                .proposal_submission_value(guarded.transaction(), &document, version)
+                .proposal_submission_value(
+                    guarded.transaction(),
+                    &self.registry,
+                    &document,
+                    version,
+                    authority,
+                )
                 .await?;
             if authority
                 .task_grant
