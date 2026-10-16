@@ -301,7 +301,8 @@ test('inspect and reconcile validate wait budgets and preserve exhausted waits',
     [29, 0, 1, false], [86401, 0, 1, false],
     [30, 0, 0, false], [30, 2, 1, false],
   ]) {
-    document = { ...INSPECTION, waits: [{
+    const observing = { ...INSPECTION.steps[0], step: 'observe', state: 'pending', uncertain: false, failureCode: null };
+    document = { ...INSPECTION, steps: [...INSPECTION.steps, observing], waits: [{
       step: 'observe', acceptedStep: 'submit', completion: 'result',
       completionRevision: STATUS.workflowRevision,
       timeoutAt: STATUS.deadlineAt, nextObservationAt: null, notBefore: STATUS.admittedAt,

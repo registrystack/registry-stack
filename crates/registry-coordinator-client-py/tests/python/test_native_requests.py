@@ -192,7 +192,8 @@ class NativeRequestTests(unittest.TestCase):
             (29, 0, 1, False), (86401, 0, 1, False),
             (30, 0, 0, False), (30, 2, 1, False),
         ):
-            document = {**INSPECTION, "waits": [{
+            observing = {**INSPECTION["steps"][0], "step": "observe", "state": "pending", "uncertain": False, "failureCode": None}
+            document = {**INSPECTION, "steps": [*INSPECTION["steps"], observing], "waits": [{
                 "step": "observe", "acceptedStep": "submit", "completion": "result",
                 "completionRevision": STATUS["workflowRevision"],
                 "timeoutAt": STATUS["deadlineAt"], "nextObservationAt": None,
