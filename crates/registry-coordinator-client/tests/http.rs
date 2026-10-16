@@ -809,6 +809,61 @@ async fn list_responses_must_satisfy_the_requested_effective_state_and_attention
 }
 
 #[tokio::test]
+async fn list_pages_must_strictly_descend_by_admission_then_run_identity() {
+    let server = Server::new(json!({"runs":[]})).await;
+    let client = server.client();
+    let run = |admitted: &str, id: &str| {
+        let mut run = status();
+        run["admittedAt"] = json!(admitted);
+        run["runId"] = json!(id);
+        run
+    };
+    let low = "00000000-0000-4000-8000-000000000001";
+    let high = "00000000-0000-4000-8000-000000000002";
+    let early = "2026-10-10T12:00:00.000001Z";
+    let late = "2026-10-10T12:00:00.000002Z";
+    let cases = [
+        (
+            "newer admission first",
+            vec![run(late, low), run(early, high)],
+            true,
+        ),
+        (
+            "equal admission, higher run first",
+            vec![run(early, high), run(early, low)],
+            true,
+        ),
+        (
+            "duplicated run",
+            vec![run(early, low), run(early, low)],
+            false,
+        ),
+        (
+            "older admission first",
+            vec![run(early, high), run(late, low)],
+            false,
+        ),
+        (
+            "equal admission, lower run first",
+            vec![run(early, low), run(early, high)],
+            false,
+        ),
+    ];
+    for (case, runs, accepted) in cases {
+        server.answer(200, "application/json", &json!({"runs":runs}).to_string());
+        let result = client.list_page(&token(), &RunListQuery::new(2)).await;
+        if accepted {
+            assert!(result.is_ok(), "{case}");
+        } else {
+            assert!(
+                matches!(result, Err(CoordinatorClientError::Protocol { .. })),
+                "{case}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn invalid_list_cursors_are_refused_on_both_sides_of_the_wire() {
     let server = Server::new(json!({"runs":[]})).await;
     let client = server.client();
