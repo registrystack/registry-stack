@@ -401,7 +401,7 @@ pub enum BaseRegistryClientError {
     /// extensions are discarded.
     #[error("Base Registry Engine refused or failed the request: status {status}, unrecognized problem code")]
     UnrecognizedProblem { status: u16, trace_id: TraceId },
-    #[error("the Base Registry Engine response did not satisfy its wire contract: status {status}, {failure}")]
+    #[error("the Base Registry Engine response did not satisfy its wire contract: status {status}, {failure}; verify the server URL and use a matching BReg runtime and client before continuing")]
     Protocol {
         status: u16,
         failure: BRegProtocolFailure,
