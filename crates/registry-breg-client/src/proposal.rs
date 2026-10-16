@@ -1444,6 +1444,20 @@ impl BaseRegistryClient {
                 .decision
                 .as_ref()
                 .is_some_and(|decision| !valid_decision(decision))
+            // A decision is read from the retained review result, so that
+            // result is present and states the decision unless it expired.
+            || submission.decision.as_ref().is_some_and(|decision| {
+                !submission.review.as_ref().is_some_and(|review| {
+                    review.state == "expired"
+                        || review.state
+                            == match decision.status {
+                                BRegProposalDecisionStatus::Approved => "approved",
+                                BRegProposalDecisionStatus::Rejected => "rejected",
+                                BRegProposalDecisionStatus::ChangesRequested => "changes-requested",
+                                BRegProposalDecisionStatus::Answered => "answered",
+                            }
+                })
+            })
         {
             return Err(refusal());
         }

@@ -148,6 +148,45 @@ fn terminal(state: &str) -> Value {
 }
 
 #[tokio::test]
+async fn retained_decision_follows_its_review_result() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let statuses = ["approved", "rejected", "changes-requested", "answered"];
+    let reviews = [
+        "approved",
+        "rejected",
+        "changes-requested",
+        "answered",
+        "cancelled",
+        "superseded",
+        "expired",
+    ];
+    let mut wrong = vec![];
+    for status in statuses {
+        let decision = json!({"status":status,"decidedAt":"2026-09-19T00:01:00.000001Z"});
+        let mut cases: Vec<(Value, bool)> = reviews
+            .iter()
+            .map(|review| (terminal(review), *review == status || *review == "expired"))
+            .collect();
+        cases.push((Value::Null, false));
+        for (review, expected) in cases {
+            fixture.answer(json!({"id":ID,"actionId":"correct","submissionVersion":1,
+                "current":true,"effectDigest":DIGEST,"review":review,"decision":decision}));
+            if fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok()
+                != expected
+            {
+                wrong.push(format!("{status} under {review}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
+}
+
+#[tokio::test]
 async fn submission_read_refuses_an_incoherent_application() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
@@ -534,7 +573,7 @@ async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_rea
         let mut current = proposal("rejected");
         current["decision"] = decision.clone();
         let submission = json!({"id":ID,"actionId":"correct","submissionVersion":1,
-            "current":true,"effectDigest":DIGEST,"review":null,"decision":decision});
+            "current":true,"effectDigest":DIGEST,"review":terminal("rejected"),"decision":decision});
         (current, submission)
     };
     for reason in ["Public reason", " Padded, with \u{e9}", &"x".repeat(2000)] {
