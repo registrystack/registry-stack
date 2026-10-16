@@ -186,7 +186,27 @@ fn only_capabilities_used_by_the_policy_are_required() {
 fn field_derived_grants_require_their_own_capability() {
     let mut value = source_value();
     value["taskTemplates"] = templates(&task_template());
-    assert!(CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    let Err(registry_casework_core::ConfigLoadError::Refused(report)) =
+        CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+    else {
+        panic!("subjects need the provider's task-grant-context capability");
+    };
+    let [finding] = report.diagnostics() else {
+        panic!("one finding names the template: {report:?}");
+    };
+    assert_eq!(finding.code, "casework.task-template.provider-capability");
+    assert_eq!(finding.path, "/taskTemplates/summary/subjects");
+    assert_eq!(
+        finding.message,
+        "task template summary declares subjects, which need the task-grant-context \
+         capability, and context provider notice-context does not declare it with a service \
+         profile"
+    );
+    assert_eq!(
+        finding.suggested_action,
+        "Remove `subjects` from task template summary, or bind the template to review \
+         policies whose source serves task-grant context."
+    );
     value["contextProviders"]["notice-context"]["capabilities"]
         .as_array_mut()
         .unwrap()

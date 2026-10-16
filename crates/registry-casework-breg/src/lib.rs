@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Read-only native Proposal context provider. No discovery, events or source writes.
 mod config;
+mod served;
 use async_trait::async_trait;
 pub use config::*;
 use registry_breg_client::{
     BRegProposalReviewDocument, BaseRegistryClient, BaseRegistryClientError, BearerToken,
 };
 use registry_casework_core::*;
+pub use served::{unserved_capabilities, SERVED_CAPABILITIES, TASK_GRANT_CONTEXT_ISSUE};
 
 pub struct BregContextProvider {
     id: String,
@@ -95,10 +97,7 @@ impl ReviewContextProvider for BregContextProvider {
         &self.id
     }
     fn capabilities(&self) -> &[ReviewContextCapability] {
-        &[
-            ReviewContextCapability::HumanDisplay,
-            ReviewContextCapability::ServiceStatus,
-        ]
+        SERVED_CAPABILITIES
     }
     async fn human_display(
         &self,

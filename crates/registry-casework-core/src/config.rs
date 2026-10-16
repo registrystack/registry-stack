@@ -848,6 +848,7 @@ impl CaseworkProject {
                 }
             }
         }
+        let mut templates_reported = BTreeSet::new();
         for policy in &self.review_policies {
             if let ReviewContextPolicy::CurrentSource { provider, contract } = &policy.context {
                 let at = format!("{}/context", keyed("reviewPolicies", &policy.id));
@@ -878,6 +879,30 @@ impl CaseworkProject {
                         || (capability != Capability::HumanDisplay
                             && !provider.service_profiles.contains_key(&capability))
                     {
+                        if capability == Capability::TaskGrantContext {
+                            // Only a template's subjects need this capability,
+                            // so the finding names each template at its subjects.
+                            for template in self.task_templates.iter().filter(|template| {
+                                template.review_policies.contains(&policy.id)
+                                    && !template.subjects.is_empty()
+                            }) {
+                                if templates_reported.insert(template.id.clone()) {
+                                    findings.push(
+                                        "casework.task-template.provider-capability",
+                                        format!("{}/subjects", keyed("taskTemplates", &template.id)),
+                                        format!(
+                                            "task template {} declares subjects, which need the task-grant-context capability, and context provider {} does not declare it with a service profile",
+                                            template.id, provider.id
+                                        ),
+                                        format!(
+                                            "Remove `subjects` from task template {}, or bind the template to review policies whose source serves task-grant context.",
+                                            template.id
+                                        ),
+                                    );
+                                }
+                            }
+                            continue;
+                        }
                         findings.push(
                             "casework.review-policy.provider-capability",
                             format!("{at}/provider"),

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A task template with `subjects` bound to a BReg-backed review policy is
+  refused by name. BReg does not serve task-grant context yet
+  ([#2062](https://github.com/registrystack/registry-stack/issues/2062)).
+  `caseworkctl check` reports `casework.task-template.unserved-capability` at
+  the template's `subjects`, and
+  `casework.context-provider.unserved-capability` when the provider declares
+  a capability BReg does not serve; when the provider does not declare
+  task-grant context at all, the core check reports
+  `casework.task-template.provider-capability` at the template's `subjects`.
+  The runtime refuses to start with the same messages and fixes instead of
+  a generic provider configuration error.
 - A decided review task no longer disappears from
   `GET /v1/review-tasks/own-decisions` and `/v1/review-tasks/supervision`
   when its current source stops reporting the subject as reviewable, which a
