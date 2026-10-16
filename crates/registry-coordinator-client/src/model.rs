@@ -2,7 +2,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -294,13 +294,67 @@ impl TryFrom<WaitStatusDocument> for WaitStatus {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RunInspectionDocument")]
 pub struct RunInspection {
     pub run: RunStatus,
     pub steps: Vec<StepStatus>,
     pub effects: Vec<EffectStatus>,
     pub waits: Vec<WaitStatus>,
     pub recovery: RecoveryStatus,
+}
+
+// The runtime reads one step row per run step and builds each effect and wait
+// from those rows in the same transaction, so evidence names this run's steps.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunInspectionDocument {
+    run: RunStatus,
+    steps: Vec<StepStatus>,
+    effects: Vec<EffectStatus>,
+    waits: Vec<WaitStatus>,
+    recovery: RecoveryStatus,
+}
+
+impl TryFrom<RunInspectionDocument> for RunInspection {
+    type Error = &'static str;
+
+    fn try_from(document: RunInspectionDocument) -> Result<Self, Self::Error> {
+        let mut steps = BTreeMap::new();
+        for step in &document.steps {
+            if steps.insert(step.step.as_str(), step).is_some() {
+                return Err("expected one entry per run step");
+            }
+        }
+        if !steps.contains_key(document.run.step.as_str()) {
+            return Err("expected the current step among the run steps");
+        }
+        let mut effects = BTreeSet::new();
+        for effect in &document.effects {
+            let Some(step) = steps.get(effect.step.as_str()) else {
+                return Err("expected each effect to name a run step");
+            };
+            let consistent = match effect.state {
+                EffectState::Unknown => step.uncertain,
+                EffectState::Accepted => !step.uncertain && step.state == "delivered",
+            };
+            if !effects.insert(effect.step.as_str()) || !consistent {
+                return Err("expected one effect consistent with its run step");
+            }
+        }
+        let mut waits = BTreeSet::new();
+        for wait in &document.waits {
+            if !steps.contains_key(wait.step.as_str()) || !waits.insert(wait.step.as_str()) {
+                return Err("expected one wait per waiting run step");
+            }
+        }
+        Ok(Self {
+            run: document.run,
+            steps: document.steps,
+            effects: document.effects,
+            waits: document.waits,
+            recovery: document.recovery,
+        })
+    }
 }
 
 /// The closed effective states accepted by the run-list filter.

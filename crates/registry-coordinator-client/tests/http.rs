@@ -171,14 +171,18 @@ async fn run_status_answers(
                 .await
                 .map(|answer| answer.value.state),
         ),
-        (
-            "cancel",
-            client
-                .cancel(&token(), run_id, "caller-withdrew")
-                .await
-                .map(|answer| answer.value.state),
-        ),
     ];
+    // The runtime marks every run its cancellation stops.
+    let mut cancelled = run.clone();
+    cancelled["cancelRequested"] = json!(true);
+    server.answer(200, "application/json", &cancelled.to_string());
+    answers.push((
+        "cancel",
+        client
+            .cancel(&token(), run_id, "caller-withdrew")
+            .await
+            .map(|answer| answer.value.state),
+    ));
     let mut inspected = inspection();
     inspected["run"] = run.clone();
     server.answer(200, "application/json", &inspected.to_string());
@@ -631,6 +635,230 @@ async fn inspection_and_reconciliation_require_one_consistent_recovery_decision(
     }
 }
 
+fn effect(step: &str, state: &str) -> Value {
+    json!({"step":step,"operation":inspection()["recovery"]["operation"],"operationRevision":format!("sha256:{}", "1".repeat(64)),"state":state})
+}
+
+fn wait(step: &str) -> Value {
+    json!({"step":step,"acceptedStep":"send","completion":"reviewed","completionRevision":format!("sha256:{}", "2".repeat(64)),"timeoutAt":"2026-10-10T12:04:00Z","nextObservationAt":null,"notBefore":"2026-10-10T12:01:00Z","minimumIntervalSeconds":30,"observations":0,"observationLimit":4})
+}
+
+fn step(step: &str, state: &str, uncertain: bool) -> Value {
+    json!({"step":step,"state":state,"generation":1,"attempt":1,"nextDueAt":null,"leaseExpiresAt":null,"commandPrepared":true,"uncertain":uncertain,"receiptExpired":false,"failureCode":null,"failurePath":null})
+}
+
+#[tokio::test]
+async fn inspection_and_reconciliation_correlate_effects_and_waits_with_their_steps() {
+    let server = Server::new(inspection()).await;
+    let client = server.client();
+    let id = Uuid::parse_str(RUN).unwrap();
+    // The runtime reads one step row per (run, step) and builds each effect
+    // and wait from those rows, in one repeatable-read transaction.
+    let notify = inspection()["steps"][0].clone();
+    let cases = [
+        ("no evidence", json!([notify]), json!([]), json!([]), true),
+        (
+            "unknown effect on its uncertain step",
+            json!([notify]),
+            json!([effect("notify", "unknown")]),
+            json!([]),
+            true,
+        ),
+        (
+            "accepted effect on its delivered step, wait on its own step",
+            json!([
+                step("send", "delivered", false),
+                step("notify", "pending", false)
+            ]),
+            json!([effect("send", "accepted")]),
+            json!([wait("notify")]),
+            true,
+        ),
+        (
+            "duplicate step",
+            json!([notify, notify]),
+            json!([]),
+            json!([]),
+            false,
+        ),
+        (
+            "run step absent from steps",
+            json!([step("send", "delivered", false)]),
+            json!([]),
+            json!([]),
+            false,
+        ),
+        (
+            "effect on an absent step",
+            json!([notify]),
+            json!([effect("other-run-step", "unknown")]),
+            json!([]),
+            false,
+        ),
+        (
+            "duplicate effect",
+            json!([notify]),
+            json!([effect("notify", "unknown"), effect("notify", "unknown")]),
+            json!([]),
+            false,
+        ),
+        (
+            "accepted effect on an undelivered step",
+            json!([step("notify", "pending", false)]),
+            json!([effect("notify", "accepted")]),
+            json!([]),
+            false,
+        ),
+        (
+            "accepted effect on an uncertain step",
+            json!([step("notify", "delivered", true)]),
+            json!([effect("notify", "accepted")]),
+            json!([]),
+            false,
+        ),
+        (
+            "unknown effect on a certain step",
+            json!([step("notify", "delivered", false)]),
+            json!([effect("notify", "unknown")]),
+            json!([]),
+            false,
+        ),
+        (
+            "wait on an absent step",
+            json!([notify]),
+            json!([]),
+            json!([wait("other-run-step")]),
+            false,
+        ),
+        (
+            "duplicate wait",
+            json!([notify]),
+            json!([]),
+            json!([wait("notify"), wait("notify")]),
+            false,
+        ),
+    ];
+    let mut accepted = Vec::new();
+    for (case, steps, effects, waits, valid) in cases {
+        let mut document = inspection();
+        document["steps"] = steps;
+        document["effects"] = effects;
+        document["waits"] = waits;
+        server.answer(200, "application/json", &document.to_string());
+        let before = server.count();
+        for (operation, answer) in [
+            ("inspect", client.inspect(&token(), id).await),
+            (
+                "reconcile",
+                client.reconcile(&token(), id, "response-lost").await,
+            ),
+        ] {
+            if valid {
+                assert_eq!(
+                    serde_json::to_value(
+                        answer
+                            .unwrap_or_else(|_| panic!("{operation} refused {case}"))
+                            .value
+                    )
+                    .unwrap(),
+                    document
+                );
+            } else {
+                match answer {
+                    Ok(_) => accepted.push(format!("{operation}: {case}")),
+                    Err(error) => {
+                        assert!(
+                            matches!(
+                                error,
+                                CoordinatorClientError::Protocol {
+                                    status: 200,
+                                    failure:
+                                        registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                                }
+                            ),
+                            "{operation} {case}: {error:?}"
+                        );
+                        assert!(error.is_outcome_unknown());
+                    }
+                }
+            }
+        }
+        assert_eq!(server.count(), before + 2, "each operation sends once");
+    }
+    assert!(
+        accepted.is_empty(),
+        "uncorrelated evidence accepted by {accepted:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancellation_receipt_must_record_the_cancellation_or_a_settled_run() {
+    let server = Server::new(status()).await;
+    let client = server.client();
+    let id = Uuid::parse_str(RUN).unwrap();
+    // (state, outcome, restoreReviewRequired, cancelRequested, authoredCancelRequested, valid)
+    let mut cases = vec![
+        // An ordinary live status is not a cancellation receipt.
+        ("running", None, false, false, false, false),
+        ("attention", None, false, false, false, false),
+        ("cancel-requested", None, false, false, false, false),
+        // The runtime marks every run it stops.
+        ("running", None, false, true, false, true),
+        ("attention", None, false, true, false, true),
+        ("cancel-requested", None, false, true, false, true),
+        // An authored onCancel path keeps running its cleanup.
+        ("running", None, false, false, true, true),
+        // Restore review projects attention over a run that already settled.
+        ("attention", Some("completed"), true, false, false, true),
+        ("attention", None, true, false, false, true),
+    ];
+    for state in [
+        "failed",
+        "cancelled",
+        "cancelled-after-effect",
+        "expired",
+        "finished",
+    ] {
+        let outcome = (state == "finished").then_some("completed");
+        cases.push((state, outcome, false, false, false, true));
+    }
+    let mut accepted = Vec::new();
+    for (state, outcome, restore, cancel, authored, valid) in cases {
+        let mut run = status();
+        run["state"] = json!(state);
+        run["outcome"] = json!(outcome);
+        run["restoreReviewRequired"] = json!(restore);
+        run["cancelRequested"] = json!(cancel);
+        run["authoredCancelRequested"] = json!(authored);
+        server.answer(200, "application/json", &run.to_string());
+        let before = server.count();
+        let case = format!("{state} restore={restore} cancel={cancel} authored={authored}");
+        match client.cancel(&token(), id, "caller-withdrew").await {
+            Ok(answer) if valid => assert_eq!(answer.value.state, state),
+            Ok(_) => accepted.push(case),
+            Err(error) => {
+                assert!(!valid, "{case} refused: {error:?}");
+                assert!(
+                    matches!(
+                        error,
+                        CoordinatorClientError::Protocol {
+                            status: 200,
+                            failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                        }
+                    ),
+                    "{case}: {error:?}"
+                );
+                assert!(error.is_outcome_unknown());
+            }
+        }
+        assert_eq!(server.count(), before + 1, "a cancellation is sent once");
+    }
+    assert!(
+        accepted.is_empty(),
+        "live statuses accepted as cancellation receipts: {accepted:?}"
+    );
+}
+
 #[tokio::test]
 async fn explicit_admission_preserves_prefix_key_input_and_single_exchange() {
     let server = Server::new(status()).await;
@@ -907,7 +1135,9 @@ async fn a_limit_outside_one_to_one_hundred_is_refused_before_io() {
 
 #[tokio::test]
 async fn an_invalid_retry_or_cancellation_reason_is_refused_before_io() {
-    let server = Server::new(status()).await;
+    let mut cancelled = status();
+    cancelled["cancelRequested"] = json!(true);
+    let server = Server::new(cancelled).await;
     let client = server.client();
     let run = Uuid::parse_str(RUN).unwrap();
     for reason in ["", "contains\ncontrol", &"r".repeat(257), &"é".repeat(129)] {
@@ -1667,6 +1897,10 @@ async fn admission_revision_is_required_before_io_and_bound_to_the_answer() {
 async fn inspection_preserves_minimized_effects_and_waits_without_accepting_correlation_payloads() {
     const CANARY: &str = "protected-correlation-canary";
     let mut document = inspection();
+    document["steps"].as_array_mut().unwrap().extend([
+        step("submit", "delivered", false),
+        step("observe", "pending", false),
+    ]);
     document["effects"] = json!([{"step":"submit","operation":document["recovery"]["operation"],"operationRevision":request().workflow_revision,"state":"accepted"}]);
     document["waits"] = json!([{"step":"observe","acceptedStep":"submit","completion":"result","completionRevision":request().workflow_revision,"timeoutAt":"2026-10-10T12:05:00Z","nextObservationAt":null,"notBefore":"2026-10-10T12:01:00Z","minimumIntervalSeconds":30,"observations":1,"observationLimit":10}]);
     let server = Server::new(document.clone()).await;
@@ -1712,6 +1946,10 @@ async fn inspection_wait_budgets_are_validated_for_inspect_and_reconcile() {
         (30, u32::MAX, 1, false),
     ] {
         let mut document = inspection();
+        document["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(step("observe", "pending", false));
         document["waits"] = json!([{
             "step": "observe", "acceptedStep": "submit", "completion": "result",
             "completionRevision": request().workflow_revision,

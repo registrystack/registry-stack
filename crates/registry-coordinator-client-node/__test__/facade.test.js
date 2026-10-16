@@ -226,7 +226,9 @@ test('every run status response requires a deadline after admission', async (con
     status: 200,
     document: request.url.endsWith('/inspect') || request.url.endsWith('/reconcile')
       ? { ...INSPECTION, run }
-      : request.url.includes('?limit=') ? { runs: [run] } : run,
+      : request.url.includes('?limit=') ? { runs: [run] }
+        // The runtime marks every run its cancellation stops.
+        : request.url.endsWith('/cancel') ? { ...run, cancelRequested: true } : run,
   }));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
@@ -237,7 +239,7 @@ test('every run status response requires a deadline after admission', async (con
     for (const [call, document] of [
       [() => client.start('token-canary', 'original-admission', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} }), run],
       [() => client.status('token-canary', RUN_ID), run],
-      [() => client.cancel('token-canary', RUN_ID, 'caller-withdrew'), run],
+      [() => client.cancel('token-canary', RUN_ID, 'caller-withdrew'), { ...run, cancelRequested: true }],
       [() => client.inspect('token-canary', RUN_ID), { ...INSPECTION, run }],
       [() => client.reconcile('token-canary', RUN_ID, 'response-lost'), { ...INSPECTION, run }],
       [() => client.list('token-canary', 1), { runs: [run] }],
@@ -301,7 +303,8 @@ test('inspect and reconcile validate wait budgets and preserve exhausted waits',
     [29, 0, 1, false], [86401, 0, 1, false],
     [30, 0, 0, false], [30, 2, 1, false],
   ]) {
-    document = { ...INSPECTION, waits: [{
+    const observing = { ...INSPECTION.steps[0], step: 'observe', state: 'pending', uncertain: false, failureCode: null };
+    document = { ...INSPECTION, steps: [...INSPECTION.steps, observing], waits: [{
       step: 'observe', acceptedStep: 'submit', completion: 'result',
       completionRevision: STATUS.workflowRevision,
       timeoutAt: STATUS.deadlineAt, nextObservationAt: null, notBefore: STATUS.admittedAt,
@@ -332,7 +335,9 @@ test('run status requires coherent terminal evidence and preserves restore revie
     status: 200,
     document: request.url.endsWith('/inspect') || request.url.endsWith('/reconcile')
       ? { ...INSPECTION, run }
-      : request.url.includes('?limit=') ? { runs: [run] } : run,
+      : request.url.includes('?limit=') ? { runs: [run] }
+        // The runtime marks every run its cancellation stops.
+        : request.url.endsWith('/cancel') ? { ...run, cancelRequested: true } : run,
   }));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
@@ -358,7 +363,7 @@ test('run status requires coherent terminal evidence and preserves restore revie
     for (const [call, document] of [
       [() => client.start('token-canary', 'original-admission', { workflow: STATUS.workflow, workflowRevision: STATUS.workflowRevision, input: {} }), run],
       [() => client.status('token-canary', RUN_ID), run],
-      [() => client.cancel('token-canary', RUN_ID, 'caller-withdrew'), run],
+      [() => client.cancel('token-canary', RUN_ID, 'caller-withdrew'), { ...run, cancelRequested: true }],
       [() => client.inspect('token-canary', RUN_ID), { ...INSPECTION, run }],
       [() => client.reconcile('token-canary', RUN_ID, 'response-lost'), { ...INSPECTION, run }],
       [() => client.list('token-canary', 1), { runs: [run] }],
