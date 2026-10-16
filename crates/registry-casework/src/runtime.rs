@@ -401,6 +401,20 @@ pub fn build_context_providers(
         let Some(binding) = config.context_providers.get(&provider.deployment_ref) else {
             continue;
         };
+        let unserved = registry_casework_breg::unserved_capabilities(project, provider);
+        if !unserved.is_empty() {
+            return Err(RuntimeError::UnservedContextCapability(
+                unserved
+                    .iter()
+                    .map(|finding| {
+                        format!(
+                            "\n  {}\n  next: {}",
+                            finding.message, finding.suggested_action
+                        )
+                    })
+                    .collect(),
+            ));
+        }
         let description = provider
             .description
             .as_deref()
@@ -1175,6 +1189,9 @@ pub enum RuntimeError {
     SecretConfiguration,
     #[error("the Casework review-context provider {0} is not configured for its declared capability and export")]
     ContextProviderConfiguration(String),
+    /// Each line pair names what needs the capability and how to fix it.
+    #[error("the Casework project needs review context its BReg source does not serve{0}")]
+    UnservedContextCapability(String),
     #[error(
         "no Casework package has been applied to this database; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]

@@ -129,13 +129,10 @@ pub fn build_provider(
             .service_profiles
             .get(&registry_casework_core::ReviewContextCapability::ServiceStatus)
             != Some(&binding.status_profile)
-        || policy.capabilities.iter().any(|cap| {
-            !matches!(
-                cap,
-                registry_casework_core::ReviewContextCapability::HumanDisplay
-                    | registry_casework_core::ReviewContextCapability::ServiceStatus
-            )
-        })
+        || policy
+            .capabilities
+            .iter()
+            .any(|cap| !crate::SERVED_CAPABILITIES.contains(cap))
     {
         return Err(ReviewContextError::Unsupported);
     }

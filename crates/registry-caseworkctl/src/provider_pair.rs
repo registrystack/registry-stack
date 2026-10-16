@@ -178,13 +178,11 @@ pub(super) fn pair(
             }
         }
     }
-    if provider.capabilities.iter().any(|cap| {
-        !matches!(
-            cap,
-            registry_casework_core::ReviewContextCapability::HumanDisplay
-                | registry_casework_core::ReviewContextCapability::ServiceStatus
-        )
-    }) {
+    if provider
+        .capabilities
+        .iter()
+        .any(|cap| !registry_casework_breg::SERVED_CAPABILITIES.contains(cap))
+    {
         bail!("native BReg provider cannot expose minimized service-purpose fields");
     }
     let relative = provider

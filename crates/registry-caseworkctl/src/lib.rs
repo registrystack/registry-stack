@@ -624,6 +624,139 @@ mod tests {
         }
     }
 
+    /// The canonical BReg-bound project with one task template whose
+    /// `subjects` need task-grant context.
+    fn canonical_with_subject_template(declare_on_provider: bool) -> (tempfile::TempDir, PathBuf) {
+        let temp = canonical_tempdir();
+        let project = temp.path().join("canonical");
+        project::init(&project, "canonical-review").unwrap();
+        let path = project.join("casework.yaml");
+        let mut yaml = std::fs::read_to_string(&path).unwrap();
+        if declare_on_provider {
+            yaml = yaml
+                .replace(
+                    "    capabilities: [human-display, service-status]\n",
+                    "    capabilities: [human-display, service-status, task-grant-context]\n",
+                )
+                .replace(
+                    "      service-status: casework-review-status\n",
+                    "      service-status: casework-review-status\n      task-grant-context: casework-task-context\n",
+                );
+        }
+        yaml.push_str(
+            "teams:
+  facility-reviewers:
+    label: Facility reviewers
+    serves: [facility-addresses]
+    memberProfiles: [staff]
+    supervisorProfiles: [supervisor]
+taskTemplates:
+  address-summary:
+    version: \"1\"
+    label: Prepare an address summary
+    eligibleTeams: [facility-reviewers]
+    eligibleProfiles: [staff]
+    source: facility-registry
+    reviewPolicies: [facility-address-review]
+    agent: {issuer: https://agent.example.test, subject: summary-agent}
+    client: summary-client
+    resource: urn:breg:facility-registry
+    scopes: [registry:facility:read]
+    purpose: prepare-summary
+    bounds: {type: breg, permissions: [{collection: facilities, operations: [get]}]}
+    subjects: {facility: facilityId}
+    lifetimeSeconds: 900
+",
+        );
+        std::fs::write(&path, yaml).unwrap();
+        // Local callers are optional; without them the policy refusal is
+        // the only one left to report.
+        std::fs::remove_file(project.join("dev-clients.yaml")).unwrap();
+        (temp, project)
+    }
+
+    fn json_check(project: &std::path::Path) -> (ExitCode, Value) {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format"),
+                OsString::from("json"),
+                OsString::from("check"),
+                project.as_os_str().to_owned(),
+            ],
+            &mut out,
+            &mut err,
+        );
+        assert!(err.is_empty(), "{}", String::from_utf8_lossy(&err));
+        (exit, serde_json::from_slice(&out).unwrap())
+    }
+
+    #[test]
+    fn check_refuses_task_grant_subjects_a_breg_source_does_not_serve() {
+        let (_temp, project) = canonical_with_subject_template(true);
+        let (exit, report) = json_check(&project);
+        assert_eq!(exit, ExitCode::from(1), "{report}");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        let template = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["path"] == "/taskTemplates/address-summary/subjects")
+            .unwrap_or_else(|| panic!("the template is named at its subjects: {report}"));
+        assert_eq!(
+            template["code"],
+            "casework.task-template.unserved-capability"
+        );
+        assert_eq!(
+            template["message"],
+            "task template address-summary declares subjects, which need the \
+             task-grant-context capability, and BReg, the source behind context provider \
+             facility-proposal-context, does not serve task-grant context yet; see \
+             https://github.com/registrystack/registry-stack/issues/2062"
+        );
+        assert_eq!(
+            template["suggestedAction"],
+            "Remove `subjects` from task template address-summary, or bind the template \
+             to review policies whose source serves task-grant context."
+        );
+        assert_eq!(
+            template["source"]["file"],
+            project.join("casework.yaml").display().to_string()
+        );
+        let provider = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic["path"] == "/contextProviders/facility-proposal-context/capabilities"
+            })
+            .unwrap_or_else(|| panic!("the provider declaration is named too: {report}"));
+        assert_eq!(
+            provider["code"],
+            "casework.context-provider.unserved-capability"
+        );
+        assert_eq!(
+            provider["suggestedAction"],
+            "Remove task-grant-context from the capabilities and serviceProfiles of context \
+             provider facility-proposal-context."
+        );
+        assert_eq!(diagnostics.len(), 2, "{report}");
+    }
+
+    #[test]
+    fn check_names_the_template_when_its_provider_does_not_declare_task_grant_context() {
+        let (_temp, project) = canonical_with_subject_template(false);
+        let (exit, report) = json_check(&project);
+        assert_eq!(exit, ExitCode::from(1), "{report}");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_eq!(
+            diagnostics[0]["code"],
+            "casework.task-template.provider-capability"
+        );
+        assert_eq!(
+            diagnostics[0]["path"],
+            "/taskTemplates/address-summary/subjects"
+        );
+    }
+
     #[test]
     fn init_files_select_existing_local_editor_schemas() {
         let temp = canonical_tempdir();

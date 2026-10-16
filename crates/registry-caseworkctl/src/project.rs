@@ -263,6 +263,7 @@ pub(crate) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
 }
 pub(super) fn check(project: &Path, _production: bool, _deny_warnings: bool) -> Result<Value> {
     let policy = load_and_check_policy(project)?;
+    check_served_capabilities(project, &policy)?;
     let policy_bytes = read_package_input(&project.join("casework.yaml"))?;
     let mut files_checked =
         registry_casework_core::CaseworkProject::schema_references("casework.yaml", &policy_bytes)?
@@ -332,6 +333,22 @@ pub(super) fn check(project: &Path, _production: bool, _deny_warnings: bool) -> 
     Ok(
         json!({"ok":true,"command":"check","status":"complete","project":project,"policyBindings":bindings,"filesChecked":files_checked.len()+1,"diagnostics":diagnostics.diagnostics(),"networkAccess":false,"databaseAccess":false}),
     )
+}
+
+/// Refuses a project that needs a review-context capability its source does
+/// not serve. Every context provider the runtime builds is a BReg provider,
+/// so the BReg adapter decides which capabilities are served.
+fn check_served_capabilities(project: &Path, policy: &CaseworkProject) -> Result<()> {
+    let findings: Vec<_> = policy
+        .context_providers
+        .iter()
+        .flat_map(|provider| registry_casework_breg::unserved_capabilities(policy, provider))
+        .collect();
+    if findings.is_empty() {
+        return Ok(());
+    }
+    let document = read_project(project)?.document;
+    Err(registry_casework_core::findings_report(&document, &findings).into())
 }
 
 fn check_holiday_sets(
