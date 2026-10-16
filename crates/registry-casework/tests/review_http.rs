@@ -2667,6 +2667,21 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
         .value;
     assert_eq!(available.items[0].task_id, first);
     let cursor = available.next_cursor.expect("more available work");
+    // The next task is the earliest-due one; a list cursor carried over from
+    // the same unclaimed, due-ordered query of one does not move it.
+    let next = client
+        .next_review_task(
+            auth(),
+            &ReviewStaffingQuery {
+                cursor: Some(cursor),
+                ..unclaimed.clone()
+            },
+        )
+        .await
+        .expect("next with a list cursor")
+        .value
+        .expect("an unclaimed task");
+    assert_eq!(next.task_id, first);
     client
         .claim_review_task(auth(), first, 1, "claim-cursor-anchor")
         .await
