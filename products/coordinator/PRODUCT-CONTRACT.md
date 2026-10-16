@@ -57,7 +57,8 @@ An Action call may declare `onDeclaredRefusal`. Only a validated owner-declared 
 routes there, as `{refusalCode}`. Authentication, authorization, transport, protocol, and
 preparation failures stay operational failures. A later refusal cannot settle an earlier uncertain
 attempt. Success and refusal outputs are available only on their respective routes; after a join
-reachable from both, the call output has no unambiguous schema and is unavailable.
+reachable from both, the call output has no unambiguous schema and is unavailable. Without the
+edge, a declared refusal fails the run with `product-refused`, like any other refusal.
 
 ## Standalone review and named completions
 
