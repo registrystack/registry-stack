@@ -186,7 +186,8 @@ own fresh authority check.
 All staffing operates on `ReviewTask`. Six supported outcomes share the same
 current Directory, policy, task, and source-disclosure checks:
 
-1. `GET /v1/review-tasks/next` returns the earliest due visible eligible task.
+1. `GET /v1/review-tasks/next` returns the earliest due visible eligible task;
+   it ignores `sort`, `limit`, and `cursor`.
 2. `GET /v1/review-tasks/holdings` returns the caller's claimed or assigned tasks.
 3. `POST /v1/directory/caseload/preview` and `/apply` move an exact,
    revision-fenced set atomically.

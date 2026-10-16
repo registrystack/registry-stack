@@ -544,3 +544,146 @@ async fn paged_reads_refuse_a_stopped_page_without_a_cursor() {
         server.abort();
     }
 }
+
+/// Casework issues random cursors, never the nil identifier: a nil cursor is
+/// refused before the request on every UUID-cursored read, and a page that
+/// offers one as its continuation is refused.
+#[tokio::test]
+async fn uuid_paged_reads_refuse_a_nil_cursor() {
+    let requests = Arc::new(Mutex::new(0_usize));
+    let page = |State((requests, value)): State<(Arc<Mutex<usize>>, Value)>| async move {
+        *requests.lock().unwrap() += 1;
+        (
+            [("content-type", "application/json"), ("traceparent", TRACE)],
+            value.to_string(),
+        )
+    };
+    let nil = Uuid::nil().to_string();
+    let response = json!({"items":[],"nextCursor":nil,"status":"budget-exhausted"});
+    let app = Router::new()
+        .route("/v1/review-tasks", get(page))
+        .route("/v1/review-tasks/next", get(page))
+        .route("/v1/review-tasks/holdings", get(page))
+        .route("/v1/review-tasks/own-decisions", get(page))
+        .route("/v1/review-tasks/supervision", get(page))
+        .route("/v1/review-requests/{id}/history", get(page))
+        .with_state((requests.clone(), response));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).unwrap(),
+    ))
+    .unwrap();
+    let token = BearerToken::new("staff-token").unwrap();
+    let auth = || CaseworkAuth::new(&token, "staff");
+
+    let staffing = ReviewStaffingQuery {
+        cursor: Some(Uuid::nil()),
+        ..Default::default()
+    };
+    for (read, result) in [
+        (
+            "review tasks",
+            client.review_tasks(auth(), &staffing).await.map(drop),
+        ),
+        (
+            "next review task",
+            client.next_review_task(auth(), &staffing).await.map(drop),
+        ),
+        (
+            "review task holdings",
+            client
+                .review_task_holdings(auth(), &staffing)
+                .await
+                .map(drop),
+        ),
+        (
+            "own review decisions",
+            client
+                .own_review_decisions(
+                    auth(),
+                    &OwnReviewDecisionQuery {
+                        cursor: Some(Uuid::nil()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(drop),
+        ),
+        (
+            "supervisory review tasks",
+            client
+                .supervisory_review_tasks(
+                    auth(),
+                    &SupervisoryReviewTaskQuery {
+                        cursor: Some(Uuid::nil()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(drop),
+        ),
+        (
+            "review history",
+            client
+                .review_history(
+                    auth(),
+                    Uuid::from_u128(1),
+                    &ReviewPageQuery {
+                        cursor: Some(Uuid::nil()),
+                        limit: None,
+                    },
+                )
+                .await
+                .map(drop),
+        ),
+    ] {
+        assert!(
+            matches!(result, Err(CaseworkClientError::InvalidRequest { .. })),
+            "{read} sent a nil cursor: {result:?}"
+        );
+    }
+    assert_eq!(*requests.lock().unwrap(), 0);
+
+    let staffing = ReviewStaffingQuery::default();
+    for (read, result) in [
+        (
+            "review tasks",
+            client.review_tasks(auth(), &staffing).await.map(drop),
+        ),
+        (
+            "review task holdings",
+            client
+                .review_task_holdings(auth(), &staffing)
+                .await
+                .map(drop),
+        ),
+        (
+            "own review decisions",
+            client
+                .own_review_decisions(auth(), &OwnReviewDecisionQuery::default())
+                .await
+                .map(drop),
+        ),
+        (
+            "supervisory review tasks",
+            client
+                .supervisory_review_tasks(auth(), &SupervisoryReviewTaskQuery::default())
+                .await
+                .map(drop),
+        ),
+    ] {
+        assert!(
+            matches!(
+                result,
+                Err(CaseworkClientError::Protocol {
+                    failure: CaseworkProtocolFailure::Body,
+                    ..
+                })
+            ),
+            "{read} accepted a nil next cursor: {result:?}"
+        );
+    }
+    server.abort();
+}

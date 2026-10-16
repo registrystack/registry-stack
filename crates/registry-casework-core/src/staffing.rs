@@ -61,6 +61,8 @@ impl ReviewStaffingQuery {
             .flatten()
             .any(|s| !text(s, 128))
             || self.reference.as_ref().is_some_and(|s| !text(s, 256))
+            // Casework issues random cursors, never the nil identifier.
+            || self.cursor.is_some_and(|cursor| cursor.is_nil())
         {
             return Err(ReviewStaffingError);
         }
@@ -225,6 +227,20 @@ mod tests {
         };
         assert!(q.check().is_err());
         assert!(ReviewStaffingQuery::default().check().is_ok());
+    }
+    #[test]
+    fn nil_cursor_is_refused() {
+        let q = ReviewStaffingQuery {
+            cursor: Some(Uuid::nil()),
+            ..Default::default()
+        };
+        assert!(q.check().is_err());
+        assert!(ReviewStaffingQuery {
+            cursor: Some(Uuid::from_u128(7)),
+            ..Default::default()
+        }
+        .check()
+        .is_ok());
     }
     #[test]
     fn recompute_refuses_duplicates() {

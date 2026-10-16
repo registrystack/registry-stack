@@ -508,7 +508,10 @@ async fn next_review_task(
     page_limit(&state, query.limit)?;
     let source = source_profile_optional(&headers)?;
     let (actor, token) = authenticate(&state, &headers).await?;
+    // The next task is always the first of the due ordering, so a list cursor
+    // never moves it.
     query.sort = ReviewTaskSort::Due;
+    query.cursor = None;
     query.limit = Some(1);
     query.ownership = Some(query.ownership.unwrap_or(ReviewTaskOwnership::Unclaimed));
     Ok(Json(

@@ -293,10 +293,7 @@ impl CaseworkClient {
         let complete: CaseworkComplete<ReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
         if !valid_staffing_page(&complete.value.items, query)
-            || page_stopped_without_cursor(
-                complete.value.status,
-                complete.value.next_cursor.is_some(),
-            )
+            || invalid_page_cursor(complete.value.status, complete.value.next_cursor)
             || complete.value.items.iter().any(|task| {
                 !staffing_task_matches(task, query, auth.profile)
                     || task.decided_by_caller.is_some()
@@ -329,7 +326,7 @@ impl CaseworkClient {
         if let Some(queue) = &query.queue {
             validate_identifier(queue, "the review queue identifier is invalid")?;
         }
-        validate_review_page(query.limit)?;
+        validate_review_page(query.cursor, query.limit)?;
         let request = self.authorized(
             self.http
                 .get(self.url(&["v1", "review-tasks", "own-decisions"])?)
@@ -339,10 +336,7 @@ impl CaseworkClient {
         let complete: CaseworkComplete<OwnReviewDecisionPage> =
             self.send_json(request, StatusCode::OK).await?;
         if page_exceeds_limit(complete.value.items.len(), query.limit)
-            || page_stopped_without_cursor(
-                complete.value.status,
-                complete.value.next_cursor.is_some(),
-            )
+            || invalid_page_cursor(complete.value.status, complete.value.next_cursor)
             || complete.value.items.iter().any(|row| {
                 query
                     .queue
@@ -375,7 +369,7 @@ impl CaseworkClient {
         if let Some(queue) = &query.queue {
             validate_identifier(queue, "the review queue identifier is invalid")?;
         }
-        validate_review_page(query.limit)?;
+        validate_review_page(query.cursor, query.limit)?;
         let request = self.authorized(
             self.http
                 .get(self.url(&["v1", "review-tasks", "supervision"])?)
@@ -385,10 +379,7 @@ impl CaseworkClient {
         let complete: CaseworkComplete<SupervisoryReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
         if page_exceeds_limit(complete.value.items.len(), query.limit)
-            || page_stopped_without_cursor(
-                complete.value.status,
-                complete.value.next_cursor.is_some(),
-            )
+            || invalid_page_cursor(complete.value.status, complete.value.next_cursor)
             || complete.value.items.iter().any(|task| {
                 query
                     .queue
@@ -775,7 +766,7 @@ impl CaseworkClient {
         request_id: Uuid,
         query: &ReviewPageQuery,
     ) -> Result<CaseworkComplete<ReviewHistoryPage>, CaseworkClientError> {
-        validate_review_page(query.limit)?;
+        validate_review_page(query.cursor, query.limit)?;
         let request = self.authorized(
             self.http
                 .get(self.url(&["v1", "review-requests", &request_id.to_string(), "history"])?)
@@ -1030,10 +1021,7 @@ impl CaseworkClient {
         let complete: CaseworkComplete<ReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
         if !valid_staffing_page(&complete.value.items, query)
-            || page_stopped_without_cursor(
-                complete.value.status,
-                complete.value.next_cursor.is_some(),
-            )
+            || invalid_page_cursor(complete.value.status, complete.value.next_cursor)
             || complete.value.items.iter().any(|task| {
                 !staffing_task_matches(task, query, auth.profile)
                     || !matches!(task.state, ReviewTaskState::Held { .. })
@@ -1956,6 +1944,12 @@ fn page_stopped_without_cursor(status: PageStatus, has_cursor: bool) -> bool {
     status != PageStatus::Complete && !has_cursor
 }
 
+/// A UUID-cursored page must say where to resume when it stopped early, and
+/// Casework never issues the nil identifier as a cursor.
+fn invalid_page_cursor(status: PageStatus, cursor: Option<Uuid>) -> bool {
+    page_stopped_without_cursor(status, cursor.is_some()) || cursor.is_some_and(|c| c.is_nil())
+}
+
 /// A successful mutation response must show the transition it was asked to
 /// perform, not only the task it names: the revision advances by exactly one
 /// and the state is a legal successor for that mutation.
@@ -2183,10 +2177,18 @@ fn validate_page(cursor: Option<&str>, limit: Option<usize>) -> Result<(), Casew
     validate_page_with_max(cursor, limit, MAXIMUM_PAGE_SIZE)
 }
 
-fn validate_review_page(limit: Option<usize>) -> Result<(), CaseworkClientError> {
+fn validate_review_page(
+    cursor: Option<Uuid>,
+    limit: Option<usize>,
+) -> Result<(), CaseworkClientError> {
     if limit.is_some_and(|value| value == 0 || value > MAXIMUM_PAGE_SIZE) {
         return Err(CaseworkClientError::invalid_request(
             "the page size is outside the accepted range",
+        ));
+    }
+    if cursor.is_some_and(|cursor| cursor.is_nil()) {
+        return Err(CaseworkClientError::invalid_request(
+            "the page cursor must be a nextCursor Casework returned",
         ));
     }
     Ok(())
