@@ -139,7 +139,7 @@ class NativeRequestTests(unittest.TestCase):
             for call, document in (
                 (lambda: self.client.start("token-canary", KEY, START_REQUEST), run),
                 (lambda: self.client.status("token-canary", RUN), run),
-                (lambda: self.client.cancel("token-canary", RUN, "caller-withdrew"), run),
+                (lambda: self.client.cancel("token-canary", RUN, "caller-withdrew"), {**run, "cancelRequested": True}),
                 (lambda: self.client.inspect("token-canary", RUN), {**INSPECTION, "run": run}),
                 (lambda: self.client.reconcile("token-canary", RUN, "response-lost"), {**INSPECTION, "run": run}),
                 (lambda: self.client.list("token-canary", 1), {"runs": [run]}),
@@ -240,7 +240,7 @@ class NativeRequestTests(unittest.TestCase):
             for call, document in (
                 (lambda: self.client.start("token-canary", KEY, START_REQUEST), run),
                 (lambda: self.client.status("token-canary", RUN), run),
-                (lambda: self.client.cancel("token-canary", RUN, "caller-withdrew"), run),
+                (lambda: self.client.cancel("token-canary", RUN, "caller-withdrew"), {**run, "cancelRequested": True}),
                 (lambda: self.client.inspect("token-canary", RUN), {**INSPECTION, "run": run}),
                 (lambda: self.client.reconcile("token-canary", RUN, "response-lost"), {**INSPECTION, "run": run}),
                 (lambda: self.client.list("token-canary", 1), {"runs": [run]}),
@@ -594,7 +594,7 @@ class NativeRequestTests(unittest.TestCase):
                 ("inspect", "/inspect", INSPECTION),
                 ("reconcile", "/reconcile", INSPECTION),
                 ("retry_same", "/retry-same", RETRY_SCHEDULED),
-                ("cancel", "/cancel", STATUS),
+                ("cancel", "/cancel", {**STATUS, "cancelRequested": True}),
             ):
                 with self.subTest(run=run, method=method):
                     self.service.script(ok(response))

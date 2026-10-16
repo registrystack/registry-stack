@@ -171,14 +171,18 @@ async fn run_status_answers(
                 .await
                 .map(|answer| answer.value.state),
         ),
-        (
-            "cancel",
-            client
-                .cancel(&token(), run_id, "caller-withdrew")
-                .await
-                .map(|answer| answer.value.state),
-        ),
     ];
+    // The runtime marks every run its cancellation stops.
+    let mut cancelled = run.clone();
+    cancelled["cancelRequested"] = json!(true);
+    server.answer(200, "application/json", &cancelled.to_string());
+    answers.push((
+        "cancel",
+        client
+            .cancel(&token(), run_id, "caller-withdrew")
+            .await
+            .map(|answer| answer.value.state),
+    ));
     let mut inspected = inspection();
     inspected["run"] = run.clone();
     server.answer(200, "application/json", &inspected.to_string());
@@ -788,6 +792,74 @@ async fn inspection_and_reconciliation_correlate_effects_and_waits_with_their_st
 }
 
 #[tokio::test]
+async fn a_cancellation_receipt_must_record_the_cancellation_or_a_settled_run() {
+    let server = Server::new(status()).await;
+    let client = server.client();
+    let id = Uuid::parse_str(RUN).unwrap();
+    // (state, outcome, restoreReviewRequired, cancelRequested, authoredCancelRequested, valid)
+    let mut cases = vec![
+        // An ordinary live status is not a cancellation receipt.
+        ("running", None, false, false, false, false),
+        ("attention", None, false, false, false, false),
+        ("cancel-requested", None, false, false, false, false),
+        // The runtime marks every run it stops.
+        ("running", None, false, true, false, true),
+        ("attention", None, false, true, false, true),
+        ("cancel-requested", None, false, true, false, true),
+        // An authored onCancel path keeps running its cleanup.
+        ("running", None, false, false, true, true),
+        // Restore review projects attention over a run that already settled.
+        ("attention", Some("completed"), true, false, false, true),
+        ("attention", None, true, false, false, true),
+    ];
+    for state in [
+        "failed",
+        "cancelled",
+        "cancelled-after-effect",
+        "expired",
+        "finished",
+    ] {
+        let outcome = (state == "finished").then_some("completed");
+        cases.push((state, outcome, false, false, false, true));
+    }
+    let mut accepted = Vec::new();
+    for (state, outcome, restore, cancel, authored, valid) in cases {
+        let mut run = status();
+        run["state"] = json!(state);
+        run["outcome"] = json!(outcome);
+        run["restoreReviewRequired"] = json!(restore);
+        run["cancelRequested"] = json!(cancel);
+        run["authoredCancelRequested"] = json!(authored);
+        server.answer(200, "application/json", &run.to_string());
+        let before = server.count();
+        let case = format!("{state} restore={restore} cancel={cancel} authored={authored}");
+        match client.cancel(&token(), id, "caller-withdrew").await {
+            Ok(answer) if valid => assert_eq!(answer.value.state, state),
+            Ok(_) => accepted.push(case),
+            Err(error) => {
+                assert!(!valid, "{case} refused: {error:?}");
+                assert!(
+                    matches!(
+                        error,
+                        CoordinatorClientError::Protocol {
+                            status: 200,
+                            failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                        }
+                    ),
+                    "{case}: {error:?}"
+                );
+                assert!(error.is_outcome_unknown());
+            }
+        }
+        assert_eq!(server.count(), before + 1, "a cancellation is sent once");
+    }
+    assert!(
+        accepted.is_empty(),
+        "live statuses accepted as cancellation receipts: {accepted:?}"
+    );
+}
+
+#[tokio::test]
 async fn explicit_admission_preserves_prefix_key_input_and_single_exchange() {
     let server = Server::new(status()).await;
     let client = server.client();
@@ -1063,7 +1135,9 @@ async fn a_limit_outside_one_to_one_hundred_is_refused_before_io() {
 
 #[tokio::test]
 async fn an_invalid_retry_or_cancellation_reason_is_refused_before_io() {
-    let server = Server::new(status()).await;
+    let mut cancelled = status();
+    cancelled["cancelRequested"] = json!(true);
+    let server = Server::new(cancelled).await;
     let client = server.client();
     let run = Uuid::parse_str(RUN).unwrap();
     for reason in ["", "contains\ncontrol", &"r".repeat(257), &"é".repeat(129)] {

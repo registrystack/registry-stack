@@ -331,7 +331,7 @@ impl CoordinatorClient {
                 Some(reason_body(reason)?),
             )
             .await?;
-        if value.run_id != run {
+        if value.run_id != run || !records_cancellation(&value) {
             return Err(protocol(200, Failure::Body));
         }
         Ok(CoordinatorComplete { value })
@@ -474,6 +474,20 @@ fn exact_media_type(headers: &HeaderMap, expected: &str) -> bool {
         (values.next(), values.next()),
         (Some(value), None) if value.as_bytes() == expected.as_bytes()
     )
+}
+
+/// The runtime answers a cancellation by marking the run cancel-requested,
+/// by taking an authored `onCancel` path, or with a run that had already
+/// settled. Restore review projects `attention` over a settled run without
+/// marking it. Any other live status does not show the run was stopped.
+fn records_cancellation(run: &RunStatus) -> bool {
+    run.cancel_requested
+        || run.authored_cancel_requested
+        || run.state == "attention" && run.restore_review_required
+        || !matches!(
+            run.state.as_str(),
+            "running" | "attention" | "cancel-requested"
+        )
 }
 
 fn valid_cursor(cursor: &str) -> bool {
