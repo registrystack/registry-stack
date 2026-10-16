@@ -30,6 +30,12 @@
   Apply prepared before the Review is decided. The refusal kind stays
   `invalid-request`; only the message changed from the generic "contract or
   attempt is invalid".
+- The runtime logs one warning when the review authority refuses a review
+  handoff for good and BReg records it `remote-refused`. The warning names
+  the authority, the HTTP status and the Problem code, never the Proposal or
+  its values, and tells the operator to check the review producer
+  configuration and its grant; the Proposal reads `review-ended` with
+  recovery `revise`.
 
 - BREAKING: retention windows other than the audit journal's live in a
   top-level `retention` block, the shape Scheduling and Messaging use.

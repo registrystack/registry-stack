@@ -1271,3 +1271,83 @@ async fn operator_resubmit_preserves_acceptance_and_refuses_replacement_after_pr
         fixture.finish().await;
     }
 }
+
+#[tokio::test]
+async fn native_submission_remote_refusal_warns_the_operator_without_values() {
+    async fn refuse() -> Response {
+        (
+            StatusCode::FORBIDDEN,
+            [
+                ("content-type", "application/problem+json"),
+                ("traceparent", TRACE),
+            ],
+            json!({"type":"https://review-provider.example.test/problems/producer/refused",
+                "title":"Forbidden","status":403,"detail":"The producer is not allowed.",
+                "code":"producer.refused","traceId":"0123456789abcdef0123456789abcdef"})
+            .to_string(),
+        )
+            .into_response()
+    }
+    let authority = Authority::start(false, true).await;
+    let fixture = fixture(&authority).await;
+    let id = submitted(&fixture, "remote-refusal").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/v1/review-requests", post(refuse)),
+        )
+        .await
+        .unwrap();
+    });
+    let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let logs = Logs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(logs.clone())
+        .finish();
+    let capture = tracing::subscriber::set_default(subscriber);
+    let client = fixture.pool.get_for_test().await.unwrap();
+    assert!(run_one_submission(
+        &**client,
+        AUTHORITY,
+        &refusing,
+        "producer",
+        &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+        30
+    )
+    .await
+    .unwrap());
+    drop(capture);
+    server.abort();
+    let delivered = job(&fixture, id).await;
+    assert_eq!(delivered["state"], "failed");
+    assert_eq!(delivered["error"], "remote-refused");
+    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let warning = output
+        .lines()
+        .find(|line| line.contains("\"level\":\"WARN\"") && line.contains("refused"))
+        .unwrap_or_else(|| panic!("no remote-refusal warning in {output}"));
+    assert!(warning.contains("\"status\":403"), "{warning}");
+    assert!(
+        warning.contains("\"problem_code\":\"producer.refused\""),
+        "{warning}"
+    );
+    for canary in [
+        OUTGOING_TOKEN,
+        INCOMING_TOKEN,
+        RECIPIENT,
+        "The producer is not allowed.",
+        &id.to_string(),
+        "After",
+    ] {
+        assert!(
+            !output.contains(canary),
+            "remote-refusal log disclosed {canary}"
+        );
+    }
+    drop(client);
+    fixture.finish().await;
+}
