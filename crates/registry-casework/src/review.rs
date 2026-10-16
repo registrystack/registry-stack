@@ -252,11 +252,11 @@ impl SourceDisclosure {
         }
     }
 
-    fn for_task(record: &ReviewRequestRecord, task_decided: bool) -> Self {
+    fn for_task(task_decided: bool) -> Self {
         if task_decided {
             Self::Visible
         } else {
-            Self::for_request(record)
+            Self::Reviewable
         }
     }
 }
@@ -545,7 +545,7 @@ impl CaseworkService {
                     let decided = self.store.review_task_decided(anchor).await?;
                     self.preflight_review_inbox_source(
                         &record,
-                        SourceDisclosure::for_task(&record, decided),
+                        SourceDisclosure::for_task(decided),
                         source_profile_id,
                         token,
                     )
@@ -612,10 +612,8 @@ impl CaseworkService {
             let prepared_length = prepared.len();
             let mut checks = stream::iter(prepared)
                 .map(|(task, record)| async move {
-                    let disclosure = SourceDisclosure::for_task(
-                        &record,
-                        matches!(task.state, ReviewTaskState::Decided),
-                    );
+                    let disclosure =
+                        SourceDisclosure::for_task(matches!(task.state, ReviewTaskState::Decided));
                     let result = tokio::time::timeout_at(
                         deadline_at,
                         self.preflight_review_inbox_source(
@@ -1309,7 +1307,7 @@ impl CaseworkService {
         let decided = self.store.review_task_decided(task_id).await?;
         self.preflight_review_disclosure(
             &record,
-            SourceDisclosure::for_task(&record, decided),
+            SourceDisclosure::for_task(decided),
             source_profile_id,
             token,
         )
