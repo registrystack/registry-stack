@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A decided review task no longer disappears from
+  `GET /v1/review-tasks/own-decisions` and `/v1/review-tasks/supervision`
+  when its current source stops reporting the subject as reviewable, which a
+  BReg Proposal does as soon as it is decided. Decided rows, a decided task
+  read, and the history and notes of a settled request now require current
+  source visibility only; claim, decide, `next`, and reads of open work still
+  require the subject to be reviewable. A subject the source conceals stays
+  omitted or not found, and a source error still fails closed.
 - BREAKING: every `ReviewDecisionReceipt` names the policy `outcome` its
   decision selected; the field is required in the OpenAPI document and the
   Rust, Node.js and Python clients, and a client refuses a receipt without
