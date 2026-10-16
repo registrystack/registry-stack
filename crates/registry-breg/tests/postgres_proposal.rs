@@ -2078,6 +2078,10 @@ async fn reviewed_apply_requires_fresh_exact_approval_and_receipt_recovery_is_lo
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("get-review-status"));
     let review = std::sync::Arc::new(LocalReview {
         calls: 0.into(),
         mode: 0.into(),
@@ -2179,6 +2183,12 @@ async fn reviewed_apply_requires_fresh_exact_approval_and_receipt_recovery_is_lo
         .unwrap();
     let applied = client.execute_proposal(&apply).await.unwrap();
     assert_eq!(applied.value.state(), BRegProposalState::Applied);
+    follow_retained_review_status_link(
+        &fixture.http.base_url,
+        &serde_json::to_value(client.read_proposal(&applied.value).await.unwrap().value).unwrap(),
+        "approved",
+    )
+    .await;
     let calls = review.calls.load(std::sync::atomic::Ordering::SeqCst);
     review.mode.store(3, std::sync::atomic::Ordering::SeqCst);
     let recovered = client.execute_proposal(&apply).await.unwrap();
@@ -2379,6 +2389,31 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
     }
 }
 
+/// A Proposal whose review was decided keeps its review-status link, and
+/// following that link serves the retained result.
+async fn follow_retained_review_status_link(base_url: &str, document: &Value, state: &str) {
+    let link = &document["links"]["reviewStatus"];
+    assert_eq!(link["method"], "GET", "{state}: {document}");
+    assert_eq!(
+        link["availability"]["available"], true,
+        "{state}: {document}"
+    );
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}",
+            base_url.trim_end_matches('/'),
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+        .send()
+        .await
+        .unwrap();
+    let code = response.status();
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(code, reqwest::StatusCode::OK, "{state}: {body}");
+    assert_eq!(body["result"]["state"], state, "{body}");
+}
+
 /// Posts every Proposal command through the link a rejected Proposal serves,
 /// as a client holding the inert link would, and checks each answers 409
 /// `proposal.rejected` with the detail naming how to try again. Attachment
@@ -2501,6 +2536,10 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
         // Rebase body to the rejected Proposal.
         source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
             json!(["target", "value"]);
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("get-review-status"));
         let review = std::sync::Arc::new(LocalReview {
             calls: 0.into(),
             mode: 0.into(),
@@ -2570,6 +2609,7 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
         assert_eq!(current["turn"], turn, "{outcome}");
         assert_eq!(current["decision"]["status"], outcome);
         assert_eq!(current["decision"]["publicReason"], "Public reason canary");
+        follow_retained_review_status_link(&fixture.http.base_url, &current, outcome).await;
         let entries = fixture.audit_capture.entries();
         assert!(entries[before..].iter().any(|entry| {
             entry["record"]["phase"] == "terminal"

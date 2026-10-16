@@ -36,6 +36,10 @@
   its values, and tells the operator to check the review producer
   configuration and its grant; the Proposal reads `review-ended` with
   recovery `revise`.
+- A rejected or applied Proposal keeps its `reviewStatus` link, so a client
+  that follows links can still read the retained review result. The link was
+  offered only while the Proposal was `submitted`, although the read itself
+  served the result after a decision.
 
 - BREAKING: retention windows other than the audit journal's live in a
   top-level `retention` block, the shape Scheduling and Messaging use.

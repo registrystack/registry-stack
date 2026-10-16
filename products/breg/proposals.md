@@ -107,6 +107,11 @@ The saved Proposal remains governed work, but that caller can no longer view,
 cancel or recover it. An adopter should explain this loss of access and provide
 its service contact path; it must not retain a private copy as substitute authority.
 
+A Proposal offers its `reviewStatus` link in every state except `draft`,
+including after it was rejected, applied or cancelled, so a client that
+follows links can still reach a retained result. The link is absent once the
+current submission's detail was erased.
+
 An authorized review-status read includes `requestId` after the Review provider
 has accepted that exact submission. Before acceptance the member is absent.
 Use this provider-issued ID to correlate independently authorized Casework

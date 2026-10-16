@@ -2893,8 +2893,12 @@ impl MutationTransaction {
                         && review_refusal.is_none()
                         && review_available
                 }
-                ProposalOperation::GetReviewContext | ProposalOperation::GetReviewStatus => {
-                    document.header.state == "submitted"
+                ProposalOperation::GetReviewContext => document.header.state == "submitted",
+                // The review-status read serves any submission whose frozen
+                // Proposal is retained, decided or not, so the link stays
+                // offered after a rejection or an application.
+                ProposalOperation::GetReviewStatus => {
+                    document.header.state != "draft" && !document.header.current_proposal_erased
                 }
                 ProposalOperation::GetApplicationActor => false,
                 ProposalOperation::List => false,
