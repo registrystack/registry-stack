@@ -2380,7 +2380,7 @@ fn ingestion_run_wire(status: &str) -> Value {
         "chunkAlgorithmVersion": BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
         "maximumItems": 100,
         "maximumBytes": 1048576,
-        "nextChunkIndex": 1,
+        "nextChunkIndex": 0,
         "committedItems": 0,
         "committedPrefixDigest": ingestion_prefix_digest(&[]),
         "lastAttempt": null,
@@ -2388,6 +2388,15 @@ fn ingestion_run_wire(status: &str) -> Value {
         "updatedAt": "2026-09-19T00:01:00Z",
         "complete": false
     })
+}
+
+fn completed_ingestion_run_wire() -> Value {
+    let mut run = ingestion_run_wire("complete");
+    run["complete"] = json!(true);
+    run["nextChunkIndex"] = run["chunkCount"].clone();
+    run["committedItems"] = run["itemCount"].clone();
+    run["committedPrefixDigest"] = run["inputDigest"].clone();
+    run
 }
 
 fn ingestion_receipt_wire() -> Value {
@@ -2547,6 +2556,123 @@ async fn ingestion_exchanges_select_the_announced_run_access_profile() {
         .is_err());
     assert_eq!(fixture.requests.lock().unwrap().len(), before);
     assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+}
+
+#[tokio::test]
+async fn ingestion_creation_refuses_a_run_that_diverges_from_its_announcement() {
+    let mut cases = Vec::new();
+    for (case, member, value) in [
+        ("operation", "operation", json!("patch")),
+        ("profile", "profileId", json!("other-profile")),
+        ("package revision", "packageRevision", json!("revision-2")),
+        (
+            "schema fingerprint",
+            "schemaFingerprint",
+            json!("fingerprint-2"),
+        ),
+        ("input digest", "inputDigest", json!("1".repeat(64))),
+        ("input length", "inputLength", json!(4322)),
+        ("item count", "itemCount", json!(11)),
+        ("chunk count", "chunkCount", json!(4)),
+        (
+            "chunk algorithm",
+            "chunkAlgorithmVersion",
+            json!("another-bounded-algorithm"),
+        ),
+        ("initial status", "status", json!("cancelled")),
+        ("next chunk", "nextChunkIndex", json!(1)),
+        ("committed items", "committedItems", json!(1)),
+        (
+            "committed prefix",
+            "committedPrefixDigest",
+            json!("2".repeat(64)),
+        ),
+        (
+            "last attempt",
+            "lastAttempt",
+            json!({"outcome": "unavailable", "chunkIndex": 0}),
+        ),
+    ] {
+        let mut run = ingestion_run_wire("open");
+        run[member] = value;
+        cases.push((case, run));
+    }
+
+    for (case, run) in cases {
+        let fixture = test_client(vec![ingestion_response(
+            StatusCode::CREATED,
+            json!({"run": run}),
+        )])
+        .await;
+        let error = fixture
+            .client
+            .create_ingestion_run("company", &ingestion_announcement(INGESTION_PROFILE))
+            .await
+            .expect_err(case);
+        let refusal = error.to_string();
+        assert!(
+            refusal.contains("verify the server URL")
+                && refusal.contains("matching BReg runtime and client"),
+            "{case}: the refusal must name the fix: {refusal}"
+        );
+        assert!(
+            matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "{case}: a creation answer that diverges from its announcement is a protocol body failure"
+        );
+    }
+}
+
+#[tokio::test]
+async fn completed_ingestion_runs_require_the_announced_totals_and_digest() {
+    let mut cases = Vec::new();
+    for (case, member, value) in [
+        ("chunk total", "nextChunkIndex", json!(2)),
+        ("item total", "committedItems", json!(9)),
+        (
+            "whole-input digest",
+            "committedPrefixDigest",
+            json!("3".repeat(64)),
+        ),
+    ] {
+        let mut run = completed_ingestion_run_wire();
+        run[member] = value;
+        cases.push((case, run));
+    }
+
+    for (case, run) in cases {
+        let fixture = test_client(vec![ingestion_response(
+            StatusCode::OK,
+            json!({"run": run}),
+        )])
+        .await;
+        let error = fixture
+            .client
+            .read_ingestion_run("company", Uuid::parse_str(RECORD_ID).unwrap(), None)
+            .await
+            .expect_err(case);
+        let refusal = error.to_string();
+        assert!(
+            refusal.contains("verify the server URL")
+                && refusal.contains("matching BReg runtime and client"),
+            "{case}: the refusal must name the fix: {refusal}"
+        );
+        assert!(
+            matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "{case}: a complete run without exact totals and digest is a protocol body failure"
+        );
+    }
 }
 
 #[tokio::test]

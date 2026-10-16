@@ -39,7 +39,7 @@ function runWire(overrides = {}) {
     chunkAlgorithmVersion: 'greedy-canonical-http-batch-v1',
     maximumItems: 100,
     maximumBytes: 1048576,
-    nextChunkIndex: 1,
+    nextChunkIndex: 0,
     committedItems: 0,
     committedPrefixDigest: EMPTY_PREFIX_DIGEST,
     lastAttempt: null,

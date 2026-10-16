@@ -515,6 +515,10 @@ impl BRegIngestionRun {
         // reports the run as complete.
         if blocked_reason.is_some() != (status == BRegIngestionRunStatus::Blocked)
             || complete != (status == BRegIngestionRunStatus::Complete)
+            || (status == BRegIngestionRunStatus::Complete
+                && (next_chunk_index != chunk_count
+                    || committed_items != item_count
+                    || committed_prefix_digest != input_digest))
         {
             return Err(refuse);
         }
@@ -1420,6 +1424,34 @@ fn bound_run(run: BRegIngestionRun, run_id: Uuid) -> Result<BRegIngestionRun, BR
     }
 }
 
+/// Bind a newly created run to the announcement that opened it. A creation
+/// answer is the caller's first durable checkpoint, so it must echo the whole
+/// source binding and begin open with no committed progress.
+fn bound_created_run(
+    run: BRegIngestionRun,
+    request: &BRegIngestionRunRequest,
+) -> Result<BRegIngestionRun, BRegIngestionError> {
+    if run.operation() != request.operation
+        || run.profile_id() != request.profile_id
+        || run.package_revision() != request.package_revision
+        || run.schema_fingerprint() != request.schema_fingerprint
+        || run.input_digest() != request.input_digest
+        || run.input_length() != request.input_length
+        || run.item_count() != request.item_count
+        || run.chunk_count() != request.chunk_count
+        || run.chunk_algorithm_version() != request.chunk_algorithm_version
+        || run.status() != BRegIngestionRunStatus::Open
+        || run.complete()
+        || run.next_chunk_index() != 0
+        || run.committed_items() != 0
+        || run.committed_prefix_digest() != ingestion_prefix_digest(&[])
+        || run.last_attempt().is_some()
+    {
+        return Err(BRegIngestionError::InvalidResponse);
+    }
+    Ok(run)
+}
+
 /// Bind a decoded receipt to the chunk the caller addressed.
 fn bound_receipt(
     receipt: BRegIngestionChunkReceipt,
@@ -1474,7 +1506,12 @@ impl BaseRegistryClient {
             raw,
             reqwest::StatusCode::CREATED.as_u16(),
             &["run"],
-            |object| BRegIngestionRun::from_value(take_member(object, "run")?),
+            |object| {
+                bound_created_run(
+                    BRegIngestionRun::from_value(take_member(object, "run")?)?,
+                    request,
+                )
+            },
         )
     }
 
@@ -1781,6 +1818,7 @@ mod tests {
         wire["complete"] = json!(true);
         wire["nextChunkIndex"] = json!(3);
         wire["committedItems"] = json!(10);
+        wire["committedPrefixDigest"] = json!(INPUT_DIGEST);
         let run = decode_wire(&wire).expect("a complete run decodes");
         assert!(run.complete());
         assert_eq!(serde_json::to_value(&run).unwrap(), wire);

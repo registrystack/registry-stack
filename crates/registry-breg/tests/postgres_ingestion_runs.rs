@@ -2,6 +2,9 @@
 
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -14,6 +17,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use client_http::ClientHttp;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
@@ -30,6 +34,10 @@ use registry_breg::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
+use registry_breg_client::{
+    BRegBatchOperation, BRegIngestionChunk, BRegIngestionRunRequest, BRegIngestionRunStatus,
+    BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+};
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
@@ -43,6 +51,96 @@ const OTHER_PRINCIPAL: &str = "ingestion-other-principal";
 const RECORD_CANARY: &str = "ingestion-record-value-must-not-enter-run-rows";
 const PACKAGE_ID: &str = "ingestion-registry";
 const PACKAGE_REVISION: &str = "package-ingestion-1";
+
+/// The SDK accepts the runtime's creation checkpoint only when it echoes the
+/// whole announcement, then accepts the terminal checkpoint only when its
+/// committed totals and prefix digest close that announcement exactly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_validates_real_run_creation_and_completion_checkpoints() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("client-checkpoints", 5);
+    let chunks = plan_chunks(&items, 3);
+    let package_revision = registry_breg::postgres::test_package_digest(PACKAGE_REVISION);
+    let request = BRegIngestionRunRequest::builder()
+        .operation(BRegBatchOperation::Create)
+        .profile("operator")
+        .unwrap()
+        .package_revision(&package_revision)
+        .unwrap()
+        .schema_fingerprint(&harness.identity.schema_fingerprint)
+        .unwrap()
+        .input_digest(&chunks.input_digest)
+        .unwrap()
+        .input_length(u64::try_from(chunks.input_length).unwrap())
+        .item_count(u64::try_from(chunks.item_count).unwrap())
+        .unwrap()
+        .chunk_count(u64::try_from(chunks.chunk_count).unwrap())
+        .unwrap()
+        .chunk_algorithm_version(BREG_INGESTION_CHUNK_ALGORITHM_VERSION)
+        .unwrap()
+        .build()
+        .unwrap();
+    let http = ClientHttp::start(harness.app.clone(), claims).await;
+
+    let created = http
+        .client
+        .create_ingestion_run("widgets", &request)
+        .await
+        .expect("the SDK accepts the runtime's exact creation checkpoint")
+        .value;
+    assert_eq!(created.status(), BRegIngestionRunStatus::Open);
+    assert!(!created.complete());
+    assert_eq!(created.operation(), BRegBatchOperation::Create);
+    assert_eq!(created.profile_id(), "operator");
+    assert_eq!(created.package_revision(), package_revision);
+    assert_eq!(
+        created.schema_fingerprint(),
+        harness.identity.schema_fingerprint
+    );
+    assert_eq!(created.input_digest(), chunks.input_digest);
+    assert_eq!(created.input_length(), chunks.input_length as u64);
+    assert_eq!(created.item_count(), chunks.item_count as u64);
+    assert_eq!(created.chunk_count(), chunks.chunk_count as u64);
+    assert_eq!(
+        created.chunk_algorithm_version(),
+        BREG_INGESTION_CHUNK_ALGORITHM_VERSION
+    );
+    assert_eq!(created.next_chunk_index(), 0);
+    assert_eq!(created.committed_items(), 0);
+    assert_eq!(created.committed_prefix_digest(), hex_digest(&[]));
+    assert!(created.last_attempt().is_none());
+
+    let run_id = created.run_id();
+    let mut completed = None;
+    for index in 0..chunks.starts.len() {
+        let chunk = BRegIngestionChunk::new(
+            index as u64,
+            chunks.items[chunks.starts[index]..chunks.ends[index]].to_vec(),
+            chunks.prefix_digests[index].clone(),
+        )
+        .unwrap();
+        let submission = http
+            .client
+            .submit_ingestion_chunk("widgets", run_id, &chunk, "operator")
+            .await
+            .expect("the SDK accepts the runtime's next exact checkpoint")
+            .value;
+        completed = Some(submission.run().clone());
+    }
+    let completed = completed.expect("the plan carries a terminal chunk");
+    assert_eq!(completed.status(), BRegIngestionRunStatus::Complete);
+    assert!(completed.complete());
+    assert_eq!(completed.next_chunk_index(), completed.chunk_count());
+    assert_eq!(completed.committed_items(), completed.item_count());
+    assert_eq!(
+        completed.committed_prefix_digest(),
+        completed.input_digest()
+    );
+
+    drop(http);
+    harness.database.cleanup().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ingestion_run_journey_commits_resumes_and_replays_without_duplicates() {
