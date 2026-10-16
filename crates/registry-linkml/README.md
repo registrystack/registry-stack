@@ -14,7 +14,7 @@ properties, and writes the registry project itself.
 |---|---|
 | `src/reader.rs` | `read_bundle`: a list of LinkML files in, one resolved `Model` out |
 | `src/model.rs` | The resolved types and the inheritance helpers (`induced_slots`, `is_subclass_of`, `concrete_descendants`) |
-| `src/publicschema.rs` | The embedded snapshot, its pin, and PublicSchema's annotation conventions (labels, convergence, sensitivity, property groups) |
+| `src/publicschema.rs` | The embedded snapshot, its pin, and PublicSchema's annotation conventions (labels, convergence, sensitivity, inline values, property groups) |
 | `publicschema/schema/` | The vendored PublicSchema domain files, byte for byte |
 | `publicschema/PIN.yaml` | Which upstream commit the files came from |
 | `publicschema/LICENSE-VOCABULARY` | The CC BY 4.0 notice the vendored files are published under |
@@ -58,6 +58,11 @@ cargo test -p registry-linkml
 The snapshot test in `tests/snapshot.rs` states the pinned model's counts
 (classes, slots, enums, values, abstract and featured classes); a refresh that
 changes them updates the test on purpose, so a review sees what moved.
+
+PublicSchema marks value structures that must be carried inside another record
+with the class annotation `inline_only: true`. The `publicschema::inline_only`
+accessor recognizes only that literal value; a missing, false, or unfamiliar
+value does not opt a class into inline treatment.
 
 Sync only from a commit reachable from upstream `main`: a branch commit can
 be squash-merged upstream and stop being reachable, which leaves the pin

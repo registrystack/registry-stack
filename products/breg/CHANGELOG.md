@@ -4,6 +4,18 @@
 
 - Apply this release to a fresh database; it carries no state migration
   from 0.41.
+- `bregctl init --from publicschema` derives a bounded `structured` list for
+  a multivalued class property when its range class explicitly declares
+  `inline_only: true`. Each generated field is a closed object with a required
+  `values` array of at most 50 complete flat scalar or enumerated objects and
+  a 16384-byte field bound; required value members stay required. Existing
+  scalar and enumeration lists retain their 4096-byte bound. This supports
+  `ProfessionalLicense.profession_code` as `CodedValue` objects and
+  `WaterUseAuthorization.authorized_water_quantity` as `QuantityValue`
+  objects. Relationship-valued lists, identifiers, nested class shapes,
+  polymorphic ranges, cycles, explicit targets and selected target entities
+  remain refused. Existing single-valued projections, Actions, access grants
+  and runtime behavior are unchanged.
 - BREAKING: a Review result from Registry Casework names the policy outcome
   it settled on, and BReg reads it. Upgrade Casework and every review
   producer, including BReg, in the same release. A 0.41 BReg refuses an

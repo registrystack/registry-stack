@@ -65,9 +65,10 @@ Everything else depends on what the property points at rather than what it is ca
 | --- | --- |
 | An enumeration of at most 300 values | `vocabulary-code` over a closed vocabulary listing every value |
 | A larger enumeration | `string` sized to the longest code, between 64 and 128 characters |
-| Another selected concept | `reference` to that entity |
-| A concept that was not selected | `structured`, carrying that concept's scalar properties inline under a closed schema |
+| One value of another selected concept | `reference` to that entity |
+| One value of a concept that was not selected | `structured`, carrying that concept's scalar and enumerated properties inline under a closed schema |
 | Many values of a scalar or an enumeration | `structured`, carrying a bounded list of at most 50 items |
+| Many values of a class marked `inline_only: true` | `structured`, carrying a bounded list of complete, flat value objects |
 
 The 300-value line is about what belongs in a project rather than what a database can hold. A code
 list short enough to read is worth declaring in full, because the compiler can then refuse an
@@ -81,7 +82,26 @@ so it has no records and no route; carrying its scalar properties whole keeps th
 inventing a registry for it. The field's schema is closed, so a caller cannot add properties the
 model does not describe.
 
-{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), scalar_kind(), enum_schema(), object_schema(), code_max_length(), and INLINE_VOCABULARY_THRESHOLD. */}
+A multivalued class has a narrower inline path. The range class must explicitly carry
+`inline_only: true`, which says its values belong inside another record rather than in records of
+their own. The derived `structured` field has the closed root shape `{ "values": [...] }`, with
+`values` required. The array holds at most 50 items, and the complete field holds at most 16384
+bytes. The existing scalar and enumeration list form has the same item limit and a 4096-byte field
+limit. Each item is another closed object containing all inherited scalar and enumerated properties
+of the range class. A property the model marks required stays required in every item.
+Strings are bounded at 255 characters and URI-ranged strings at 2048 characters; a URI range does
+not add URI syntax validation.
+
+Examples in the embedded snapshot:
+
+| Selected property | One list item |
+| --- | --- |
+| `ProfessionalLicense.profession_code` | A `CodedValue` with required `code_value` and `code_scheme`, plus optional `code_label` and `code_meaning` |
+| `WaterUseAuthorization.authorized_water_quantity` | A `QuantityValue` with `quantity_value` required as a JSON number, required `unit_code`, and required `unit_scheme` from the closed `UnitSystem` enumeration |
+
+{/* Evidence: crates/registry-linkml/src/publicschema.rs, inline_only();
+    crates/registry-linkml/tests/snapshot.rs, inline_value_classes_and_list_properties_are_explicit_in_the_snapshot();
+    crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), value_object_schema(), scalar_kind(), enum_schema(), object_schema(), list_of(), code_max_length(), LIST_MAX_ITEMS, LIST_MAX_BYTES, and OBJECT_MAX_BYTES. */}
 
 ## Sensitivity becomes classification
 
@@ -105,10 +125,20 @@ project's own generated README names the findings that say so.
 A refusal is a design question handed back rather than a defect. Each one names the property and says
 what to do instead.
 
-A property holding many values of another concept is refused outright. A person's many memberships
-are not a list inside a person record; they are records of their own, and the model that carries them
-is an entity with a reference back. Collapsing them into a field would make history unwritable and
-the relationship unqueryable, so the derivation asks for the entity instead.
+A property holding many values of another concept is refused unless its range class explicitly
+carries `inline_only: true`. A person's many memberships are not a list inside a person record;
+they are records of their own, and the model that carries them is an entity with a reference back.
+Collapsing them into a field would make history unwritable and the relationship unqueryable, so the
+derivation asks for the entity instead.
+
+The inline-only exception is refused when the selection names a `target` or a selected entity fits
+the range, because either case asks for a relationship between records. It is also refused when the
+range class is abstract or has concrete descendants, carries an identifier, contains another class-shaped
+property, has an inheritance cycle, or contains a member the derivation cannot represent as a scalar
+or enumeration. The derivation accepts the complete flat value shape or refuses it; it does not
+silently drop a member or choose one descendant. When it refuses this shape, omit the property from
+the selection, derive the project, then author the structured field or model the relationship with
+its own record type explicitly in that project.
 
 A property pointing at a concept that was not selected, and that has no scalar property to carry
 inline, is refused: there is nothing to hold and nothing to point at. Selecting that concept turns

@@ -3,7 +3,8 @@
 //! snapshot refresh that changes them changes this test on purpose.
 
 use registry_linkml::publicschema::{
-    self, convergence, featured, label, property_groups, sensitivity, Sensitivity, LANGUAGES,
+    self, convergence, featured, inline_only, label, property_groups, sensitivity, Sensitivity,
+    LANGUAGES,
 };
 use registry_linkml::Range;
 
@@ -173,6 +174,53 @@ fn slot_conventions_read_from_the_snapshot() {
         .filter(|slot| sensitivity(slot).unwrap() == Some(Sensitivity::Restricted))
         .count();
     assert_eq!(restricted, 3);
+}
+
+#[test]
+fn inline_value_classes_and_list_properties_are_explicit_in_the_snapshot() {
+    let model = publicschema::model().expect("the snapshot reads");
+    let inline_classes: Vec<&str> = model
+        .classes
+        .values()
+        .filter(|class| inline_only(class))
+        .map(|class| class.name.as_str())
+        .collect();
+    assert_eq!(inline_classes, ["CodedValue", "QuantityValue"]);
+
+    for (class, required) in [
+        ("CodedValue", &["code_value", "code_scheme"][..]),
+        (
+            "QuantityValue",
+            &["quantity_value", "unit_code", "unit_scheme"][..],
+        ),
+    ] {
+        let required_slots: Vec<&str> = model
+            .induced_slots(class)
+            .expect("the inline value class resolves")
+            .into_iter()
+            .filter(|slot| slot.required)
+            .map(|slot| slot.name.as_str())
+            .collect();
+        assert_eq!(required_slots, required, "{class} required slots");
+    }
+
+    for (owner, property, range) in [
+        ("ProfessionalLicense", "profession_code", "CodedValue"),
+        (
+            "WaterUseAuthorization",
+            "authorized_water_quantity",
+            "QuantityValue",
+        ),
+    ] {
+        let slot = &model.slots[property];
+        assert_eq!(slot.range, Range::Class(range.to_owned()));
+        assert!(slot.multivalued, "{owner}.{property} is a list");
+        assert!(model
+            .induced_slots(owner)
+            .expect("the owning class resolves")
+            .iter()
+            .any(|carried| carried.name == property));
+    }
 }
 
 #[test]

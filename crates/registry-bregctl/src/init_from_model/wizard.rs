@@ -574,7 +574,9 @@ fn shape(model: &Model, slot: &SlotDef, concepts: &[String]) -> String {
             }
         }
         Range::Class(name) => {
-            if concepts
+            if slot.multivalued {
+                "list of structured values carried inline".to_owned()
+            } else if concepts
                 .iter()
                 .any(|concept| resolve::fits_range(model, concept, name))
             {
@@ -1087,6 +1089,27 @@ mod tests {
         assert!(line.starts_with("Not offered for Location: "), "{line}");
         assert!(line.contains("geocodes ("), "{line}");
         assert_eq!(withheld_line("Location", &[]), None);
+    }
+
+    #[test]
+    fn an_inline_value_list_is_offered_with_its_list_shape() {
+        let choices = offer("ProfessionalLicense", &["ProfessionalLicense"]);
+        let property = choices
+            .offered
+            .iter()
+            .find(|property| property.name == "profession_code")
+            .expect("an explicit inline value list is offered");
+        assert!(property
+            .label
+            .contains("list of structured values carried inline"));
+        let conflict = offer(
+            "ProfessionalLicense",
+            &["ProfessionalLicense", "CodedValue"],
+        );
+        assert!(conflict
+            .withheld
+            .iter()
+            .any(|property| property.name == "profession_code"));
     }
 
     #[test]
