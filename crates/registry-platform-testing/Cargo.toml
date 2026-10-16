@@ -16,6 +16,10 @@ test-utils = []
 # An in-process OAuth authorization server for tests; see `TestAuthorizationServer`.
 test-authorization-server = ["test-utils", "dep:sha2", "dep:url", "dep:uuid"]
 
+[[test]]
+name = "test_authorization_server"
+required-features = ["test-authorization-server"]
+
 [dependencies]
 axum.workspace = true
 base64.workspace = true

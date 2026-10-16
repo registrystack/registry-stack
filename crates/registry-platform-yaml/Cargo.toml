@@ -13,6 +13,10 @@ workspace = true
 [features]
 schema = ["dep:schemars"]
 
+[[test]]
+name = "reader_schema"
+required-features = ["schema"]
+
 [dependencies]
 saphyr-parser.workspace = true
 schemars = { workspace = true, optional = true }

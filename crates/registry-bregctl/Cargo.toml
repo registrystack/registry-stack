@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "tool_schema"
 required-features = ["schema"]
 
+[[test]]
+name = "wasm_test_lifecycle"
+required-features = ["wasm"]
+
 [lints]
 workspace = true
 
