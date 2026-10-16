@@ -351,6 +351,11 @@ fn a_snapshot_cannot_carry_the_refusal_edge_on_an_operation_without_it() {
     );
     let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
     let mut frozen: Value = serde_json::from_str(&snapshot).unwrap();
+    // A call without the edge freezes no member for it.
+    assert_eq!(
+        frozen["workflow"]["steps"]["act"].get("onDeclaredRefusal"),
+        None
+    );
     frozen["workflow"]["steps"]["act"]["onDeclaredRefusal"] = json!("accepted");
     assert_eq!(
         Definition::from_snapshot(&frozen.to_string())
