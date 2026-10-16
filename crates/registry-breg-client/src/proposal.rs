@@ -1378,6 +1378,13 @@ impl BaseRegistryClient {
             || current.action_revision != proposal.action_revision
             || current.revision < proposal.revision
             || current.submission_version < proposal.submission_version
+            // One submission version freezes one set of effects.
+            || current.submission_version == proposal.submission_version
+                && current
+                    .effect_digest
+                    .as_ref()
+                    .zip(proposal.effect_digest.as_ref())
+                    .is_some_and(|(current, held)| current != held)
         {
             return Err(refusal());
         }

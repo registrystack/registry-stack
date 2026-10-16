@@ -269,6 +269,30 @@ async fn current_submission_read_is_bound_to_the_disclosed_effect_digest() {
 }
 
 #[tokio::test]
+async fn proposal_reread_keeps_the_frozen_digest_of_an_unchanged_submission_version() {
+    let fixture = Fixture::start().await;
+    let other = format!("sha256:{}", "b".repeat(64));
+    let held = fixture.proposal(proposal("submitted")).await;
+    fixture.answer(proposal("submitted"));
+    assert!(fixture.client.read_proposal(&held).await.is_ok());
+    let mut swapped = proposal("submitted");
+    swapped["effectDigest"] = json!(other);
+    fixture.answer(swapped);
+    assert!(fixture.client.read_proposal(&held).await.is_err());
+
+    // A later submission froze different effects of its own.
+    let mut advanced = proposal("submitted");
+    advanced["submissionVersion"] = json!(2);
+    advanced["effectDigest"] = json!(other);
+    fixture.answer(advanced);
+    assert!(fixture.client.read_proposal(&held).await.is_ok());
+
+    // An erased snapshot discloses no digest, so there is nothing to compare.
+    fixture.answer(proposal("cancelled"));
+    assert!(fixture.client.read_proposal(&held).await.is_ok());
+}
+
+#[tokio::test]
 async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_reads() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
