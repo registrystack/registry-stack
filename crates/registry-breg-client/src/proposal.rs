@@ -534,10 +534,9 @@ impl BRegProposal {
             if !valid_locator
                 || link.method != expected_method
                 || link.operation != expected_operation
-                || link
-                    .availability
-                    .as_ref()
-                    .is_some_and(|availability| !valid_availability(availability, self.revision))
+                || link.availability.as_ref().is_some_and(|availability| {
+                    !valid_availability(availability, self.revision, self.state)
+                })
             {
                 return Err(refusal());
             }
@@ -582,7 +581,7 @@ impl BRegProposal {
                     || !identifier(&link.access_profile)
                     || method != "GET" && !valid_condition(link.if_match.as_deref())
                     || link.availability.as_ref().is_some_and(|availability| {
-                        !valid_availability(availability, self.revision)
+                        !valid_availability(availability, self.revision, self.state)
                     })
                 {
                     return Err(refusal());
@@ -1703,9 +1702,15 @@ fn canonical_proposal_id(value: &str) -> bool {
 /// recovery BReg pairs with its reason: a rejected review is revised while
 /// the Proposal is still submitted and read from its receipt once it is
 /// rejected, and a changed contract is refreshed for Revise and corrected
-/// while the draft is blocked.
-fn valid_availability(availability: &BRegAvailability, revision: u64) -> bool {
+/// while the draft is blocked. A closed Proposal names its state on every
+/// unavailable link, and an open one never gives either closed reason.
+fn valid_availability(
+    availability: &BRegAvailability,
+    revision: u64,
+    state: BRegProposalState,
+) -> bool {
     use BRegAvailabilityReason as Reason;
+    use BRegProposalState as State;
     use BRegRecoveryHint as Recovery;
     availability.observed_revision == revision
         && match (
@@ -1738,6 +1743,17 @@ fn valid_availability(availability: &BRegAvailability, revision: u64) -> bool {
             ),
             (false, _, _) => false,
         }
+        && (availability.available
+            || match (availability.reason, availability.recovery) {
+                (Some(Reason::AlreadyApplied), _) => state == State::Applied,
+                (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
+                    state == State::Rejected
+                }
+                (Some(Reason::StaleRevision), _) => {
+                    !matches!(state, State::Applied | State::Rejected)
+                }
+                _ => matches!(state, State::Draft | State::Submitted),
+            })
 }
 fn valid_cursor(cursor: &str) -> bool {
     !cursor.is_empty()

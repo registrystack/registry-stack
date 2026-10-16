@@ -470,6 +470,60 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
 }
 
 #[tokio::test]
+async fn unavailable_link_reasons_follow_the_lifecycle_state_in_current_and_list_reads() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    // A closed Proposal gives every unavailable link the one reason its state
+    // names, and an open Proposal never gives either closed reason.
+    let cases = [
+        ("applied", "already-applied", "receipt-only", true),
+        ("rejected", "review-rejected", "receipt-only", true),
+        ("cancelled", "stale-revision", "receipt-only", true),
+        ("draft", "stale-revision", "receipt-only", true),
+        ("draft", "contract-changed", "correct-input", true),
+        ("submitted", "stale-revision", "receipt-only", true),
+        ("submitted", "pending-review", "refresh", true),
+        ("submitted", "review-rejected", "revise", true),
+        ("applied", "stale-revision", "receipt-only", false),
+        ("applied", "review-rejected", "receipt-only", false),
+        ("applied", "pending-review", "refresh", false),
+        ("rejected", "already-applied", "receipt-only", false),
+        ("rejected", "stale-revision", "receipt-only", false),
+        ("rejected", "review-rejected", "revise", false),
+        ("cancelled", "already-applied", "receipt-only", false),
+        ("cancelled", "review-rejected", "receipt-only", false),
+        ("cancelled", "pending-review", "refresh", false),
+        ("cancelled", "dependency-outage", "retry", false),
+        ("draft", "already-applied", "receipt-only", false),
+        ("draft", "review-rejected", "receipt-only", false),
+        ("submitted", "already-applied", "receipt-only", false),
+        ("submitted", "review-rejected", "receipt-only", false),
+    ];
+    let mut wrong = vec![];
+    for (state, reason, recovery, expected) in cases {
+        let mut current = proposal(state);
+        current["links"]["submit"]["availability"] =
+            json!({"available":false,"observedRevision":2,"reason":reason,"recovery":recovery});
+        fixture.answer(current.clone());
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() != expected {
+            wrong.push(format!("current {state}:{reason}/{recovery}"));
+        }
+        fixture.answer(json!({"items":[current]}));
+        if fixture
+            .client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .is_ok()
+            != expected
+        {
+            wrong.push(format!("list {state}:{reason}/{recovery}"));
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
+}
+
+#[tokio::test]
 async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_reads() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
