@@ -423,6 +423,14 @@
       "additionalProperties": false,
       "description": "Retention periods the retention sweep enforces. Every value is deployment\nconfiguration, never policy: a jurisdiction's retention schedule approves\nthe deployed numbers, and changing one is an operational event.",
       "properties": {
+        "claimOwnerRetentionDays": {
+          "default": 7,
+          "description": "How long raw ownership remains after an appointment ends or is\ncancelled, or a hold expires, is released, or is consumed.",
+          "format": "uint32",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
+        },
         "hookPayloadRetentionDays": {
           "default": 7,
           "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection, from one through thirty days.",

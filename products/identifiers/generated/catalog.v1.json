@@ -4726,11 +4726,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "9ff413ae3a1ef84f607733390a466966b5d000799ab7b98ab2e2ae7291b1a9f5"
+        "sha256": "95ed07d3de2d4259a94b34c5254015272f973d9c7bc6ec7dceea4d3c34e735a9"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "1df71993187667485778479fd7274350cad34e07d89dc478adc935c39e204db6",
+        "sha256": "7ecb960a2e3b2e9675bbda21ff13f403dd5b097d8decc132dcf18e4ea96c619e",
         "mediaType": "application/schema+json"
       }
     },

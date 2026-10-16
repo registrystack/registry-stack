@@ -5714,14 +5714,10 @@ async fn committed_row_counts(fx: &Fixture) -> Vec<(&'static str, i64)> {
     counts
 }
 
-/// What the retention sweep erases, and just as much what it does not. The
-/// deployment advertises one retention period, for idempotency receipts, and
-/// the sweep enforces that one plus the fifteen minutes the listing contract
-/// gives a cursor. Appointments, their history, and the delivery outbox have
-/// no retention period in this milestone and the sweep
-/// passes over them, by decision rather than omission; this test is what
-/// stops the single configured knob from quietly growing into a promise to
-/// erase committed scheduling data.
+/// Receipt and cursor retention erase only those tables. The separate claim
+/// owner pass clears identifying columns, while claim, history, and delivery
+/// outbox rows remain. This regression keeps receipt expiry from deleting
+/// committed scheduling data.
 #[tokio::test]
 async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing() {
     let fx = fixture().await;
@@ -9327,4 +9323,419 @@ async fn reapplying_a_policy_does_not_reconstruct_a_missing_retained_document() 
         missing,
         "publication must not reconstruct an earlier stored document"
     );
+}
+
+#[tokio::test]
+async fn a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut admitted = admission(&fx, OFFERING, slot);
+    admitted["externalReferences"] = json!([case_reference("owner-retention")]);
+    let body = json!({"hold": null, "admission": admitted});
+    let key = "owner-retention-receipt";
+    let (status, original) = fx
+        .post("/v1/appointments", &fx.agent, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{original}");
+    let id = original["appointmentId"].as_str().unwrap();
+    let claim_id = Uuid::parse_str(id).unwrap();
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+    let (status, _) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // Model the raw owner being cleared while the independent receipt window
+    // still permits observation. Neither the receipt nor its digest is authority.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET displayed_end=$1 WHERE claim_id=$2",
+            &[&(pinned_now() - TimeDelta::days(8)), &claim_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.store
+            .erase_expired_claim_owners(pinned_now(), 7)
+            .await
+            .unwrap(),
+        1
+    );
+    for route in [
+        format!("/v1/appointments/{id}"),
+        format!("/v1/appointments/{id}/history"),
+    ] {
+        let (status, hidden) = fx.get(&route, &same_owner).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{hidden}");
+        assert_eq!(hidden["code"], "operation.not-authorized");
+    }
+    let (status, page) = fx
+        .get(
+            &appointments_by_reference_uri("owner-retention", 10, None),
+            &same_owner,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"], json!([]));
+    let (status, hidden) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body.clone())
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a retained receipt must not restore an erased owner: {hidden}"
+    );
+    assert_eq!(hidden["code"], "receipt.unresolved");
+    let (status, hidden) = fx.post("/v1/appointments", &fx.agent, key, body).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "command replay must also respect erased ownership: {hidden}"
+    );
+    assert_eq!(hidden["code"], "operation.not-authorized");
+}
+
+#[tokio::test]
+async fn an_erased_hold_owner_cannot_replay_a_retained_release_receipt() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "owner-retention-release",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let id = hold["holdId"].as_str().unwrap();
+    let claim_id = Uuid::parse_str(id).unwrap();
+    let route = format!("/v1/holds/{id}");
+    assert_eq!(fx.delete(&route, &fx.agent).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(fx.delete(&route, &fx.agent).await.0, StatusCode::NO_CONTENT);
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET closed_at=$1 WHERE claim_id=$2",
+            &[&(pinned_now() - TimeDelta::days(8)), &claim_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.store
+            .erase_expired_claim_owners(pinned_now(), 7)
+            .await
+            .unwrap(),
+        1
+    );
+    let (status, hidden) = fx.delete(&route, &fx.agent).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a retained empty release receipt must not restore an erased owner: {hidden}"
+    );
+    assert_eq!(hidden["code"], "operation.not-authorized");
+}
+
+#[tokio::test]
+async fn claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledger() {
+    let now = pinned_now();
+    let cutoff = now - TimeDelta::days(7);
+    for (kind, state, end, expiry, closed, erased) in [
+        (
+            "booking",
+            "active",
+            now + TimeDelta::days(1),
+            None,
+            None,
+            false,
+        ),
+        ("booking", "active", cutoff, None, None, true),
+        (
+            "booking",
+            "active",
+            cutoff + TimeDelta::seconds(1),
+            None,
+            None,
+            false,
+        ),
+        (
+            "booking",
+            "cancelled",
+            now + TimeDelta::days(1),
+            None,
+            Some(cutoff),
+            true,
+        ),
+        (
+            "hold",
+            "active",
+            now + TimeDelta::days(1),
+            Some(cutoff),
+            None,
+            true,
+        ),
+        (
+            "hold",
+            "expired",
+            now + TimeDelta::days(1),
+            Some(cutoff),
+            Some(now),
+            true,
+        ),
+        (
+            "hold",
+            "released",
+            now + TimeDelta::days(1),
+            Some(now),
+            Some(cutoff),
+            true,
+        ),
+        (
+            "hold",
+            "consumed",
+            now + TimeDelta::days(1),
+            Some(now),
+            Some(cutoff),
+            true,
+        ),
+        (
+            "hold",
+            "active",
+            now + TimeDelta::days(1),
+            Some(now + TimeDelta::minutes(1)),
+            None,
+            false,
+        ),
+        (
+            "hold",
+            "released",
+            now + TimeDelta::days(1),
+            Some(now),
+            Some(cutoff + TimeDelta::seconds(1)),
+            false,
+        ),
+    ] {
+        let fx = fixture().await;
+        let slot = first_slot(&fx, OFFERING, 300, 440).await;
+        let (status, original) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                "owner-window",
+                json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{original}");
+        let id = Uuid::parse_str(original["appointmentId"].as_str().unwrap()).unwrap();
+        fx.admin.execute(
+            "UPDATE scheduling_claims SET kind=$1, state=$2, displayed_start=$3, displayed_end=$4, hold_expires_at=$5, closed_at=$6 WHERE claim_id=$7",
+            &[&kind, &state, &(end-TimeDelta::minutes(30)), &end, &expiry, &closed, &id],
+        ).await.unwrap();
+        let rows_before = committed_row_counts(&fx).await;
+        let history_before = fx
+            .admin
+            .query_one(
+                "SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, Value>(0);
+        let audit_before = fx.capture.entries();
+        assert_eq!(
+            fx.store.erase_expired_claim_owners(now, 7).await.unwrap(),
+            u64::from(erased),
+            "{kind}/{state}/{end}/{expiry:?}/{closed:?}"
+        );
+        let row = fx.admin.query_one("SELECT owner_issuer, owner_subject, owner_reference, owner_erased_at FROM scheduling_claims WHERE claim_id=$1", &[&id]).await.unwrap();
+        if erased {
+            assert!(row.get::<_, Option<String>>(0).is_none());
+            assert!(row.get::<_, Option<String>>(1).is_none());
+            let digest = row.get::<_, String>(2);
+            assert!(digest.starts_with("sha256:"));
+            assert_eq!(digest.len(), 71);
+            use sha2::{Digest as _, Sha256};
+            let mut expected = Sha256::new();
+            expected.update(b"scheduling-claim-owner-v1");
+            expected.update(id.as_bytes());
+            for value in [ISSUER, "principal-agent"] {
+                expected.update((value.len() as u64).to_be_bytes());
+                expected.update(value.as_bytes());
+            }
+            assert_eq!(
+                digest,
+                format!(
+                    "sha256:{}",
+                    expected
+                        .finalize()
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                )
+            );
+            assert_eq!(row.get::<_, DateTime<Utc>>(3), now);
+            assert!(fx.admin.execute("UPDATE scheduling_claims SET owner_issuer=$1, owner_subject=$2 WHERE claim_id=$3", &[&ISSUER, &"principal-agent", &id]).await.is_err(), "a tombstone cannot retain raw ownership");
+            assert!(!fx
+                .store
+                .claim(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_owned_by(ISSUER, "principal-agent"));
+        } else {
+            assert_eq!(row.get::<_, String>(0), ISSUER);
+            assert_eq!(row.get::<_, String>(1), "principal-agent");
+            assert!(row.get::<_, Option<String>>(2).is_none());
+            assert!(row.get::<_, Option<DateTime<Utc>>>(3).is_none());
+        }
+        assert_eq!(
+            fx.store.erase_expired_claim_owners(now, 7).await.unwrap(),
+            0
+        );
+        assert_eq!(committed_row_counts(&fx).await, rows_before);
+        assert_eq!(
+            fx.admin
+                .query_one(
+                    "SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h",
+                    &[]
+                )
+                .await
+                .unwrap()
+                .get::<_, Value>(0),
+            history_before
+        );
+        assert_eq!(fx.capture.entries(), audit_before);
+    }
+}
+
+#[tokio::test]
+async fn a_mutation_waiting_on_owner_erasure_rechecks_ownership_before_writing() {
+    let fx = fixture().await;
+    let (id, revision) = booked(&fx, 300, 440, "owner-race").await;
+    let next = first_slot(&fx, OFFERING, 500, 700).await;
+    let body = json!({"observedRevision": revision, "admission": admission(&fx, OFFERING, next)});
+    let http = fx.http.clone();
+    let agent = fx.agent.clone();
+    let claim_id = Uuid::parse_str(&id).unwrap();
+    let mut admin = fx.admin;
+    let eraser = admin.transaction().await.unwrap();
+    eraser
+        .query_one(
+            "SELECT claim_id FROM scheduling_claims WHERE claim_id=$1 FOR UPDATE",
+            &[&claim_id],
+        )
+        .await
+        .unwrap();
+    let pid: i32 = eraser
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let mutation = tokio::spawn(send(
+        http,
+        "POST".to_owned(),
+        format!("/v1/appointments/{id}/reschedule"),
+        agent,
+        Some("owner-race-move".to_owned()),
+        Some(body),
+    ));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let waiting: bool = eraser
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
+                &[&pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiting {
+            break;
+        }
+        assert!(
+            !mutation.is_finished(),
+            "mutation finished before reaching the erasure lock"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "mutation never waited on erasure"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    eraser.execute("UPDATE scheduling_claims SET owner_issuer=NULL, owner_subject=NULL, owner_reference='sha256:' || repeat('a',64), owner_erased_at=$1 WHERE claim_id=$2", &[&pinned_now(), &claim_id]).await.unwrap();
+    eraser.commit().await.unwrap();
+    let (status, problem) = mutation.await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    assert_eq!(
+        fx.store.claim(claim_id).await.unwrap().unwrap().revision,
+        i64::try_from(revision).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling() {
+    let fx = fixture().await;
+    let mut holds = Vec::new();
+    for (key, from, to) in [
+        ("owner-ceiling-expired", 300, 440),
+        ("owner-ceiling-live", 500, 640),
+    ] {
+        let slot = first_slot(&fx, OFFERING, from, to).await;
+        let (status, hold) = fx
+            .post("/v1/holds", &fx.agent, key, admission(&fx, OFFERING, slot))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{hold}");
+        holds.push(Uuid::parse_str(hold["holdId"].as_str().unwrap()).unwrap());
+    }
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET hold_expires_at=$1 WHERE claim_id=$2",
+            &[&(pinned_now() - TimeDelta::days(8)), &holds[0]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.store
+            .erase_expired_claim_owners(pinned_now(), 7)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(fx
+        .store
+        .claim(holds[0])
+        .await
+        .unwrap()
+        .unwrap()
+        .owner
+        .is_none());
+    assert!(fx
+        .store
+        .claim(holds[1])
+        .await
+        .unwrap()
+        .unwrap()
+        .is_owned_by(ISSUER, "principal-agent"));
+    let slot = first_slot(&fx, OFFERING, 700, 840).await;
+    let (status, held) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "owner-ceiling-replacement",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{held}");
+    let slot = first_slot(&fx, OFFERING, 900, 1040).await;
+    let (status, refused) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "owner-ceiling-over",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "capacity.exhausted");
 }

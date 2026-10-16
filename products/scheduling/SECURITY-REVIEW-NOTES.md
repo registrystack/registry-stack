@@ -76,14 +76,12 @@ audit entries. The threats this surface answers:
 - Every answer carries `Cache-Control: no-store`, the security headers
   without HSTS (TLS termination is the deployer's), a 1 MiB body ceiling,
   and the caller's trace identifier when a trace is presented.
-- Retention defaults (attempt receipt days, cursor minutes) are
-  placeholders: a jurisdiction must approve real retention periods before
-  production use. Retention sweeps idempotency attempt receipts and
-  cursors only, and clears an attempt's raw caller and key with its receipt
-  (SCHEDULING-SEC-33); appointments, history, and outbox rows are never
-  swept in this milestone (SCHEDULING-DEF-06, recorded in
-  `RUNTIME-CONFIG.md`), so a hold or appointment keeps its owner's raw
-  issuer and subject (SCHEDULING-SEC-34).
+- Retention defaults are placeholders: a jurisdiction must approve real
+  retention periods before production use. Retention clears an attempt's raw
+  caller and key with its receipt (SCHEDULING-SEC-33), expires cursors, and
+  clears a claim's raw owner after its terminal window (SCHEDULING-SEC-34).
+  Claim, history, and outbox rows remain (SCHEDULING-DEF-06, recorded in
+  `RUNTIME-CONFIG.md`).
   Rotated audit files are removed after `audit.retentionDays`, 90 days by
   default, which is equally a placeholder.
 - Reminder intents with no configured destination stay local and readable
@@ -928,13 +926,57 @@ never reach a projection).
 `crates/registry-schedulingctl/tests/activation_postgres.rs`:
 `fresh_claim_storage_refuses_a_partial_owner`.
 
-**Accepted residual.** The raw issuer and subject stay on the claim for as
-long as it exists, and claims have no retention sweep (SCHEDULING-DEF-06);
-a future claim retention must clear both columns, which the constraint
-allows. A fresh ownerless claim is owned by no caller, so no API caller can
+**Retention.** The raw pair now has its own bounded terminal window, described
+below. A claim with no raw owner is owned by no caller, so no API caller can
 read, confirm, reschedule, cancel, or release it. Earlier claims are not
-converted: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
-database.
+assigned an owner: v0.40.0 does not upgrade v0.39.0 state in place; apply to a
+new database.
+
+## Bounded claim owner retention (#2045)
+
+**Decision and threat.** Keep live ownership independent of the audit key,
+while ending indefinite retention of the raw verified issuer and subject.
+`retention.claimOwnerRetentionDays` accepts 1 through 365 days and defaults to
+seven days. This is a placeholder, not a jurisdictional recommendation.
+The window starts at an appointment's end or cancellation, or a hold's expiry,
+release, or consumption, whichever applicable instant comes first. Claim,
+history, reminder outbox, and audit records are not deleted by this pass.
+
+**Enforcement.** Migration 13 adds an inert owner reference and erasure time.
+`PostgresStore::erase_expired_claim_owners` atomically clears both raw columns
+and writes a SHA-256 digest of a domain marker, claim UUID, and length-prefixed
+issuer and subject. Its single UPDATE rechecks the eligible row after any
+concurrent update. The retention worker invokes it using the configured window.
+A constraint forbids restoring a raw owner on a tombstoned row. Mutation reads
+lock the claim before checking ownership, so a mutation waiting behind erasure
+cannot use a stale owner. The digest is never an authorization input.
+
+Owner reads, history, reference listings, and hold counts continue to use only
+the raw pair. Receipt observation joins the current claim owner; idempotent replay locks and checks the claim named by the receipt or the internal hold-release scope. An erased owner therefore cannot
+recover claim data through a separately retained receipt. Receipt observation
+answers `receipt.unresolved`; claim receipt replay answers `operation.not-authorized`. An empty hold-release
+receipt follows the same owner check. These retain the existing recovery rules: use an
+active claim owned by the current principal, and do not interpret unresolved
+receipt evidence as proof that no effect occurred.
+
+**Residual.** The digest is a pseudonymous reference, not anonymization: a
+holder of candidate issuer/subject values and the claim UUID can test guesses.
+Including the UUID avoids a stable cross-claim owner reference. The existing
+keyed actor pseudonym remains in claim history and audit, whose retention is
+separate. Erasure changes no revision, history entry, capacity, or audit event.
+A running runtime is required for scheduled erasure; the pass is idempotent.
+
+**Regression evidence.** The PostgreSQL tests
+`claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledger`,
+`a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt`,
+`an_erased_hold_owner_cannot_replay_a_retained_release_receipt`,
+`a_mutation_waiting_on_owner_erasure_rechecks_ownership_before_writing`, and
+`erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling` cover the
+cutoff, terminal variants, live claims, exact digest, unchanged ledger, receipt
+paths, mutation race, and remaining hold limit. The configuration test
+`claim_owner_retention_accepts_its_own_bounded_window` covers the independent
+window and both bounds. The existing audit-key rotation test covers live claims.
+The PR records which of these and the product gates actually ran.
 
 
 ## Client refusal vocabulary

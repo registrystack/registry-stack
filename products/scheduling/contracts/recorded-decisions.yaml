@@ -243,3 +243,22 @@ decisions:
       detected, not prevented.
     evidence:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves, features: [postgres-test]}
+  - id: SCHEDULING-DEC-11
+    subject: Clear terminal claim owners without deleting the ledger
+    decision: >-
+      claimOwnerRetentionDays bounds the raw issuer and subject from 1 through
+      365 days after the earliest applicable terminal instant, with a placeholder
+      default of seven days. Keep a per-claim digest and erasure time, never
+      authority. Keep the claim, its history, and audit unchanged.
+    reasoning: >-
+      Live ownership must survive audit-key rotation; retaining raw personal
+      identifiers indefinitely is unnecessary once the terminal window passes.
+      Receipt observation and replay must check the current owner so a longer
+      receipt window cannot bypass erasure. Lock mutation reads against erasure.
+    residual: >-
+      A digest permits candidate matching, and existing keyed actor pseudonyms
+      remain under the separate history and audit retention contracts.
+    evidence:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledger}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_mutation_waiting_on_owner_erasure_rechecks_ownership_before_writing}

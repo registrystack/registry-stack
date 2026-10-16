@@ -280,6 +280,12 @@ entries:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: fresh_attempt_storage_preserves_digests_and_refuses_partial_erasure, features: [postgres-test]}
   - id: SCHEDULING-SEC-34
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledger}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_erased_hold_owner_cannot_replay_a_retained_release_receipt}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_mutation_waiting_on_owner_erasure_rechecks_ownership_before_writing}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling}
+      - {path: crates/registry-scheduling/src/config.rs, name: claim_owner_retention_accepts_its_own_bounded_window}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: original_appointment_receipt_is_readable_without_a_grant_and_never_creates_capacity}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: original_appointment_receipt_authenticates_before_parsing_its_bounded_body}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: original_hold_confirmation_receipt_is_read_by_its_hold_and_key}

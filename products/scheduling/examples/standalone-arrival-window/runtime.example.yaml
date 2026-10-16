@@ -140,9 +140,9 @@ destinations: {}
   #     attemptTimeoutMilliseconds: 5000
   #     maximumAttempts: 8
 retention:
-  # Attempt receipts/listing cursors and hook delivery payloads have separate
-  # bounded lifetimes. Appointment, reminder, and history retention are
-  # deferred; audit.retentionDays bounds rotated audit files. Seven days is a
-  # default, not a jurisdictional recommendation.
+  # Receipts, raw claim owners and hook payloads have separate bounded lifetimes.
+  # Claim, history and reminder rows stay; audit.retentionDays bounds rotated
+  # audit files. Seven days is a placeholder, not a jurisdictional recommendation.
   receiptRetentionDays: 7
+  claimOwnerRetentionDays: 7
   hookPayloadRetentionDays: 7

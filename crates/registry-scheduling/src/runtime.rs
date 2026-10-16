@@ -341,16 +341,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         },
     ));
 
-    // The whole of retention, and deliberately not all of retention. This
-    // sweep erases two things: idempotency attempt receipts, with the raw
-    // caller and key they were filed under, after the configured
-    // `retention.receiptRetentionDays`, and listing cursors, after
-    // the fifteen minutes the listing contract gives them. Appointments,
-    // their history, and the delivery outbox are never swept, by decision
-    // and not by omission: committed scheduling data has
-    // no retention period in this milestone, and one knob must not read as a
-    // promise to sweep it. A future period for those is new configuration and
-    // new passes here, not a wider reading of this one.
+    // Receipt, cursor and owner retention have separate clocks. Claim rows,
+    // history, reminder intents and the audit journal remain intact.
+    let claim_owner_retention_days = config.retention.claim_owner_retention_days;
     let retention_store = store.clone();
     workers.push(supervise("retention", worker_stopped, async move {
         let mut interval = worker_timer();
@@ -364,6 +357,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             let now = retention_store.observed_now();
             if let Err(error) = retention_store.erase_expired_cursors(now).await {
                 tracing::warn!(error = %error, "Scheduling cursor retention pass did not complete");
+            }
+            if let Err(error) = retention_store
+                .erase_expired_claim_owners(now, claim_owner_retention_days)
+                .await
+            {
+                tracing::warn!(error = %error, "Scheduling claim owner retention pass did not complete");
             }
             if let Err(error) = retention_store.erase_expired_attempts(now).await {
                 tracing::warn!(

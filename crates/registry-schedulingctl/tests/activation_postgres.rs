@@ -383,7 +383,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert_eq!(report["schemaVersion"], 0);
     assert_eq!(
         report["pendingSchemaVersions"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
     );
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
@@ -478,7 +478,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .starts_with("single-role mode"));
     assert_eq!(
         initial["schemaVersionsApplied"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
     );
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
@@ -575,7 +575,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 12);
+    assert_eq!(report["schemaVersion"], 13);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
     deployment.drop().await;

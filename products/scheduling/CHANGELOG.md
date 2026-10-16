@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Raw claim owners expire after `retention.claimOwnerRetentionDays` (default 7,
+  range 1 through 365) following an appointment's end or cancellation, or a
+  hold's expiry, release, or consumption. This default is a placeholder.
+  Apply schema version 13 before starting the updated runtime. The sweep keeps
+  an inert digest and the claim, history, and audit, but the former owner can
+  no longer list, read, act on, observe, or replay a receipt containing the claim.
+
 - BREAKING: a `taskGrantStatus` entry names its status resource
   `statusResource` (was `caseworkResource`), since any task authority, not
   only Casework, can answer grant status. The old key is refused with
