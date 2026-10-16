@@ -148,7 +148,12 @@ fn failed_post_switch_adoption_restores_every_changed_command_and_pointer() {
             None => fixture.run_failing_command_adoption(2),
         };
 
-        assert!(!output.status.success());
+        let case = signal.map_or("injected failure", |(name, _)| name);
+        assert!(
+            !output.status.success(),
+            "{case} adoption unexpectedly succeeded; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         if let Some((_, code)) = signal {
             assert_eq!(output.status.code(), Some(code));
         }
@@ -176,6 +181,46 @@ fn failed_post_switch_adoption_restores_every_changed_command_and_pointer() {
         assert_eq!(
             fs::read_to_string(fixture.install_dir.join("mint")).unwrap(),
             "mint other product binary\n"
+        );
+    }
+}
+
+#[test]
+fn signal_injecting_mv_exits_from_the_signal_it_sends() {
+    for (signal, code) in [("INT", 130), ("TERM", 143)] {
+        let fixture = InstallerFixture::new();
+        fixture.install_failing_mv();
+        let source = fixture.root.join(format!("{signal}-source"));
+        let destination = fixture.root.join(format!("{signal}-destination"));
+        fs::write(&source, "staged link\n").unwrap();
+
+        // The wrapper handles the parent-directed signal and reports the mv
+        // child's eventual status. The injector must itself die from the same
+        // signal so bash does not treat a normal child exit as cooperative
+        // handling of SIGINT.
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg("trap ':' \"$1\"; \"$2\" \"$3\" \"$4\"; status=$?; exit \"$status\"")
+            .arg("signal-injector-parent")
+            .arg(signal)
+            .arg(fixture.fake_bin.join("mv"))
+            .arg(&source)
+            .arg(&destination)
+            .env("REAL_MV", "/bin/mv")
+            .env(
+                "FAKE_MV_COMMAND_COUNT",
+                fixture.root.join("mv-command-count"),
+            )
+            .env("FAKE_MV_COMMAND_SIGNAL_AT", "1")
+            .env("FAKE_MV_COMMAND_SIGNAL", signal)
+            .output()
+            .unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{signal} injector status; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
@@ -722,7 +767,7 @@ if [[ "$destination" != */.casework-current &&
   if [[ "$count" -eq "${FAKE_MV_COMMAND_SIGNAL_AT:-0}" ]]; then
     "$REAL_MV" "$@"
     kill -s "$FAKE_MV_COMMAND_SIGNAL" "$PPID"
-    exit 0
+    kill -s "$FAKE_MV_COMMAND_SIGNAL" "$$"
   fi
 fi
 exec "$REAL_MV" "$@"
