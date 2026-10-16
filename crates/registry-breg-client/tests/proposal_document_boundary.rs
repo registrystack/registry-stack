@@ -226,6 +226,177 @@ async fn submission_read_refuses_an_incoherent_application() {
 }
 
 #[tokio::test]
+async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_reads() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let status = |reason: &str, recovery: &str| {
+        json!({"state":"blocked","mode":"automatic","reason":reason,"recovery":recovery,
+            "automaticRetry":{"scheduled":false,"attempts":3,"maximumAttempts":3}})
+    };
+    let reads = |application: Value| {
+        let mut current = proposal("submitted");
+        current["applicationStatus"] = application.clone();
+        let submission = json!({"id":ID,"actionId":"correct","submissionVersion":1,
+            "current":true,"effectDigest":DIGEST,"review":null,"application":application});
+        (current, submission)
+    };
+    // The only pairs BReg emits: a dependency outage or an expired lease can
+    // be retried; everything else needs corrected input.
+    for (reason, recovery) in [
+        ("contract-changed", "correct-input"),
+        ("attempts-exhausted", "correct-input"),
+        ("application-refused", "correct-input"),
+        ("dependency-outage", "retry"),
+        ("lease-expired", "retry"),
+    ] {
+        let (current, submission) = reads(status(reason, recovery));
+        fixture.answer(current);
+        assert!(
+            fixture.client.get_proposal(&binding, ID).await.is_ok(),
+            "current {reason}/{recovery}"
+        );
+        fixture.answer(submission);
+        assert!(
+            fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok(),
+            "retained {reason}/{recovery}"
+        );
+    }
+    let mut accepted = vec![];
+    for (reason, recovery) in [
+        ("contract-changed", "retry"),
+        ("attempts-exhausted", "retry"),
+        ("application-refused", "retry"),
+        ("dependency-outage", "correct-input"),
+        ("lease-expired", "correct-input"),
+    ] {
+        let (current, submission) = reads(status(reason, recovery));
+        fixture.answer(current);
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("current {reason}/{recovery}"));
+        }
+        fixture.answer(submission);
+        if fixture
+            .client
+            .read_proposal_submission(&held, 1)
+            .await
+            .is_ok()
+        {
+            accepted.push(format!("retained {reason}/{recovery}"));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_reads() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let reads = |reason: &str| {
+        let decision = json!({"status":"rejected","decidedAt":"2026-10-01T10:00:00.000000Z",
+            "publicReason":reason});
+        let mut current = proposal("rejected");
+        current["decision"] = decision.clone();
+        let submission = json!({"id":ID,"actionId":"correct","submissionVersion":1,
+            "current":true,"effectDigest":DIGEST,"review":null,"decision":decision});
+        (current, submission)
+    };
+    for reason in ["Public reason", " Padded, with \u{e9}", &"x".repeat(2000)] {
+        let (current, submission) = reads(reason);
+        fixture.answer(current);
+        assert!(
+            fixture.client.get_proposal(&binding, ID).await.is_ok(),
+            "current {reason:?}"
+        );
+        fixture.answer(submission);
+        assert!(
+            fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok(),
+            "retained {reason:?}"
+        );
+    }
+    let mut accepted = vec![];
+    for reason in [
+        "",
+        "   ",
+        "\t\n",
+        "line\nbreak",
+        "bell\u{7}",
+        "next\u{85}line",
+        &"x".repeat(2001),
+    ] {
+        let (current, submission) = reads(reason);
+        fixture.answer(current);
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("current {reason:?}"));
+        }
+        fixture.answer(submission);
+        if fixture
+            .client
+            .read_proposal_submission(&held, 1)
+            .await
+            .is_ok()
+        {
+            accepted.push(format!("retained {reason:?}"));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn proposal_turn_follows_its_lifecycle_state() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let with_turn = |state: &str, turn: &str| {
+        let mut value = proposal(state);
+        value["turn"] = json!(turn);
+        value
+    };
+    // A draft is the party's to finish and a closed Proposal is nobody's;
+    // only a submitted Proposal's turn depends on review and application.
+    for (state, turn) in [
+        ("draft", "party"),
+        ("submitted", "party"),
+        ("submitted", "official"),
+        ("submitted", "nobody"),
+        ("applied", "nobody"),
+        ("cancelled", "nobody"),
+        ("rejected", "nobody"),
+    ] {
+        fixture.answer(with_turn(state, turn));
+        assert!(
+            fixture.client.get_proposal(&binding, ID).await.is_ok(),
+            "{state}/{turn}"
+        );
+    }
+    let mut accepted = vec![];
+    for (state, turn) in [
+        ("draft", "official"),
+        ("draft", "nobody"),
+        ("applied", "party"),
+        ("applied", "official"),
+        ("cancelled", "party"),
+        ("cancelled", "official"),
+        ("rejected", "party"),
+        ("rejected", "official"),
+    ] {
+        fixture.answer(with_turn(state, turn));
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("{state}/{turn}"));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
 async fn proposal_get_list_and_promoted_reads_validate_frozen_state_and_allow_tombstones() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;

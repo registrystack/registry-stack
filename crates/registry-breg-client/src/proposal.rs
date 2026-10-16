@@ -95,10 +95,10 @@ pub struct BRegProposalDecision {
 }
 fn valid_decision(decision: &BRegProposalDecision) -> bool {
     proposal_instant(&decision.decided_at).is_some()
-        && decision.public_reason.as_ref().is_none_or(|reason| {
-            !reason.is_empty()
-                && reason.len() <= registry_review_protocol::MAXIMUM_PUBLIC_REASON_BYTES
-        })
+        && decision
+            .public_reason
+            .as_deref()
+            .is_none_or(|reason| registry_review_protocol::check_public_reason(reason).is_ok())
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -435,6 +435,13 @@ impl BRegProposal {
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
             || self.state == BRegProposalState::Draft && self.decision.is_some()
+            || self.turn.is_some_and(|turn| match self.state {
+                BRegProposalState::Draft => turn != BRegProposalTurn::Party,
+                BRegProposalState::Submitted => false,
+                BRegProposalState::Applied
+                | BRegProposalState::Cancelled
+                | BRegProposalState::Rejected => turn != BRegProposalTurn::Nobody,
+            })
             || self
                 .decision
                 .as_ref()
@@ -449,8 +456,8 @@ impl BRegProposal {
                 || !valid_application_shape(
                     status.state,
                     status.mode,
-                    status.reason.is_some(),
-                    status.recovery.is_some(),
+                    status.reason,
+                    status.recovery,
                     status.automatic_retry.as_ref(),
                 )
                 || match status.state {
@@ -1566,20 +1573,32 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
     }
 }
 /// The rules an application status follows whichever document carries it:
-/// a reason always comes with its recovery, only a blocked application has
-/// one, and automatic retry progress belongs to automatic mode alone.
+/// a reason always comes with the one recovery BReg pairs it with (only a
+/// dependency outage or an expired lease can be retried), only a blocked
+/// application has one, and automatic retry progress belongs to automatic
+/// mode alone.
 fn valid_application_shape(
     state: BRegProposalApplicationState,
     mode: BRegProposalApplicationMode,
-    reason: bool,
-    recovery: bool,
+    reason: Option<BRegProposalApplicationReason>,
+    recovery: Option<BRegApplicationRecoveryHint>,
     automatic_retry: Option<&BRegProposalAutomaticRetry>,
 ) -> bool {
+    use BRegProposalApplicationReason::{DependencyOutage, LeaseExpired};
     use BRegProposalApplicationState::{
         Applied, Applying, AwaitingReview, Blocked, Cancelled, Pending, Rejected,
     };
     let open = matches!(state, AwaitingReview | Pending | Applying | Blocked);
-    reason == recovery
+    let paired = recovery
+        == reason.map(|reason| {
+            if matches!(reason, DependencyOutage | LeaseExpired) {
+                BRegApplicationRecoveryHint::Retry
+            } else {
+                BRegApplicationRecoveryHint::CorrectInput
+            }
+        });
+    let reason = reason.is_some();
+    paired
         && (state != Blocked || reason)
         && !(state == AwaitingReview && reason)
         && !(matches!(state, Applied | Cancelled | Rejected)
@@ -1611,8 +1630,8 @@ fn valid_submission_application(application: &BRegProposalSubmissionApplication)
             valid_application_shape(
                 state,
                 mode,
-                application.reason.is_some(),
-                application.recovery.is_some(),
+                application.reason,
+                application.recovery,
                 application.automatic_retry.as_ref(),
             )
         }),
