@@ -1694,10 +1694,45 @@ fn proposal_instant(value: &str) -> Option<OffsetDateTime> {
 fn canonical_proposal_id(value: &str) -> bool {
     Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
 }
+/// An available link carries no reason, and an unavailable one carries a
+/// recovery BReg pairs with its reason: a rejected review is revised while
+/// the Proposal is still submitted and read from its receipt once it is
+/// rejected, and a changed contract is refreshed for Revise and corrected
+/// while the draft is blocked.
 fn valid_availability(availability: &BRegAvailability, revision: u64) -> bool {
+    use BRegAvailabilityReason as Reason;
+    use BRegRecoveryHint as Recovery;
     availability.observed_revision == revision
-        && (availability.available
-            || availability.reason.is_some() && availability.recovery.is_some())
+        && match (
+            availability.available,
+            availability.reason,
+            availability.recovery,
+        ) {
+            (true, reason, recovery) => reason.is_none() && recovery.is_none(),
+            (false, Some(reason), Some(recovery)) => matches!(
+                (reason, recovery),
+                (Reason::PendingReview, Recovery::Refresh)
+                    | (
+                        Reason::ReviewRejected,
+                        Recovery::ReceiptOnly | Recovery::Revise
+                    )
+                    | (
+                        Reason::ReviewChangesRequested | Reason::ReviewEnded,
+                        Recovery::Revise
+                    )
+                    | (
+                        Reason::StaleRevision | Reason::AlreadyApplied,
+                        Recovery::ReceiptOnly
+                    )
+                    | (
+                        Reason::ContractChanged,
+                        Recovery::Refresh | Recovery::CorrectInput
+                    )
+                    | (Reason::DependencyOutage, Recovery::Retry)
+                    | (Reason::InvalidInput, Recovery::CorrectInput)
+            ),
+            (false, _, _) => false,
+        }
 }
 fn valid_cursor(cursor: &str) -> bool {
     !cursor.is_empty()

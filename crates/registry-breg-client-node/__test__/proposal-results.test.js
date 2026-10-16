@@ -125,7 +125,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       const original = structuredClone(value);
       for (const missing of ['reason', 'recovery']) {
         value = structuredClone(original);
-        const availability = {available: false, observedRevision: 8, reason: 'stale-revision', recovery: 'refresh'};
+        const availability = {available: false, observedRevision: 8, reason: 'stale-revision', recovery: 'receipt-only'};
         delete availability[missing];
         value.attachments.support.links.upload.availability = availability;
         await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
@@ -133,7 +133,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         await assert.rejects(client.executeProposal(attempt), error => error.kind === 'protocol' && error.outcomeUnknown);
       }
       for (const availability of [undefined, {available: true, observedRevision: 8},
-        {available: false, observedRevision: 8, reason: 'stale-revision', recovery: 'refresh'}]) {
+        {available: false, observedRevision: 8, reason: 'stale-revision', recovery: 'receipt-only'}]) {
         value = structuredClone(original); value.attachments.support.links.upload.availability = availability;
         await client.getProposal(binding, id);
       }
