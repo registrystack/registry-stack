@@ -14,9 +14,11 @@
   Version 1 signable bound, instead of 2 MiB, and a larger one is refused
   when it is recorded. The runtime logs the envelope size and bound with the
   fix: project fewer or smaller fields into the event.
-- The Rust client's `verify_webhook` delegates to the shared hooks receiver
-  and keeps its API and refusal codes. A signed header that is not visible
-  ASCII is refused as `malformed-signature`.
+- The Rust client's `verify_webhook` delegates to the shared hooks receiver.
+  Invalid delivery time, duplicate signed header, oversized body, and
+  undersized key failures now have distinct codes and messages that name the
+  input to fix without rendering it. A signed header that is not visible ASCII
+  is refused as `malformed-signature`.
 
 - BREAKING: retention windows other than the audit journal's live in a
   top-level `retention` block, the shape Scheduling and Messaging use.

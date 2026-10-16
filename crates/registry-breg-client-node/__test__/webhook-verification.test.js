@@ -49,6 +49,10 @@ function assertRefusal(code) {
     && !error.message.includes(key.toString());
 }
 
+function assertExactRefusal(code, message) {
+  return (error) => assertRefusal(code)(error) && error.message === message;
+}
+
 test('accepts the fixed BReg signing vector and returns exact delivery values', () => {
   const verified = verifyWebhookDelivery(input());
 
@@ -91,6 +95,44 @@ test('refuses a truncated signature', () => {
   assert.throws(() => verifyWebhookDelivery(input({
     headers: { ...headers(), 'x-registry-signature': 'v1=truncated' },
   })), assertRefusal('malformed-signature'));
+});
+
+test('reports an invalid delivery time with its fix', () => {
+  assert.throws(() => verifyWebhookDelivery(input({
+    headers: { ...headers(), 'x-registry-delivery-time': 'not-a-time' },
+  })), assertExactRefusal(
+    'invalid-delivery-time',
+    'the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock',
+  ));
+});
+
+test('reports a duplicate signed header with its fix', () => {
+  assert.throws(() => verifyWebhookDelivery(input({
+    headers: { ...headers(), 'CE-TYPE': 'case-created-v1' },
+  })), assertExactRefusal(
+    'duplicate-header',
+    'a Base Registry Engine webhook header is repeated; remove duplicate signed headers',
+  ));
+});
+
+test('reports an oversized body with its fix', () => {
+  assert.throws(
+    () => verifyWebhookDelivery(input({ body: Buffer.alloc(1_048_577, 0x78) })),
+    assertExactRefusal(
+      'body-too-large',
+      'the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size',
+    ),
+  );
+});
+
+test('reports an invalid key with its fix', () => {
+  assert.throws(
+    () => verifyWebhookDelivery(input({ key: Buffer.from('short-key') })),
+    assertExactRefusal(
+      'invalid-key',
+      'the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes',
+    ),
+  );
 });
 
 test('refuses an unknown signature version', () => {

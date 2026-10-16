@@ -57,8 +57,9 @@ across operator replay uses a durable apply-once operation keyed by authenticate
 `source` plus `id`, or by an application business key, before acting on `body`.
 
 Refusal throws `BaseRegistryClientError` with kind `webhook-verification` and a
-code from `missing-header`, `malformed-signature`, `signature-mismatch`, or
-`unsupported-version`. The message never includes a header value, body, or key.
+code from `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
+The message names the input to check and never includes a header value, body,
+or key.
 
 ## Exact values and application metadata
 

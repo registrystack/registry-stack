@@ -108,6 +108,8 @@ pub enum ReceiverError {
     MalformedSignature,
     #[error("the hook delivery signature does not match")]
     SignatureMismatch,
+    #[error("the hook delivery time is invalid; check the signed delivery time and sender clock")]
+    InvalidDeliveryTime,
     #[error("the hook delivery time is outside the receiver's allowed skew")]
     Stale,
     #[error("the hook delivery body exceeds the {MAX_BODY_BYTES}-byte Version 1 signable bound")]
@@ -167,7 +169,7 @@ where
         DeliveryFreshness::CallerEnforced => (
             OffsetDateTime::parse(delivery_time, &Rfc3339)
                 .map(SystemTime::from)
-                .map_err(|_| ReceiverError::MalformedHeader)?,
+                .map_err(|_| ReceiverError::InvalidDeliveryTime)?,
             Duration::ZERO,
         ),
     };
@@ -197,7 +199,7 @@ where
         VerificationError::InputTooLarge => ReceiverError::MalformedHeader,
         VerificationError::UnsupportedVersion => ReceiverError::UnsupportedVersion,
         VerificationError::InvalidSignature => ReceiverError::SignatureMismatch,
-        VerificationError::InvalidDeliveryTime => ReceiverError::MalformedHeader,
+        VerificationError::InvalidDeliveryTime => ReceiverError::InvalidDeliveryTime,
         VerificationError::DeliveryTimeSkew => ReceiverError::Stale,
     })?;
 
@@ -498,13 +500,16 @@ mod tests {
                 );
             }
         }
+        let invalid_headers = with("x-registry-delivery-time", "yesterday");
+        let invalid_delivery_time =
+            verify(&invalid_headers, BODY, DeliveryFreshness::CallerEnforced);
         assert_eq!(
-            verify(
-                &with("x-registry-delivery-time", "yesterday"),
-                BODY,
-                DeliveryFreshness::CallerEnforced
-            ),
-            Err(ReceiverError::MalformedHeader)
+            invalid_delivery_time,
+            Err(ReceiverError::InvalidDeliveryTime)
+        );
+        assert_eq!(
+            invalid_delivery_time.unwrap_err().to_string(),
+            "the hook delivery time is invalid; check the signed delivery time and sender clock"
         );
         assert_eq!(
             verify(
