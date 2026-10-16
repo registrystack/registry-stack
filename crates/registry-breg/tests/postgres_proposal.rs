@@ -859,6 +859,102 @@ async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
 }
 
 #[tokio::test]
+async fn proposal_turn_filter_pages_a_bounded_scan_without_gaps_or_duplicates() {
+    use std::time::Duration;
+
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("author", "zone-a"),
+        |mutations| mutations.with_action_timeout_for_test(Duration::from_secs(2)),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"})))
+                .unwrap(),
+            &key("turn-filter-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let mut expected = BTreeSet::new();
+    for index in 0..70 {
+        let input = BRegActionInvocationRequest::new(
+            &action,
+            map(json!({"target":record.value.data.record_identifier,"value":"After"})),
+            None,
+        )
+        .unwrap();
+        let draft = client
+            .start_proposal(&action, &input, &key(&format!("turn-filter-{index}")))
+            .await
+            .unwrap()
+            .value;
+        if index % 23 == 0 {
+            let submit = client
+                .prepare_proposal(
+                    &draft,
+                    "submit",
+                    json!({}),
+                    &key(&format!("turn-filter-submit-{index}")),
+                )
+                .unwrap();
+            let submitted = client.execute_proposal(&submit).await.unwrap().value;
+            expected.insert(submitted.id().to_owned());
+        }
+    }
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let mut cursor = None;
+    let mut seen = BTreeSet::new();
+    let mut pages = 0usize;
+    loop {
+        let page = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.list_proposals(
+                &collection,
+                &BRegProposalQuery {
+                    cursor,
+                    limit: Some(100),
+                    turn: Some(BRegProposalTurn::Official),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .expect("a turn-filtered page stays inside its bounded scan")
+        .unwrap()
+        .value;
+        pages += 1;
+        for item in page.items {
+            assert_eq!(item.turn(), Some(BRegProposalTurn::Official));
+            assert!(seen.insert(item.id().to_owned()), "Proposal repeated");
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+        assert!(pages < 12, "turn-filter pagination must make progress");
+    }
+    assert!(pages > 1, "the turn filter must stop at its scan budget");
+    assert_eq!(seen, expected);
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn proposal_list_audit_counts_only_each_actions_returned_items() {
     let mut source = registry_source(false);
     for id in ["correct-alternate", "correct-empty"] {
