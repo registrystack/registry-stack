@@ -327,7 +327,7 @@ TRACEPARENT = parameter(
 IDEMPOTENCY = parameter(
     "Idempotency-Key",
     "header",
-    "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+    "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer while its claim remains owned by the caller, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
     IDEMPOTENCY_SCHEMA,
 )
 HOLD_ID = parameter("hold_id", "path", "The hold's identifier.", UUID_SCHEMA)
@@ -808,7 +808,7 @@ def document(contract: dict) -> dict:
                 CURSOR_QUERY,
                 LIMIT_QUERY,
             ],
-            description="Lists only the authenticated caller's appointments carrying the exact opaque reference. The 15-minute cursor is bound to both the caller and the reference, and ownership is rechecked on every page. Scheduling stores the tuple without calling the referenced product.",
+            description="Lists only the authenticated caller's appointments carrying the exact opaque reference. The 15-minute cursor is bound to both the caller and the reference, and ownership is rechecked on every page. Claims whose owner has been erased are absent. Scheduling stores the tuple without calling the referenced product.",
         ), "post": operation(
             "Confirm a hold or book directly",
             "AppointmentDocument",
@@ -823,7 +823,7 @@ def document(contract: dict) -> dict:
             "AppointmentDocument",
             body="CreateAppointmentRequest",
             idempotency=True,
-            description="Reads only a retained success receipt matching the verified caller's issuer and subject, the original key, and the original request. It requires current ordinary read authority, can observe work after task authority ends, and never creates or replays a capacity command. Missing, expired, changed, or refused receipts are receipt.unresolved; this is not evidence that no effect occurred.",
+            description="Reads only a retained success receipt matching the verified caller's issuer and subject, the original key, and the original request. It requires current ordinary read authority and current claim ownership, can observe work after task authority ends, and never creates or replays a capacity command. Missing, expired, changed, or refused receipts, and claims whose owner was erased, are receipt.unresolved; this is not evidence that no effect occurred.",
         )},
         "/v1/appointments/{appointment_id}": {"get": operation(
             "Read one owned appointment",

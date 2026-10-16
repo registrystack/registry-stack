@@ -333,7 +333,12 @@ official books for the party, and changes go through the process that booked
 it. History and
 audit carry the keyed pseudonym of that pair instead, derived with the audit
 hash key (`audit.hashKeyRef`), and decide nothing: rotating that key leaves
-every claim with its owner. The published
+every live claim with its owner. After an appointment ends or is cancelled,
+or a hold expires, is released, or is consumed, the configured
+`retention.claimOwnerRetentionDays` window bounds the raw pair. It defaults to
+seven days and accepts 1 through 365 days. The sweep replaces the pair with an
+inert digest; the former owner can no longer list, read, act on, or recover a
+receipt for that claim. The claim, its history, and audit stay. The published
 [Registry Scheduling API reference](https://docs.registrystack.org/reference/apis/registry-scheduling/)
 gives the full recovery rules for an unknown outcome.
 
@@ -403,7 +408,8 @@ original success receipt for the same verified issuer and subject. It never
 repeats the business operation. A same-principal read credential can observe
 work after task authority ends; another service identity cannot impersonate
 that principal. `409 receipt.unresolved` covers unavailable evidence such as
-a missing, expired, or changed receipt and does not prove that no effect occurred.
+a missing, expired, or changed receipt, or a claim whose owner has been erased,
+and does not prove that no effect occurred.
 The receipt route authenticates before checking the JSON media type and decoding
 its bounded body. The router still rejects a declared body larger than one MiB
 before entering the handler. Authenticated callers retain the usual malformed

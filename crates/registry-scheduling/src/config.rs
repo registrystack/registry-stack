@@ -58,6 +58,9 @@ pub const DEFAULT_RECEIPT_RETENTION_DAYS: u32 = 7;
 /// The longest a stored idempotency receipt may stay replayable, in days.
 pub const MAX_RECEIPT_RETENTION_DAYS: u32 = 365;
 
+/// The longest raw ownership may remain after a claim ends, in days.
+pub const MAX_CLAIM_OWNER_RETENTION_DAYS: u32 = 365;
+
 /// The longest a canonical hook envelope may be retained for retry and
 /// dead-letter inspection, in days.
 pub const MAX_HOOK_PAYLOAD_RETENTION_DAYS: u32 = 30;
@@ -588,6 +591,17 @@ pub struct RetentionConfig {
         schemars(range(min = 1, max = MAX_RECEIPT_RETENTION_DAYS))
     )]
     pub receipt_retention_days: u32,
+    /// How long raw ownership remains after an appointment ends or is
+    /// cancelled, or a hold expires, is released, or is consumed.
+    #[serde(
+        default = "default_claim_owner_retention_days",
+        deserialize_with = "bounded_u32::<_, 1, MAX_CLAIM_OWNER_RETENTION_DAYS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAX_CLAIM_OWNER_RETENTION_DAYS))
+    )]
+    pub claim_owner_retention_days: u32,
     /// Lifetime of canonical hook envelopes retained for retry and
     /// dead-letter inspection, from one through thirty days.
     #[serde(
@@ -605,6 +619,7 @@ impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
             receipt_retention_days: DEFAULT_RECEIPT_RETENTION_DAYS,
+            claim_owner_retention_days: default_claim_owner_retention_days(),
             hook_payload_retention_days: default_hook_payload_retention_days(),
         }
     }
@@ -612,6 +627,10 @@ impl Default for RetentionConfig {
 
 const fn default_receipt_retention_days() -> u32 {
     DEFAULT_RECEIPT_RETENTION_DAYS
+}
+
+const fn default_claim_owner_retention_days() -> u32 {
+    7
 }
 
 const fn default_hook_payload_retention_days() -> u32 {
@@ -1874,6 +1893,26 @@ holdPolicy:
     /// The code and pointer of a refusal, the pair an operator acts on.
     fn refusal(error: &RuntimeConfigError) -> (String, String) {
         (error.code().to_owned(), error.pointer())
+    }
+
+    #[test]
+    fn claim_owner_retention_accepts_its_own_bounded_window() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        for days in [1, 7, 365] {
+            document["retention"]["claimOwnerRetentionDays"] = serde_json::json!(days);
+            let config = parse_runtime(&document)
+                .expect("the claim owner window is independent of receipts");
+            assert_eq!(config.retention.claim_owner_retention_days, days);
+            assert_eq!(config.retention.receipt_retention_days, 7);
+        }
+        for days in [0, 366] {
+            document["retention"]["claimOwnerRetentionDays"] = serde_json::json!(days);
+            let error =
+                parse_runtime(&document).expect_err("the owner retention window is bounded");
+            assert_eq!(error.code(), "config.out-of-range");
+            assert_eq!(error.pointer(), "/retention/claimOwnerRetentionDays");
+        }
     }
 
     #[test]

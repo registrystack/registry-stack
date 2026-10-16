@@ -335,11 +335,19 @@ binding is no longer available.
 `retention.receiptRetentionDays` covers idempotency attempt receipts
 from 1 through 365 days; listing cursors keep their fixed fifteen-minute
 lifetime. `retention.hookPayloadRetentionDays` sets the canonical observer payload's retry and
-dead-letter lifetime from 1 through 30 days. Both configured values default to
-seven days, which is not a jurisdictional recommendation. Appointment, history,
-and reminder outbox retention remain deferred, so a hold or appointment keeps
-the verified issuer and subject that own it for as long as it exists;
-`audit.retentionDays` bounds rotated audit files. An idempotency receipt past its period is erased, so an
+dead-letter lifetime from 1 through 30 days.
+`retention.claimOwnerRetentionDays` bounds the raw owner issuer and subject
+from 1 through 365 days after an appointment ends or is cancelled, or a hold
+expires, is released, or is consumed. The earlier applicable instant starts
+the window. All three configured values default to seven days, a placeholder
+that is not a jurisdictional recommendation. The sweep clears both owner
+columns together and retains a per-claim SHA-256 reference and erasure time.
+The reference grants no authority: the claim is no longer readable, listable,
+or actionable by its former owner, and a receipt containing that claim cannot be observed or replayed even if
+the independent receipt window remains open. Live claims
+keep their owner across audit-key rotation. Claim, history, and reminder outbox
+rows remain; their retention is deferred. `audit.retentionDays` bounds rotated
+audit files. An idempotency receipt past its period is erased, so an
 exact retry after expiry answers `idempotency.expired` with HTTP 410 instead of
 replaying the first answer. The same sweep clears the attempt's raw token
 issuer, subject, and key; the row stays, identified only by a SHA-256 digest of

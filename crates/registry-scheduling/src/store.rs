@@ -97,9 +97,12 @@ const ATTEMPT_KEY_REFERENCE_MIGRATION: &str =
 const ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION: i64 = 11;
 const CLAIM_OWNER_MIGRATION: &str = include_str!("../migrations/0012_claim_owner.sql");
 const CLAIM_OWNER_MIGRATION_VERSION: i64 = 12;
+const CLAIM_OWNER_RETENTION_MIGRATION: &str =
+    include_str!("../migrations/0013_claim_owner_retention.sql");
+const CLAIM_OWNER_RETENTION_MIGRATION_VERSION: i64 = 13;
 
 /// Every schema version in ledger order.
-const SCHEMA_VERSIONS: [i64; 12] = [
+const SCHEMA_VERSIONS: [i64; 13] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
@@ -112,6 +115,7 @@ const SCHEMA_VERSIONS: [i64; 12] = [
     EXTERNAL_REFERENCES_MIGRATION_VERSION,
     ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION,
     CLAIM_OWNER_MIGRATION_VERSION,
+    CLAIM_OWNER_RETENTION_MIGRATION_VERSION,
 ];
 
 /// Serializes schema migration and package activation on one transaction
@@ -538,8 +542,8 @@ pub struct ClaimRow {
     /// The verified caller that owns the claim, read from its row. It is
     /// never serialized, so a receipt, a payload, or a hook projection built
     /// from a claim cannot carry it, and a claim read back from a receipt has
-    /// none. `None` also covers a claim written before owners were stored,
-    /// which no caller owns.
+    /// none. `None` also covers an owner erased after its retention window,
+    /// or a claim written before owners were stored; no caller owns either.
     #[serde(skip)]
     pub owner: Option<ClaimOwner>,
 }
@@ -2079,10 +2083,13 @@ impl PostgresStore {
         let reference = attempt_key_reference(issuer, subject, scope, key);
         let row = client
             .query_opt(
-                "SELECT receipt FROM scheduling_attempts WHERE key_reference=$1 \
-             AND request_hash=$2 AND state='completed' AND status_code IN (200,201) \
-             AND erased_at IS NULL AND expires_at>$3",
-                &[&reference, &request_hash, &now],
+                "SELECT a.receipt FROM scheduling_attempts a \
+                 JOIN scheduling_claims c ON c.claim_id=(a.receipt->'claim'->>'claimId')::uuid \
+                 WHERE a.key_reference=$1 AND a.request_hash=$2 \
+                 AND a.state='completed' AND a.status_code IN (200,201) \
+                 AND a.erased_at IS NULL AND a.expires_at>$3 \
+                 AND c.owner_issuer=$4 AND c.owner_subject=$5",
+                &[&reference, &request_hash, &now, &issuer, &subject],
             )
             .await?;
         Ok(row.and_then(|row| row.get(0)))
@@ -2378,6 +2385,41 @@ impl PostgresStore {
         }
     }
 
+    /// Clear raw ownership once a claim's end or earlier closure is beyond
+    /// the configured window. Expired holds use their actual expiry even if
+    /// the expiry worker recorded closure later. Consuming a hold closes it;
+    /// the appointment created from it retains its own independent owner.
+    ///
+    /// The digest binds the fixed domain, the claim UUID bytes, and the two
+    /// UTF-8 owner values prefixed by their big-endian u64 byte lengths. It
+    /// is scoped to one claim and never used for authorization. PostgreSQL
+    /// computes it and clears the raw pair in one atomic row update, whose
+    /// predicate is rechecked after a concurrent reschedule or closure.
+    pub async fn erase_expired_claim_owners(
+        &self,
+        now: DateTime<Utc>,
+        retention_days: u32,
+    ) -> Result<u64, StoreError> {
+        if !(1..=crate::config::MAX_CLAIM_OWNER_RETENTION_DAYS).contains(&retention_days) {
+            return Err(StoreError::Configuration);
+        }
+        let cutoff = now
+            .checked_sub_signed(TimeDelta::days(i64::from(retention_days)))
+            .ok_or(StoreError::Configuration)?;
+        let client = self.client().await?;
+        Ok(client.execute(
+            "UPDATE scheduling_claims SET owner_reference='sha256:' || encode(sha256(\
+             convert_to('scheduling-claim-owner-v1','UTF8') || uuid_send(claim_id) || \
+             int8send(octet_length(convert_to(owner_issuer,'UTF8'))::bigint) || convert_to(owner_issuer,'UTF8') || \
+             int8send(octet_length(convert_to(owner_subject,'UTF8'))::bigint) || convert_to(owner_subject,'UTF8')), 'hex'), \
+             owner_issuer=NULL, owner_subject=NULL, owner_erased_at=$1 \
+             WHERE owner_issuer IS NOT NULL AND \
+             CASE WHEN kind='booking' THEN LEAST(displayed_end, closed_at) \
+                  ELSE LEAST(hold_expires_at, closed_at) END <= $2",
+            &[&now, &cutoff],
+        ).await?)
+    }
+
     /// Erase idempotency receipts past their retention period. The answer and
     /// the raw issuer, subject, and key are dropped together; the row is kept
     /// under its key reference and stamped erased. A key that answered once
@@ -2385,10 +2427,8 @@ impl PostgresStore {
     /// expired rather than executed again as a fresh request, and the row is
     /// never deleted.
     ///
-    /// This is the only retention the sweep enforces beside listing cursors.
-    /// Appointments, history, and the delivery outbox are not swept, and
-    /// audit entries live outside the database under the audit destination's
-    /// own retention.
+    /// Claim ownership has its own retention pass. Claim, history and outbox
+    /// rows remain; audit entries live under the audit destination's retention.
     pub async fn erase_expired_attempts(&self, now: DateTime<Utc>) -> Result<u64, StoreError> {
         let client = self.client().await?;
         Ok(client
@@ -3075,6 +3115,36 @@ async fn replay_stored_attempt(
     else {
         return Ok(Some(ReplayOutcome::Refused(CommitError::KeyExpired)));
     };
+    let claim_id = if let Some(claim) = receipt.get("claim") {
+        Some(
+            claim
+                .get("claimId")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or(StoreError::Corrupt)?,
+        )
+    } else if receipt.is_null() {
+        // Hold release answers 204 without a body. Its internal scope binds
+        // the claim, including when refusal recording reconciles a replay.
+        scope
+            .strip_prefix("hold:")
+            .and_then(|id| id.strip_suffix(":release"))
+            .map(|id| Uuid::parse_str(id).map_err(|_| StoreError::Corrupt))
+            .transpose()?
+    } else {
+        None
+    };
+    if let Some(claim_id) = claim_id {
+        let owned = transaction
+            .claim_in_transaction(claim_id)
+            .await?
+            .is_some_and(|claim| {
+                claim.is_owned_by(commitment.actor_issuer, commitment.actor_subject)
+            });
+        if !owned {
+            return Ok(Some(ReplayOutcome::Refused(CommitError::Unauthorized)));
+        }
+    }
     Ok(Some(ReplayOutcome::Replay {
         status_code: u16::try_from(row.get::<_, i32>(2)).unwrap_or(500),
         receipt,
@@ -3786,7 +3856,11 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
     }
 
     async fn claim_in_transaction(&self, claim_id: Uuid) -> Result<Option<ClaimRow>, StoreError> {
-        let row = self.query_opt(SELECT_CLAIM, &[&claim_id]).await?;
+        // Serialize the ownership decision with owner erasure and lifecycle
+        // writes, so a stale owner read cannot commit after the sweep.
+        let row = self
+            .query_opt(&format!("{SELECT_CLAIM} FOR UPDATE"), &[&claim_id])
+            .await?;
         row.map(map_claim_row).transpose()
     }
 

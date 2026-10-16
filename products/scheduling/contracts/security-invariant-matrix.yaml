@@ -692,7 +692,9 @@ invariants:
       appointment from its booker when the audit hash key rotates, so an
       orchestrator reads an empty page as no booking and books again, and the
       per-caller hold ceiling stops counting holds the caller already has; or
-      the owner leaks into a receipt, outbox payload, or observer projection.
+      the owner leaks into a receipt, outbox payload, or observer projection;
+      or a terminal claim retains its raw owner indefinitely or discloses
+      data through a retained receipt after owner erasure.
     enforcementPoint: >-
       Original receipt observation matches the verified issuer and subject,
       original operation key and canonical request hash, reads only retained
@@ -704,12 +706,17 @@ invariants:
       ClaimRow::is_owned_by, owned_booking, the external reference listing,
       the hold-ceiling lock and count, and the listing cursor context all
       decide on that pair; the pseudonym decides nothing. The owner is never
-      serialized.
+      serialized. A separate bounded claimOwnerRetentionDays window atomically
+      clears the raw pair after the terminal instant, keeping an inert digest.
+      Receipt observation and successful replay check current ownership;
+      mutation reads lock the claim before deciding ownership.
     refusal: >-
       Keep the booker's listing, cursor, read, reschedule, cancel, release,
       and hold ceiling across a rotation; answer another principal with an
       empty page, cursor.invalid, and operation.not-authorized; own no claim
-      written before migration 12; and refuse a partial or empty owner.
+      written before migration 12; refuse a partial or empty owner or raw
+      restoration on a tombstone; and refuse reads, listings, receipt observation,
+      and mutations after owner erasure while preserving history and live holds.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: rotating_the_audit_key_keeps_existing_claims_with_their_owner
@@ -747,9 +754,9 @@ deferred:
       Retention windows for committed scheduling data are a product question
       this milestone does not answer. Idempotency receipts do expire and
       tombstone, and the sweep clears the raw caller and key with them
-      (SCHEDULING-SEC-33); nothing else in the database is swept, so a hold
-      or appointment keeps its owner's verified issuer and subject for as
-      long as it exists (SCHEDULING-SEC-34). Rotated audit files are removed
+      (SCHEDULING-SEC-33). The claim owner's raw issuer and subject expire
+      separately under claimOwnerRetentionDays (SCHEDULING-SEC-34), but the
+      claim, history, and outbox rows remain. Rotated audit files are removed
       after audit.retentionDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a

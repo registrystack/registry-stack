@@ -429,6 +429,14 @@ mod tests {
             u64::from(MAX_RECEIPT_RETENTION_DAYS),
             u64::from(MAX_RECEIPT_RETENTION_DAYS) + 1,
         ];
+        for claim_owner_days in periods {
+            let document = serde_json::json!({"claimOwnerRetentionDays": claim_owner_days});
+            assert_eq!(
+                validator.is_valid(&document),
+                reads_block::<RetentionConfig>(&document),
+                "schema and runtime disagree on {document}"
+            );
+        }
         for attempt_receipt_days in periods {
             for hook_payload_days in periods {
                 let document = serde_json::json!({

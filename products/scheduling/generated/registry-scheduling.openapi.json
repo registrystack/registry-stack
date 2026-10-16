@@ -2094,7 +2094,7 @@
     },
     "/v1/appointments": {
       "get": {
-        "description": "Lists only the authenticated caller's appointments carrying the exact opaque reference. The 15-minute cursor is bound to both the caller and the reference, and ownership is rechecked on every page. Scheduling stores the tuple without calling the referenced product.",
+        "description": "Lists only the authenticated caller's appointments carrying the exact opaque reference. The 15-minute cursor is bound to both the caller and the reference, and ownership is rechecked on every page. Claims whose owner has been erased are absent. Scheduling stores the tuple without calling the referenced product.",
         "operationId": "listAppointmentsByExternalReference",
         "parameters": [
           {
@@ -2344,7 +2344,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer while its claim remains owned by the caller, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -2701,7 +2701,7 @@
     },
     "/v1/appointments/receipt": {
       "post": {
-        "description": "Reads only a retained success receipt matching the verified caller's issuer and subject, the original key, and the original request. It requires current ordinary read authority, can observe work after task authority ends, and never creates or replays a capacity command. Missing, expired, changed, or refused receipts are receipt.unresolved; this is not evidence that no effect occurred.",
+        "description": "Reads only a retained success receipt matching the verified caller's issuer and subject, the original key, and the original request. It requires current ordinary read authority and current claim ownership, can observe work after task authority ends, and never creates or replays a capacity command. Missing, expired, changed, or refused receipts, and claims whose owner was erased, are receipt.unresolved; this is not evidence that no effect occurred.",
         "operationId": "readAppointmentReceipt",
         "parameters": [
           {
@@ -2714,7 +2714,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer while its claim remains owned by the caller, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -3138,7 +3138,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer while its claim remains owned by the caller, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -3672,7 +3672,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer while its claim remains owned by the caller, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -4490,7 +4490,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer while its claim remains owned by the caller, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
