@@ -2005,7 +2005,7 @@ pub async fn run_one_submission(
             }
         }
         Err(error) if terminal_submission_error(&error) => {
-            client
+            let updated = client
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='failed',lease_until=NULL,last_error_code='remote-refused',
@@ -2021,6 +2021,21 @@ pub async fn run_one_submission(
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            if updated == 1 {
+                let (status, problem_code) = match &error {
+                    ReviewClientError::Problem { status, problem } => {
+                        (Some(*status), Some(problem.code.as_str()))
+                    }
+                    _ => (None, None),
+                };
+                tracing::warn!(
+                    authority,
+                    status,
+                    problem_code,
+                    "BReg review handoff was refused by the review authority and recorded remote-refused; \
+                     check the review producer configuration and its grant at the authority; the Proposal reads review-ended and its author revises it"
+                );
+            }
         }
         Err(_) => {
             client
