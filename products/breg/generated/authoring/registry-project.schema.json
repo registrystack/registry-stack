@@ -3992,7 +3992,8 @@
         "rebase",
         "retry",
         "get-review-status",
-        "get-review-context"
+        "get-review-context",
+        "get-application-actor"
       ],
       "type": "string"
     },

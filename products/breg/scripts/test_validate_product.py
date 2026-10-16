@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 179) if index not in {61, 62}],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 180) if index not in {61, 62}],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -414,7 +414,7 @@ class BRegProductCatalogTests(unittest.TestCase):
             any("duplicate identifier" in error for error in errors), errors
         )
 
-    def test_closed_security_range_rejects_a_missing_rhai_invariant(self) -> None:
+    def test_closed_security_range_rejects_a_missing_final_invariant(self) -> None:
         original = VALIDATOR.load_yaml
 
         def load_without_final_invariant(path: Path):

@@ -197,6 +197,10 @@ async fn submission_read_refuses_an_incoherent_application() {
     let retry = json!({"scheduled":true,"attempts":1,"maximumAttempts":3});
     for (name, application) in [
         ("applied", json!({"state":"applied","applicationId":ID})),
+        (
+            "applied-with-actor",
+            json!({"state":"applied","applicationId":ID,"appliedBy":format!("hmac-sha256:{}", "a".repeat(64)),"appliedAt":"2026-10-16T01:02:03.000004Z"}),
+        ),
         ("pending", json!({"state":"pending","mode":"manual"})),
         (
             "blocked",
@@ -228,6 +232,14 @@ async fn submission_read_refuses_an_incoherent_application() {
         (
             "applied-with-retry",
             json!({"state":"applied","applicationId":ID,"automaticRetry":retry}),
+        ),
+        (
+            "applied-without-time",
+            json!({"state":"applied","applicationId":ID,"appliedBy":format!("hmac-sha256:{}", "a".repeat(64))}),
+        ),
+        (
+            "applied-without-actor",
+            json!({"state":"applied","applicationId":ID,"appliedAt":"2026-10-16T01:02:03.000004Z"}),
         ),
         (
             "pending-with-receipt",

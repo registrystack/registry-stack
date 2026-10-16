@@ -3661,3 +3661,40 @@ Retry, Cancel and a second rejection from `rejected`.
 The public reason is whatever the reviewer wrote for the subject. BReg bounds
 its length through the protocol type but cannot judge its content; a
 reviewer who writes personal data there discloses it to every Get holder.
+
+## Application actor disclosure is a separate Proposal grant
+
+Proposal Get and the per-version submission read may now serve the stored
+keyed actor pseudonym as `appliedBy` and the receipt time as `appliedAt`, but
+only when the selected Proposal grant holds both `get` and the supplemental
+`get-application-actor` operation. `application_actor_disclosed` in
+`crates/registry-breg/src/mutation/proposal.rs` is the release point. It
+requires the actual read authority to be Get and checks the selected compiled
+profile for the supplemental operation. When a task grant supplies the Get
+authority, it must also carry `get-application-actor` for the exact Proposal;
+the selected profile alone cannot widen that delegated bound. List uses List
+authority, so it omits both values even when the profile holds the supplemental
+operation. Lifecycle responses also omit them. The server schema and client
+require the pair to appear together and validate the pseudonym as the stored
+`hmac-sha256:` prefix plus 64 lowercase hexadecimal characters and the time as
+RFC 3339.
+
+No new data is stored. The projection uses the existing `applied_by` and
+`applied_at` receipt columns and never serves the raw issuer or subject. The
+`breg-proposal-actor-v1` derivation remains keyed and scoped to the database
+and verified caller issuer. A holder can link Proposals applied by the same
+actor within that database and issuer. A holder who knows the applier of one
+Proposal from another source can associate that actor with other matching
+pseudonyms. A holder of the audit hash key can also recompute the value for a
+known issuer and subject. The value is pseudonymous, not anonymous.
+
+`application_actor_requires_its_dedicated_get_grant_and_is_issuer_scoped` in
+`crates/registry-breg/tests/postgres_proposal.rs` proves that authorized Get
+and per-version reads match the stored receipt, ungranted reads omit both
+members, List omits both for granted and ungranted profiles, and the same
+subject applied under another issuer produces a different pseudonym. This is
+recorded by BREG-SEC-179.
+`task_grant_get_requires_the_exact_application_actor_bound` in
+`crates/registry-breg/tests/postgres_proposal_security.rs` proves that a task
+grant with Get authority cannot borrow the supplemental operation from its
+selected profile or from a bound for another Proposal.

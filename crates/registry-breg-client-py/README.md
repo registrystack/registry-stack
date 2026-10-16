@@ -205,6 +205,9 @@ review has decided, a `decision` with its status, `decidedAt` and optional
 retained submission version, its review, application receipt and decision,
 with the Proposal Get authority; an expired version is the
 `proposal.submission_expired` problem.
+When that profile also holds `get-application-actor`, Proposal Get and the
+submission read include `appliedBy` and `appliedAt` together in the application
+member. Proposal List omits both.
 
 After an uncertain response or restart, fetch the current authorized Proposal
 before recovering the original attempt:

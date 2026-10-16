@@ -245,6 +245,12 @@ Proposal ID, Action revision, submission version and effect digest before using
 that evidence to continue a dependent workflow. A blocked state does not claim
 that application can never occur.
 
+When the selected profile also holds the supplemental
+`get-application-actor` Proposal operation, Proposal Get and
+`read_proposal_submission` include `appliedBy`, the stored keyed actor
+pseudonym, and `appliedAt` together in the application member. List omits both.
+The client exposes no raw issuer or subject for the applier.
+
 Automatic recovery Apply and Retry require an explicit current grant and a
 verified human caller. An observing service gains no recovery authority.
 The built-in executor uses its own governed system grant.

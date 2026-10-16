@@ -100,6 +100,9 @@ pub(crate) fn proposal_operation_name(operation: ProposalAuthorityOperation) -> 
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) => {
             "get-review-context"
         }
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetApplicationActor) => {
+            "get-application-actor"
+        }
     }
 }
 
@@ -703,6 +706,7 @@ impl MutationTransaction {
                         | ProposalOperation::List
                         | ProposalOperation::GetReviewContext
                         | ProposalOperation::GetReviewStatus
+                        | ProposalOperation::GetApplicationActor
                 )
             );
             let row = load_proposal_row(tx, entity, *id, lock).await?;
@@ -2490,8 +2494,10 @@ impl MutationTransaction {
     pub(crate) async fn proposal_submission_value(
         &self,
         tx: &Transaction<'_>,
+        registry: &CompiledRegistry,
         document: &ProposalDocument,
         version: u32,
+        authority: &ProposalAuthority,
     ) -> Result<Option<Value>, MutationError> {
         let version = i64::from(version);
         let Some(submission) = tx
@@ -2550,7 +2556,8 @@ impl MutationTransaction {
         };
         let receipt = tx
             .query_opt(
-                "SELECT application_id
+                "SELECT application_id,applied_by,
+                    to_char(applied_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
         FROM registry_internal.registry_proposal_applications
         WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
                 &[&document.action_id, &document.proposal_id, &version],
@@ -2558,8 +2565,15 @@ impl MutationTransaction {
             .await
             .map_err(map_database_error)?;
         let application = match (receipt, frozen) {
-            // Who applied and when stay with the receipt: no profile reads them.
-            (Some(row), _) => json!({"state":"applied","applicationId":row.get::<_,Uuid>(0)}),
+            (Some(row), _) => {
+                let mut application =
+                    json!({"state":"applied","applicationId":row.get::<_,Uuid>(0)});
+                if application_actor_disclosed(registry, document, authority)? {
+                    application["appliedBy"] = json!(row.get::<_, String>(1));
+                    application["appliedAt"] = json!(row.get::<_, String>(2));
+                }
+                application
+            }
             (None, Some(frozen)) => proposal_application_status(tx, document, frozen).await?,
             (None, None) => Value::Null,
         };
@@ -2716,7 +2730,10 @@ impl MutationTransaction {
             .as_ref()
             .and_then(|workflow| workflow.application())
         {
-            value["application"] = public_application(application);
+            value["application"] = public_application(
+                application,
+                application_actor_disclosed(registry, document, current)?,
+            );
         }
         let Some(claims) = claims else {
             return Ok(value);
@@ -2879,6 +2896,7 @@ impl MutationTransaction {
                 ProposalOperation::GetReviewContext | ProposalOperation::GetReviewStatus => {
                     document.header.state == "submitted"
                 }
+                ProposalOperation::GetApplicationActor => false,
                 ProposalOperation::List => false,
             };
             if !available
@@ -3218,11 +3236,56 @@ async fn proposal_application_status(
     Ok(value)
 }
 
-fn public_application(application: &crate::proposal_workflow::ApplicationReceipt) -> Value {
-    json!({"applicationId":application.application_id().as_str(),
+fn application_actor_disclosed(
+    registry: &CompiledRegistry,
+    document: &ProposalDocument,
+    authority: &ProposalAuthority,
+) -> Result<bool, MutationError> {
+    if authority.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get) {
+        return Ok(false);
+    }
+    if authority.task_grant.as_ref().is_some_and(|grant| {
+        let collection = format!("proposal:{}", document.proposal_id);
+        !grant
+            .bounds()
+            .breg_permissions()
+            .is_some_and(|permissions| {
+                permissions.iter().any(|permission| {
+                    permission.collection() == collection
+                        && permission
+                            .operations()
+                            .iter()
+                            .any(|operation| operation == "get-application-actor")
+                })
+            })
+    }) {
+        return Ok(false);
+    }
+    let action = proposal_action(registry, &document.action_id)?;
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        return Err(MutationError::InvalidRequest);
+    };
+    Ok(proposal.permissions.iter().any(|permission| {
+        permission.profile_id == authority.common.access_profile()
+            && permission
+                .operations
+                .contains(&ProposalOperation::GetApplicationActor)
+    }))
+}
+
+fn public_application(
+    application: &crate::proposal_workflow::ApplicationReceipt,
+    disclose_actor: bool,
+) -> Value {
+    let mut value = json!({"applicationId":application.application_id().as_str(),
         "submissionVersion":application.version().get(),
         "effectDigest":application.effect_digest().as_str(),
-        "resultLinks":application.result_links()})
+        "resultLinks":application.result_links()});
+    if disclose_actor {
+        value["appliedBy"] = json!(application.applied_by().as_str());
+        value["appliedAt"] = json!(application.applied_at().as_str());
+    }
+    value
 }
 
 fn proposal_action<'a>(
@@ -3724,7 +3787,7 @@ mod disclosure_tests {
         assert!(!owner.contains("principal-canary"));
     }
     #[test]
-    fn public_application_projection_never_discloses_internal_actor_reason_or_timestamps() {
+    fn public_application_projection_omits_actor_without_disclosure_and_internal_reason() {
         use crate::proposal_workflow::*;
         let receipt = ApplicationReceipt::restore(
             ApplicationId::new(Uuid::new_v4().to_string()).unwrap(),
@@ -3741,7 +3804,7 @@ mod disclosure_tests {
             true,
         )
         .unwrap();
-        let public = public_application(&receipt);
+        let public = public_application(&receipt, false);
         assert_eq!(
             public
                 .as_object()

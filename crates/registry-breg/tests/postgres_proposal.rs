@@ -880,8 +880,7 @@ async fn proposal_turn_filter_pages_a_bounded_scan_without_gaps_or_duplicates() 
     let record = client
         .create_record(
             &create,
-            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"})))
-                .unwrap(),
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
             &key("turn-filter-record"),
             BRegRecordFormat::Json,
         )
@@ -2950,43 +2949,176 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn submission_read_reports_the_application_receipt_without_the_applier() {
-    let fixture =
-        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
-    let client = &fixture.http.client;
-    let draft = start(&fixture, "Receipt", "receipt-start").await;
-    let submit = client
-        .prepare_proposal(&draft, "submit", json!({}), &key("receipt-submit"))
-        .unwrap();
-    let submitted = client.execute_proposal(&submit).await.unwrap().value;
-    let body = json!({"submissionVersion":submitted.submission_version(),"effectDigest":submitted.effect_digest().unwrap()});
-    let apply = client
-        .prepare_proposal(&submitted, "apply", body, &key("receipt-apply"))
-        .unwrap();
-    let applied =
-        serde_json::to_value(client.execute_proposal(&apply).await.unwrap().value).unwrap();
-    let response = reqwest::get(format!(
-        "{}/v1/proposals/{}/submissions/1?accessProfile=clerk",
-        fixture.http.base_url,
-        submitted.id()
-    ))
-    .await
-    .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let read = response.json::<Value>().await.unwrap();
-    assert_eq!(read["current"], true);
-    assert!(read["review"].is_null(), "{read}");
-    assert_eq!(read["application"]["state"], "applied");
-    assert_eq!(
-        read["application"]["applicationId"],
-        applied["application"]["applicationId"]
-    );
-    // Who applied and when stay private to the receipt (D24): no profile is
-    // granted them by default.
-    for hidden in ["appliedAt", "appliedBy", "author"] {
-        assert!(!read.to_string().contains(hidden), "{read}");
+async fn application_actor_requires_its_dedicated_get_grant_and_is_issuer_scoped() {
+    async fn applied_under(issuer: &str) -> String {
+        let mut source = registry_source(false);
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("get-application-actor"));
+        let mut observer = source["accessProfiles"][0].clone();
+        observer["id"] = json!("observer");
+        observer["default"] = json!(false);
+        observer["permissions"]["actions"] = json!([]);
+        observer["permissions"]["proposals"][0]["operations"] = json!(["get", "list"]);
+        observer["permissions"]["proposals"][0]["readableAttachments"] = json!([]);
+        observer["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+        source["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(observer);
+        let policy = registry_breg::idempotency::IdempotencyPolicy::new(issuer, 7).unwrap();
+        let fixture = client_http::ClientFixture::start_with_mutations(
+            compile(source),
+            claims("author", "zone-a"),
+            move |mutations| mutations.with_idempotency_policy(policy),
+        )
+        .await;
+        let client = &fixture.http.client;
+        let draft = start(&fixture, "Receipt", "receipt-start").await;
+        let submit = client
+            .prepare_proposal(&draft, "submit", json!({}), &key("receipt-submit"))
+            .unwrap();
+        let submitted = client.execute_proposal(&submit).await.unwrap().value;
+        let body = json!({"submissionVersion":submitted.submission_version(),"effectDigest":submitted.effect_digest().unwrap()});
+        let apply = client
+            .prepare_proposal(&submitted, "apply", body, &key("receipt-apply"))
+            .unwrap();
+        let applied_receipt = client.execute_proposal(&apply).await.unwrap().value;
+        let applied = serde_json::to_value(&applied_receipt).unwrap();
+        assert!(
+            applied.pointer("/application/appliedBy").is_none(),
+            "{applied}"
+        );
+        assert!(
+            applied.pointer("/application/appliedAt").is_none(),
+            "{applied}"
+        );
+        let stored = fixture.database.admin.query_one(
+            "SELECT applied_by,to_char(applied_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+             FROM registry_internal.registry_proposal_applications WHERE proposal_id=$1",
+            &[&uuid::Uuid::parse_str(submitted.id()).unwrap()],
+        ).await.unwrap();
+        let stored_actor: String = stored.get(0);
+        let stored_time: String = stored.get(1);
+        let decoded = client.read_proposal(&applied_receipt).await.unwrap().value;
+        let decoded_application = decoded.application().unwrap();
+        assert_eq!(
+            decoded_application.applied_by.as_deref(),
+            Some(stored_actor.as_str())
+        );
+        assert_eq!(
+            decoded_application.applied_at.as_deref(),
+            Some(stored_time.as_str())
+        );
+        let decoded_submission = client
+            .read_proposal_submission(&decoded, 1)
+            .await
+            .unwrap()
+            .value;
+        let decoded_submission_application = decoded_submission.application.unwrap();
+        assert_eq!(
+            decoded_submission_application.applied_by.as_deref(),
+            Some(stored_actor.as_str())
+        );
+        assert_eq!(
+            decoded_submission_application.applied_at.as_deref(),
+            Some(stored_time.as_str())
+        );
+
+        let get = |profile: &str| {
+            let url = format!(
+                "{}/v1/proposals/{}?accessProfile={profile}",
+                fixture.http.base_url,
+                submitted.id()
+            );
+            async move {
+                reqwest::get(url)
+                    .await
+                    .unwrap()
+                    .json::<Value>()
+                    .await
+                    .unwrap()
+            }
+        };
+        let submission = |profile: &str| {
+            let url = format!(
+                "{}/v1/proposals/{}/submissions/1?accessProfile={profile}",
+                fixture.http.base_url,
+                submitted.id()
+            );
+            async move {
+                reqwest::get(url)
+                    .await
+                    .unwrap()
+                    .json::<Value>()
+                    .await
+                    .unwrap()
+            }
+        };
+        let privileged = get("clerk").await;
+        assert_eq!(privileged["application"]["appliedBy"], stored_actor);
+        assert_eq!(privileged["application"]["appliedAt"], stored_time);
+        let privileged_submission = submission("clerk").await;
+        assert_eq!(privileged_submission["application"]["state"], "applied");
+        assert_eq!(
+            privileged_submission["application"]["applicationId"],
+            applied["application"]["applicationId"]
+        );
+        assert_eq!(
+            privileged_submission["application"]["appliedBy"],
+            stored_actor
+        );
+        assert_eq!(
+            privileged_submission["application"]["appliedAt"],
+            stored_time
+        );
+
+        for redacted in [get("observer").await, submission("observer").await] {
+            assert_eq!(redacted["id"], submitted.id(), "{redacted}");
+            assert!(
+                redacted.pointer("/application/appliedBy").is_none(),
+                "{redacted}"
+            );
+            assert!(
+                redacted.pointer("/application/appliedAt").is_none(),
+                "{redacted}"
+            );
+        }
+        for profile in ["clerk", "observer"] {
+            let listed = reqwest::get(format!(
+                "{}/v1/proposals?accessProfile={profile}",
+                fixture.http.base_url
+            ))
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+            let item = listed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == submitted.id())
+                .unwrap();
+            assert_eq!(item["state"], "applied", "{listed}");
+            assert_eq!(
+                item["application"]["applicationId"], applied["application"]["applicationId"],
+                "{listed}"
+            );
+            assert!(item.pointer("/application/appliedBy").is_none(), "{listed}");
+            assert!(item.pointer("/application/appliedAt").is_none(), "{listed}");
+        }
+        fixture.finish().await;
+        stored_actor
     }
-    fixture.finish().await;
+
+    let first = applied_under("https://issuer-one.example").await;
+    let second = applied_under("https://issuer-two.example").await;
+    assert_ne!(
+        first, second,
+        "the issuer must scope the keyed actor pseudonym"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

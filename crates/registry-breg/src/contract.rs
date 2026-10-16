@@ -507,6 +507,7 @@ pub enum ProposalOperation {
     Retry,
     GetReviewStatus,
     GetReviewContext,
+    GetApplicationActor,
 }
 impl ProposalOperation {
     pub const fn as_str(self) -> &'static str {
@@ -522,6 +523,7 @@ impl ProposalOperation {
             Self::Retry => "retry",
             Self::GetReviewStatus => "get-review-status",
             Self::GetReviewContext => "get-review-context",
+            Self::GetApplicationActor => "get-application-actor",
         }
     }
 }

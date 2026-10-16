@@ -60,6 +60,7 @@ pub(super) fn target_policies(
                     ProposalOperation::Apply => "apply",
                     ProposalOperation::GetReviewContext => "get-review-context",
                     ProposalOperation::GetReviewStatus => "get-review-status",
+                    ProposalOperation::GetApplicationActor => continue,
                 };
                 add_read_policies(
                     &mut result,

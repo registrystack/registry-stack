@@ -12,6 +12,7 @@ const digest = `sha256:${'a'.repeat(64)}`;
 const document = () => ({id, actionId: 'correct', actionRevision: digest, submissionVersion: 2, revision: 8, state: 'applied',
   effectDigest: digest, links: {self: {method: 'GET', path: `/v1/proposals/${id}`, accessProfile: 'reader', operation: 'get'}},
   application: {applicationId: id, submissionVersion: 2, effectDigest: digest,
+    appliedBy: `hmac-sha256:${'a'.repeat(64)}`, appliedAt: '2026-10-16T01:02:03.000004Z',
     resultLinks: [{recordType: 'person', recordId: targetId, revision: 4}]}});
 
 const statusDocument = state => {
@@ -55,6 +56,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
     const binding = (await client.registryContract('reader')).selectProposalGet('reader');
     const proposal = await client.getProposal(binding, id);
     assert.deepEqual(JSON.parse(proposal.documentJson).application.resultLinks, [{recordType: 'person', recordId: targetId, revision: 4}]);
+    assert.deepEqual(JSON.parse(proposal.documentJson).application.appliedBy, `hmac-sha256:${'a'.repeat(64)}`);
     assert.doesNotMatch(inspect(proposal), new RegExp(`${id}|${targetId}|person`));
     const count = requests.length;
     assert.throws(() => client.prepareProposal(proposal, 'apply', '{}', 'ungranted'), error => error.kind === 'invalid-request');
@@ -98,7 +100,9 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       const held = await client.getProposal(binding, id);
       const attempt = client.prepareProposal(held, 'apply', JSON.stringify({submissionVersion: 2, effectDigest: digest}), 'canonical-application');
       const canonical = '123e4567-e89b-42d3-a456-426614174000';
-      const receipt = {...value, state: 'applied', revision: 9, application: {...document().application, applicationId: canonical}};
+      const lifecycleApplication = structuredClone(document().application);
+      delete lifecycleApplication.appliedBy; delete lifecycleApplication.appliedAt;
+      const receipt = {...value, state: 'applied', revision: 9, application: {...lifecycleApplication, applicationId: canonical}};
       receipt.links.apply.availability = {available: false, observedRevision: 9, reason: 'already-applied', recovery: 'receipt-only'};
       for (const applicationId of [canonical.toUpperCase(), canonical.replaceAll('-', ''), '00000000-0000-0000-0000-000000000000']) {
         value = structuredClone(receipt); value.application.applicationId = applicationId;
