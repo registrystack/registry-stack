@@ -19,6 +19,11 @@
   undersized key failures now have distinct codes and messages that name the
   input to fix without rendering it. A signed header that is not visible ASCII
   is refused as `malformed-signature`.
+- A Proposal prepared without an optional input serves its review context:
+  an `input` field whose input was omitted reads `null`, and so does a
+  `record` field whose optional reference input was omitted or whose
+  optional Record field is empty, as the published context schema already
+  declared. The review-context read refused such a Proposal before.
 
 - BREAKING: retention windows other than the audit journal's live in a
   top-level `retention` block, the shape Scheduling and Messaging use.

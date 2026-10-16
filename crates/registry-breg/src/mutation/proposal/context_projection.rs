@@ -115,11 +115,10 @@ pub(super) async fn fields(
                     return Err(MutationError::PreconditionFailed);
                 }
             }
-            ProposalContextValueSource::Input { input } => frozen
-                .inputs()
-                .get(input)
-                .cloned()
-                .ok_or(MutationError::PreconditionFailed)?,
+            ProposalContextValueSource::Input { input } => match frozen.inputs().get(input) {
+                Some(value) => value.clone(),
+                None => absent_input(action, input)?,
+            },
             ProposalContextValueSource::Record { input, field } => {
                 let declared = action
                     .inputs
@@ -140,23 +139,35 @@ pub(super) async fn fields(
                     .ok_or(MutationError::PreconditionFailed)?;
                 require_fields(record, std::slice::from_ref(field))?;
                 install_disclosure(tx, record).await?;
-                let id = frozen
-                    .inputs()
-                    .get(input)
-                    .and_then(Value::as_str)
-                    .and_then(|id| Uuid::parse_str(id).ok())
-                    .ok_or(MutationError::PreconditionFailed)?;
-                let row = load_proposal_row(tx, entity, id, false).await?;
-                if !authority
-                    .authorizes_snapshot(entity, id, &row.data)
-                    .map_err(|_| MutationError::PreconditionFailed)?
-                {
-                    return Err(MutationError::PreconditionFailed);
+                match frozen.inputs().get(input) {
+                    // An omitted optional reference names no Record, and the
+                    // compiler declares this context field nullable for it.
+                    None => absent_input(action, input)?,
+                    Some(Value::Null) if !declared.required => Value::Null,
+                    Some(reference) => {
+                        let id = reference
+                            .as_str()
+                            .and_then(|id| Uuid::parse_str(id).ok())
+                            .ok_or(MutationError::PreconditionFailed)?;
+                        let row = load_proposal_row(tx, entity, id, false).await?;
+                        if !authority
+                            .authorizes_snapshot(entity, id, &row.data)
+                            .map_err(|_| MutationError::PreconditionFailed)?
+                        {
+                            return Err(MutationError::PreconditionFailed);
+                        }
+                        let optional = !entity
+                            .fields
+                            .get(field)
+                            .ok_or(MutationError::PreconditionFailed)?
+                            .required;
+                        match row.data.get(field) {
+                            Some(value) => value.clone(),
+                            None if optional => Value::Null,
+                            None => return Err(MutationError::PreconditionFailed),
+                        }
+                    }
                 }
-                row.data
-                    .get(field)
-                    .cloned()
-                    .ok_or(MutationError::PreconditionFailed)?
             }
             ProposalContextValueSource::Changes {
                 record_type,
@@ -216,6 +227,19 @@ pub(super) async fn fields(
         projected.insert(field.clone(), resolved);
     }
     Ok(projected)
+}
+
+/// Prepare refuses a submission that omits a required input, so the frozen
+/// inputs omit only optional ones, which the compiler declares nullable. A
+/// required input missing here is a retained submission that no longer
+/// matches its Action: an integrity failure for the operator, not a refusal
+/// the caller caused.
+fn absent_input(action: &CompiledAction, input: &str) -> Result<Value, MutationError> {
+    match action.inputs.iter().find(|declared| declared.id == input) {
+        Some(declared) if !declared.required => Ok(Value::Null),
+        Some(_) => Err(MutationError::Unavailable),
+        None => Err(MutationError::PreconditionFailed),
+    }
 }
 
 fn require_fields(

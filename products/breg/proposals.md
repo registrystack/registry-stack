@@ -322,6 +322,8 @@ Each matching frozen effect exposes its record ID, operation, and selected
 the stored submission, including computed changes. Inspection does not run the
 planner or apply the change. A `type: record` mapping selects a current field
 through a reference input; a `type: input` mapping selects one frozen input.
+Either field is `null` when its optional input was omitted at preparation, and
+a `type: record` field is also `null` when its optional Record field is empty.
 
 The reviewer needs `get-review-context` with the named `readableContextFields`.
 Record and changes projections also require an ordinary Record Get grant for

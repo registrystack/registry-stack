@@ -4553,6 +4553,63 @@ async fn review_context_refuses_active_action_mapping_for_a_retained_submission(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_context_projects_an_omitted_optional_input_as_null() {
+    let mut source = registry_source(false);
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id":"note","type":"string","required":false,"maximumLength":64,"classification":"internal"}),
+            json!({"id":"related","type":"reference","target":"target","required":false,"classification":"internal"}),
+        ]);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+        "id":"review-optional","fields":{
+            "proposedName":{"type":"input","input":"value"},
+            "note":{"type":"input","input":"note"},
+            "relatedName":{"type":"record","input":"related","field":"name"}
+        }
+    });
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("get-review-context"));
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["proposedName", "note", "relatedName"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    // The shared helper supplies only the required inputs.
+    let draft = start(&fixture, "optional-omitted", "optional-start").await;
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(&draft, "submit", json!({}), &key("optional-submit"))
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let response = reqwest::get(format!(
+        "{}/v1/proposals/{}/review-context?accessProfile=clerk",
+        fixture.http.base_url,
+        submitted.id()
+    ))
+    .await
+    .unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    let context: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        context["context"]["fields"],
+        json!({"proposedName":"optional-omitted","note":null,"relatedName":null})
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[cfg(feature = "tooling")]
 async fn retained_attachment_download_survives_tighter_current_upload_policy() {
     let mut source = registry_source(false);
