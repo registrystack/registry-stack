@@ -158,6 +158,12 @@
   `maximum-bytes-exceeded` at `$.reason` instead of `text-invalid`, so the
   refusal names the bound; a blank or control-character reason still answers
   `text-invalid`.
+- The Rust client refuses a review-task, holdings, own-decision, supervisory
+  or directory-target page whose `status` is `budget-exhausted` or
+  `source-unavailable` but which carries no `nextCursor`, as a malformed
+  response. The runtime always sends a continuation with a page that stopped
+  early; without one a caller could only restart and repeat the same partial
+  page.
 
 ## 0.41.0 - 2026-10-13
 

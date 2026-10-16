@@ -436,3 +436,111 @@ async fn draft_response_json_rejects_duplicate_members_in_arbitrary_private_body
     }
     server.abort();
 }
+
+/// A page that stopped early must say where to resume; every paged read whose
+/// runtime emits a status refuses a stopped page without a `nextCursor`.
+#[tokio::test]
+async fn paged_reads_refuse_a_stopped_page_without_a_cursor() {
+    let cursor = Uuid::from_u128(7).to_string();
+    let cases = [
+        (json!({"items":[],"status":"budget-exhausted"}), false),
+        (json!({"items":[],"status":"source-unavailable"}), false),
+        (json!({"items":[],"status":"complete"}), true),
+        (
+            json!({"items":[],"nextCursor":cursor,"status":"complete"}),
+            true,
+        ),
+        (
+            json!({"items":[],"nextCursor":cursor,"status":"budget-exhausted"}),
+            true,
+        ),
+        (
+            json!({"items":[],"nextCursor":cursor,"status":"source-unavailable"}),
+            true,
+        ),
+    ];
+    for (response, accepted) in cases {
+        let page = |State(value): State<Value>| async move {
+            (
+                [("content-type", "application/json"), ("traceparent", TRACE)],
+                value.to_string(),
+            )
+        };
+        let app = Router::new()
+            .route("/v1/review-tasks", get(page))
+            .route("/v1/review-tasks/holdings", get(page))
+            .route("/v1/review-tasks/own-decisions", get(page))
+            .route("/v1/review-tasks/supervision", get(page))
+            .route("/v1/directory/targets", get(page))
+            .with_state(response.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            Url::parse(&format!("http://{address}/")).unwrap(),
+        ))
+        .unwrap();
+        let token = BearerToken::new("staff-token").unwrap();
+        let auth = || CaseworkAuth::new(&token, "staff");
+        let check = |read: &str, result: Result<(), CaseworkClientError>| {
+            if accepted {
+                assert!(result.is_ok(), "{read} refused {response}: {result:?}");
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(CaseworkClientError::Protocol {
+                            failure: CaseworkProtocolFailure::Body,
+                            ..
+                        })
+                    ),
+                    "{read} accepted {response}: {result:?}"
+                );
+            }
+        };
+        let staffing = ReviewStaffingQuery::default();
+        check(
+            "review tasks",
+            client.review_tasks(auth(), &staffing).await.map(drop),
+        );
+        check(
+            "review task holdings",
+            client
+                .review_task_holdings(auth(), &staffing)
+                .await
+                .map(drop),
+        );
+        check(
+            "own review decisions",
+            client
+                .own_review_decisions(auth(), &OwnReviewDecisionQuery::default())
+                .await
+                .map(drop),
+        );
+        check(
+            "supervisory review tasks",
+            client
+                .supervisory_review_tasks(auth(), &SupervisoryReviewTaskQuery::default())
+                .await
+                .map(drop),
+        );
+        check(
+            "directory targets",
+            client
+                .directory_targets(
+                    auth(),
+                    &DirectoryTargetsQuery {
+                        purpose: DirectoryTargetPurpose::AbsencePerson,
+                        queue: None,
+                        person_issuer: None,
+                        person_subject: None,
+                        cursor: None,
+                        limit: Some(25),
+                    },
+                )
+                .await
+                .map(drop),
+        );
+        server.abort();
+    }
+}

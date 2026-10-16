@@ -5,19 +5,19 @@ use registry_casework_core::{
     AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest,
     BootstrapDirectoryRequest, DelegateRequest, Description, DirectoryResponse,
     DirectoryTargetPage, DirectoryTargetsQuery, HolidaySetDocument, HolidaySetRevisionInput,
-    OwnReviewDecisionPage, ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse,
-    ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest, ReviewCaseloadPreview,
-    ReviewCaseloadResult, ReviewClockOccurrence, ReviewClockRecomputeApplyRequest,
-    ReviewClockRecomputePreview, ReviewClockRecomputeRequest, ReviewClockRecomputeResult,
-    ReviewContextPolicy, ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry,
-    ReviewHistoryPage, ReviewNoteRequest, ReviewPolicyClosure, ReviewRequestAccepted,
-    ReviewRequestView, ReviewResultFeedPage, ReviewSourceBindingStatus, ReviewStaffingQuery,
-    ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput,
-    ReviewTaskPage, ReviewTaskState, ReviewValidationError, ReviewValidationReason,
-    SupervisoryReviewTaskPage, CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER,
-    DIRECTORY_TARGETS_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER, VALIDATION_ALLOWED_HEADER,
-    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
+    OwnReviewDecisionPage, PageStatus, ReviewAccountabilityRecord, ReviewCancelRequest,
+    ReviewCancelResponse, ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest,
+    ReviewCaseloadPreview, ReviewCaseloadResult, ReviewClockOccurrence,
+    ReviewClockRecomputeApplyRequest, ReviewClockRecomputePreview, ReviewClockRecomputeRequest,
+    ReviewClockRecomputeResult, ReviewContextPolicy, ReviewCreateRequest, ReviewHistoryAudience,
+    ReviewHistoryEntry, ReviewHistoryPage, ReviewNoteRequest, ReviewPolicyClosure,
+    ReviewRequestAccepted, ReviewRequestView, ReviewResultFeedPage, ReviewSourceBindingStatus,
+    ReviewStaffingQuery, ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft,
+    ReviewTaskDraftInput, ReviewTaskPage, ReviewTaskState, ReviewValidationError,
+    ReviewValidationReason, SupervisoryReviewTaskPage, CASEWORK_PROBLEM_TYPE_BASE,
+    CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, IDEMPOTENCY_KEY_HEADER,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER,
+    VALIDATION_ALLOWED_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -293,6 +293,10 @@ impl CaseworkClient {
         let complete: CaseworkComplete<ReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
         if !valid_staffing_page(&complete.value.items, query)
+            || page_stopped_without_cursor(
+                complete.value.status,
+                complete.value.next_cursor.is_some(),
+            )
             || complete.value.items.iter().any(|task| {
                 !staffing_task_matches(task, query, auth.profile)
                     || task.decided_by_caller.is_some()
@@ -335,6 +339,10 @@ impl CaseworkClient {
         let complete: CaseworkComplete<OwnReviewDecisionPage> =
             self.send_json(request, StatusCode::OK).await?;
         if page_exceeds_limit(complete.value.items.len(), query.limit)
+            || page_stopped_without_cursor(
+                complete.value.status,
+                complete.value.next_cursor.is_some(),
+            )
             || complete.value.items.iter().any(|row| {
                 query
                     .queue
@@ -377,6 +385,10 @@ impl CaseworkClient {
         let complete: CaseworkComplete<SupervisoryReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
         if page_exceeds_limit(complete.value.items.len(), query.limit)
+            || page_stopped_without_cursor(
+                complete.value.status,
+                complete.value.next_cursor.is_some(),
+            )
             || complete.value.items.iter().any(|task| {
                 query
                     .queue
@@ -1018,6 +1030,10 @@ impl CaseworkClient {
         let complete: CaseworkComplete<ReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
         if !valid_staffing_page(&complete.value.items, query)
+            || page_stopped_without_cursor(
+                complete.value.status,
+                complete.value.next_cursor.is_some(),
+            )
             || complete.value.items.iter().any(|task| {
                 !staffing_task_matches(task, query, auth.profile)
                     || !matches!(task.state, ReviewTaskState::Held { .. })
@@ -1053,7 +1069,17 @@ impl CaseworkClient {
         validate_page(query.cursor.as_deref(), query.limit)?;
         let url = self.url_from_constant(DIRECTORY_TARGETS_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<DirectoryTargetPage> =
+            self.send_json(request, StatusCode::OK).await?;
+        if page_stopped_without_cursor(complete.value.status, complete.value.next_cursor.is_some())
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn bootstrap_directory(
@@ -1922,6 +1948,12 @@ fn valid_staffing_tasks(tasks: impl Iterator<Item = (Uuid, i64)>) -> bool {
 
 fn page_exceeds_limit(item_count: usize, requested_limit: Option<usize>) -> bool {
     item_count > requested_limit.unwrap_or(MAXIMUM_PAGE_SIZE)
+}
+
+/// A page that stopped early must carry the position to resume from; without
+/// one the caller can only restart and repeat the same partial page.
+fn page_stopped_without_cursor(status: PageStatus, has_cursor: bool) -> bool {
+    status != PageStatus::Complete && !has_cursor
 }
 
 /// A successful mutation response must show the transition it was asked to
