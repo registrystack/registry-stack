@@ -148,6 +148,45 @@ fn terminal(state: &str) -> Value {
 }
 
 #[tokio::test]
+async fn retained_decision_follows_its_review_result() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let statuses = ["approved", "rejected", "changes-requested", "answered"];
+    let reviews = [
+        "approved",
+        "rejected",
+        "changes-requested",
+        "answered",
+        "cancelled",
+        "superseded",
+        "expired",
+    ];
+    let mut wrong = vec![];
+    for status in statuses {
+        let decision = json!({"status":status,"decidedAt":"2026-09-19T00:01:00.000001Z"});
+        let mut cases: Vec<(Value, bool)> = reviews
+            .iter()
+            .map(|review| (terminal(review), *review == status || *review == "expired"))
+            .collect();
+        cases.push((Value::Null, false));
+        for (review, expected) in cases {
+            fixture.answer(json!({"id":ID,"actionId":"correct","submissionVersion":1,
+                "current":true,"effectDigest":DIGEST,"review":review,"decision":decision}));
+            if fixture
+                .client
+                .read_proposal_submission(&held, 1)
+                .await
+                .is_ok()
+                != expected
+            {
+                wrong.push(format!("{status} under {review}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
+}
+
+#[tokio::test]
 async fn submission_read_refuses_an_incoherent_application() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
@@ -360,6 +399,170 @@ async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_rea
 }
 
 #[tokio::test]
+async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_reads() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    // The only pairs BReg emits. A rejected review reads receipt-only once the
+    // Proposal is rejected and revise while it is still submitted; a changed
+    // contract is refreshed for Revise and corrected while the draft is blocked.
+    let emitted = [
+        ("pending-review", "refresh"),
+        ("review-rejected", "receipt-only"),
+        ("review-rejected", "revise"),
+        ("review-changes-requested", "revise"),
+        ("review-ended", "revise"),
+        ("stale-revision", "receipt-only"),
+        ("contract-changed", "refresh"),
+        ("contract-changed", "correct-input"),
+        ("dependency-outage", "retry"),
+        ("invalid-input", "correct-input"),
+        ("already-applied", "receipt-only"),
+    ];
+    let reads = |state: &str, availability: Value| {
+        let mut value = proposal(state);
+        value["links"]["submit"]["availability"] = availability;
+        (value.clone(), json!({"items":[value]}))
+    };
+    let mut wrong = vec![];
+    for reason in [
+        "pending-review",
+        "review-rejected",
+        "review-changes-requested",
+        "review-ended",
+        "stale-revision",
+        "contract-changed",
+        "dependency-outage",
+        "invalid-input",
+        "already-applied",
+    ] {
+        for recovery in [
+            "refresh",
+            "revise",
+            "retry",
+            "correct-input",
+            "receipt-only",
+        ] {
+            let state = match (reason, recovery) {
+                ("already-applied", _) => "applied",
+                ("review-rejected", "receipt-only") => "rejected",
+                _ => "submitted",
+            };
+            let (current, list) = reads(
+                state,
+                json!({"available":false,"observedRevision":2,"reason":reason,"recovery":recovery}),
+            );
+            let expected = emitted.contains(&(reason, recovery));
+            fixture.answer(current);
+            if fixture.client.get_proposal(&binding, ID).await.is_ok() != expected {
+                wrong.push(format!("current {reason}/{recovery}"));
+            }
+            fixture.answer(list);
+            if fixture
+                .client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .is_ok()
+                != expected
+            {
+                wrong.push(format!("list {reason}/{recovery}"));
+            }
+        }
+    }
+    // An available link carries neither a reason nor a recovery.
+    for (name, availability, expected) in [
+        ("bare", json!({"available":true,"observedRevision":2}), true),
+        (
+            "reason",
+            json!({"available":true,"observedRevision":2,"reason":"pending-review"}),
+            false,
+        ),
+        (
+            "recovery",
+            json!({"available":true,"observedRevision":2,"recovery":"refresh"}),
+            false,
+        ),
+        (
+            "both",
+            json!({"available":true,"observedRevision":2,"reason":"pending-review",
+                "recovery":"refresh"}),
+            false,
+        ),
+    ] {
+        let (current, list) = reads("draft", availability);
+        fixture.answer(current);
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() != expected {
+            wrong.push(format!("current available {name}"));
+        }
+        fixture.answer(list);
+        if fixture
+            .client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .is_ok()
+            != expected
+        {
+            wrong.push(format!("list available {name}"));
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
+}
+
+#[tokio::test]
+async fn unavailable_link_reasons_follow_the_lifecycle_state_in_current_and_list_reads() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    // A closed Proposal gives every unavailable link the one reason its state
+    // names, and an open Proposal never gives either closed reason.
+    let cases = [
+        ("applied", "already-applied", "receipt-only", true),
+        ("rejected", "review-rejected", "receipt-only", true),
+        ("cancelled", "stale-revision", "receipt-only", true),
+        ("draft", "stale-revision", "receipt-only", true),
+        ("draft", "contract-changed", "correct-input", true),
+        ("submitted", "stale-revision", "receipt-only", true),
+        ("submitted", "pending-review", "refresh", true),
+        ("submitted", "review-rejected", "revise", true),
+        ("applied", "stale-revision", "receipt-only", false),
+        ("applied", "review-rejected", "receipt-only", false),
+        ("applied", "pending-review", "refresh", false),
+        ("rejected", "already-applied", "receipt-only", false),
+        ("rejected", "stale-revision", "receipt-only", false),
+        ("rejected", "review-rejected", "revise", false),
+        ("cancelled", "already-applied", "receipt-only", false),
+        ("cancelled", "review-rejected", "receipt-only", false),
+        ("cancelled", "pending-review", "refresh", false),
+        ("cancelled", "dependency-outage", "retry", false),
+        ("draft", "already-applied", "receipt-only", false),
+        ("draft", "review-rejected", "receipt-only", false),
+        ("submitted", "already-applied", "receipt-only", false),
+        ("submitted", "review-rejected", "receipt-only", false),
+    ];
+    let mut wrong = vec![];
+    for (state, reason, recovery, expected) in cases {
+        let mut current = proposal(state);
+        current["links"]["submit"]["availability"] =
+            json!({"available":false,"observedRevision":2,"reason":reason,"recovery":recovery});
+        fixture.answer(current.clone());
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() != expected {
+            wrong.push(format!("current {state}:{reason}/{recovery}"));
+        }
+        fixture.answer(json!({"items":[current]}));
+        if fixture
+            .client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .is_ok()
+            != expected
+        {
+            wrong.push(format!("list {state}:{reason}/{recovery}"));
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
+}
+
+#[tokio::test]
 async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_reads() {
     let fixture = Fixture::start().await;
     let held = fixture.proposal(proposal("submitted")).await;
@@ -370,7 +573,7 @@ async fn public_reasons_follow_the_review_text_rules_in_current_and_retained_rea
         let mut current = proposal("rejected");
         current["decision"] = decision.clone();
         let submission = json!({"id":ID,"actionId":"correct","submissionVersion":1,
-            "current":true,"effectDigest":DIGEST,"review":null,"decision":decision});
+            "current":true,"effectDigest":DIGEST,"review":terminal("rejected"),"decision":decision});
         (current, submission)
     };
     for reason in ["Public reason", " Padded, with \u{e9}", &"x".repeat(2000)] {
@@ -461,6 +664,42 @@ async fn proposal_turn_follows_its_lifecycle_state() {
         }
     }
     assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn proposal_decision_follows_its_lifecycle_state_in_current_and_list_reads() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let reads = |state: &str, status: &str| {
+        let mut value = proposal(state);
+        value["decision"] = json!({"status":status,"decidedAt":"2026-10-01T10:00:00.000000Z"});
+        (value.clone(), json!({"items":[value]}))
+    };
+    // Only a rejected review result ends a Proposal in rejected. A submitted
+    // or cancelled Proposal may carry any recorded decision.
+    let mut wrong = vec![];
+    for state in ["submitted", "cancelled", "rejected"] {
+        for status in ["approved", "rejected", "changes-requested", "answered"] {
+            let expected = state != "rejected" || status == "rejected";
+            let (current, list) = reads(state, status);
+            fixture.answer(current);
+            if fixture.client.get_proposal(&binding, ID).await.is_ok() != expected {
+                wrong.push(format!("current {state}/{status}"));
+            }
+            fixture.answer(list);
+            if fixture
+                .client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .is_ok()
+                != expected
+            {
+                wrong.push(format!("list {state}/{status}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "misjudged: {wrong:?}");
 }
 
 #[tokio::test]
@@ -1439,7 +1678,7 @@ async fn attachment_availability_uses_the_same_complete_unavailable_contract_as_
         for missing in ["reason", "recovery"] {
             let mut invalid = original.clone();
             let mut availability = json!({"available":false,"observedRevision":3,
-                "reason":"stale-revision","recovery":"refresh"});
+                "reason":"stale-revision","recovery":"receipt-only"});
             availability.as_object_mut().unwrap().remove(missing);
             invalid["attachments"]["supporting-file"]["links"][operation]["availability"] =
                 availability;
@@ -1493,7 +1732,7 @@ async fn attachment_availability_uses_the_same_complete_unavailable_contract_as_
         }
         for availability in [
             json!({"available":true,"observedRevision":3}),
-            json!({"available":false,"observedRevision":3,"reason":"stale-revision","recovery":"refresh"}),
+            json!({"available":false,"observedRevision":3,"reason":"stale-revision","recovery":"receipt-only"}),
         ] {
             let mut valid = original.clone();
             valid["attachments"]["supporting-file"]["links"][operation]["availability"] =

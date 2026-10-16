@@ -435,6 +435,11 @@ impl BRegProposal {
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
             || self.state == BRegProposalState::Draft && self.decision.is_some()
+            // Only a rejected review result ends a Proposal in rejected.
+            || self.state == BRegProposalState::Rejected
+                && self.decision.as_ref().is_some_and(|decision| {
+                    decision.status != BRegProposalDecisionStatus::Rejected
+                })
             || self.turn.is_some_and(|turn| match self.state {
                 BRegProposalState::Draft => turn != BRegProposalTurn::Party,
                 BRegProposalState::Submitted => false,
@@ -529,10 +534,9 @@ impl BRegProposal {
             if !valid_locator
                 || link.method != expected_method
                 || link.operation != expected_operation
-                || link
-                    .availability
-                    .as_ref()
-                    .is_some_and(|availability| !valid_availability(availability, self.revision))
+                || link.availability.as_ref().is_some_and(|availability| {
+                    !valid_availability(availability, self.revision, self.state)
+                })
             {
                 return Err(refusal());
             }
@@ -577,7 +581,7 @@ impl BRegProposal {
                     || !identifier(&link.access_profile)
                     || method != "GET" && !valid_condition(link.if_match.as_deref())
                     || link.availability.as_ref().is_some_and(|availability| {
-                        !valid_availability(availability, self.revision)
+                        !valid_availability(availability, self.revision, self.state)
                     })
                 {
                     return Err(refusal());
@@ -1440,6 +1444,20 @@ impl BaseRegistryClient {
                 .decision
                 .as_ref()
                 .is_some_and(|decision| !valid_decision(decision))
+            // A decision is read from the retained review result, so that
+            // result is present and states the decision unless it expired.
+            || submission.decision.as_ref().is_some_and(|decision| {
+                !submission.review.as_ref().is_some_and(|review| {
+                    review.state == "expired"
+                        || review.state
+                            == match decision.status {
+                                BRegProposalDecisionStatus::Approved => "approved",
+                                BRegProposalDecisionStatus::Rejected => "rejected",
+                                BRegProposalDecisionStatus::ChangesRequested => "changes-requested",
+                                BRegProposalDecisionStatus::Answered => "answered",
+                            }
+                })
+            })
         {
             return Err(refusal());
         }
@@ -1694,10 +1712,62 @@ fn proposal_instant(value: &str) -> Option<OffsetDateTime> {
 fn canonical_proposal_id(value: &str) -> bool {
     Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
 }
-fn valid_availability(availability: &BRegAvailability, revision: u64) -> bool {
+/// An available link carries no reason, and an unavailable one carries a
+/// recovery BReg pairs with its reason: a rejected review is revised while
+/// the Proposal is still submitted and read from its receipt once it is
+/// rejected, and a changed contract is refreshed for Revise and corrected
+/// while the draft is blocked. A closed Proposal names its state on every
+/// unavailable link, and an open one never gives either closed reason.
+fn valid_availability(
+    availability: &BRegAvailability,
+    revision: u64,
+    state: BRegProposalState,
+) -> bool {
+    use BRegAvailabilityReason as Reason;
+    use BRegProposalState as State;
+    use BRegRecoveryHint as Recovery;
     availability.observed_revision == revision
+        && match (
+            availability.available,
+            availability.reason,
+            availability.recovery,
+        ) {
+            (true, reason, recovery) => reason.is_none() && recovery.is_none(),
+            (false, Some(reason), Some(recovery)) => matches!(
+                (reason, recovery),
+                (Reason::PendingReview, Recovery::Refresh)
+                    | (
+                        Reason::ReviewRejected,
+                        Recovery::ReceiptOnly | Recovery::Revise
+                    )
+                    | (
+                        Reason::ReviewChangesRequested | Reason::ReviewEnded,
+                        Recovery::Revise
+                    )
+                    | (
+                        Reason::StaleRevision | Reason::AlreadyApplied,
+                        Recovery::ReceiptOnly
+                    )
+                    | (
+                        Reason::ContractChanged,
+                        Recovery::Refresh | Recovery::CorrectInput
+                    )
+                    | (Reason::DependencyOutage, Recovery::Retry)
+                    | (Reason::InvalidInput, Recovery::CorrectInput)
+            ),
+            (false, _, _) => false,
+        }
         && (availability.available
-            || availability.reason.is_some() && availability.recovery.is_some())
+            || match (availability.reason, availability.recovery) {
+                (Some(Reason::AlreadyApplied), _) => state == State::Applied,
+                (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
+                    state == State::Rejected
+                }
+                (Some(Reason::StaleRevision), _) => {
+                    !matches!(state, State::Applied | State::Rejected)
+                }
+                _ => matches!(state, State::Draft | State::Submitted),
+            })
 }
 fn valid_cursor(cursor: &str) -> bool {
     !cursor.is_empty()

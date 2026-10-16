@@ -153,7 +153,7 @@ class ProposalResultTests(unittest.TestCase):
         original = copy.deepcopy(self.value)
         for missing in ['reason', 'recovery']:
             self.value = copy.deepcopy(original)
-            availability = {'available': False, 'observedRevision': 8, 'reason': 'stale-revision', 'recovery': 'refresh'}
+            availability = {'available': False, 'observedRevision': 8, 'reason': 'stale-revision', 'recovery': 'receipt-only'}
             del availability[missing]
             self.value['attachments']['support']['links']['upload']['availability'] = availability
             with self.subTest(missing=missing), self.assertRaises(BaseRegistryClientError) as raised:
@@ -165,7 +165,7 @@ class ProposalResultTests(unittest.TestCase):
             self.assertEqual(raised.exception.kind, 'protocol')
             self.assertTrue(raised.exception.outcome_unknown)
         for availability in [None, {'available': True, 'observedRevision': 8},
-                             {'available': False, 'observedRevision': 8, 'reason': 'stale-revision', 'recovery': 'refresh'}]:
+                             {'available': False, 'observedRevision': 8, 'reason': 'stale-revision', 'recovery': 'receipt-only'}]:
             self.value = copy.deepcopy(original)
             if availability is not None:
                 self.value['attachments']['support']['links']['upload']['availability'] = availability
