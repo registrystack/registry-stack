@@ -136,6 +136,10 @@ def encode_ingestion_chunk(
 
 WebhookVerificationRefusalCode = Literal[
     "missing-header",
+    "invalid-delivery-time",
+    "duplicate-header",
+    "body-too-large",
+    "invalid-key",
     "malformed-signature",
     "signature-mismatch",
     "unsupported-version",

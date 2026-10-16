@@ -56,6 +56,16 @@ impl std::fmt::Debug for BRegVerifiedWebhookDelivery {
 pub enum BRegWebhookVerificationError {
     #[error("a required Base Registry Engine webhook header is missing")]
     MissingHeader,
+    #[error("the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock")]
+    InvalidDeliveryTime,
+    #[error("a Base Registry Engine webhook header is repeated; remove duplicate signed headers")]
+    DuplicateHeader,
+    #[error(
+        "the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size"
+    )]
+    BodyTooLarge,
+    #[error("the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes")]
+    InvalidKey,
     #[error("the Base Registry Engine webhook signature is malformed")]
     MalformedSignature,
     #[error("the Base Registry Engine webhook signature does not match")]
@@ -70,6 +80,10 @@ impl BRegWebhookVerificationError {
     pub const fn code(self) -> &'static str {
         match self {
             Self::MissingHeader => "missing-header",
+            Self::InvalidDeliveryTime => "invalid-delivery-time",
+            Self::DuplicateHeader => "duplicate-header",
+            Self::BodyTooLarge => "body-too-large",
+            Self::InvalidKey => "invalid-key",
             Self::MalformedSignature => "malformed-signature",
             Self::SignatureMismatch => "signature-mismatch",
             Self::UnsupportedVersion => "unsupported-version",
@@ -119,8 +133,17 @@ pub fn verify_webhook_delivery(
 fn map_receiver_error(error: ReceiverError) -> BRegWebhookVerificationError {
     match error {
         ReceiverError::MissingHeader => BRegWebhookVerificationError::MissingHeader,
+        ReceiverError::InvalidDeliveryTime | ReceiverError::Stale => {
+            BRegWebhookVerificationError::InvalidDeliveryTime
+        }
+        ReceiverError::DuplicateHeader => BRegWebhookVerificationError::DuplicateHeader,
+        ReceiverError::BodyTooLarge => BRegWebhookVerificationError::BodyTooLarge,
+        ReceiverError::InvalidKey => BRegWebhookVerificationError::InvalidKey,
         ReceiverError::UnsupportedVersion => BRegWebhookVerificationError::UnsupportedVersion,
         ReceiverError::SignatureMismatch => BRegWebhookVerificationError::SignatureMismatch,
+        ReceiverError::MalformedHeader | ReceiverError::MalformedSignature => {
+            BRegWebhookVerificationError::MalformedSignature
+        }
         _ => BRegWebhookVerificationError::MalformedSignature,
     }
 }

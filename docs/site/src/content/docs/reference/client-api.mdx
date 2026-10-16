@@ -755,13 +755,15 @@ Keep the key in server-side secret storage and never log the input or a failed d
 key buffers with shared backing stores are refused; accepted buffers are copied before entering the
 native verifier so another worker cannot change the bytes being authenticated. The helper
 throws `BaseRegistryClientError` with kind `webhook-verification` and code `missing-header`,
-`malformed-signature`, `signature-mismatch`, or `unsupported-version`. Generation and attempt are
-authenticated decimal strings, which avoids rounding a signed 64-bit generation at the JavaScript
-number boundary. A delivery outside the receiver's skew bound can still have a valid signature, so
-reject it before the deduplication transaction and effect. `idempotencyKey` identifies one delivery
-generation and is stable across automatic retries. An operator replay creates a new generation and
-key, so an effect that must happen only once is deduplicated on authenticated event identity,
-`source` plus `id`, or on an application business key.
+`invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`,
+`malformed-signature`, `signature-mismatch`, or `unsupported-version`. Each message names the input
+to check without rendering its value. Generation and attempt are authenticated decimal strings,
+which avoids rounding a signed 64-bit generation at the JavaScript number boundary. A delivery
+outside the receiver's skew bound can still have a valid signature, so reject it before the
+deduplication transaction and effect. `idempotencyKey` identifies one delivery generation and is
+stable across automatic retries. An operator replay creates a new generation and key, so an effect
+that must happen only once is deduplicated on authenticated event identity, `source` plus `id`, or
+on an application business key.
 
 {/* Evidence: crates/registry-breg-client/src/webhook.rs, verify_webhook_delivery();
     crates/registry-breg-client-node/src/lib.rs, verify_webhook_delivery();

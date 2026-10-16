@@ -2881,9 +2881,10 @@ its terminal result.
   from `TransportKind::kind`; retryability, unknown-outcome reporting and
   response validation are unchanged.
 - `BRegWebhookVerificationError::code` in
-  `crates/registry-breg-client/src/webhook.rs` returns `missing-header`,
-  `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
-  Signature verification and value-free failure messages are unchanged.
+  `crates/registry-breg-client/src/webhook.rs` preserves distinct
+  `invalid-delivery-time`, `duplicate-header`, `body-too-large`, and
+  `invalid-key` causes alongside the signature and missing-header failures.
+  Every message names the input to fix without rendering its value.
 - `webhook_outcome_name` and `webhook_disposition_name` in
   `crates/registry-breg/src/audit.rs` write kebab-case words, such as
   `attempt-started`, `http-non-success`, `retry-pending`, and `dead-lettered`,

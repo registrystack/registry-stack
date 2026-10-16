@@ -54,16 +54,18 @@ def verify(**overrides):
 
 
 class WebhookVerificationTests(unittest.TestCase):
-    def assert_refused(self, code: str, **overrides) -> None:
+    def assert_refused(self, code: str, message: str | None = None, **overrides) -> None:
         with self.assertRaises(BaseRegistryClientError) as raised:
             verify(**overrides)
         error = raised.exception
         self.assertEqual(error.kind, "webhook-verification")
         self.assertEqual(error.code, code)
         self.assertFalse(error.outcome_unknown)
-        message = str(error)
+        rendered = str(error)
+        if message is not None:
+            self.assertEqual(rendered, message)
         for secret in (SIGNATURE, KEY.decode(), BODY.decode(), "case-patched-v1"):
-            self.assertNotIn(secret, message)
+            self.assertNotIn(secret, rendered)
 
     def test_fixed_vector_verifies_and_returns_exact_delivery(self) -> None:
         verified = verify()
@@ -110,7 +112,30 @@ class WebhookVerificationTests(unittest.TestCase):
 
     def test_refuses_a_header_repeated_under_another_case(self) -> None:
         self.assert_refused(
-            "malformed-signature", headers={**headers(), "CE-TYPE": "case-created-v1"}
+            "duplicate-header",
+            "a Base Registry Engine webhook header is repeated; remove duplicate signed headers",
+            headers={**headers(), "CE-TYPE": "case-created-v1"},
+        )
+
+    def test_reports_an_invalid_delivery_time_with_its_fix(self) -> None:
+        self.assert_refused(
+            "invalid-delivery-time",
+            "the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock",
+            headers={**headers(), "x-registry-delivery-time": "not-a-time"},
+        )
+
+    def test_reports_an_oversized_body_with_its_fix(self) -> None:
+        self.assert_refused(
+            "body-too-large",
+            "the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size",
+            body=b"x" * 1_048_577,
+        )
+
+    def test_reports_an_invalid_key_with_its_fix(self) -> None:
+        self.assert_refused(
+            "invalid-key",
+            "the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes",
+            key=b"short-key",
         )
 
     def test_refuses_an_unknown_signature_version(self) -> None:

@@ -9,6 +9,10 @@ export type SafeInteger = number
 
 export type WebhookVerificationRefusalCode =
   | 'missing-header'
+  | 'invalid-delivery-time'
+  | 'duplicate-header'
+  | 'body-too-large'
+  | 'invalid-key'
   | 'malformed-signature'
   | 'signature-mismatch'
   | 'unsupported-version'

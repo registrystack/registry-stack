@@ -124,3 +124,54 @@ fn refusal_codes_are_closed_and_value_free() {
         assert!(!error.to_string().contains("case-patched-v1"));
     }
 }
+
+#[test]
+fn invalid_delivery_time_names_the_delivery_time_fix() {
+    let mut invalid = headers();
+    invalid.insert("x-registry-delivery-time".into(), "not-a-time".into());
+    let error = verify_webhook_delivery(delivery(&invalid, BODY, KEY)).unwrap_err();
+    assert_eq!(error, BRegWebhookVerificationError::InvalidDeliveryTime);
+    assert_eq!(error.code(), "invalid-delivery-time");
+    assert_eq!(
+        error.to_string(),
+        "the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock"
+    );
+}
+
+#[test]
+fn duplicate_header_names_the_header_fix() {
+    let mut duplicate = headers();
+    duplicate.insert("CE-TYPE".into(), "case-created-v1".into());
+    let error = verify_webhook_delivery(delivery(&duplicate, BODY, KEY)).unwrap_err();
+    assert_eq!(error, BRegWebhookVerificationError::DuplicateHeader);
+    assert_eq!(error.code(), "duplicate-header");
+    assert_eq!(
+        error.to_string(),
+        "a Base Registry Engine webhook header is repeated; remove duplicate signed headers"
+    );
+}
+
+#[test]
+fn oversized_body_names_the_body_size_fix() {
+    let oversized = vec![b'x'; 1_048_577];
+    let error = verify_webhook_delivery(delivery(&headers(), &oversized, KEY)).unwrap_err();
+    assert_eq!(error, BRegWebhookVerificationError::BodyTooLarge);
+    assert_eq!(error.code(), "body-too-large");
+    assert_eq!(
+        error.to_string(),
+        "the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size"
+    );
+    assert!(!error.to_string().contains(&"x".repeat(64)));
+}
+
+#[test]
+fn invalid_key_names_the_key_configuration_fix() {
+    let error = verify_webhook_delivery(delivery(&headers(), BODY, b"short-key")).unwrap_err();
+    assert_eq!(error, BRegWebhookVerificationError::InvalidKey);
+    assert_eq!(error.code(), "invalid-key");
+    assert_eq!(
+        error.to_string(),
+        "the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes"
+    );
+    assert!(!error.to_string().contains("short-key"));
+}
