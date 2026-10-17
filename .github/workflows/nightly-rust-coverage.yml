@@ -172,4 +172,4 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-rust-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}

@@ -11,7 +11,10 @@ inputs:
     required: false
   container_name:
     description: Unique name for the owned service container
-    required: true
+    required: false
+  container_id:
+    description: Exact ID returned by a successful start operation
+    required: false
   database:
     description: Database created by the image entrypoint
     required: false
@@ -100,20 +103,23 @@ runs:
       if: inputs.operation == 'stop'
       shell: bash
       env:
-        CONTAINER_NAME: ${{ inputs.container_name }}
+        CONTAINER_ID: ${{ inputs.container_id }}
       run: |
         set -euo pipefail
 
-        if ! docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+        if [ -z "${CONTAINER_ID}" ]; then
+          exit 0
+        fi
+        if ! docker container inspect "${CONTAINER_ID}" >/dev/null 2>&1; then
           exit 0
         fi
         owner="$(
           docker container inspect \
             --format '{{ index .Config.Labels "org.registrystack.ci.postgres-service" }}' \
-            "${CONTAINER_NAME}"
+            "${CONTAINER_ID}"
         )"
         if [ "${owner}" != true ]; then
-          echo "refusing to remove container not owned by postgres-service: ${CONTAINER_NAME}" >&2
+          echo "refusing to remove container not owned by postgres-service: ${CONTAINER_ID}" >&2
           exit 1
         fi
-        docker rm --force "${CONTAINER_NAME}"
+        docker rm --force "${CONTAINER_ID}"

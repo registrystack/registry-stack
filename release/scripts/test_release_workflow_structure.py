@@ -135,7 +135,7 @@ class DockerHubPullAuthenticationTest(unittest.TestCase):
                         "uses": "./.github/actions/postgres-service",
                         "with": {
                             "operation": "stop",
-                            "container_name": container_name,
+                            "container_id": "${{ steps.postgres.outputs.container_id }}",
                         },
                     },
                 )
@@ -210,7 +210,7 @@ class DockerHubPullAuthenticationTest(unittest.TestCase):
                 ["bash", "-c", stop["run"]],
                 env={
                     **environment,
-                    "CONTAINER_NAME": "registry-stack-canary-postgres",
+                    "CONTAINER_ID": "fake-container-id",
                 },
                 capture_output=True,
                 text=True,
@@ -218,8 +218,38 @@ class DockerHubPullAuthenticationTest(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn(
-                "rm --force registry-stack-canary-postgres",
+                "rm --force fake-container-id",
                 docker_log.read_text(encoding="utf-8"),
+            )
+
+            docker_state.touch()
+            refused_output = temporary_path / "refused-output"
+            refused_environment = {
+                **environment,
+                "GITHUB_OUTPUT": str(refused_output),
+            }
+            completed = subprocess.run(
+                ["bash", "-c", start["run"]],
+                env=refused_environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse(refused_output.exists())
+            log_before_cleanup = docker_log.read_text(encoding="utf-8")
+
+            completed = subprocess.run(
+                ["bash", "-c", stop["run"]],
+                env={**environment, "CONTAINER_ID": ""},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(docker_state.exists())
+            self.assertEqual(
+                docker_log.read_text(encoding="utf-8"), log_before_cleanup
             )
 
     def test_docker_hub_build_pulls_authenticate_when_secrets_are_available(self) -> None:

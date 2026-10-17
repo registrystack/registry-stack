@@ -315,7 +315,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-platform-coverage-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   platform-coverage-upload:
     name: Upload platform coverage
@@ -898,7 +898,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-casework-postgres-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   scheduling-contracts:
     name: Scheduling product contracts
@@ -1037,7 +1037,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-scheduling-postgres-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   messaging-contracts:
     name: Messaging product contracts and vendor neutrality
@@ -1155,7 +1155,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-messaging-postgres-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
@@ -1211,7 +1211,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-coordinator-postgres-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   messaging-smtp:
     name: Messaging SMTP provider
@@ -1422,7 +1422,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-breg-contracts-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   breg-wasm:
     # The WASM action-handler executor runs under the `wasm` feature, which
@@ -1491,7 +1491,7 @@ jobs:
         uses: ./.github/actions/postgres-service
         with:
           operation: stop
-          container_name: registry-stack-breg-wasm-postgres
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   identifiers:
     name: Public identifier catalog
