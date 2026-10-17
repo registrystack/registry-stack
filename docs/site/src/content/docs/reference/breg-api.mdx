@@ -618,7 +618,8 @@ Proposal-required Record type remains protected. Record effects, revisions,
 audit, receipt, and outbox commit together; failure creates no partial effect.
 Use the original prepared command and idempotency key for uncertain execution.
 
-{/* Evidence: crates/registry-breg/src/api/actions.rs;
+{/* Evidence: crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/mutation.rs;
+    crates/registry-breg/tests/postgres_mutation.rs;
     crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs;
     crates/registry-breg-mcp/src/contract.rs;
     products/breg/examples/facility/registry.yaml. */}
@@ -662,6 +663,29 @@ string that is empty, over 16 KiB, or not `name=value` pairs with valid percent-
 `fieldPath`, and neither do lookup bodies, ingestion runs and chunks, attachments, and the feature
 API.
 
+A direct Record Create, Patch, or Batch that reaches PostgreSQL and violates an authored
+row-local constraint keeps `code: mutation.conflict` and may carry one complete declared location:
+
+```json
+{
+  "recordType": "permit",
+  "constraintId": "chronological-validity",
+  "constraintKind": "compare",
+  "left": "valid-from",
+  "right": "valid-to"
+}
+```
+
+`compare` carries `left` and `right`. `int-range` and `vocabulary` carry `field` instead.
+These members are present only when the selected access profile can read every referenced field.
+Otherwise, all constraint members are absent. Action and Proposal effects have no selected Record
+response profile at this layer, so their constraint conflicts also stay generic.
+The response uses declared Record type, constraint, and field identifiers only. It never carries a
+submitted value, a PostgreSQL constraint name, or a database message. An explicit constraint `id`
+is the stable application mapping key; an omitted `id` uses the compiler-derived identity, which
+changes when the declaration changes. `unique` and `temporal-non-overlap` conflicts stay generic
+because identifying either could reveal another row.
+
 `type` is the published identifier for the code, and `code` is the same fact in the short form a
 program branches on: the type is the code with each dot read as a path segment, under
 `https://id.registrystack.org/problems/registry-breg/`. Branch on `code`; resolve `type` when you
@@ -672,8 +696,9 @@ want the published description of a refusal you have not seen before.
 {/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), precondition_required(), invalid_request_at(), and invalid_query_at();
     crates/registry-breg/src/problem_location.rs, RequestLocation;
     crates/registry-breg/src/query.rs, QUERY_PARAMETERS;
-    crates/registry-breg/src/mutation.rs, admit_submitted_names();
-    crates/registry-breg/tests/postgres_mutation.rs, record_and_query_refusals_name_only_fixed_members_and_admitted_fields();
+    crates/registry-breg/src/mutation.rs, admit_submitted_names() and map_field_database_error();
+    crates/registry-breg/src/correlation.rs, row_local_constraint_response();
+    crates/registry-breg/tests/postgres_mutation.rs, record_and_query_refusals_name_only_fixed_members_and_admitted_fields() and real_postgres_row_local_constraint_problems_name_only_readable_declarations();
     crates/registry-breg/src/auth.rs;
     crates/registry-breg/src/problem.rs, ProblemCode;
     crates/registry-breg/src/artifacts.rs, problem_schema. */}

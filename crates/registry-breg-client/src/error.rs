@@ -61,6 +61,71 @@ impl std::fmt::Debug for BRegProblemFieldPath {
     }
 }
 
+/// A bounded, declared row-local constraint named by a mutation conflict.
+///
+/// These identifiers are available only through explicit access. Default
+/// error formatting does not render them. The server omits this entire
+/// extension when any referenced field is not readable by the caller.
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "constraintKind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum BRegConstraintViolation {
+    Compare {
+        record_type: String,
+        constraint_id: String,
+        left: String,
+        right: String,
+    },
+    IntRange {
+        record_type: String,
+        constraint_id: String,
+        field: String,
+    },
+    Vocabulary {
+        record_type: String,
+        constraint_id: String,
+        field: String,
+    },
+}
+
+impl BRegConstraintViolation {
+    #[must_use]
+    pub fn record_type(&self) -> &str {
+        match self {
+            Self::Compare { record_type, .. }
+            | Self::IntRange { record_type, .. }
+            | Self::Vocabulary { record_type, .. } => record_type,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Compare { constraint_id, .. }
+            | Self::IntRange { constraint_id, .. }
+            | Self::Vocabulary { constraint_id, .. } => constraint_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Compare { .. } => "compare",
+            Self::IntRange { .. } => "int-range",
+            Self::Vocabulary { .. } => "vocabulary",
+        }
+    }
+}
+
+impl std::fmt::Debug for BRegConstraintViolation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BRegConstraintViolation(<undisclosed>)")
+    }
+}
+
 /// One closed Base Registry Engine Problem code accepted by the client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -376,7 +441,8 @@ impl std::fmt::Display for BRegProtocolFailure {
 /// detail code and validated problem field path are retained because they are
 /// machine-readable outcomes. Callers read immediate-action and statistical
 /// detail codes through `refusal_code` or `reason_code`, and paths through
-/// `field_path`; none are rendered.
+/// `field_path`, and declared row-local constraints through `constraint`;
+/// none are rendered.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BaseRegistryClientError {
@@ -394,6 +460,7 @@ pub enum BaseRegistryClientError {
         code: BRegProblemCode,
         trace_id: TraceId,
         field_path: Option<BRegProblemFieldPath>,
+        constraint: Option<Box<BRegConstraintViolation>>,
         refusal_code: Option<BRegRefusalCode>,
     },
     /// A valid Problem whose code is newer than this client. Only HTTP status
@@ -544,6 +611,15 @@ impl BaseRegistryClientError {
     pub fn field_path(&self) -> Option<&BRegProblemFieldPath> {
         match self {
             Self::Problem { field_path, .. } => field_path.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The declared row-local constraint named by a mutation conflict.
+    #[must_use]
+    pub fn constraint(&self) -> Option<&BRegConstraintViolation> {
+        match self {
+            Self::Problem { constraint, .. } => constraint.as_deref(),
             _ => None,
         }
     }
@@ -715,6 +791,7 @@ mod tests {
                 code,
                 trace_id: trace_id.clone(),
                 field_path: None,
+                constraint: None,
                 refusal_code: None,
             };
             let expected = if code == BRegProblemCode::ResourceNotFound {
@@ -733,6 +810,7 @@ mod tests {
             trace_id: TraceId::parse("0123456789abcdef0123456789abcdef")
                 .expect("a canonical trace identifier"),
             field_path: None,
+            constraint: None,
             refusal_code: None,
         }
     }

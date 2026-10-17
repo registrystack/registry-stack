@@ -75,6 +75,7 @@ pub(crate) struct PublicProblem {
     field_path: Option<String>,
     declared_refusal: Option<(String, String)>,
     declared_field: Option<(String, String)>,
+    declared_constraint: Option<Box<crate::mutation::RowLocalConstraintViolation>>,
     statistical_detail: Option<(&'static str, &'static str)>,
 }
 
@@ -99,6 +100,7 @@ pub(crate) fn problem_response(
         field_path: None,
         declared_refusal: None,
         declared_field: None,
+        declared_constraint: None,
         statistical_detail: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
@@ -131,6 +133,7 @@ pub(crate) fn problem_response_with_field_path(
         field_path: Some(field_path.clone()),
         declared_refusal: None,
         declared_field: None,
+        declared_constraint: None,
         statistical_detail: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
@@ -214,6 +217,23 @@ pub(crate) fn field_pattern_response(entity: String, field: String) -> Response 
     response
 }
 
+pub(crate) fn row_local_constraint_response(
+    violation: Box<crate::mutation::RowLocalConstraintViolation>,
+) -> Response {
+    let mut response = problem_response(
+        StatusCode::CONFLICT,
+        "Conflict",
+        "The mutation conflicts with current state.",
+        "mutation.conflict",
+    );
+    response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem response carries public metadata")
+        .declared_constraint = Some(violation);
+    response
+}
+
 /// Observe a router that is not already owned by an outer correlation layer.
 /// Nested use is deliberately idempotent so the production timeout wrapper
 /// and focused test routers share one request ID and emit one log record.
@@ -277,6 +297,42 @@ pub(crate) fn finish_response(
         if let Some((entity, field)) = &problem.declared_field {
             object.insert("recordType".to_owned(), Value::String(entity.clone()));
             object.insert("fieldId".to_owned(), Value::String(field.clone()));
+        }
+        if let Some(constraint) = &problem.declared_constraint {
+            let constraint = constraint.as_ref();
+            let (record_type, constraint_id, kind) = match constraint {
+                crate::mutation::RowLocalConstraintViolation::Compare {
+                    record_type,
+                    constraint_id,
+                    ..
+                } => (record_type, constraint_id, "compare"),
+                crate::mutation::RowLocalConstraintViolation::IntRange {
+                    record_type,
+                    constraint_id,
+                    ..
+                } => (record_type, constraint_id, "int-range"),
+                crate::mutation::RowLocalConstraintViolation::Vocabulary {
+                    record_type,
+                    constraint_id,
+                    ..
+                } => (record_type, constraint_id, "vocabulary"),
+            };
+            object.insert("recordType".to_owned(), Value::String(record_type.clone()));
+            object.insert(
+                "constraintId".to_owned(),
+                Value::String(constraint_id.clone()),
+            );
+            object.insert("constraintKind".to_owned(), Value::String(kind.to_owned()));
+            match constraint {
+                crate::mutation::RowLocalConstraintViolation::Compare { left, right, .. } => {
+                    object.insert("left".to_owned(), Value::String(left.clone()));
+                    object.insert("right".to_owned(), Value::String(right.clone()));
+                }
+                crate::mutation::RowLocalConstraintViolation::IntRange { field, .. }
+                | crate::mutation::RowLocalConstraintViolation::Vocabulary { field, .. } => {
+                    object.insert("field".to_owned(), Value::String(field.clone()));
+                }
+            }
         }
         let body = serde_json::to_vec(&value).expect("ProblemBody serialization is infallible");
         parts.headers.remove(CONTENT_LENGTH);

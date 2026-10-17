@@ -276,7 +276,14 @@ and Proposal JSON are decoded with strict duplicate-member rejection. Storage-pa
 conflicts preserve the `MutationConflict` classification; their optional paired
 `recordType` and `fieldId` members are bounded, validated and discarded. An
 optional `fieldPath` is retained only after it matches BReg's closed grammar and
-the known problem code that permits that location. Unknown object members are
+the known problem code that permits that location. Row-local constraint conflicts
+expose `constraint()` as a `BRegConstraintViolation`: bounded `recordType` and
+`constraintId`, a closed `constraintKind`, and either `left`/`right` or `field`.
+The server omits the entire extension if any referenced field is unreadable.
+Unique and temporal non-overlap conflicts remain generic. Node.js and Python
+expose the same members in `error.constraint`; Node keeps that property
+non-enumerable, and Rust Debug and Python exception messages omit its values.
+Unknown object members are
 ignored after duplicate rejection; recognized extensions on known codes retain
 their existing validation.
 

@@ -349,6 +349,7 @@ pub struct MutationPlan {
     route: CompiledRoute,
     entity: CompiledEntity,
     event_deliveries: Vec<CompiledEventDelivery>,
+    constraint_names: BTreeMap<String, String>,
     temporal_exclusion_constraints: Vec<String>,
     /// A create item of an `import` route. Change control does not count it
     /// as a direct write: an operator-opened import authority bounds it.
@@ -412,6 +413,7 @@ impl MutationPlan {
             route: route.clone(),
             entity: entity.clone(),
             event_deliveries,
+            constraint_names: inventory.constraints.clone(),
             temporal_exclusion_constraints,
             imported_item: false,
         })
@@ -473,6 +475,7 @@ impl MutationPlan {
             },
             entity: self.entity.clone(),
             event_deliveries: self.event_deliveries.clone(),
+            constraint_names: self.constraint_names.clone(),
             temporal_exclusion_constraints: self.temporal_exclusion_constraints.clone(),
             imported_item: self.route.operation == Operation::Import,
         })
@@ -2203,6 +2206,8 @@ pub enum MutationError {
     ActionRefusal(crate::action_handler::ActionHandlerRefusal),
     #[error("field does not conform to its declared storage pattern")]
     FieldPatternViolation { entity_id: String, field_id: String },
+    #[error("mutation violates a declared row-local constraint")]
+    RowLocalConstraintViolation(Box<RowLocalConstraintViolation>),
     #[error("field-encryption key state is unavailable for this operation")]
     FieldEncryptionUnavailable,
     /// A durable ingestion run refused the chunk under its own invariants.
@@ -2224,6 +2229,31 @@ pub enum MutationError {
     /// loads the configured package through this error and can produce it.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
+}
+
+/// Value-free identifiers for one compiler-owned row-local constraint.
+///
+/// Construction stays inside the PostgreSQL error mapper, after its physical
+/// constraint name matches the exact compiled inventory and every referenced
+/// field is readable through the selected access profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RowLocalConstraintViolation {
+    Compare {
+        record_type: String,
+        constraint_id: String,
+        left: String,
+        right: String,
+    },
+    IntRange {
+        record_type: String,
+        constraint_id: String,
+        field: String,
+    },
+    Vocabulary {
+        record_type: String,
+        constraint_id: String,
+        field: String,
+    },
 }
 
 #[cfg(feature = "postgres-test")]
@@ -2412,12 +2442,17 @@ async fn apply_create_row(
         )
         .await
         .map_err(map_database_error)?;
+    let profile = selected_profile(request)?;
     insert_current_row(
         transaction,
         &request.plan.entity,
         record_id,
         data,
         field_encryption,
+        Some(ConstraintDisclosure {
+            physical_names: &request.plan.constraint_names,
+            readable_fields: &profile.readable_fields,
+        }),
     )
     .await
 }
@@ -2430,6 +2465,7 @@ async fn apply_patch_row(
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     let record_id = request.record_id.ok_or(MutationError::InvalidRequest)?;
+    let profile = selected_profile(request)?;
     update_current_row(
         transaction,
         &request.plan.entity,
@@ -2437,6 +2473,10 @@ async fn apply_patch_row(
         expected_revision,
         data,
         field_encryption,
+        Some(ConstraintDisclosure {
+            physical_names: &request.plan.constraint_names,
+            readable_fields: &profile.readable_fields,
+        }),
     )
     .await
 }
@@ -2472,7 +2512,15 @@ pub(super) async fn write_plan_row(
             {
                 return Err(MutationError::InvalidRequest);
             }
-            insert_current_row(transaction, entity, &record_id, &fields, field_encryption).await?
+            insert_current_row(
+                transaction,
+                entity,
+                &record_id,
+                &fields,
+                field_encryption,
+                None,
+            )
+            .await?
         }
         Some(revision) => {
             if revision < 1 || before.is_none() {
@@ -2485,6 +2533,7 @@ pub(super) async fn write_plan_row(
                 revision,
                 fields,
                 field_encryption,
+                None,
             )
             .await?
         }
@@ -2500,6 +2549,7 @@ async fn insert_current_row(
     record_id: &str,
     data: &Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
+    constraint_disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> Result<CurrentRow, MutationError> {
     let submitted_fields = entity
         .fields
@@ -2563,7 +2613,7 @@ async fn insert_current_row(
     let row = transaction
         .query_one(&sql, &parameters)
         .await
-        .map_err(|error| map_field_database_error(error, entity))?;
+        .map_err(|error| map_field_database_error(error, entity, constraint_disclosure))?;
     row_to_current(entity, &row)
 }
 
@@ -2574,6 +2624,7 @@ async fn update_current_row(
     expected_revision: i64,
     data: Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
+    constraint_disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> Result<CurrentRow, MutationError> {
     let submitted_fields = entity
         .fields
@@ -2645,7 +2696,7 @@ async fn update_current_row(
     let row = transaction
         .query_opt(&sql, &parameters)
         .await
-        .map_err(|error| map_field_database_error(error, entity))?
+        .map_err(|error| map_field_database_error(error, entity, constraint_disclosure))?
         .ok_or(MutationError::PreconditionFailed)?;
     row_to_current(entity, &row)
 }
@@ -3825,9 +3876,16 @@ fn method_name(method: HttpMethod) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ConstraintDisclosure<'a> {
+    physical_names: &'a BTreeMap<String, String>,
+    readable_fields: &'a BTreeSet<String>,
+}
+
 fn map_field_database_error(
     error: tokio_postgres::Error,
     entity: &CompiledEntity,
+    disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> MutationError {
     if error.code() == Some(&SqlState::CHECK_VIOLATION) {
         if let Some(constraint) = error.as_db_error().and_then(|error| error.constraint()) {
@@ -3842,6 +3900,56 @@ fn map_field_database_error(
                         entity_id: entity.id.clone(),
                         field_id: field.id.clone(),
                     };
+                }
+            }
+            if let Some(disclosure) = disclosure {
+                for (constraint_id, declared) in &entity.constraints {
+                    if disclosure
+                        .physical_names
+                        .get(constraint_id)
+                        .is_none_or(|physical| physical != constraint)
+                    {
+                        continue;
+                    }
+                    let violation = match declared {
+                        crate::contract::ConstraintSource::Compare { left, right, .. }
+                            if disclosure.readable_fields.contains(left)
+                                && disclosure.readable_fields.contains(right) =>
+                        {
+                            Some(RowLocalConstraintViolation::Compare {
+                                record_type: entity.id.clone(),
+                                constraint_id: constraint_id.clone(),
+                                left: left.clone(),
+                                right: right.clone(),
+                            })
+                        }
+                        crate::contract::ConstraintSource::IntRange { field, .. }
+                            if disclosure.readable_fields.contains(field) =>
+                        {
+                            Some(RowLocalConstraintViolation::IntRange {
+                                record_type: entity.id.clone(),
+                                constraint_id: constraint_id.clone(),
+                                field: field.clone(),
+                            })
+                        }
+                        crate::contract::ConstraintSource::Vocabulary { field, .. }
+                            if disclosure.readable_fields.contains(field) =>
+                        {
+                            Some(RowLocalConstraintViolation::Vocabulary {
+                                record_type: entity.id.clone(),
+                                constraint_id: constraint_id.clone(),
+                                field: field.clone(),
+                            })
+                        }
+                        crate::contract::ConstraintSource::Unique { .. }
+                        | crate::contract::ConstraintSource::TemporalNonOverlap { .. }
+                        | crate::contract::ConstraintSource::Compare { .. }
+                        | crate::contract::ConstraintSource::IntRange { .. }
+                        | crate::contract::ConstraintSource::Vocabulary { .. } => None,
+                    };
+                    if let Some(violation) = violation {
+                        return MutationError::RowLocalConstraintViolation(Box::new(violation));
+                    }
                 }
             }
         }

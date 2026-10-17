@@ -3637,6 +3637,11 @@ fn problem_schema() -> Value {
             },
             "recordType": {"type": "string", "minLength": 1, "maxLength": 128},
             "fieldId": {"type": "string", "minLength": 1, "maxLength": 128},
+            "constraintId": {"type": "string", "minLength": 1, "maxLength": 128},
+            "constraintKind": {"type": "string", "enum": ["compare", "int-range", "vocabulary"]},
+            "left": {"type": "string", "minLength": 1, "maxLength": 128},
+            "right": {"type": "string", "minLength": 1, "maxLength": 128},
+            "field": {"type": "string", "minLength": 1, "maxLength": 128},
             "code": {
                 "type": "string",
                 "enum": crate::problem::ProblemCode::DOCUMENTED
@@ -3693,10 +3698,39 @@ fn problem_schema() -> Value {
                 "then": {"properties": {"status": {"const": 500}}}
             },
             {
-                "if": {"anyOf": [{"required": ["recordType"]}, {"required": ["fieldId"]}]},
+                "if": {"anyOf": [
+                    {"required": ["recordType"]}, {"required": ["fieldId"]},
+                    {"required": ["constraintId"]}, {"required": ["constraintKind"]},
+                    {"required": ["left"]}, {"required": ["right"]}, {"required": ["field"]}
+                ]},
                 "then": {
-                    "required": ["recordType", "fieldId"],
-                    "properties": {"code": {"const": "mutation.conflict"}, "status": {"const": 409}}
+                    "required": ["recordType"],
+                    "properties": {"code": {"const": "mutation.conflict"}, "status": {"const": 409}},
+                    "oneOf": [
+                        {
+                            "required": ["fieldId"],
+                            "not": {"anyOf": [
+                                {"required": ["constraintId"]}, {"required": ["constraintKind"]},
+                                {"required": ["left"]}, {"required": ["right"]}, {"required": ["field"]}
+                            ]}
+                        },
+                        {
+                            "required": ["constraintId", "constraintKind"],
+                            "not": {"required": ["fieldId"]},
+                            "oneOf": [
+                                {
+                                    "required": ["left", "right"],
+                                    "properties": {"constraintKind": {"const": "compare"}},
+                                    "not": {"required": ["field"]}
+                                },
+                                {
+                                    "required": ["field"],
+                                    "properties": {"constraintKind": {"enum": ["int-range", "vocabulary"]}},
+                                    "not": {"anyOf": [{"required": ["left"]}, {"required": ["right"]}]}
+                                }
+                            ]
+                        }
+                    ]
                 }
             }
         ]
@@ -4255,7 +4289,7 @@ mod problem_contract_tests {
     }
 
     #[test]
-    fn problem_contract_keeps_pattern_locations_paired_and_errors_closed() {
+    fn problem_contract_keeps_declared_locations_complete_and_errors_closed() {
         let schema = problem_schema();
         let validator = jsonschema::JSONSchema::options()
             .with_draft(jsonschema::Draft::Draft202012)
@@ -4266,6 +4300,19 @@ mod problem_contract_tests {
         problem["recordType"] = json!("person");
         assert!(!validator.is_valid(&problem));
         problem["fieldId"] = json!("identifier");
+        assert!(validator.is_valid(&problem));
+        problem.as_object_mut().unwrap().remove("fieldId");
+        problem["constraintId"] = json!("chronological");
+        problem["constraintKind"] = json!("compare");
+        problem["left"] = json!("valid-from");
+        assert!(!validator.is_valid(&problem));
+        problem["right"] = json!("valid-to");
+        assert!(validator.is_valid(&problem));
+        problem["field"] = json!("status");
+        assert!(!validator.is_valid(&problem));
+        problem.as_object_mut().unwrap().remove("left");
+        problem.as_object_mut().unwrap().remove("right");
+        problem["constraintKind"] = json!("vocabulary");
         assert!(validator.is_valid(&problem));
         problem["code"] = json!("resource.not_found");
         assert!(!validator.is_valid(&problem));

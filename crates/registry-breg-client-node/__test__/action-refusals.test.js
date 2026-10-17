@@ -75,6 +75,41 @@ test('a declared refusal reaches the caller with its reason', async () => {
   }
 });
 
+test('row-local constraints expose bounded identifiers without default rendering', async () => {
+  const base = {
+    type: 'https://id.registrystack.org/problems/registry-breg/mutation/conflict',
+    title: 'Conflict', status: 409, detail: 'The mutation conflicts with current state.',
+    code: 'mutation.conflict', traceId: TRACE_ID,
+  };
+  const constraints = [
+    { recordType: 'item', constraintId: 'valid-period', constraintKind: 'compare', left: 'valid-from', right: 'valid-to' },
+    { recordType: 'item', constraintId: 'quantity-range', constraintKind: 'int-range', field: 'quantity' },
+    { recordType: 'item', constraintId: 'allowed-status', constraintKind: 'vocabulary', field: 'status' },
+  ];
+  for (const constraint of constraints) {
+    const error = await answer({ ...base, ...constraint });
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.code, 'mutation.conflict');
+    assert.equal(error.outcomeUnknown, false);
+    assert.deepEqual(error.constraint, constraint);
+    assert.equal(Object.prototype.propertyIsEnumerable.call(error, 'constraint'), false);
+    for (const render of [inspect, format, JSON.stringify]) {
+      assert.equal(render(error).includes(constraint.constraintId), false);
+    }
+  }
+  assert.equal((await answer(base)).constraint, undefined);
+  for (const malformed of [
+    { ...constraints[0], right: null },
+    { ...constraints[0], constraintKind: 'unique' },
+    { ...constraints[1], field: 'x'.repeat(129) },
+    { ...constraints[2], field: 'value\ncanary' },
+  ]) {
+    const error = await answer({ ...base, ...malformed });
+    assert.equal(error.kind, 'protocol');
+    assert.equal(error.constraint, undefined);
+  }
+});
+
 test('located problems keep field paths out of default Node rendering', async () => {
   for (const problem of [
     refusal({ fieldPath: '/input/givenName' }),

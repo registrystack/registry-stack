@@ -79,12 +79,28 @@ class RemoteExchangeConfig(TypedDict):
 
 ExchangeAuthorization = TypedDict("ExchangeAuthorization", {"exchange": FirstPartyExchangeConfig | RemoteExchangeConfig})
 
+class BRegCompareConstraintViolation(TypedDict):
+    recordType: str
+    constraintId: str
+    constraintKind: Literal["compare"]
+    left: str
+    right: str
+
+class BRegFieldConstraintViolation(TypedDict):
+    recordType: str
+    constraintId: str
+    constraintKind: Literal["int-range", "vocabulary"]
+    field: str
+
+BRegConstraintViolation = BRegCompareConstraintViolation | BRegFieldConstraintViolation
+
 class BaseRegistryClientError(Exception):
     kind: str
     code: str | None
     refusal_code: str | None
     reason_code: str | None
     field_path: str | None
+    constraint: BRegConstraintViolation | None
     status: int | None
     trace_id: str | None
     transport_kind: str | None

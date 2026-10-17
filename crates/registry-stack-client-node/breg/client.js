@@ -16,13 +16,15 @@ class BaseRegistryClientError extends Error {
     for (const field of ['code', 'refusalCode', 'reasonCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
-    if (envelope.fieldPath !== undefined && envelope.fieldPath !== null) {
-      Object.defineProperty(this, 'fieldPath', {
-        value: envelope.fieldPath,
-        configurable: true,
-        enumerable: false,
-        writable: true,
-      });
+    for (const field of ['fieldPath', 'constraint']) {
+      if (envelope[field] !== undefined && envelope[field] !== null) {
+        Object.defineProperty(this, field, {
+          value: envelope[field],
+          configurable: true,
+          enumerable: false,
+          writable: true,
+        });
+      }
     }
   }
 }

@@ -260,6 +260,7 @@ mod tests {
             code,
             trace_id: TraceId::parse(TRACE).expect("trace id"),
             field_path: None,
+            constraint: None,
             refusal_code: None,
         })
     }

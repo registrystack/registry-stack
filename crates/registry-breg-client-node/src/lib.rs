@@ -377,6 +377,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             code,
             trace_id,
             field_path,
+            constraint,
             refusal_code,
         } => json!({
             // app-developer-22: a missing resource is its own kind, not-found,
@@ -403,6 +404,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
                 _ => None,
             },
             "fieldPath": field_path.as_ref().map(|value| value.as_str()),
+            "constraint": constraint,
             "traceId": trace_id.as_str(),
             "message": "Base Registry Engine refused the request",
         }),
