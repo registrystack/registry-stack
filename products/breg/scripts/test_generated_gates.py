@@ -214,6 +214,10 @@ class GeneratedGateTests(unittest.TestCase):
                 snippet = source.split(marker, 1)[1].split("\nPY\n", 1)[0]
                 subprocess.run([sys.executable, "-", str(project / "registry.yaml")], input=snippet, text=True, check=True)
                 model = yaml.safe_load((project / "registry.yaml").read_text())
+                self.assertEqual(
+                    "https://generic-registry.example.test",
+                    model["project"]["canonicalBaseIri"],
+                )
                 self.assertNotIn("entities", model)
                 records = {item["id"]: item for item in model["recordTypes"]}
                 self.assertEqual({"record", "record-group"}, records.keys())
