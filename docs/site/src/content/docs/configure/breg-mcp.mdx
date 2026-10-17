@@ -19,12 +19,6 @@ chat host, for example an AI assistant, to read their own Record and prepare a c
 citizen then submits that change on a review page you host. You need a registry project with a
 proposal-mode Action, an issuer that exchanges tokens and carries task grants, and a TLS proxy.
 
-Both services ship in releases as an
-[experimental surface](../../reference/api-stability/#experimental-surfaces): they stay outside
-the compatibility promise and may change in any minor release. Neither provides the task authority
-that issues the citizen's grants, so your deployment integrates its own (see
-[An issuer and a task authority](#an-issuer-and-a-task-authority)).
-
 ## What the two services do
 
 `breg-mcp` is a Model Context Protocol (MCP) gateway. A chat host calls it at `/mcp` with a token
@@ -35,6 +29,12 @@ the citizen signs in, compares the draft with their Record, and submits it.
 Neither service adds registry semantics: BReg decides what the citizen may see or change, under the
 access profile each service names. The two run with separate credentials, so no process can both
 prepare a change and submit it.
+
+Both services ship in releases as an
+[experimental surface](../../reference/api-stability/#experimental-surfaces): they stay outside
+the compatibility promise and may change in any minor release. Neither provides the task authority
+that issues the citizen's grants, so your deployment integrates its own (see
+[An issuer and a task authority](#an-issuer-and-a-task-authority)).
 
 | Tool | What it does |
 |---|---|
