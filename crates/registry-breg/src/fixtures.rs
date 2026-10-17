@@ -225,7 +225,7 @@ pub enum FixtureError {
     AuthorityWideningRefused,
     RequestConstructionRefused,
     AuthenticationActorKindMissing,
-    AuthenticationKeyRefused,
+    AuthenticationCredentialRefused,
     ResponseTooLarge,
     ResponseShapeRefused,
     ExpectationMismatch,
@@ -334,8 +334,8 @@ impl fmt::Display for FixtureError {
             Self::AuthenticationActorKindMissing => {
                 "the fixture credential is missing the configured actor-kind claim"
             }
-            Self::AuthenticationKeyRefused => {
-                "the fixture credential uses an unknown or disallowed signing key"
+            Self::AuthenticationCredentialRefused => {
+                "the fixture credential failed token verification; check its signing key, signature, issuer, and validity period"
             }
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
             Self::ResponseShapeRefused => "the fixture response shape was refused",
@@ -3622,7 +3622,7 @@ impl SchemaTestRuntime {
 
 fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> FixtureError {
     if matches!(error, registry_platform_oidc::OidcError::UnknownKid) {
-        FixtureError::AuthenticationKeyRefused
+        FixtureError::AuthenticationCredentialRefused
     } else {
         FixtureError::RequestConstructionRefused
     }
@@ -3634,7 +3634,7 @@ fn fixture_authentication_error(error: crate::auth::AuthenticationError) -> Fixt
             FixtureError::AuthenticationActorKindMissing
         }
         crate::auth::AuthenticationError::VerificationRefused => {
-            FixtureError::AuthenticationKeyRefused
+            FixtureError::AuthenticationCredentialRefused
         }
         _ => FixtureError::RequestConstructionRefused,
     }
@@ -5832,18 +5832,30 @@ mod tests {
     };
 
     #[test]
-    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_key() {
+    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_credential() {
         assert_eq!(
             fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
             FixtureError::AuthenticationActorKindMissing
         );
         assert_eq!(
             fixture_verification_error(registry_platform_oidc::OidcError::UnknownKid),
-            FixtureError::AuthenticationKeyRefused
+            FixtureError::AuthenticationCredentialRefused
         );
+        // The runtime authenticator erases why verification refused a token:
+        // an unknown key, a bad signature, a wrong issuer, and an expired
+        // token are one refusal, so the message must be true of each.
+        assert_eq!(
+            fixture_authentication_error(crate::auth::AuthenticationError::VerificationRefused),
+            FixtureError::AuthenticationCredentialRefused
+        );
+        let message = FixtureError::AuthenticationCredentialRefused.to_string();
+        for cause in ["signing key", "signature", "issuer", "validity period"] {
+            assert!(message.contains(cause), "{message}");
+        }
+        assert!(!message.contains("unknown"), "{message}");
         for error in [
             FixtureError::AuthenticationActorKindMissing,
-            FixtureError::AuthenticationKeyRefused,
+            FixtureError::AuthenticationCredentialRefused,
         ] {
             let rendered = format!("{error:?}: {error}");
             assert!(!rendered.contains("claim-canary-value"));
