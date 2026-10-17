@@ -2293,98 +2293,126 @@ fn stage_reference_secrets(secret_root: &Path) {
     write("evidence-signing", VERIFY_PRIVATE_JWK);
 }
 
+/// Stage a standalone deployment with a target authority document and an
+/// authority binding, sealed and ready for `evidence authority activate`.
+fn stage_activation(stdout: bool) -> (Deployment, PathBuf, Value) {
+    let deployment = Deployment::stage("adult-status");
+    let mut bundle: Value = serde_norway::from_str(
+        &fs::read_to_string(deployment.path("bundle/evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    bundle["project"] = json!("standalone-evidence");
+    for requirement in bundle["requirements"].as_array_mut().unwrap() {
+        requirement["question"] = json!("Is the subject an adult?");
+        requirement["representations"] = json!(["signed-jws"]);
+        requirement["grantCeiling"] = json!({
+            "authorities": ["statutory"], "actorKinds": ["service"],
+            "valueOrigins": ["request", "authenticated-context"],
+            "audiences": ["urn:example:audience:relying-party"]
+        });
+    }
+    let mut profiles = bundle["authorityProfiles"].take();
+    for profile in profiles.as_object_mut().unwrap().values_mut() {
+        profile["actorKind"] = json!("service");
+    }
+    bundle["authorityProfiles"] = json!({});
+    deployment.write(
+        "bundle/evidence.yaml",
+        &serde_norway::to_string(&bundle).unwrap(),
+    );
+    let authority = json!({
+        "apiVersion": registry_evidence::authority::AUTHORITY_API_VERSION,
+        "kind": registry_evidence::authority::AUTHORITY_KIND,
+        "target": "local", "project": "standalone-evidence", "accessProfiles": profiles
+    });
+    let document = deployment.path("compiled-authority.yaml");
+    write_private_json(&document, &authority);
+    deployment.append(
+        "runtime.yaml",
+        &format!(
+            "authority:\n  target: local\n  root: {}\n",
+            deployment.path("authority").display()
+        ),
+    );
+    deployment.write_secret("audit-hash-key", "activation-audit-key-canary-32-bytes");
+    if stdout {
+        deployment.write_audit_to_stdout();
+    }
+    deployment.seal();
+    (deployment, document, authority)
+}
+
+/// Run `evidence authority activate` against a deployment staged by
+/// [`stage_activation`].
+fn activate_authority(deployment: &Deployment, document: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["authority", "activate", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .arg("--document")
+        .arg(document)
+        .args(["--operator-reference", "operator-reference-canary"])
+        .output()
+        .unwrap()
+}
+
+/// The activation audit entries a command wrote: the companion file beside a
+/// file destination, or the command's stderr for a `stdout` destination.
+fn activation_audit_entries(
+    deployment: &Deployment,
+    output: &std::process::Output,
+    stdout: bool,
+) -> Vec<Value> {
+    let bytes = if stdout {
+        output.stderr.clone()
+    } else {
+        fs::read(deployment.path("audit.activation.jsonl")).unwrap_or_default()
+    };
+    String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 /// Activation resolves the audit boundary alone. Missing source and signer
-/// secrets do not prevent an operator from activating target authority.
+/// secrets do not prevent an operator from activating target authority. It
+/// writes the companion of the configured destination, so the service's own
+/// stream and stdout stay untouched.
 #[test]
 fn authority_activation_uses_configured_audit_without_source_or_signer_initialization() {
     for stdout in [false, true] {
-        let deployment = Deployment::stage("adult-status");
-        let mut bundle: Value = serde_norway::from_str(
-            &fs::read_to_string(deployment.path("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        bundle["project"] = json!("standalone-evidence");
-        for requirement in bundle["requirements"].as_array_mut().unwrap() {
-            requirement["question"] = json!("Is the subject an adult?");
-            requirement["representations"] = json!(["signed-jws"]);
-            requirement["grantCeiling"] = json!({
-                "authorities": ["statutory"], "actorKinds": ["service"],
-                "valueOrigins": ["request", "authenticated-context"],
-                "audiences": ["urn:example:audience:relying-party"]
-            });
-        }
-        let mut profiles = bundle["authorityProfiles"].take();
-        for profile in profiles.as_object_mut().unwrap().values_mut() {
-            profile["actorKind"] = json!("service");
-        }
-        bundle["authorityProfiles"] = json!({});
-        deployment.write(
-            "bundle/evidence.yaml",
-            &serde_norway::to_string(&bundle).unwrap(),
-        );
-        let mut authority = json!({
-            "apiVersion": registry_evidence::authority::AUTHORITY_API_VERSION,
-            "kind": registry_evidence::authority::AUTHORITY_KIND,
-            "target": "local", "project": "standalone-evidence", "accessProfiles": profiles
-        });
-        let document = deployment.path("compiled-authority.yaml");
-        write_private_json(&document, &authority);
-        deployment.append(
-            "runtime.yaml",
-            &format!(
-                "authority:\n  target: local\n  root: {}\n",
-                deployment.path("authority").display()
-            ),
-        );
-        deployment.write_secret("audit-hash-key", "activation-audit-key-canary-32-bytes");
-        if stdout {
-            deployment.write_audit_to_stdout();
-        }
-        deployment.seal();
-        let activate = || {
-            Command::new(env!("CARGO_BIN_EXE_evidence"))
-                .args(["authority", "activate", "--runtime-config"])
-                .arg(deployment.path("runtime.yaml"))
-                .arg("--document")
-                .arg(&document)
-                .args(["--operator-reference", "operator-reference-canary"])
-                .output()
-                .unwrap()
-        };
-        let first = activate();
+        let (deployment, document, mut authority) = stage_activation(stdout);
+        let first = activate_authority(&deployment, &document);
         assert!(
             first.status.success(),
             "{}",
             String::from_utf8_lossy(&first.stderr)
         );
-        let bytes = if stdout {
-            first.stdout
-        } else {
-            fs::read(deployment.path("audit.jsonl")).unwrap()
-        };
-        let entry: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(String::from_utf8_lossy(&first.stdout).starts_with("ACTIVATED "));
+        assert!(!deployment.path("audit.jsonl").exists());
+        let entries = activation_audit_entries(&deployment, &first, stdout);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
         assert_eq!(entry["schema"], "evidence-activation-audit/v1");
         assert_eq!(entry["phase"], "response");
         assert_eq!(entry["record"]["outcome"], "applied");
         assert_eq!(entry["correlation"], entry["record"]["activationId"]);
-        assert!(!String::from_utf8_lossy(&bytes).contains("operator-reference-canary"));
-        let repeated = activate();
+        assert!(!serde_json::to_string(entry)
+            .unwrap()
+            .contains("operator-reference-canary"));
+        let repeated = activate_authority(&deployment, &document);
         assert!(repeated.status.success());
-        assert!(repeated.stdout.is_empty());
+        let delivered = if stdout { 0 } else { 1 };
+        assert_eq!(
+            activation_audit_entries(&deployment, &repeated, stdout).len(),
+            delivered
+        );
         authority["project"] = json!("other-project");
         write_private_json(&document, &authority);
-        let refused = activate();
+        let refused = activate_authority(&deployment, &document);
         assert!(!refused.status.success());
-        let bytes = if stdout {
-            refused.stdout
-        } else {
-            fs::read(deployment.path("audit.jsonl")).unwrap()
-        };
-        let entries: Vec<Value> = String::from_utf8(bytes)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let entries = activation_audit_entries(&deployment, &refused, stdout);
         let refusal = entries.last().unwrap();
         assert_eq!(refusal["record"]["outcome"], "refused");
         assert_ne!(
@@ -2392,6 +2420,75 @@ fn authority_activation_uses_configured_audit_without_source_or_signer_initializ
             refusal["record"]["operatorReferenceHash"]
         );
     }
+}
+
+/// The documented flow activates while `evidence serve` runs and then
+/// restarts it, so activation must not need the service's single-writer lock.
+#[tokio::test]
+async fn authority_activation_succeeds_while_the_service_holds_the_audit_lock() {
+    use registry_evidence::audit::EvidenceAuditLog;
+    use registry_platform_audit::{AuditDestination, FileDestination};
+
+    let (deployment, document, _) = stage_activation(false);
+    let service = EvidenceAuditLog::initialize(
+        AuditDestination::File(
+            FileDestination::new(deployment.path("audit.jsonl"))
+                .expect("the audit destination is valid"),
+        ),
+        b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
+        1,
+    )
+    .await
+    .expect("the service writer initializes");
+
+    let output = activate_authority(&deployment, &document);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let entries = activation_audit_entries(&deployment, &output, false);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["record"]["outcome"], "applied");
+    assert!(
+        service.ready().await,
+        "activation disturbed the service writer"
+    );
+    drop(service);
+}
+
+/// A second activation holding the companion lock is refused with the
+/// writer's own reason, not a generic sentence that hides it.
+#[tokio::test]
+async fn authority_activation_reports_why_the_companion_audit_is_unavailable() {
+    use registry_evidence::audit::EvidenceAuditLog;
+    use registry_platform_audit::{AuditDestination, FileDestination};
+
+    let (deployment, document, _) = stage_activation(false);
+    let other = EvidenceAuditLog::initialize(
+        AuditDestination::File(
+            FileDestination::new(deployment.path("audit.jsonl"))
+                .expect("the audit destination is valid"),
+        )
+        .for_process("activation")
+        .expect("the companion destination is valid"),
+        b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
+        1,
+    )
+    .await
+    .expect("the other activation writer initializes");
+
+    let output = activate_authority(&deployment, &document);
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "evidence: activation audit initialization failed: another activation invocation \
+         holds the single-writer lock on its companion audit file; wait for it to finish \
+         before starting this one\n"
+    );
+    drop(other);
 }
 
 /// Target grants are validated even when the project declares no fixtures.

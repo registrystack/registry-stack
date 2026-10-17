@@ -146,8 +146,12 @@ evidencectl test '<editable-project>' --target '<deployment-target>'
 evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
-Activation writes an `evidence-activation-audit/v1` response entry through the
-runtime's configured audit destination. It resolves only the audit key and sink,
+Activation writes an `evidence-activation-audit/v1` response entry to the
+`activation` companion of the runtime's configured audit destination: beside a
+file destination `audit.jsonl` it writes `audit.activation.jsonl` under its own
+single-writer lock, so it runs while `evidence serve` holds the service file, and a
+`stdout` destination becomes stderr. Ship the companion file with the service
+audit. It resolves only the audit key and sink,
 without initializing sources or the signer. The record carries an activation ID,
 package and authority digests, authority revision, outcome, and successful history
 sequence. The optional operator reference is retained only as a keyed hash scoped

@@ -82,6 +82,12 @@ const OFFLINE_BINDING_KEY: [u8; 32] = [0x45; 32];
 const ANTI_RECONSTRUCTION_FIXTURE: &[u8] =
     include_bytes!("../../../products/evidence/fixtures/conformance/anti-reconstruction.yaml");
 
+/// The companion audit role `evidence authority activate` writes under: a
+/// file destination's `audit.jsonl` becomes `audit.activation.jsonl`, and a
+/// `stdout` destination becomes `stderr`.
+const ACTIVATION_AUDIT_PROCESS: &str = "activation";
+const ACTIVATION_AUDIT_FAILED: &str = "activation audit initialization failed";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CliError(&'static str);
 
@@ -263,17 +269,36 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                             .map_err(|_| {
                                 CommandError::Cli(CliError("activation audit key is unavailable"))
                             })?;
-                        let destination = runtime.audit.destination().map_err(|_| {
-                            CommandError::Cli(CliError("activation audit destination is invalid"))
-                        })?;
+                        // Activation runs while `evidence serve` holds the
+                        // configured destination, so it writes that
+                        // destination's companion under its own lock.
+                        let destination = runtime
+                            .audit
+                            .destination()
+                            .map_err(|_| {
+                                CommandError::Audit(
+                                    ACTIVATION_AUDIT_FAILED,
+                                    AuditInitializationFault::Configuration,
+                                )
+                            })?
+                            .for_process(ACTIVATION_AUDIT_PROCESS)
+                            .map_err(|error| {
+                                CommandError::Audit(
+                                    ACTIVATION_AUDIT_FAILED,
+                                    AuditInitializationFault::File(error.to_string()),
+                                )
+                            })?;
                         let audit = registry_evidence::audit::EvidenceAuditLog::initialize(
                             destination,
                             secret.expose_secret().to_vec(),
                             bundle.config.audit.hash_key_version.get(),
                         )
                         .await
-                        .map_err(|_| {
-                            CommandError::Cli(CliError("activation audit is unavailable"))
+                        .map_err(|error| {
+                            CommandError::Audit(
+                                ACTIVATION_AUDIT_FAILED,
+                                AuditInitializationFault::from(&error),
+                            )
                         })?;
                         authority::activate_with_operator(
                             &binding.root,
@@ -286,7 +311,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                         )
                         .await
                         .map(|snapshot| {
-                            eprintln!(
+                            println!(
                                 "ACTIVATED {} {} sequence={}",
                                 snapshot.revision(),
                                 snapshot.digest(),
