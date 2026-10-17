@@ -1,0 +1,127 @@
+---
+title: How Evidence works
+description: What you define in an Evidence project, what exists once Evidence Gateway runs, who owns each answer, and how you inspect a project or change a published question.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you are deciding whether Evidence Gateway can answer questions from your institution's data,
+four questions settle most of it.
+
+## What do I define?
+
+You define an Evidence project: an `evidence.yaml` file and the scripts it names, kept in version
+control. It declares four things.
+
+- **Assertion definitions.** Each entry under `assertionDefinitions` is one question with its
+  Requirement URI, the purpose it serves, the subject roles a caller names, the source it reads,
+  the outputs it may return, and the grant ceiling no caller can exceed. `adult-status` returns
+  one Boolean, `adult`, and nothing else.
+- **Sources.** Each entry under `sources` is one fixed read, an HTTP request or one SQL statement
+  over a read-only SQLite extract, with the response shape Evidence accepts and the facts it
+  may yield.
+- **Selector profiles.** A selector profile, under `selectorProfiles`, bounds what a caller may
+  send to identify a subject. `record-by-id` admits one string field of 1 to 64 bytes, and a
+  source's path takes its value only from that field.
+- **Functions.** A Function is a small Rhai script with a declared interface. A
+  `source-extract/v1` Function turns the source response into facts, or reports no match or an
+  ambiguous one. An `assertion-derive/v1` Function turns those facts into outputs. Functions run
+  under fixed operation and size limits and cannot import or evaluate code.
+
+Evidence has no built-in domain: adult status exists only because a project declares it.
+
+Beside the project sit two files an operator owns. A target, such as `local-target.yaml`, binds
+the project to one deployment: the token issuer, the source endpoints and their credentials, the
+signer, and the audit path. A target authority, such as `dev-authority.yaml`, names the access
+profiles that may call and the grants each holds. A grant can only narrow a definition's
+`grantCeiling`; Evidence refuses to activate one that widens it.
+
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs, EvidenceProject, SelectorProfile,
+    FunctionInterface, AssertionDefinition, and SourceType; crates/registry-evidence/src/rhai_runtime.rs,
+    MAXIMUM_OPERATIONS and disable_symbol; products/evidence/examples/standalone/evidence.yaml;
+    products/evidence/examples/standalone/local-target.yaml; products/evidence/examples/standalone/dev-authority.yaml;
+    crates/registry-evidence/src/authority.rs, target_grants_cannot_widen_any_definition_ceiling;
+    products/evidence/CONCEPT.md. */}
+
+## What exists at runtime?
+
+`evidencectl package` compiles the project and its target into an immutable bundle, a runtime
+file, and a compiled authority, and prints the `Package digest`. `evidence authority activate`
+records the target authority and prints `ACTIVATED`. One `evidence` process serves that package
+and authority as read at startup; a change means a new package or activation and a restart.
+
+Each request passes the stages `evidence evaluate --explain` names: `prepare` checks the
+selectors, `acquire` makes the fixed read, `extract` and `derive` run the Functions, `validate`
+accepts only declared outputs, and `sign` signs the assertion, which carries its requirement's
+`configurationRevision`.
+
+Evidence keeps no database. Its only durable state is the audit trail: an access event before
+the source is read, and a release event before the response leaves. If the release event cannot
+be written, the caller gets a `503` and no assertion.
+
+{/* Evidence: crates/registry-evidencectl/src/build.rs; crates/registry-evidence/src/authority.rs,
+    activate(); crates/registry-evidence/src/fixture.rs; crates/registry-evidence/src/bundle.rs,
+    compute_requirement_revisions; crates/registry-evidence/src/runtime.rs, AuditPhase::AccessAttempt
+    and AuditPhase::DisclosureRelease; products/evidence/OPERATOR-CONTRACT.md, "Supported deployment"
+    and "Governed bundle and operator runtime". */}
+
+## Who owns the result?
+
+Your institution keeps the record, and Evidence never returns the source response. In the
+example project the source yields a birth date, a region, and a private address field;
+`adult-status` releases only `adult`.
+
+The relying service verifies the answer and owns the decision; an assertion grants no review
+approval and no right to write anywhere. Evidence, in turn, inherits no authority from its
+sources: a Base Registry Engine route is one more HTTP endpoint, reached with Evidence's own
+credentials.
+
+Authors own the project and its fixtures. Operators own the target, the target authority, the
+signing keys, and audit retention.
+
+{/* Evidence: products/evidence/examples/standalone/README.md; products/evidence/examples/standalone/serve-source.py;
+    products/evidence/OPERATOR-CONTRACT.md,
+    "Secrets and keys" and "Audit destinations, rotation, and retention". */}
+
+## How do I inspect or recover it?
+
+Before anything serves, `evidencectl check` reports every diagnostic, and `evidencectl test` runs
+the project's synthetic fixtures offline, ending with
+`Proof: offline synthetic fixture evaluation; no live dependency readiness was checked`.
+`evidencectl explain` prints each definition's Requirement URI, outputs, and grant ceiling, each
+Function's interface and capabilities, and the effective target authority. `evidence evaluate
+--explain` traces each fixture case stage by stage, naming fact keys but never values.
+
+After a request, `evidencectl verify` checks a retained response offline, and `evidencectl audit
+show` reads a stopped local service's audit history. On a host, `evidencectl doctor` checks a
+runtime file and its startup dependencies, and `evidence authority history` lists activations.
+
+Relying services pin the `configurationRevision`, so changing a published question needs a
+decision. The revision moves when you edit what the definition does: its source request or
+response shape, selector profiles, Functions, codelists, schemas, outputs, or validity. It stays
+put for `question` text, fixtures, endpoints, credentials, grants, and signing keys, which move
+the package digest or authority revision instead.
+
+- **A change in meaning gets a new Requirement URI.** Publish `...:adult-status:v2` beside `v1`,
+  keep both for an announced period.
+- **A clarification keeps the URI and moves the revision.** Announce it first; relying services
+  read the new revision from `GET /v1/evidence-definitions` and re-pin.
+
+When you cannot tell which kind of change it is, treat it as a change in meaning.
+
+{/* Evidence: crates/registry-evidencectl/src/check.rs, render_human(); crates/registry-evidencectl/src/fixtures.rs;
+    crates/registry-evidencectl/src/verify.rs; crates/registry-evidencectl/src/audit_view.rs, AuditCommand;
+    crates/registry-evidencectl/src/doctor.rs; crates/registry-evidence/src/authority.rs, history();
+    crates/registry-evidence/src/bundle.rs, canonical_projection and requirement_artifact_paths;
+    crates/registry-evidence/src/server.rs, DEFINITIONS_ROUTE;
+    products/evidence/OPERATOR-CONTRACT.md, "Discovery of available evidence". */}
+
+## Next
+
+- [Connect an institution source from OpenAPI](../../tutorials/connect-an-institution-source/)
