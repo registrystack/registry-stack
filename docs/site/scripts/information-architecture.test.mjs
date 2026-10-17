@@ -599,7 +599,8 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
     'tutorials/run-oid4vci-interoperability-checks',
   ]);
   assert.equal(evidence.items[1].slug, 'tutorials/first-evidence-assertion');
-  assert.equal(evidence.items[2], consumer, 'consumer entry point must precede provider phases');
+  assert.equal(evidence.items[2].slug, 'explanation/how-evidence-works');
+  assert.equal(evidence.items[3], consumer, 'consumer entry point must precede provider phases');
 });
 
 test('seats generated product references directly below Reference without losing leaf attributes', () => {
@@ -792,8 +793,8 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     evidence,
     [
       "label: 'Deploy'",
-      "slug: 'operate/evidence-requirements'",
       "slug: 'tutorials/prove-an-evidence-project'",
+      "slug: 'configure/evidence'",
     ],
     'Registry Evidence Deploy group',
   );
@@ -810,18 +811,27 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     ],
     'Base Registry Engine Deploy and operate group',
   );
-  for (const slug of ['operate/evidence-requirements', 'operate/breg']) {
+  for (const slug of ['explanation/how-evidence-works', 'operate/breg']) {
     assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);
   }
 
-  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg', 'operate/breg-requirements']) {
+  // Evidence's requirements page was absorbed by the one page that explains
+  // how the product works.
+  for (const retired of [
+    'start/evaluate-evidence',
+    'start/evaluate-breg',
+    'operate/breg-requirements',
+    'operate/evidence-requirements',
+  ]) {
     assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
     assert.doesNotMatch(sidebarSource, new RegExp(retired));
   }
-  assert.match(
-    configSource,
-    /'\/start\/evaluate-evidence\/': internalRedirect\('\/operate\/evidence-requirements\/'\)/,
-  );
+  for (const route of ['/start/evaluate-evidence/', '/operate/evidence-requirements/']) {
+    assert.match(
+      configSource,
+      new RegExp(`'${route.replaceAll('/', '\\/')}': internalRedirect\\('\\/explanation\\/how-evidence-works\\/'\\)`),
+    );
+  }
   assert.match(
     configSource,
     /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg\/'\)/,
@@ -916,6 +926,31 @@ test('organizes Registry Evidence tasks without publishing the obsolete Relay co
     1,
   );
   assert.match(evidence, /slug: 'explanation\/integration-patterns'/);
+  // How Evidence works has one seat, right after the first tutorial, and the
+  // tutorials that follow it sit in the order each one's `after:` chains them.
+  assert.equal(
+    [...sidebarSource.matchAll(/slug: 'explanation\/how-evidence-works'/g)].length,
+    1,
+  );
+  assertOrdered(
+    evidence,
+    [
+      "slug: 'tutorials/first-evidence-assertion'",
+      "slug: 'explanation/how-evidence-works'",
+      "slug: 'tutorials/return-a-governed-value'",
+      "slug: 'tutorials/control-who-can-request-evidence'",
+      "slug: 'tutorials/assert-a-role-bound-relationship'",
+      "slug: 'tutorials/request-evidence-as-sd-jwt-vc'",
+    ],
+    'Evidence Gateway tutorial order',
+  );
+  // The refusal tutorial was folded into the access-control tutorial.
+  assert.equal(hasDocForSlug('tutorials/refuse-unsafe-evidence-requests'), false);
+  assert.doesNotMatch(sidebarSource, /refuse-unsafe-evidence-requests/);
+  assert.match(
+    configSource,
+    /'\/tutorials\/refuse-unsafe-evidence-requests\/': internalRedirect\('\/tutorials\/control-who-can-request-evidence\/'\)/,
+  );
   assert.doesNotMatch(evidence, /first-run-with-solmara-lab|Relay-protected|over a Relay/);
   assert.equal(hasDocForSlug('tutorials/first-run-with-solmara-lab'), false);
   assert.ok(RETIRED_RELAY_ROUTES.includes('/tutorials/first-run-with-solmara-lab/'));
