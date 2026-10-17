@@ -7225,10 +7225,8 @@ journeys:
         journey_source: &[u8],
     ) -> PackageFixture {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-        let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-            .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module))
-            .into_bytes();
+        let digest = module_digest(&module);
+        let project = production_project_source(&digest, COMPILER_SOURCE_REVISION);
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
@@ -7282,14 +7280,8 @@ journeys:
 
     fn production_prepared_package(source_revision: &str) -> PreparedPackage {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-        let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-            .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module))
-            .replace(
-                "sourceRevision: fixture-project-source",
-                &format!("sourceRevision: {source_revision}"),
-            )
-            .into_bytes();
+        let digest = module_digest(&module);
+        let project = production_project_source(&digest, source_revision);
         prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: source_revision.to_owned(),
@@ -7311,6 +7303,21 @@ journeys:
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
         })
         .expect("Production candidate package prepares")
+    }
+
+    fn production_project_source(module_digest: &str, source_revision: &str) -> Vec<u8> {
+        String::from_utf8(PROJECT_TEMPLATE.to_vec())
+            .expect("project fixture is UTF-8")
+            .replace("MODULE_DIGEST", module_digest)
+            .replace(
+                "canonicalBaseIri: https://fixture.invalid",
+                "canonicalBaseIri: https://fixture.example.test",
+            )
+            .replace(
+                "sourceRevision: fixture-project-source",
+                &format!("sourceRevision: {source_revision}"),
+            )
+            .into_bytes()
     }
 
     fn execution_facts(

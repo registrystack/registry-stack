@@ -240,6 +240,20 @@ class BRegProductCatalogTests(unittest.TestCase):
             commands.index(constraint_races),
         )
 
+    def test_postgres_connection_diagnostics_follow_kernel_in_the_owned_gate(
+        self,
+    ) -> None:
+        commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
+        kernel = (
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
+            "--test postgres_kernel"
+        )
+        diagnostics = (
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
+            "--test postgres_connection_diagnostics"
+        )
+        self.assertEqual(commands.index(kernel) + 1, commands.index(diagnostics))
+
     def test_postgres_migration_requires_tooling_and_follows_package_in_the_owned_gate(
         self,
     ) -> None:
