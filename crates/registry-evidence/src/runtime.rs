@@ -646,7 +646,6 @@ async fn assemble<A>(
         Some(authenticator) => authenticator,
         None => Arc::new(Authenticator::from_config(
             &bundle.config.authentication,
-            bundle.config.assurance_profile,
             issuer_trust_roots(&bundle, &runtime_document)?,
         )),
     };

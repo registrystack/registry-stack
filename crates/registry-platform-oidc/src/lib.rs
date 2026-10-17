@@ -56,11 +56,14 @@ pub struct OidcDiscoveryConfig {
 
 /// The outbound URL policy for one operator-declared token issuer.
 ///
-/// The declared issuer origin is trusted to live on a private network, and a
-/// same-origin JWKS endpoint inherits that trust. An endpoint on another
-/// origin remains under the strict public-network policy. Cloud metadata is
-/// denied in both cases, and plain HTTP beyond loopback requires the explicit
-/// operator setting represented by `allow_insecure_http`.
+/// Every endpoint the operator declares in configuration, the issuer and a
+/// declared JWKS URI alike, is trusted to live on a private network or on
+/// loopback. An endpoint returned by a discovery document inherits that trust
+/// only on the declared issuer's own origin; a discovered endpoint on another
+/// origin remains under the strict public-network policy. Cloud metadata and
+/// link-local addresses are denied in every case, and plain HTTP beyond
+/// loopback requires the explicit operator setting represented by
+/// `allow_insecure_http`.
 #[derive(Debug, Clone)]
 pub struct IssuerNetworkPolicy {
     issuer: Url,
@@ -115,22 +118,49 @@ impl IssuerNetworkPolicy {
         }
     }
 
-    /// Policy for a key endpoint. Only the declared issuer's own origin
-    /// inherits its private-network allowance.
-    pub fn jwks_fetch_policy(&self, jwks_uri: &str) -> Result<FetchUrlPolicy, OidcError> {
-        let jwks_uri = Url::parse(jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
-        if jwks_uri.origin() == self.issuer.origin() {
+    /// Policy for a key endpoint the operator declared in configuration.
+    ///
+    /// A declared endpoint carries the same operator authority as the declared
+    /// issuer, whatever its origin: it may resolve to a private or loopback
+    /// address, never to cloud metadata or a link-local address. Plain HTTP is
+    /// open only when the declared issuer itself uses it or
+    /// `allow_insecure_http` is set, and beyond loopback it still requires
+    /// `allow_insecure_http`. Use [`Self::discovered_endpoint_fetch_policy`]
+    /// for any URL that came from a discovery document.
+    #[must_use]
+    pub fn declared_jwks_fetch_policy(&self) -> FetchUrlPolicy {
+        FetchUrlPolicy {
+            allowed_schemes: if self.issuer.scheme() == "http" || self.allow_insecure_http {
+                vec!["http".to_owned(), "https".to_owned()]
+            } else {
+                vec!["https".to_owned()]
+            },
+            allow_localhost: true,
+            allow_http_private_network: false,
+            allow_http_non_loopback: self.allow_insecure_http,
+            deny_private_ranges: false,
+            deny_cloud_metadata: true,
+        }
+    }
+
+    /// Policy for an endpoint returned by the issuer's discovery document, such
+    /// as its `jwks_uri` or `token_endpoint`. Only the declared issuer's own
+    /// origin inherits its private-network and plain HTTP allowance; another
+    /// origin stays under the strict public-network policy and must use https,
+    /// whatever `allow_insecure_http` says.
+    pub fn discovered_endpoint_fetch_policy(
+        &self,
+        endpoint: &str,
+    ) -> Result<FetchUrlPolicy, OidcError> {
+        let endpoint = Url::parse(endpoint).map_err(|_| OidcError::InvalidUrl)?;
+        if endpoint.origin() == self.issuer.origin() {
             Ok(self.issuer_fetch_policy())
         } else {
             Ok(FetchUrlPolicy {
-                allowed_schemes: if self.allow_insecure_http {
-                    vec!["http".to_owned(), "https".to_owned()]
-                } else {
-                    vec!["https".to_owned()]
-                },
+                allowed_schemes: vec!["https".to_owned()],
                 allow_localhost: false,
                 allow_http_private_network: false,
-                allow_http_non_loopback: self.allow_insecure_http,
+                allow_http_non_loopback: false,
                 deny_private_ranges: true,
                 deny_cloud_metadata: true,
             })
@@ -149,11 +179,12 @@ pub async fn fetch_discovery_for_issuer(
         if cfg.issuer.trim().is_empty() {
             return Err(OidcError::MissingIssuer);
         }
-        let policy = network.jwks_fetch_policy(jwks_uri)?;
+        let policy = network.declared_jwks_fetch_policy();
         let url = Url::parse(jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
         policy
             .validate_for_immediate_fetch_with_timeout(&url, cfg.discovery_timeout)
-            .await?;
+            .await
+            .map_err(|error| refusal(OidcEndpoint::DeclaredJwks, error))?;
         return Ok((
             DiscoveryDocument {
                 issuer: cfg.issuer.clone(),
@@ -171,7 +202,8 @@ pub async fn fetch_discovery_for_issuer(
     let validated_url = network
         .issuer_fetch_policy()
         .validate_for_immediate_fetch_with_timeout(&url, cfg.discovery_timeout)
-        .await?;
+        .await
+        .map_err(|error| refusal(OidcEndpoint::Issuer, error))?;
     let response = validated_url
         .immediate_get()?
         .timeout(cfg.discovery_timeout)
@@ -190,12 +222,65 @@ pub async fn fetch_discovery_for_issuer(
             actual: document.issuer,
         });
     }
-    let policy = network.jwks_fetch_policy(&document.jwks_uri)?;
+    let policy = network.discovered_endpoint_fetch_policy(&document.jwks_uri)?;
     let jwks_uri = Url::parse(&document.jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
+    let endpoint = if jwks_uri.origin() == network.issuer.origin() {
+        OidcEndpoint::Issuer
+    } else {
+        OidcEndpoint::DiscoveredCrossOriginJwks
+    };
     policy
         .validate_for_immediate_fetch_with_timeout(&jwks_uri, cfg.discovery_timeout)
-        .await?;
+        .await
+        .map_err(|error| refusal(endpoint, error))?;
     Ok((document, policy))
+}
+
+/// Which endpoint an issuer network refusal concerns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OidcEndpoint {
+    /// The declared issuer or an endpoint on its own origin.
+    Issuer,
+    /// A JWKS URI the operator declared in configuration.
+    DeclaredJwks,
+    /// A JWKS URI a discovery document returned on another origin.
+    DiscoveredCrossOriginJwks,
+}
+
+/// Name the remedy for a policy refusal, without repeating the address. Other
+/// failures, such as DNS errors or timeouts, keep their own description.
+fn refusal(endpoint: OidcEndpoint, error: FetchUrlError) -> OidcError {
+    let remedy = match (&error, endpoint) {
+        (FetchUrlError::HttpRequiresLoopback, _) => {
+            "plain http beyond loopback needs allowInsecureHttp: true"
+        }
+        (FetchUrlError::CloudMetadataDenied { .. }, _) => {
+            "cloud metadata addresses are never fetched"
+        }
+        (
+            FetchUrlError::PrivateRangeDenied { .. } | FetchUrlError::LocalhostDenied { .. },
+            OidcEndpoint::DiscoveredCrossOriginJwks,
+        ) => {
+            "a key endpoint discovered on another origin may not resolve to a private or \
+             loopback address; serve keys from the issuer's origin or declare the JWKS URI in \
+             configuration"
+        }
+        (FetchUrlError::PrivateRangeDenied { .. }, _) => {
+            "link-local and unspecified addresses are never fetched"
+        }
+        (FetchUrlError::SchemeDenied { scheme }, OidcEndpoint::DeclaredJwks)
+            if scheme == "http" =>
+        {
+            "a plain http key endpoint needs allowInsecureHttp: true when the issuer uses https"
+        }
+        (FetchUrlError::SchemeDenied { .. }, OidcEndpoint::DiscoveredCrossOriginJwks) => {
+            "a key endpoint discovered on another origin must use https; \
+             allowInsecureHttp covers only the issuer's origin, so serve keys from \
+             there or declare the JWKS URI in configuration"
+        }
+        _ => return OidcError::FetchUrl(error),
+    };
+    OidcError::EndpointRefused { endpoint, remedy }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1726,6 +1811,21 @@ pub enum OidcError {
     ConflictingEndpointConfiguration,
     #[error("issuer {issuer}; plain http needs allowInsecureHttp: true")]
     InsecureHttpRequiresOptIn { issuer: String },
+    #[error("{} refused by the issuer network policy: {remedy}", endpoint.describe())]
+    EndpointRefused {
+        endpoint: OidcEndpoint,
+        remedy: &'static str,
+    },
+}
+
+impl OidcEndpoint {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Issuer => "issuer endpoint",
+            Self::DeclaredJwks => "configured JWKS endpoint",
+            Self::DiscoveredCrossOriginJwks => "discovered cross-origin JWKS endpoint",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1750,7 +1850,7 @@ mod tests {
             )
             .expect("the declared private issuer is reachable");
         network
-            .jwks_fetch_policy("https://10.20.30.40:8443/jwks")
+            .discovered_endpoint_fetch_policy("https://10.20.30.40:8443/jwks")
             .unwrap()
             .validate_dns_pinned_for_immediate_fetch(
                 &Url::parse("https://10.20.30.40:8443/jwks").unwrap(),
@@ -1763,7 +1863,7 @@ mod tests {
         let network = IssuerNetworkPolicy::new("https://10.20.30.40:8443", false).unwrap();
         let cross_origin = Url::parse("https://10.20.30.41:8443/jwks").unwrap();
         let error = network
-            .jwks_fetch_policy(cross_origin.as_str())
+            .discovered_endpoint_fetch_policy(cross_origin.as_str())
             .unwrap()
             .validate_dns_pinned_for_immediate_fetch(&cross_origin)
             .expect_err("a cross-origin private key endpoint stays confined");
@@ -1810,22 +1910,208 @@ mod tests {
     }
 
     #[test]
-    fn http_opt_in_allows_a_public_cross_origin_jwks_without_opening_private_ranges() {
+    fn a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in() {
         let network = IssuerNetworkPolicy::new("http://93.184.216.34:8080", true).unwrap();
-        let public_keys = Url::parse("http://93.184.216.35:8080/jwks").unwrap();
-        network
-            .jwks_fetch_policy(public_keys.as_str())
-            .unwrap()
-            .validate_dns_pinned_for_immediate_fetch(&public_keys)
-            .expect("the HTTP opt-in applies to a public cross-origin key endpoint");
-
-        let private_keys = Url::parse("http://10.20.30.41:8080/jwks").unwrap();
+        let plain_keys = Url::parse("http://93.184.216.35:8080/jwks").unwrap();
         let error = network
-            .jwks_fetch_policy(private_keys.as_str())
+            .discovered_endpoint_fetch_policy(plain_keys.as_str())
+            .unwrap()
+            .validate_dns_pinned_for_immediate_fetch(&plain_keys)
+            .expect_err("the HTTP opt-in covers only the issuer's origin");
+        assert!(matches!(error, FetchUrlError::SchemeDenied { .. }));
+
+        let secure_keys = Url::parse("https://93.184.216.35/jwks").unwrap();
+        network
+            .discovered_endpoint_fetch_policy(secure_keys.as_str())
+            .unwrap()
+            .validate_dns_pinned_for_immediate_fetch(&secure_keys)
+            .expect("a public cross-origin https key endpoint is accepted");
+
+        let private_keys = Url::parse("https://10.20.30.41/jwks").unwrap();
+        let error = network
+            .discovered_endpoint_fetch_policy(private_keys.as_str())
             .unwrap()
             .validate_dns_pinned_for_immediate_fetch(&private_keys)
             .expect_err("a cross-origin private key endpoint stays denied");
         assert!(matches!(error, FetchUrlError::PrivateRangeDenied { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_discovered_cross_origin_plain_http_jwks_names_the_remedy() {
+        let issuer = serve_discovery("http://93.184.216.35:8080/jwks").await;
+        let cfg = OidcDiscoveryConfig {
+            issuer,
+            jwks_uri_override: None,
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+        let error = fetch_discovery_for_issuer(&cfg, true)
+            .await
+            .expect_err("a discovered cross-origin plain http key endpoint is refused");
+        assert_refused(
+            error,
+            OidcEndpoint::DiscoveredCrossOriginJwks,
+            "must use https",
+            "93.184.216.35",
+        );
+    }
+
+    fn declared_override(issuer: &str, jwks_uri: &str) -> OidcDiscoveryConfig {
+        OidcDiscoveryConfig {
+            issuer: issuer.to_owned(),
+            jwks_uri_override: Some(jwks_uri.to_owned()),
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        }
+    }
+
+    fn assert_refused(error: OidcError, expected: OidcEndpoint, remedy: &str, address: &str) {
+        match &error {
+            OidcError::EndpointRefused {
+                endpoint,
+                remedy: actual,
+            } => {
+                assert_eq!(*endpoint, expected);
+                assert!(actual.contains(remedy), "unexpected remedy: {actual}");
+            }
+            other => panic!("expected a policy refusal, got {other:?}"),
+        }
+        let message = error.to_string();
+        assert!(message.contains(remedy), "{message}");
+        assert!(
+            !message.contains(address),
+            "the refusal repeats the address"
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_jwks_on_a_private_container_address_inherits_the_declared_issuer_allowance() {
+        // The Compose shape: browsers reach the issuer on localhost, the
+        // runtime reaches its keys on the container network.
+        let cfg = declared_override(
+            "http://localhost:8090",
+            "http://172.18.0.3:8090/oauth2/jwks",
+        );
+        let (_, policy) = fetch_discovery_for_issuer(&cfg, true)
+            .await
+            .expect("a declared private key endpoint is trusted like the declared issuer");
+        assert_eq!(
+            policy,
+            IssuerNetworkPolicy::new("http://localhost:8090", true)
+                .unwrap()
+                .declared_jwks_fetch_policy()
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_jwks_on_another_loopback_port_is_accepted_without_the_opt_in() {
+        let cfg = declared_override("http://127.0.0.1:8081", "http://127.0.0.1:8082/jwks");
+        fetch_discovery_for_issuer(&cfg, false)
+            .await
+            .expect("a declared loopback key endpoint keeps the development behavior");
+        let cfg = declared_override("http://[::1]:8081", "http://[::1]:8082/jwks");
+        fetch_discovery_for_issuer(&cfg, false)
+            .await
+            .expect("IPv6 loopback behaves the same");
+    }
+
+    #[tokio::test]
+    async fn declared_plain_http_jwks_beyond_loopback_requires_the_opt_in() {
+        // Under an http loopback issuer the http scheme is open, and the
+        // non-loopback destination is what needs the opt-in.
+        let cfg = declared_override("http://localhost:8090", "http://10.20.30.40:8080/jwks");
+        let error = fetch_discovery_for_issuer(&cfg, false)
+            .await
+            .expect_err("declared plain http beyond loopback needs the opt-in");
+        assert_refused(
+            error,
+            OidcEndpoint::DeclaredJwks,
+            "plain http beyond loopback needs allowInsecureHttp: true",
+            "10.20.30.40",
+        );
+        fetch_discovery_for_issuer(&cfg, true)
+            .await
+            .expect("the opt-in admits the declared plain http key endpoint");
+
+        // Under an https issuer, plain http keys are closed without the opt-in.
+        let cfg = declared_override("https://issuer.example", "http://10.20.30.40:8080/jwks");
+        let error = fetch_discovery_for_issuer(&cfg, false)
+            .await
+            .expect_err("an https issuer keeps https keys without the opt-in");
+        assert_refused(
+            error,
+            OidcEndpoint::DeclaredJwks,
+            "needs allowInsecureHttp: true when the issuer uses https",
+            "10.20.30.40",
+        );
+        fetch_discovery_for_issuer(&cfg, true)
+            .await
+            .expect("the opt-in admits the declared plain http key endpoint");
+    }
+
+    #[tokio::test]
+    async fn cloud_metadata_is_refused_for_declared_and_discovered_key_endpoints() {
+        let cfg = declared_override("https://issuer.example", "https://169.254.169.254/keys");
+        let error = fetch_discovery_for_issuer(&cfg, true)
+            .await
+            .expect_err("a declared metadata key endpoint is refused");
+        assert_refused(
+            error,
+            OidcEndpoint::DeclaredJwks,
+            "cloud metadata",
+            "169.254.169.254",
+        );
+
+        let issuer = serve_discovery("https://169.254.169.254/keys").await;
+        let cfg = OidcDiscoveryConfig {
+            issuer,
+            jwks_uri_override: None,
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+        let error = fetch_discovery_for_issuer(&cfg, true)
+            .await
+            .expect_err("a discovered metadata key endpoint is refused");
+        assert_refused(
+            error,
+            OidcEndpoint::DiscoveredCrossOriginJwks,
+            "cloud metadata",
+            "169.254.169.254",
+        );
+
+        let declared = IssuerNetworkPolicy::new("https://issuer.example", true)
+            .unwrap()
+            .declared_jwks_fetch_policy();
+        let link_local = Url::parse("https://169.254.10.20/keys").unwrap();
+        assert!(matches!(
+            declared.validate_dns_pinned_for_immediate_fetch(&link_local),
+            Err(FetchUrlError::PrivateRangeDenied { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn discovered_cross_origin_private_or_loopback_jwks_stays_refused() {
+        for (jwks_uri, address) in [
+            ("https://10.0.0.1/jwks", "10.0.0.1"),
+            ("https://127.0.0.1:1/jwks", "127.0.0.1:1"),
+        ] {
+            let issuer = serve_discovery(jwks_uri).await;
+            let cfg = OidcDiscoveryConfig {
+                issuer,
+                jwks_uri_override: None,
+                discovery_timeout: Duration::from_secs(1),
+                max_doc_bytes: DEFAULT_DOC_BYTES,
+            };
+            let error = fetch_discovery_for_issuer(&cfg, true)
+                .await
+                .expect_err("a discovered cross-origin private key endpoint is refused");
+            assert_refused(
+                error,
+                OidcEndpoint::DiscoveredCrossOriginJwks,
+                "declare the JWKS URI in configuration",
+                address,
+            );
+        }
     }
 
     async fn serve_discovery(jwks_uri: &str) -> String {
