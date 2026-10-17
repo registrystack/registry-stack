@@ -3636,6 +3636,38 @@ fn export_client_names_a_symlinked_output_parent_and_target() {
     assert!(rendered.contains(&real.display().to_string()), "{rendered}");
 }
 
+#[cfg(unix)]
+#[test]
+fn export_client_names_a_symlinked_output_and_target() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let live_target = state.project.join("operator-key.jwk");
+    fs::write(&live_target, b"operator-owned").unwrap();
+    let dangling_target = state.project.join("missing-key.jwk");
+    for target in [&live_target, &dangling_target] {
+        let args = export_args(&state);
+        if fs::symlink_metadata(&args.assertion_key_file).is_ok() {
+            fs::remove_file(&args.assertion_key_file).unwrap();
+        }
+        std::os::unix::fs::symlink(target, &args.assertion_key_file).unwrap();
+        let linked = args.assertion_key_file.clone();
+
+        let error = export_client::run(args).expect_err("a symlinked output is refused");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(&linked.display().to_string()),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&target.display().to_string()),
+            "{rendered}"
+        );
+        assert!(!export_args(&state).client_id_file.exists());
+    }
+    assert_eq!(fs::read(&live_target).unwrap(), b"operator-owned");
+    assert!(!dangling_target.exists());
+}
+
 #[test]
 fn export_client_reports_the_registered_external_resource() {
     let (_temp, state, mut clients, files) = fixture();

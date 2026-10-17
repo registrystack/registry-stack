@@ -158,6 +158,11 @@ impl Output {
         )?;
         let exists = entry.exists()?;
         if exists {
+            if let Some(detail) = crate::safe_path::symlink_detail(path) {
+                return Err(anyhow::anyhow!("{detail}")).context(
+                    "credential output needs a prepared directory without symbolic links or parent-directory components",
+                );
+            }
             let mut file = entry.open_read()?;
             let metadata = file.metadata()?;
             private::check_metadata(&metadata, false)?;
