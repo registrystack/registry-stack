@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS scheduling_meta (
     scheduling_id text NOT NULL,
     policy_revision bigint NOT NULL CHECK (policy_revision > 0),
     policy_digest text NOT NULL,
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    facts_revision bigint NOT NULL DEFAULT 0
 );
 -- The empty scheduling_id marks a database no deployment has adopted yet;
 -- `schedulingctl apply` claims it for the policy's scheduling id, and every
@@ -15,7 +16,8 @@ ON CONFLICT (singleton) DO NOTHING;
 CREATE TABLE IF NOT EXISTS scheduling_policy_revisions (
     policy_revision bigint PRIMARY KEY CHECK (policy_revision > 0),
     policy_digest text NOT NULL,
-    applied_at timestamptz NOT NULL DEFAULT now()
+    applied_at timestamptz NOT NULL DEFAULT now(),
+    policy_document jsonb
 );
 
 CREATE TABLE IF NOT EXISTS scheduling_locations (
@@ -96,14 +98,35 @@ CREATE TABLE IF NOT EXISTS scheduling_claims (
     reason text CHECK (reason IS NULL OR octet_length(reason) <= 4096),
     created_at timestamptz NOT NULL DEFAULT now(),
     changed_at timestamptz NOT NULL DEFAULT now(),
-    closed_at timestamptz
+    closed_at timestamptz,
+    external_references jsonb NOT NULL DEFAULT '[]'::jsonb,
+    owner_issuer text,
+    owner_subject text,
+    owner_reference text,
+    owner_erased_at timestamptz,
+    CONSTRAINT scheduling_claims_owner_check CHECK (
+        (owner_issuer IS NULL AND owner_subject IS NULL)
+        OR (owner_issuer IS NOT NULL AND owner_issuer <> ''
+            AND owner_subject IS NOT NULL AND owner_subject <> '')
+    ),
+    CONSTRAINT scheduling_claims_owner_reference_check CHECK (
+        owner_reference IS NULL OR owner_reference ~ '^sha256:[0-9a-f]{64}$'
+    ),
+    CONSTRAINT scheduling_claims_owner_erasure_check CHECK (
+        (owner_erased_at IS NULL AND owner_reference IS NULL)
+        OR (owner_erased_at IS NOT NULL AND owner_reference IS NOT NULL
+            AND owner_issuer IS NULL AND owner_subject IS NULL)
+    )
 );
 CREATE INDEX IF NOT EXISTS scheduling_claims_supply_active_idx
     ON scheduling_claims(supply_id, occupied_start, occupied_end)
     WHERE state = 'active';
-CREATE INDEX IF NOT EXISTS scheduling_claims_duplicate_idx
-    ON scheduling_claims(duplicate_key)
+CREATE INDEX IF NOT EXISTS scheduling_claims_duplicate_lookup_idx
+    ON scheduling_claims(duplicate_key, offering, occupied_end)
     WHERE state = 'active' AND duplicate_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS scheduling_claims_external_references_idx
+    ON scheduling_claims USING gin (external_references jsonb_path_ops)
+    WHERE kind = 'booking';
 CREATE INDEX IF NOT EXISTS scheduling_claims_expiry_idx
     ON scheduling_claims(hold_expires_at)
     WHERE state = 'active' AND kind = 'hold';
@@ -126,7 +149,7 @@ CREATE TABLE IF NOT EXISTS scheduling_outbox (
     claim_id uuid NOT NULL REFERENCES scheduling_claims(claim_id),
     appointment_revision bigint NOT NULL,
     due_at timestamptz NOT NULL,
-    delivery_state text NOT NULL CHECK (delivery_state IN ('pending','delivered','failed','local')),
+    delivery_state text NOT NULL CHECK (delivery_state IN ('pending','delivered','failed','local','suppressed')),
     attempts integer NOT NULL DEFAULT 0,
     next_attempt_at timestamptz NOT NULL,
     payload jsonb NOT NULL,
@@ -141,10 +164,10 @@ CREATE INDEX IF NOT EXISTS scheduling_outbox_claim_idx
 
 CREATE TABLE IF NOT EXISTS scheduling_attempts (
     attempt_id uuid PRIMARY KEY,
-    actor_issuer text NOT NULL,
-    actor_subject text NOT NULL,
+    actor_issuer text,
+    actor_subject text,
     scope text NOT NULL,
-    idempotency_key text NOT NULL,
+    idempotency_key text,
     request_hash text NOT NULL,
     state text NOT NULL CHECK (state IN ('completed','refused')),
     status_code integer NOT NULL,
@@ -156,8 +179,17 @@ CREATE TABLE IF NOT EXISTS scheduling_attempts (
     created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL,
     erased_at timestamptz,
+    key_reference text NOT NULL CHECK (key_reference ~ '^sha256:[0-9a-f]{64}$'),
     CHECK (erased_at IS NOT NULL OR receipt IS NOT NULL),
-    UNIQUE (actor_issuer, actor_subject, scope, idempotency_key)
+    CONSTRAINT scheduling_attempts_key_reference_key UNIQUE (key_reference),
+    CONSTRAINT scheduling_attempts_raw_caller_check CHECK (
+        (erased_at IS NULL
+            AND actor_issuer IS NOT NULL AND actor_issuer <> ''
+            AND actor_subject IS NOT NULL AND actor_subject <> ''
+            AND idempotency_key IS NOT NULL AND idempotency_key <> '')
+        OR (erased_at IS NOT NULL
+            AND actor_issuer IS NULL AND actor_subject IS NULL AND idempotency_key IS NULL)
+    )
 );
 CREATE INDEX IF NOT EXISTS scheduling_attempts_expiry_idx
     ON scheduling_attempts(expires_at)
@@ -171,3 +203,34 @@ CREATE TABLE IF NOT EXISTS scheduling_cursors (
 );
 CREATE INDEX IF NOT EXISTS scheduling_cursors_expiry_idx
     ON scheduling_cursors(expires_at);
+
+CREATE TABLE IF NOT EXISTS scheduling_windows (
+    window_id text PRIMARY KEY,
+    window_record jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS scheduling_window_revision_heads (
+    window_id text PRIMARY KEY,
+    window_record jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- The activation ledger is append-only. The latest apply_order names the
+-- package this database serves.
+CREATE TABLE IF NOT EXISTS scheduling_activations (
+    activation_id uuid PRIMARY KEY,
+    apply_order bigint NOT NULL UNIQUE CHECK (apply_order > 0),
+    package_digest text NOT NULL CHECK (package_digest ~ '^sha256:[0-9a-f]{64}$'),
+    predecessor_package_digest text
+        CHECK (predecessor_package_digest ~ '^sha256:[0-9a-f]{64}$'),
+    database_id text NOT NULL CHECK (octet_length(database_id) BETWEEN 1 AND 256),
+    plan_kind text NOT NULL CHECK (plan_kind IN ('initial', 'successor')),
+    applied_at timestamptz NOT NULL,
+    operator_reference_hash text CHECK (octet_length(operator_reference_hash) <= 256),
+    backup_references text[] NOT NULL DEFAULT '{}'
+        CHECK (cardinality(backup_references) <= 16),
+    role_mode text NOT NULL CHECK (role_mode IN ('single', 'split')),
+    runtime_role text NOT NULL CHECK (octet_length(runtime_role) BETWEEN 1 AND 256),
+    CHECK ((plan_kind = 'initial') = (predecessor_package_digest IS NULL))
+);

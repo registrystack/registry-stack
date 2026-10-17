@@ -1640,7 +1640,9 @@ async fn fingerprint_catalog(
                     a.attname,
                     pg_catalog.format_type(a.atttypid, a.atttypmod),
                     a.attnotnull,
-                    COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '')
+                    COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), ''),
+                    COALESCE(collation_namespace.nspname, ''),
+                    COALESCE(coll.collname, '')
              FROM deparse_context
              CROSS JOIN pg_catalog.pg_class c
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -1648,6 +1650,9 @@ async fn fingerprint_catalog(
                ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
              LEFT JOIN pg_catalog.pg_attrdef d
                ON d.adrelid = c.oid AND d.adnum = a.attnum
+             LEFT JOIN pg_catalog.pg_collation coll ON coll.oid = a.attcollation
+             LEFT JOIN pg_catalog.pg_namespace collation_namespace
+               ON collation_namespace.oid = coll.collnamespace
              WHERE n.nspname = ANY($1::text[])
                AND c.relkind IN ('r', 'v', 'S')
              ORDER BY n.nspname, c.relname,
@@ -1665,7 +1670,8 @@ async fn fingerprint_catalog(
                     c.relname,
                     x.conname,
                     x.contype::text,
-                    pg_catalog.pg_get_constraintdef(x.oid, false)
+                    pg_catalog.pg_get_constraintdef(x.oid, false),
+                    x.convalidated
              FROM deparse_context
              CROSS JOIN pg_catalog.pg_constraint x
              JOIN pg_catalog.pg_class c ON c.oid = x.conrelid
@@ -1765,13 +1771,13 @@ async fn fingerprint_catalog(
     let mut hasher = Sha256::new();
     // Runtime statements address table columns explicitly by name. ALTER TABLE
     // appends physical slots, whereas a fresh install uses compiler field order.
-    // v5 hashes the same named table schema for both histories, including after
+    // v6 hashes the same named table schema for both histories, including after
     // dropped-column gaps. View/sequence order and every other catalog input
     // remain covered. The versioned domain keeps a hash of physical column
     // order from ever matching this one.
-    hasher.update(b"breg/catalog/v5/columns");
+    hasher.update(b"breg/catalog/v6/columns");
     for row in column_rows {
-        for index in [0, 1, 2, 7, 8, 10] {
+        for index in [0, 1, 2, 7, 8, 10, 11, 12] {
             hash_text(&mut hasher, &row.get::<_, String>(index));
         }
         for index in [3, 4, 5, 9] {
@@ -1781,8 +1787,17 @@ async fn fingerprint_catalog(
             hasher.update(row.get::<_, i16>(6).to_be_bytes());
         }
     }
-    hasher.update(b"breg/catalog/v3/constraints");
+    hasher.update(b"breg/catalog/v4/constraints");
     for row in constraint_rows {
+        let kind = row.get::<_, String>(3);
+        if kind == "n" && !row.get::<_, bool>(5) {
+            return Err(PostgresKernelError::CatalogInvariant(
+                "a managed NOT NULL constraint is not validated; validate it before applying the package",
+            ));
+        }
+        if !constraint_belongs_in_fingerprint(&kind) {
+            continue;
+        }
         for index in 0..5 {
             hash_text(&mut hasher, &row.get::<_, String>(index));
         }
@@ -1851,9 +1866,28 @@ fn hash_bool(hasher: &mut Sha256, value: bool) {
     hasher.update([u8::from(value)]);
 }
 
+fn constraint_belongs_in_fingerprint(kind: &str) -> bool {
+    // PostgreSQL 18 exposes NOT NULL constraints through pg_constraint as
+    // contype=n. Requiredness is already hashed from pg_attribute.attnotnull,
+    // which PostgreSQL 17 and 18 both expose, so including the new catalog row
+    // would count the same invariant twice and make one schema major-specific.
+    kind != "n"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn not_null_is_fingerprinted_once_through_the_column_catalog() {
+        assert!(!constraint_belongs_in_fingerprint("n"));
+        for kind in ["c", "f", "p", "u", "x"] {
+            assert!(
+                constraint_belongs_in_fingerprint(kind),
+                "constraint kind {kind} remains part of the fingerprint"
+            );
+        }
+    }
 
     #[test]
     fn the_inventory_names_every_platform_delivery_object() {

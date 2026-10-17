@@ -582,23 +582,35 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
         .migration_plan
         .statements
         .iter()
-        .map(|statement| statement.id.as_str())
+        .map(|statement| statement.id.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        statements,
-        vec![
-            "entity.consent-decision.policy.registry_action_rls_insert_18c2deac1df83f2bbf7c42e1.drop",
-            "entity.consent-decision.policy.registry_action_rls_select_f13c1f2f332145d8ba2b99c4.drop",
-            "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38.drop",
-            "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600.drop",
-            "entity.consent-decision.field.recipient.vocabulary",
-            "entity.consent-decision.policy.registry_action_rls_insert_18c2deac1df83f2bbf7c42e1",
-            "entity.consent-decision.policy.registry_action_rls_select_f13c1f2f332145d8ba2b99c4",
-            "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38",
-            "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600",
-        ],
+        statements.len(),
+        9,
+        "the recipient change rewrites exactly four grouped policies around one vocabulary change"
+    );
+    let installed_policy_ids = statements[5..].to_vec();
+    let dropped_policy_ids = installed_policy_ids
+        .iter()
+        .map(|id| format!("{id}.drop"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statements[..4],
+        dropped_policy_ids,
         "a recipient addition retires Action policies before replacing the check, then reinstalls them"
     );
+    assert_eq!(
+        statements[4],
+        "entity.consent-decision.field.recipient.vocabulary"
+    );
+    for (id, prefix) in installed_policy_ids.iter().zip([
+        "entity.consent-decision.policy.registry_action_rls_insert_",
+        "entity.consent-decision.policy.registry_action_rls_select_",
+        "entity.person.policy.registry_action_link_rls_lock_update_",
+        "entity.person.policy.registry_action_link_rls_select_",
+    ]) {
+        assert!(id.starts_with(prefix), "unexpected grouped policy id {id}");
+    }
     // The recipient widens the action contract, whose fingerprint the action
     // policies embed, so the rehearsal must reconcile policies as activation
     // does to measure the same catalog as the fresh install.
@@ -970,7 +982,7 @@ fn metadata_only_source(
         sql_sha256: Vec::new(),
         assertion_sha256: Vec::new(),
         fixture_inventory: Vec::new(),
-        postgres_major: 16,
+        postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_schema_fingerprint.to_owned(),
     };

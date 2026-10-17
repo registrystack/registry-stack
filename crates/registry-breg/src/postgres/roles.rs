@@ -133,7 +133,7 @@ pub async fn provision_postgis_prerequisites(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<SqlIdentifier> {
-    verify_postgres_16_or_newer(admin).await?;
+    verify_postgres_17_or_newer(admin).await?;
     admin
         .batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS {POSTGIS_EXTENSION_SCHEMA};\n\
@@ -156,7 +156,7 @@ pub async fn provision_spatial_bbox_role(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<SqlIdentifier> {
-    verify_postgres_16_or_newer(admin).await?;
+    verify_postgres_17_or_newer(admin).await?;
     let bbox_role = spatial_bbox_role(runtime_role);
     admin
         .batch_execute(&format!(
@@ -186,7 +186,7 @@ pub async fn verify_postgis(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    verify_postgres_16_or_newer(client).await?;
+    verify_postgres_17_or_newer(client).await?;
     let bbox_role = spatial_bbox_role(runtime_role);
     verify_postgis_spatial_bbox_role(client, migration_role, runtime_role, &bbox_role).await?;
     let installed = client
@@ -381,19 +381,19 @@ fn postgis_version_supported(version: &str) -> bool {
     major > MIN_POSTGIS_MAJOR || (major == MIN_POSTGIS_MAJOR && minor >= MIN_POSTGIS_MINOR)
 }
 
-async fn verify_postgres_16_or_newer(client: &impl GenericClient) -> Result<()> {
+async fn verify_postgres_17_or_newer(client: &impl GenericClient) -> Result<()> {
     let version_num: String = client
         .query_one("SELECT current_setting('server_version_num')", &[])
         .await?
         .get(0);
     let version_num = version_num.parse::<u32>().map_err(|_| {
         PostgresKernelError::Configuration(
-            "PostgreSQL 16 or newer is required for spatial bbox roles",
+            "PostgreSQL 17 or newer is required for spatial bbox roles",
         )
     })?;
-    if version_num < 160_000 {
+    if version_num < 170_000 {
         return Err(PostgresKernelError::Configuration(
-            "PostgreSQL 16 or newer is required for spatial bbox roles",
+            "PostgreSQL 17 or newer is required for spatial bbox roles",
         ));
     }
     Ok(())

@@ -379,8 +379,8 @@ mod members {
     pub(super) fn postgres_major<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<u16, D::Error> {
-        let major = BoundedU32::<15, 18>::deserialize(deserializer)?;
-        u16::try_from(major.get()).map_err(|_| Invalid::out_of_range(15, 18).into_error())
+        let major = BoundedU32::<17, 18>::deserialize(deserializer)?;
+        u16::try_from(major.get()).map_err(|_| Invalid::out_of_range(17, 18).into_error())
     }
 
     pub(super) fn backup_age<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
@@ -2096,7 +2096,7 @@ fn validate_receipt(
         || receipt.plan_sha256 != plan_digest
         || receipt.sql_sha256 != expected_sql
         || receipt.assertion_sha256 != expected_assertions
-        || !(15..=18).contains(&receipt.postgres_major)
+        || !(17..=18).contains(&receipt.postgres_major)
         || (receipt.fixture_inventory.is_empty() && !metadata_only)
         || !strictly_sorted(
             receipt

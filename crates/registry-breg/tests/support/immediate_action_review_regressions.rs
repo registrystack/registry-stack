@@ -313,6 +313,60 @@ async fn late_known_abort_retry_reuses_reserved_create_and_application_ids() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wide_patch_action_returns_and_replays_the_full_mutation_ceiling_result_set() {
     let (database, registry, identity) = setup_wide_action_registry().await;
+    let policy_oids = immediate_action_policy_oids(&database).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    reconcile_compiled_runtime_acl_for_test(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("unchanged wide action policies reconcile idempotently");
+    drop(migration);
+    migration_task.abort();
+    assert_eq!(
+        immediate_action_policy_oids(&database).await,
+        policy_oids,
+        "unchanged policies retain their catalog identity instead of being dropped and recreated"
+    );
+
+    let (policy_table, policy_name) =
+        tamper_immediate_action_policy_with_stale_marker(&database).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    reconcile_compiled_runtime_acl_for_test(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("the stale matching marker takes the unchanged-policy reconciliation path");
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            &identity,
+            &ExpectedManagedCatalog::compiled(&registry),
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err(),
+        "exact catalog verification refuses ALTER POLICY drift even when its marker is unchanged"
+    );
+    migration
+        .batch_execute(&format!(
+            "COMMENT ON POLICY {} ON registry_data.{} IS NULL",
+            q(&policy_name),
+            q(&policy_table),
+        ))
+        .await
+        .expect("test removes the stale marker so reconciliation repairs the policy");
+    reconcile_compiled_runtime_acl_for_test(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("missing policy marker forces exact policy replacement");
+    verify_catalog_identity_for_catalog(
+        &migration,
+        &identity,
+        &ExpectedManagedCatalog::compiled(&registry),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("replaced policy restores the exact managed catalog");
+    drop(migration);
+    migration_task.abort();
+
     let app = action_router(&database, registry.clone(), identity);
     let claims = action_claims();
 
@@ -395,6 +449,60 @@ async fn wide_patch_action_returns_and_replays_the_full_mutation_ceiling_result_
     );
     assert_wide_receipt_preserves_batch_result_count_bounds(&database).await;
     database.cleanup().await;
+}
+
+async fn immediate_action_policy_oids(database: &TestDatabase) -> Vec<(String, u32)> {
+    database
+        .admin
+        .query(
+            "SELECT p.polname, p.oid
+               FROM pg_catalog.pg_policy p
+               JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'registry_data'
+                AND p.polname LIKE 'registry_action_rls_%'
+              ORDER BY p.polname COLLATE \"C\"",
+            &[],
+        )
+        .await
+        .expect("administrator lists immediate-action policy identities")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
+async fn tamper_immediate_action_policy_with_stale_marker(
+    database: &TestDatabase,
+) -> (String, String) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT c.relname, p.polname
+               FROM pg_catalog.pg_policy p
+               JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'registry_data'
+                AND p.polname LIKE 'registry_action_rls_%'
+                AND p.polcmd = 'r'
+                AND pg_catalog.obj_description(p.oid, 'pg_policy') LIKE 'breg/policy/v1/%'
+              ORDER BY p.polname COLLATE \"C\"
+              LIMIT 1",
+            &[],
+        )
+        .await
+        .expect("wide fixture exposes a marked immediate-action SELECT policy");
+    let table: String = row.get(0);
+    let policy: String = row.get(1);
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER POLICY {} ON registry_data.{} USING (false)",
+            q(&policy),
+            q(&table),
+        ))
+        .await
+        .expect("test changes the policy expression without changing its marker");
+    (table, policy)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

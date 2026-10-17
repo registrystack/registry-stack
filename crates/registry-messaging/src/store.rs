@@ -23,12 +23,11 @@ use tokio_postgres::Config as PgConfig;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
-const ACTIVATION_MIGRATION: &str = include_str!("../migrations/0002_activations.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
-pub(crate) const MIGRATIONS: [(i64, &str); 2] =
-    [(1, MESSAGING_MIGRATION), (2, ACTIVATION_MIGRATION)];
+pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
+pub(crate) const PRE_1_0_BETA_SCHEMA_MAX_VERSION: i64 = 2;
 
 /// Shared advisory-lock key for schema migration and package activation. Its
 /// ASCII bytes spell "messagin".
@@ -44,6 +43,11 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Messaging database schema is not the version this runtime expects")]
     SchemaVersion,
+    #[error(
+        "the Messaging database uses a pre-1.0 beta schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
+        schema_versions(versions)
+    )]
+    BetaSchema { versions: Vec<i64> },
     #[cfg(feature = "postgres-test")]
     #[error("the Messaging migration lock was not held when it was released")]
     MigrationLock,
@@ -208,11 +212,16 @@ impl PostgresStore {
                     row.try_get::<_, i64>(0)
                         .is_ok_and(|version| version == *expected)
                 });
-        if current {
-            Ok(())
-        } else {
-            Err(StoreError::SchemaVersion)
+        let applied_versions = applied
+            .iter()
+            .filter_map(|row| row.try_get::<_, i64>(0).ok())
+            .collect::<Vec<_>>();
+        if let Some(refusal) =
+            beta_schema_refusal(&applied_versions, baseline_marker_exists(&**client).await?)
+        {
+            return Err(refusal);
         }
+        current.then_some(()).ok_or(StoreError::SchemaVersion)
     }
 
     /// How many dispatch jobs wait in each state work waits in. Each count
@@ -263,6 +272,26 @@ async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), 
              applied_at timestamptz NOT NULL);",
         )
         .await?;
+    let applied = client
+        .query(
+            "SELECT version FROM messaging_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.get::<_, i64>(0))
+        .collect::<Vec<_>>();
+    if let Some(refusal) = beta_schema_refusal(&applied, baseline_marker_exists(&***client).await?)
+    {
+        return Err(refusal);
+    }
+    if applied
+        .iter()
+        .enumerate()
+        .any(|(index, version)| MIGRATIONS.get(index).map(|(known, _)| known) != Some(version))
+    {
+        return Err(StoreError::SchemaVersion);
+    }
     for (version, migration) in MIGRATIONS {
         let transaction = client.transaction().await?;
         let applied: bool = transaction
@@ -306,6 +335,10 @@ pub(crate) async fn migrate_in(
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
+    if let Some(refusal) = beta_schema_refusal(&applied, baseline_marker_exists(transaction).await?)
+    {
+        return Err(refusal);
+    }
     if applied
         .iter()
         .enumerate()
@@ -328,6 +361,37 @@ pub(crate) async fn migrate_in(
         added.push(version);
     }
     Ok(added)
+}
+
+async fn baseline_marker_exists(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<bool, StoreError> {
+    Ok(client
+        .query_one(
+            "SELECT to_regclass('messaging_activations') IS NOT NULL",
+            &[],
+        )
+        .await?
+        .get(0))
+}
+
+fn beta_schema_refusal(applied: &[i64], baseline_marker_exists: bool) -> Option<StoreError> {
+    ((!baseline_marker_exists && applied == [1])
+        || (applied.len() > 1
+            && applied
+                .iter()
+                .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))))
+    .then(|| StoreError::BetaSchema {
+        versions: applied.to_vec(),
+    })
+}
+
+fn schema_versions(values: &[i64]) -> String {
+    values
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn tls_connector(
@@ -394,5 +458,25 @@ mod tests {
             .find("ALTER TABLE messaging_dispatch_jobs")
             .expect("the job table's own constraints");
         assert_eq!(normalized(&MESSAGING_MIGRATION[start..end]), declared);
+    }
+
+    #[test]
+    fn the_only_supported_schema_is_the_fresh_install_baseline() {
+        assert_eq!(MIGRATIONS.len(), 1);
+        assert_eq!(MIGRATIONS[0].0, 1);
+        let refusal = beta_schema_refusal(&[1, 2], false)
+            .expect("a pre-1.0 migration ledger has a named refusal");
+        assert!(matches!(
+            &refusal,
+            StoreError::BetaSchema { versions } if versions == &vec![1, 2]
+        ));
+        let message = refusal.to_string();
+        assert!(message.contains("pre-1.0 beta schema"), "{message}");
+        assert!(message.contains("fresh database"), "{message}");
+        assert!(matches!(
+            beta_schema_refusal(&[1], false),
+            Some(StoreError::BetaSchema { versions }) if versions == vec![1]
+        ));
+        assert!(beta_schema_refusal(&[1], true).is_none());
     }
 }

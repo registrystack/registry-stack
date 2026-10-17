@@ -485,7 +485,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         .iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, [1, 2, 99]);
+    assert_eq!(versions, [1, 99]);
 
     let operator_audit = match config
         .audit
@@ -757,7 +757,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
     )
     .await
     .expect("one transactional split-role activation");
-    assert_eq!(applied.schema_versions_applied, [1, 2]);
+    assert_eq!(applied.schema_versions_applied, [1]);
     assert!(applied.recorded);
     assert_eq!(applied.activation.database_id, "messaging-test");
     assert_eq!(applied.activation.role_mode.as_str(), "split");

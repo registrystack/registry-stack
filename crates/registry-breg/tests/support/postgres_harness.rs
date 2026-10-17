@@ -52,6 +52,18 @@ impl TestDatabase {
         .await
     }
 
+    /// A disposable database whose encoding is deliberately unsupported, for
+    /// proving activation refuses it with fresh-database recovery guidance.
+    #[allow(dead_code)] // Only encoding-sensitive integration targets use this.
+    pub async fn create_with_encoding(pool_size: usize, encoding: &str) -> Self {
+        let literal = encoding.replace('\'', "''");
+        Self::create_in(
+            pool_size,
+            &format!(" TEMPLATE template0 ENCODING '{literal}' LC_COLLATE 'C' LC_CTYPE 'C'"),
+        )
+        .await
+    }
+
     async fn create_in(pool_size: usize, database_options: &str) -> Self {
         let url = env::var("BREG_TEST_DATABASE_URL")
             .expect("BREG_TEST_DATABASE_URL is required for the real PostgreSQL kernel test");

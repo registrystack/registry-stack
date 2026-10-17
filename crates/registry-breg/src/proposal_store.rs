@@ -194,37 +194,6 @@ pub(crate) async fn install(
                  (action_id, proposal_id, submission_version);
 "
     ).await.map_err(|_| MutationError::Unavailable)?;
-    // A database installed before a review rejection became terminal lacks
-    // the `rejected` state. Widening both checks keeps every existing row valid.
-    client
-        .batch_execute(
-            "DO $$ BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                     WHERE conrelid='registry_internal.registry_proposal_state'::regclass
-                       AND conname='registry_proposal_state_state_check'
-                       AND pg_catalog.pg_get_constraintdef(oid) LIKE '%rejected%'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_proposal_state
-                         DROP CONSTRAINT IF EXISTS registry_proposal_state_state_check,
-                         ADD CONSTRAINT registry_proposal_state_state_check
-                         CHECK (state IN ('draft','submitted','cancelled','applied','rejected'));
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                     WHERE conrelid='registry_internal.registry_proposal_state'::regclass
-                       AND conname='registry_proposal_state_detail_erasure_terminal'
-                       AND pg_catalog.pg_get_constraintdef(oid) LIKE '%rejected%'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_proposal_state
-                         DROP CONSTRAINT IF EXISTS registry_proposal_state_detail_erasure_terminal,
-                         ADD CONSTRAINT registry_proposal_state_detail_erasure_terminal
-                         CHECK (detail_erased_at IS NULL OR state IN ('cancelled','applied','rejected'));
-                 END IF;
-             END $$;",
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
     crate::attachment_store::install(client, runtime_role).await?;
     crate::review_store::install(client, runtime_role).await?;
     let revoke_grantees = crate::postgres::RuntimeRevoke::detect(client, runtime_role)

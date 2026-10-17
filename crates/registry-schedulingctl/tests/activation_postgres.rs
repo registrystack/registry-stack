@@ -381,10 +381,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert!(report["activePackage"].is_null(), "{report}");
     assert_eq!(report["databaseIdCheck"], "initial");
     assert_eq!(report["schemaVersion"], 0);
-    assert_eq!(
-        report["pendingSchemaVersions"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
-    );
+    assert_eq!(report["pendingSchemaVersions"], serde_json::json!([1]));
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
     assert_eq!(report["retainedHookBindings"], "none-retained");
@@ -476,10 +473,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .as_str()
         .unwrap()
         .starts_with("single-role mode"));
-    assert_eq!(
-        initial["schemaVersionsApplied"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
-    );
+    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([1]));
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
     assert_eq!(initial["effects"]["policyRevisionAdvanced"], true);
@@ -575,57 +569,9 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 13);
+    assert_eq!(report["schemaVersion"], 1);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
-    deployment.drop().await;
-}
-
-#[tokio::test]
-async fn external_reference_migration_preserves_existing_claims_with_an_empty_set() {
-    let deployment = Deployment::single("activation_external_references").await;
-    let first = deployment.package("first", POLICY);
-    let second = deployment.package("second", &successor_policy());
-    let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
-    let second_config = deployment.config("second.yaml", &second, ConfigOptions::default());
-    apply(&first_config).expect("the initial package activates");
-
-    deployment
-        .admin
-        .batch_execute(&format!(
-            "INSERT INTO {schema}.scheduling_claims
-                (claim_id, kind, state, offering, supply_id, displayed_start,
-                 displayed_end, occupied_start, occupied_end, units, revision,
-                 policy_revision, actor)
-             VALUES ('00000000-0000-4000-8000-000000001764', 'booking', 'active',
-                     'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
-                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor');
-             ALTER TABLE {schema}.scheduling_claims DROP COLUMN external_references;
-             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=10;",
-            schema = deployment.schema
-        ))
-        .await
-        .expect("simulate a populated schema immediately before migration 10");
-
-    let report = apply(&second_config).expect("the successor applies migration 10");
-    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([10]));
-    let row = deployment
-        .admin
-        .query_one(
-            &format!(
-                "SELECT offering, actor, external_references
-                   FROM {}.scheduling_claims
-                  WHERE claim_id='00000000-0000-4000-8000-000000001764'",
-                deployment.schema
-            ),
-            &[],
-        )
-        .await
-        .expect("the ownerless claim remains");
-    assert_eq!(row.get::<_, String>(0), "registry-update-30");
-    assert_eq!(row.get::<_, String>(1), "ownerless-actor");
-    assert_eq!(row.get::<_, Value>(2), serde_json::json!([]));
-
     deployment.drop().await;
 }
 
@@ -944,61 +890,6 @@ async fn apply_refuses_the_active_package_and_a_foreign_database_without_writing
     deployment.drop().await;
 }
 
-/// A pending migration that would drop unpublished audit is named by
-/// `plan`, read without a lock, and `apply` refuses the same.
-#[tokio::test]
-async fn plan_reports_the_unpublished_audit_apply_refuses() {
-    let deployment = Deployment::single("activation_plan_outbox").await;
-    let package = deployment.package("package", POLICY);
-    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
-    apply(&config).expect("the package activates");
-    // The schema head of the release that published audit from an outbox,
-    // holding one record its publisher has not reached.
-    deployment
-        .admin
-        .batch_execute(&format!(
-            "CREATE TABLE {schema}.scheduling_audit_outbox (event_id uuid PRIMARY KEY, \
-                 audit_record jsonb NOT NULL, published_at timestamptz); \
-             INSERT INTO {schema}.scheduling_audit_outbox(event_id, audit_record) \
-                 VALUES('00000000-0000-4000-8000-0000000000c1', '{{}}'); \
-             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=8;",
-            schema = deployment.schema
-        ))
-        .await
-        .expect("simulate the schema before migration 8");
-    let successor = deployment.package("successor", &successor_policy());
-    let config = deployment.config("successor.yaml", &successor, ConfigOptions::default());
-
-    let report = plan(&config);
-    let codes: Vec<&str> = report["refusals"]
-        .as_array()
-        .expect("refusals")
-        .iter()
-        .map(|refusal| refusal["code"].as_str().expect("code"))
-        .collect();
-    assert_eq!(
-        codes,
-        ["schedulingctl.activation.unpublished-audit"],
-        "{report}"
-    );
-    assert_eq!(report["changesPending"], false, "{report}");
-    assert!(
-        report["refusals"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains("holds 1 audit record(s) that schema migration 8 would drop"),
-        "{report}"
-    );
-
-    let error = refusal(apply(&config));
-    assert!(
-        error.contains("holds 1 audit record(s) that schema migration 8 would drop"),
-        "{error}"
-    );
-    assert_eq!(deployment.ledger_rows().await, 1);
-    deployment.drop().await;
-}
-
 #[tokio::test]
 async fn apply_refuses_to_activate_without_its_audit_destination() {
     let deployment = Deployment::single("activation_audit").await;
@@ -1066,6 +957,99 @@ async fn apply_waits_for_the_migration_lock_another_apply_holds() {
         .expect("the apply does not panic")
         .expect("the apply proceeds once the lock is released");
     assert_eq!(report["applyOrder"], 1);
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn successor_apply_waits_for_publication_locks_before_it_publishes() {
+    // Split roles name the waiting apply among sibling tests on the server.
+    let deployment = Deployment::split("activation_publication_lock_order").await;
+    let migration_role = deployment.roles[1].clone();
+    let first = deployment.package("first", POLICY);
+    let successor = deployment.package("successor", &successor_policy());
+    let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
+    let successor_config =
+        deployment.config("successor.yaml", &successor, ConfigOptions::default());
+    apply(&first_config).expect("the initial package activates");
+    assert!(
+        deployment
+            .scalar_i64("SELECT count(*) FROM {schema}.scheduling_supply")
+            .await
+            > 0,
+        "the policy anchors no supply to wait on"
+    );
+    let original_revision = deployment
+        .scalar_i64("SELECT policy_revision FROM {schema}.scheduling_meta")
+        .await;
+
+    let holder = connect(&base_url()).await;
+    holder.batch_execute("BEGIN").await.unwrap();
+    holder
+        .batch_execute(&format!(
+            "SELECT supply_id FROM {}.scheduling_supply FOR UPDATE",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let waiting = std::thread::spawn({
+        let config = successor_config.clone();
+        move || activation::apply(&config, None, &[])
+    });
+
+    let mut blocked = false;
+    for _ in 0..200 {
+        let waiters: i64 = deployment
+            .admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE usename=$1 AND wait_event_type='Lock' \
+                 AND wait_event IN ('transactionid', 'tuple')",
+                &[&migration_role],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiters > 0 {
+            blocked = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        blocked,
+        "the successor apply never waited on the supply anchor"
+    );
+    assert!(
+        !waiting.is_finished(),
+        "the successor applied while blocked"
+    );
+    assert_eq!(
+        deployment.ledger_rows().await,
+        1,
+        "the successor was published"
+    );
+    assert_eq!(
+        deployment
+            .scalar_i64("SELECT policy_revision FROM {schema}.scheduling_meta")
+            .await,
+        original_revision,
+        "the successor policy was published"
+    );
+
+    holder.batch_execute("COMMIT").await.unwrap();
+    let report = waiting
+        .join()
+        .expect("the apply does not panic")
+        .expect("the successor applies once the anchor is released");
+    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([]));
+    assert_eq!(deployment.ledger_rows().await, 2);
+    assert!(
+        deployment
+            .scalar_i64("SELECT policy_revision FROM {schema}.scheduling_meta")
+            .await
+            > original_revision,
+        "the successor policy was not published"
+    );
     deployment.drop().await;
 }
 
@@ -1951,94 +1935,5 @@ async fn an_apply_whose_response_audit_entry_is_refused_reports_it_applied_unaud
         "{message}"
     );
     assert_eq!(deployment.ledger_rows().await, 1, "the activation stands");
-    deployment.drop().await;
-}
-
-#[tokio::test]
-async fn apply_takes_the_publication_locks_before_it_migrates() {
-    // Split roles name the waiting apply among sibling tests on the server.
-    let deployment = Deployment::split("activation_lock_order").await;
-    let migration_role = deployment.roles[1].clone();
-    let package = deployment.package("package", POLICY);
-    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
-    apply(&config).expect("the package activates");
-    assert!(
-        deployment
-            .scalar_i64("SELECT count(*) FROM {schema}.scheduling_supply")
-            .await
-            > 0,
-        "the policy anchors no supply to wait on"
-    );
-
-    // A database from before the ledger: its last schema version pending.
-    deployment
-        .admin
-        .batch_execute(&format!(
-            "DROP TABLE {schema}.scheduling_activations;\
-             DELETE FROM {schema}.scheduling_schema_migrations WHERE version IN (9, 10);",
-            schema = deployment.schema
-        ))
-        .await
-        .unwrap();
-
-    // A capacity transaction holds a supply anchor.
-    let holder = connect(&base_url()).await;
-    holder.batch_execute("BEGIN").await.unwrap();
-    holder
-        .batch_execute(&format!(
-            "SELECT supply_id FROM {}.scheduling_supply FOR UPDATE",
-            deployment.schema
-        ))
-        .await
-        .unwrap();
-    let waiting = std::thread::spawn({
-        let config = config.clone();
-        move || activation::apply(&config, None, &[])
-    });
-
-    let mut blocked = false;
-    for _ in 0..200 {
-        let waiters: i64 = deployment
-            .admin
-            .query_one(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE usename=$1 AND wait_event_type='Lock' \
-                 AND wait_event IN ('transactionid', 'tuple')",
-                &[&migration_role],
-            )
-            .await
-            .unwrap()
-            .get(0);
-        if waiters > 0 {
-            blocked = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(blocked, "the apply never waited on the supply anchor");
-    // A row-lock wait holds a tuple lock in AccessExclusive mode, so only
-    // relation locks show a migration's DDL.
-    let exclusive: i64 = deployment
-        .admin
-        .query_one(
-            "SELECT count(*) FROM pg_locks JOIN pg_stat_activity USING (pid) \
-             WHERE usename=$1 AND granted AND locktype='relation' \
-             AND mode='AccessExclusiveLock'",
-            &[&migration_role],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(
-        exclusive, 0,
-        "the apply held migration locks while it waited on supply"
-    );
-
-    holder.batch_execute("COMMIT").await.unwrap();
-    let report = waiting
-        .join()
-        .expect("the apply does not panic")
-        .expect("the apply proceeds once the anchor is released");
-    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([9, 10]));
     deployment.drop().await;
 }

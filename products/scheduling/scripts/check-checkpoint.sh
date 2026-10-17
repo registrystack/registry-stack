@@ -5,7 +5,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 prepare_schedulingctl_runtime=0
 if [ -z "${SCHEDULINGCTL_BIN:-}" ]; then
-  schedulingctl_bin="$repo_root/target/debug/schedulingctl"
+  schedulingctl_bin="${CARGO_TARGET_DIR:-$repo_root/target}/debug/schedulingctl"
   prepare_schedulingctl_runtime=1
 else
   schedulingctl_bin=$SCHEDULINGCTL_BIN

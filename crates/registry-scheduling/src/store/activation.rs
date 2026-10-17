@@ -17,17 +17,8 @@ use uuid::Uuid;
 
 use super::{
     check_policy_publication, current_schema_in, lock_publication, publish_policy,
-    refuse_combined_conflicts, PolicyPublication, PostgresStore, StoreError, ACTIVATIONS_MIGRATION,
-    ACTIVATIONS_MIGRATION_VERSION, ATTEMPT_KEY_REFERENCE_MIGRATION,
-    ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION, AUDIT_WRITER_MIGRATION,
-    AUDIT_WRITER_MIGRATION_VERSION, CLAIM_OWNER_MIGRATION, CLAIM_OWNER_MIGRATION_VERSION,
-    CLAIM_OWNER_RETENTION_MIGRATION, CLAIM_OWNER_RETENTION_MIGRATION_VERSION,
-    DUPLICATE_LOOKUP_INDEX_MIGRATION, DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
-    EXTERNAL_REFERENCES_MIGRATION, EXTERNAL_REFERENCES_MIGRATION_VERSION, FACTS_REVISION_MIGRATION,
-    HOOK_DELIVERY_MIGRATION_VERSION, MIGRATION_LOCK_KEY, POLICY_DOCUMENT_MIGRATION,
-    POLICY_DOCUMENT_MIGRATION_VERSION, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
-    WINDOW_RECORDS_MIGRATION, WINDOW_RECORDS_MIGRATION_VERSION, WINDOW_REVISION_HEADS_MIGRATION,
-    WINDOW_REVISION_HEADS_MIGRATION_VERSION,
+    refuse_combined_conflicts, PolicyPublication, PostgresStore, StoreError, MIGRATION_LOCK_KEY,
+    PRE_1_0_BETA_SCHEMA_MAX_VERSION, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
 };
 
 /// Said wherever the effective role mode is `single`.
@@ -68,6 +59,16 @@ impl SchemaState {
     /// a later release, and an unknown older one is a damaged ledger.
     pub fn check(&self) -> Result<(), StoreError> {
         let newest = SCHEMA_VERSIONS[SCHEMA_VERSIONS.len() - 1];
+        if self.applied.len() > 1
+            && self
+                .applied
+                .iter()
+                .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))
+        {
+            return Err(StoreError::BetaSchema {
+                versions: self.applied.clone(),
+            });
+        }
         for version in &self.applied {
             if !SCHEMA_VERSIONS.contains(version) {
                 return Err(if *version > newest {
@@ -448,15 +449,6 @@ impl PostgresStore {
                 });
             }
         }
-        if schema.pending.contains(&AUDIT_WRITER_MIGRATION_VERSION) {
-            match refuse_to_drop_unpublished_audit(&*transaction, true).await {
-                Ok(()) => {}
-                Err(refusal @ StoreError::UnpublishedAuditWouldBeDropped { .. }) => {
-                    refusals.push(refusal);
-                }
-                Err(error) => return Err(error),
-            }
-        }
         if let Err(refusal) = schema.check() {
             refusals.push(refusal);
             return Ok(ActivationPlan {
@@ -737,7 +729,7 @@ fn refuse_foreign_scheduling_id(
 /// Whether the database may retain hook events a candidate must still
 /// deliver: a policy was published and the delivery tables exist.
 fn retains_hook_state(deployed: &DeployedPolicy, schema: &SchemaState) -> bool {
-    !deployed.policy_digest.is_empty() && schema.applied.contains(&HOOK_DELIVERY_MIGRATION_VERSION)
+    !deployed.policy_digest.is_empty() && schema.applied.contains(&1)
 }
 
 /// The pool anchors the policy's exact-time offerings name, sorted and
@@ -822,43 +814,6 @@ async fn deployed_policy_in(
     }))
 }
 
-/// Refuse schema version 8 while an earlier audit outbox still holds a
-/// record its publisher had not reached. Apply calls it holding the
-/// table exclusively; a plan (`plan` true) reads it without a lock and
-/// passes over an outbox the planning role cannot read, which apply counts
-/// again.
-async fn refuse_to_drop_unpublished_audit(
-    client: &impl GenericClient,
-    plan: bool,
-) -> Result<(), StoreError> {
-    let readable: bool = client
-        .query_one(
-            "SELECT to_regclass('scheduling_audit_outbox') IS NOT NULL \
-             AND (NOT $1 OR has_table_privilege(to_regclass('scheduling_audit_outbox'),'SELECT'))",
-            &[&plan],
-        )
-        .await?
-        .get(0);
-    if !readable {
-        return Ok(());
-    }
-    let rows: i64 = client
-        .query_one(
-            "SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL",
-            &[],
-        )
-        .await?
-        .get(0);
-    if rows == 0 {
-        Ok(())
-    } else {
-        Err(StoreError::UnpublishedAuditWouldBeDropped {
-            version: AUDIT_WRITER_MIGRATION_VERSION,
-            rows,
-        })
-    }
-}
-
 /// The schema versions this database holds and the ones still pending. A
 /// database no migration has touched holds none.
 pub(super) async fn schema_state_in(
@@ -867,6 +822,20 @@ pub(super) async fn schema_state_in(
     let state = platform_activation::schema_state(client, &activation_layout(), &SCHEMA_VERSIONS)
         .await
         .map_err(platform_error)?;
+    if state.applied == [1] {
+        let fresh_baseline: bool = client
+            .query_one(
+                "SELECT to_regclass('scheduling_activations') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !fresh_baseline {
+            return Err(StoreError::BetaSchema {
+                versions: state.applied,
+            });
+        }
+    }
     Ok(SchemaState {
         applied: state.applied,
         pending: state.pending,
@@ -889,70 +858,12 @@ pub(super) async fn apply_migrations_in(
     let state = schema_state_in(&**transaction).await?;
     state.check()?;
     for version in &state.pending {
-        match *version {
-            1 => transaction.batch_execute(SCHEDULING_MIGRATION).await?,
-            2 => transaction.batch_execute(FACTS_REVISION_MIGRATION).await?,
-            HOOK_DELIVERY_MIGRATION_VERSION => {
-                let schema = current_schema_in(&**transaction).await?;
-                registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
-            }
-            POLICY_DOCUMENT_MIGRATION_VERSION => {
-                transaction.batch_execute(POLICY_DOCUMENT_MIGRATION).await?;
-            }
-            WINDOW_RECORDS_MIGRATION_VERSION => {
-                transaction.batch_execute(WINDOW_RECORDS_MIGRATION).await?;
-            }
-            WINDOW_REVISION_HEADS_MIGRATION_VERSION => {
-                transaction
-                    .batch_execute(WINDOW_REVISION_HEADS_MIGRATION)
-                    .await?;
-            }
-            DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION => {
-                transaction
-                    .batch_execute(DUPLICATE_LOOKUP_INDEX_MIGRATION)
-                    .await?;
-            }
-            AUDIT_WRITER_MIGRATION_VERSION => {
-                let exists: bool = transaction
-                    .query_one(
-                        "SELECT to_regclass('scheduling_audit_outbox') IS NOT NULL",
-                        &[],
-                    )
-                    .await?
-                    .get(0);
-                if exists {
-                    transaction
-                        .batch_execute(
-                            "LOCK TABLE scheduling_audit_outbox IN ACCESS EXCLUSIVE MODE",
-                        )
-                        .await?;
-                }
-                refuse_to_drop_unpublished_audit(&**transaction, false).await?;
-                transaction.batch_execute(AUDIT_WRITER_MIGRATION).await?;
-            }
-            ACTIVATIONS_MIGRATION_VERSION => {
-                transaction.batch_execute(ACTIVATIONS_MIGRATION).await?;
-            }
-            EXTERNAL_REFERENCES_MIGRATION_VERSION => {
-                transaction
-                    .batch_execute(EXTERNAL_REFERENCES_MIGRATION)
-                    .await?;
-            }
-            ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION => {
-                transaction
-                    .batch_execute(ATTEMPT_KEY_REFERENCE_MIGRATION)
-                    .await?;
-            }
-            CLAIM_OWNER_MIGRATION_VERSION => {
-                transaction.batch_execute(CLAIM_OWNER_MIGRATION).await?;
-            }
-            CLAIM_OWNER_RETENTION_MIGRATION_VERSION => {
-                transaction
-                    .batch_execute(CLAIM_OWNER_RETENTION_MIGRATION)
-                    .await?;
-            }
-            _ => return Err(StoreError::Corrupt),
+        if *version != 1 {
+            return Err(StoreError::Corrupt);
         }
+        transaction.batch_execute(SCHEDULING_MIGRATION).await?;
+        let schema = current_schema_in(&**transaction).await?;
+        registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
         transaction
             .execute(
                 "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
@@ -992,7 +903,7 @@ mod tests {
 
     #[test]
     fn a_newer_schema_version_names_the_release_that_applied_it() {
-        let newer = SCHEMA_VERSIONS[SCHEMA_VERSIONS.len() - 1] + 1;
+        let newer = PRE_1_0_BETA_SCHEMA_MAX_VERSION + 1;
         let state = SchemaState {
             applied: SCHEMA_VERSIONS.iter().copied().chain([newer]).collect(),
             pending: Vec::new(),
@@ -1006,6 +917,24 @@ mod tests {
             pending: Vec::new(),
         };
         assert!(matches!(damaged.check(), Err(StoreError::Corrupt)));
+    }
+
+    #[test]
+    fn a_beta_schema_names_the_fresh_install_recovery() {
+        let state = SchemaState {
+            applied: vec![1, 2, 3],
+            pending: Vec::new(),
+        };
+        let refusal = state
+            .check()
+            .expect_err("a pre-1.0 migration ledger is not an accepted baseline");
+        assert!(matches!(
+            &refusal,
+            StoreError::BetaSchema { versions } if versions == &vec![1, 2, 3]
+        ));
+        let message = refusal.to_string();
+        assert!(message.contains("pre-1.0 beta schema"), "{message}");
+        assert!(message.contains("fresh database"), "{message}");
     }
 
     #[test]

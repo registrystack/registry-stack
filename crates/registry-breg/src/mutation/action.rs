@@ -1685,36 +1685,35 @@ impl MutationTransaction {
         preconditions: &BTreeMap<String, String>,
         application_id: Uuid,
     ) -> Result<BTreeMap<String, CurrentRow>, MutationError> {
-        let mut patch_effects = action
-            .effects
-            .iter()
-            .filter_map(|effect| match &effect.target.binding {
-                CompiledPlanTargetBinding::Existing { input } => Some((input, effect)),
-                CompiledPlanTargetBinding::Create => None,
-            })
-            .collect::<Vec<_>>();
-        patch_effects.sort_by(|left, right| {
-            let left_id = input_record_id(input_values, left.0).unwrap_or_default();
-            let right_id = input_record_id(input_values, right.0).unwrap_or_default();
-            (&left.1.target.entity_id, left_id, &left.1.id).cmp(&(
-                &right.1.target.entity_id,
-                right_id,
-                &right.1.id,
-            ))
-        });
-        let mut bases = BTreeMap::new();
-        for (input_id, effect) in patch_effects {
-            let entity = registry
-                .entities()
-                .get(&effect.target.entity_id)
-                .ok_or(MutationError::InvalidRequest)?;
-            let record_id = input_record_id(input_values, input_id)?;
+        let mut patch_targets =
+            BTreeMap::<(String, Uuid), Vec<(&str, &CompiledPlanEffect, String)>>::new();
+        for effect in &action.effects {
+            let CompiledPlanTargetBinding::Existing { input } = &effect.target.binding else {
+                continue;
+            };
+            let record_id = input_record_id(input_values, input)?;
             let record_uuid =
                 Uuid::parse_str(&record_id).map_err(|_| MutationError::InvalidRequest)?;
-            let read_context = action_target_context(
+            patch_targets
+                .entry((effect.target.entity_id.clone(), record_uuid))
+                .or_default()
+                .push((input, effect, record_id));
+        }
+        let mut bases = BTreeMap::new();
+        for ((entity_id, record_uuid), mut target_effects) in patch_targets {
+            target_effects.sort_by_key(|(_, effect, _)| &effect.id);
+            let effects = target_effects
+                .iter()
+                .map(|(_, effect, _)| *effect)
+                .collect::<Vec<_>>();
+            let entity = registry
+                .entities()
+                .get(&entity_id)
+                .ok_or(MutationError::InvalidRequest)?;
+            let read_context = action_target_group_context(
                 registry,
                 action,
-                effect,
+                &effects,
                 claims,
                 target_authority,
                 record_uuid,
@@ -1730,26 +1729,28 @@ impl MutationTransaction {
                 )
                 .await
                 .map_err(map_database_error)?;
-            let current = load_action_row(transaction, entity, &record_id, true).await?;
-            let token = action_condition_token(
-                self.audit.profile(),
-                registry.registry_id(),
-                &action.id,
-                input_id,
-                &effect.target.entity_id,
-                &current.record_id,
-                current.record_revision,
-            )?;
-            let provided = preconditions
-                .get(input_id)
-                .ok_or(MutationError::InvalidRequest)?;
-            if provided.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() != 1 {
-                return Err(MutationError::PreconditionFailed);
+            let current = load_action_row(transaction, entity, &target_effects[0].2, true).await?;
+            for (input_id, effect, _) in &target_effects {
+                let token = action_condition_token(
+                    self.audit.profile(),
+                    registry.registry_id(),
+                    &action.id,
+                    input_id,
+                    &effect.target.entity_id,
+                    &current.record_id,
+                    current.record_revision,
+                )?;
+                let provided = preconditions
+                    .get(*input_id)
+                    .ok_or(MutationError::InvalidRequest)?;
+                if provided.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() != 1 {
+                    return Err(MutationError::PreconditionFailed);
+                }
             }
-            let target_context = action_target_context(
+            let target_context = action_target_group_context(
                 registry,
                 action,
-                effect,
+                &effects,
                 claims,
                 target_authority,
                 current.record_uuid,
@@ -1766,7 +1767,9 @@ impl MutationTransaction {
                     current.record_uuid,
                 )
                 .map_err(|_| MutationError::PreconditionFailed)?;
-            bases.insert(effect.id.clone(), current);
+            for (_, effect, _) in target_effects {
+                bases.insert(effect.id.clone(), current.clone());
+            }
         }
         Ok(bases)
     }
@@ -1999,7 +2002,8 @@ impl MutationTransaction {
             )
             .await
             .map_err(map_database_error)?;
-        for row in rows {
+        let mut targets = BTreeMap::<(String, Uuid), Vec<&CompiledPlanEffect>>::new();
+        for row in &rows {
             let effect_id = row.get::<_, String>(0);
             let entity_id = row.get::<_, String>(1);
             let record_uuid = row.get::<_, Uuid>(2);
@@ -2012,14 +2016,21 @@ impl MutationTransaction {
                 .iter()
                 .find(|effect| effect.id == effect_id && effect.target.entity_id == entity_id)
                 .ok_or(MutationError::Unavailable)?;
+            targets
+                .entry((entity_id, record_uuid))
+                .or_default()
+                .push(effect);
+        }
+        for ((entity_id, record_uuid), mut effects) in targets {
+            effects.sort_by_key(|effect| &effect.id);
             let entity = registry
                 .entities()
                 .get(&entity_id)
                 .ok_or(MutationError::Unavailable)?;
-            let target_context = action_target_context(
+            let read_context = action_target_context(
                 registry,
                 action,
-                effect,
+                effects[0],
                 claims,
                 target_authority,
                 record_uuid,
@@ -2031,20 +2042,34 @@ impl MutationTransaction {
             transaction
                 .execute(
                     "SELECT set_config('registry.immediate_action_target_context', $1, true)",
-                    &[&target_context.canonical_context()],
+                    &[&read_context.canonical_context()],
                 )
                 .await
                 .map_err(map_database_error)?;
             let current =
                 load_action_row(transaction, entity, &record_uuid.to_string(), false).await?;
-            target_context
-                .authorize_rows(
-                    entity,
-                    (effect.operation == Operation::Patch).then_some(&current.data),
-                    &current.data,
-                    current.record_uuid,
-                )
-                .map_err(|_| MutationError::PreconditionFailed)?;
+            for effect in effects {
+                let target_context = action_target_context(
+                    registry,
+                    action,
+                    effect,
+                    claims,
+                    target_authority,
+                    record_uuid,
+                    None,
+                    false,
+                    None,
+                    &self.expected.activation_id,
+                )?;
+                target_context
+                    .authorize_rows(
+                        entity,
+                        (effect.operation == Operation::Patch).then_some(&current.data),
+                        &current.data,
+                        current.record_uuid,
+                    )
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+            }
         }
         Ok(())
     }

@@ -2558,7 +2558,7 @@ fn metadata_only_source_between(
         sql_sha256: Vec::new(),
         assertion_sha256: Vec::new(),
         fixture_inventory: Vec::new(),
-        postgres_major: 16,
+        postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
     };
@@ -2683,7 +2683,7 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
             sha256: digest(&fixture_bytes),
             row_count: 1,
         }],
-        postgres_major: 16,
+        postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
     };
@@ -2837,7 +2837,7 @@ fn reviewed_source_with_canaries(
             sha256: digest(&fixture_bytes),
             row_count: 1,
         }],
-        postgres_major: 16,
+        postgres_major: 17,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "step-canary".to_owned(),
             affected_rows: 10,
