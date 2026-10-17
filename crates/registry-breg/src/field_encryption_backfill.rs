@@ -58,7 +58,7 @@ pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptio
 /// The audit schema every field-encryption lifecycle entry carries. The shape
 /// follows the history maintenance entries: actor reference, package revision,
 /// step, and counts; field values never cross this boundary.
-pub const FIELD_ENCRYPTION_AUDIT_SCHEMA: &str = "breg-field-encryption-audit/v2";
+pub const FIELD_ENCRYPTION_AUDIT_SCHEMA: &str = "breg-field-encryption-audit/v3";
 
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const MAX_REASON_BYTES: usize = 1024;
@@ -1314,7 +1314,7 @@ fn erase_history_entry(
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.activation_id,
+            "activationId": request.expected.activation_id,
             "lifecycleReference": lifecycle_reference,
             "operatorReference": operator_reference,
             "reasonReference": reason_reference,
@@ -1349,7 +1349,7 @@ fn lifecycle_request_entry(
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.activation_id,
+            "activationId": request.expected.activation_id,
             "lifecycleReference": lifecycle_reference,
             "operatorReference": operator_reference,
             "reasonReference": reason_reference,

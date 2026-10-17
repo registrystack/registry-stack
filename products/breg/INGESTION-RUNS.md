@@ -70,7 +70,7 @@ authority is opened and closed only by the migration role through
 `bregctl import-authority`; the runtime role can read it and advance an open
 authority's counter or record its expiry, exhaustion, or supersession, never
 open, close, or reopen one. Each transition appends a
-`breg-import-authority-audit/v1` record, and every run audit record under an
+`breg-import-authority-audit/v2` record, and every run audit record under an
 authority carries `importAuthorityId`.
 
 ## Chunk protocol

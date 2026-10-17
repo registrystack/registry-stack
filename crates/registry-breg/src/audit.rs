@@ -23,9 +23,9 @@ use crate::model::HttpMethod;
 use crate::postgres::{ActionClaimContext, ClaimContext, ExpectedRegistryIdentity};
 
 /// Schema of request, read, mutation, action, and refusal entries.
-pub const AUDIT_SCHEMA: &str = "breg-audit/v2";
+pub const AUDIT_SCHEMA: &str = "breg-audit/v3";
 /// Schema of event delivery entries.
-pub const WEBHOOK_AUDIT_SCHEMA: &str = "breg-webhook-audit/v2";
+pub const WEBHOOK_AUDIT_SCHEMA: &str = "breg-webhook-audit/v3";
 /// The process role operator commands append under, beside the runtime's
 /// destination.
 pub const COMPANION_PROCESS_ROLE: &str = "bregctl";
@@ -329,6 +329,8 @@ pub(crate) struct TerminalAudit {
     pub operation_id: String,
     pub entity_id: Option<String>,
     pub action_id: Option<String>,
+    // Legacy internal name: callers supply the activation UUID. Preserve
+    // this value as the reference-hash context; emit it as activationId.
     pub package_revision: String,
     pub selected_access_profile: String,
     pub purpose_present: bool,
@@ -496,7 +498,7 @@ pub(crate) async fn begin_statistics_pre_io_audit(
             "operationId":event.operation_id,
             "requestId":event.correlation.request_id().to_string(),
             "traceId":event.correlation.trace_id().as_str(),
-            "packageRevision":expected.activation_id,
+            "activationId":expected.activation_id,
             "selectedAccessProfile":context.selected_profile(),
             "purposePresent":context.purpose().is_some(),
             "principalReference":principal_reference,
@@ -596,7 +598,7 @@ fn pre_io_record(
         "operationId": event.operation_id,
         "requestId": event.correlation.request_id().to_string(),
         "traceId": event.correlation.trace_id().as_str(),
-        "packageRevision": expected.activation_id,
+        "activationId": expected.activation_id,
         "selectedAccessProfile": claims.access_profile(),
         "purposePresent": claims.purpose().is_some(),
         "principalReference": principal_reference,
@@ -738,7 +740,7 @@ fn action_resource_pre_io_record(
         "operationId": event.operation_id,
         "requestId": event.correlation.request_id().to_string(),
         "traceId": event.correlation.trace_id().as_str(),
-        "packageRevision": expected.activation_id,
+        "activationId": expected.activation_id,
         "selectedAccessProfile": claims.access_profile(),
         "purposePresent": claims.purpose().is_some(),
         "principalReference": principal_reference,
@@ -779,6 +781,7 @@ fn unfinished_record(attempt: &Value) -> Value {
         "requestId",
         "traceId",
         "packageRevision",
+        "activationId",
         "actionId",
     ] {
         if let Some(value) = attempt.get(field) {
@@ -868,7 +871,7 @@ async fn record_http_refusal_audit_inner(
             Value::String(event.correlation.trace_id().as_str().to_owned()),
         ),
         (
-            "packageRevision".to_owned(),
+            "activationId".to_owned(),
             Value::String(expected.activation_id.clone()),
         ),
         (
@@ -1105,7 +1108,7 @@ pub(crate) fn webhook_entry(
         "phase": webhook_phase_name(event.phase),
         "outcome": webhook_outcome_name(event.outcome),
         "disposition": webhook_disposition_name(event.disposition),
-        "packageRevision": event.package_revision,
+        "activationId": event.package_revision,
         "eventReference": event_reference,
         "deliveryReference": delivery_reference,
         "generation": event.generation,
@@ -1229,7 +1232,7 @@ fn terminal_record(
             Value::String(terminal.correlation.trace_id().as_str().to_owned()),
         ),
         (
-            "packageRevision".to_owned(),
+            "activationId".to_owned(),
             Value::String(terminal.package_revision),
         ),
         (

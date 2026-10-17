@@ -89,8 +89,7 @@ pub(super) const DISPATCH_SQL: DispatchSql = DispatchSql {
                      AND delivery.compiled_delivery_id = state.compiled_delivery_id
                     JOIN {schema}.registry_outbox AS outbox
                       ON outbox.event_id = delivery.event_id",
-            predicate: "outbox.payload IS NOT NULL
-                        AND outbox.payload_expires_at <= transaction_timestamp()",
+            predicate: "outbox.payload_expires_at <= transaction_timestamp()",
         },
         order_by: "outbox.payload_expires_at",
         lock_of: "state, outbox",
@@ -649,7 +648,9 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
                 &[&key.id()],
             )
             .await?;
-        if payload_changed != 1 {
+        // Another sibling or product erasure may already have removed the
+        // shared payload. Each delivery still needs its own expiry and audit.
+        if payload_changed > 1 {
             return Err(DispatchError::Unavailable);
         }
         Ok(())

@@ -5334,7 +5334,7 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
     let sweep_entries = database
         .audit_entries()
         .into_iter()
-        .filter(|entry| entry["schema"] == "breg-idempotency-retention-audit/v1")
+        .filter(|entry| entry["schema"] == "breg-idempotency-retention-audit/v2")
         .collect::<Vec<_>>();
     assert_eq!(sweep_entries.len(), 4, "{sweep_entries:?}");
     assert_eq!(sweep_entries[1]["record"]["outcome"], "erased");

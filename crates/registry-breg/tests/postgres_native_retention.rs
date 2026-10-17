@@ -325,6 +325,21 @@ impl Drop for S3Fixture {
         self.server.abort();
     }
 }
+fn assert_operator_audit_identity(fixture: &client_http::ClientFixture) {
+    for entry in fixture.database.activation_audit_entries() {
+        if matches!(
+            entry["schema"].as_str(),
+            Some("breg-audit/v3" | "breg-attachment-cleanup-audit/v2")
+        ) {
+            assert_eq!(
+                entry["record"]["activationId"],
+                fixture.identity.activation_id
+            );
+            assert!(entry["record"].get("packageRevision").is_none());
+        }
+    }
+}
+
 fn cleanup(
     fixture: &client_http::ClientFixture,
     storage: AttachmentStorage,
@@ -466,6 +481,7 @@ async fn shared_attachment_bytes_survive_until_the_last_native_proposal_erasure(
         .await
         .unwrap();
     assert_eq!(count.get::<_, i64>(0), 0);
+    assert_operator_audit_identity(&fixture);
     fixture.finish().await;
 }
 // This HTTP fixture injects admitted claims without bearer authentication and
@@ -743,6 +759,7 @@ async fn native_erasure_reports_sensitive_copies_and_preserves_only_bounded_revi
         .unwrap();
     assert_eq!(after.get::<_, Value>(0), json!({}));
     assert_eq!(after.get::<_, Value>(1), json!({}));
+    assert_operator_audit_identity(&fixture);
     fixture.finish().await;
 }
 
@@ -786,6 +803,7 @@ async fn native_proposal_erasure_refuses_a_failed_request_audit_without_changing
     let row=fixture.database.admin.query_one("SELECT count(*)::bigint FROM registry_internal.registry_proposal_submissions WHERE snapshot IS NOT NULL",&[]).await.unwrap();
     assert_eq!(row.get::<_, i64>(0), 1);
     assert!(capture.entries().is_empty());
+    assert_operator_audit_identity(&fixture);
     fixture.finish().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -855,6 +873,7 @@ async fn external_tombstones_survive_late_writes_failed_rechecks_and_backend_cha
         .await
         .unwrap();
     assert_eq!(row.get::<_, String>(0), "delete_confirmed");
+    assert_operator_audit_identity(&fixture);
     fixture.finish().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -917,5 +936,6 @@ async fn native_operator_retry_preserves_the_exact_job_and_refuses_stale_or_exha
     assert_eq!(row.get::<_, String>(2), grant);
     assert_eq!(row.get::<_, String>(3), "queued");
     assert_eq!(row.get::<_, i32>(4), 1);
+    assert_operator_audit_identity(&fixture);
     fixture.finish().await;
 }

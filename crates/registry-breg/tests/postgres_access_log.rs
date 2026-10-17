@@ -552,7 +552,7 @@ async fn access_log_exemptions_are_delayed_audited_and_expire_without_runtime_de
     assert!(db
         .audit_entries()
         .iter()
-        .any(|entry| entry["schema"] == "breg-access-log/v1"
+        .any(|entry| entry["schema"] == "breg-access-log/v2"
             && entry["record"]["operation"] == "visibility-delay"));
     db.admin.execute("UPDATE registry_internal.registry_subject_access_log SET accessed_at=accessed_at-interval '8 days',visible_after=visible_after-interval '8 days',expires_at=expires_at-interval '8 days'",&[]).await.unwrap();
     let (_, visible) = history(&app, &owner, RECORD_A, "").await;
@@ -668,7 +668,7 @@ async fn relationship_exemptions_bind_the_source_entity_without_profile_name_col
         .audit_entries()
         .into_iter()
         .filter(|entry| {
-            entry["schema"] == "breg-access-log/v1"
+            entry["schema"] == "breg-access-log/v2"
                 && entry["phase"] == "request"
                 && entry["record"]["operation"] == "visibility-delay"
         })

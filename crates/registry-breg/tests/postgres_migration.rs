@@ -3509,8 +3509,8 @@ async fn real_postgres_a_successor_activation_supersedes_every_open_import_autho
     let records = import_authority_records(&database, authority_id);
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0]["transition"], "superseded");
-    assert_eq!(records[0]["activationId"], active.activation_id);
-    assert_eq!(records[0]["packageRevision"], activated.activation_id);
+    assert_eq!(records[0]["authorityActivationId"], active.activation_id);
+    assert_eq!(records[0]["activationId"], activated.activation_id);
     assert!(records[0].get("activationRevision").is_none());
     database.cleanup().await;
 }
@@ -4924,7 +4924,7 @@ fn import_authority_records(database: &TestDatabase, authority_id: Uuid) -> Vec<
         .activation_audit_entries()
         .into_iter()
         .filter(|entry| {
-            entry["schema"] == "breg-import-authority-audit/v1"
+            entry["schema"] == "breg-import-authority-audit/v2"
                 && entry["correlation"] == authority_id.to_string()
         })
         .map(|mut entry| {

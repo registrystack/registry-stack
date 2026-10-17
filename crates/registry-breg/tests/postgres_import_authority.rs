@@ -352,7 +352,7 @@ impl Harness {
             .audit_entries()
             .into_iter()
             .filter(|entry| {
-                entry["schema"] == "breg-import-authority-audit/v1"
+                entry["schema"] == "breg-import-authority-audit/v2"
                     && entry["correlation"] == authority_id.to_string()
             })
             .map(|mut entry| {
@@ -853,8 +853,13 @@ async fn a_successor_package_supersedes_an_open_authority() {
     assert_eq!(records.len(), 2, "{records:?}");
     assert_eq!(records[1]["transition"], "superseded");
     assert_eq!(
-        records[1]["packageRevision"],
+        records[1]["activationId"],
         registry_breg::postgres::test_activation_id(SUCCESSOR_REVISION)
+    );
+    assert_eq!(
+        records[1]["authorityActivationId"],
+        authority.activation_id.to_string(),
+        "the original authority activation remains distinct from the successor that supersedes it"
     );
 
     // The operator re-opens deliberately under the successor.

@@ -169,7 +169,9 @@ impl TestDatabase {
     /// The record of every activation audit entry accepted so far.
     #[allow(dead_code)] // Not every integration target reads activation audit entries.
     pub fn activation_audit_entries(&self) -> Vec<Value> {
-        self.activation_audit.entries()
+        let entries = self.activation_audit.entries();
+        assert_audit_identity_goldens(&entries);
+        entries
     }
 
     /// The capture behind [`Self::audit`], for failure injection.
@@ -181,7 +183,9 @@ impl TestDatabase {
     /// Every audit entry accepted so far, as whole envelopes.
     #[allow(dead_code)] // Not every integration target reads audit entries.
     pub fn audit_entries(&self) -> Vec<Value> {
-        self.audit.entries()
+        let entries = self.audit.entries();
+        assert_audit_identity_goldens(&entries);
+        entries
     }
 
     /// Assert that every audit request accepted so far has exactly one
@@ -321,4 +325,51 @@ fn unique_suffix() -> String {
         .as_nanos();
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{}_{nanos}_{counter}", std::process::id())
+}
+
+/// Compare only the changed audit identity projection; the owning journeys
+/// separately assert event-specific values, hash references, and outcomes.
+pub fn assert_audit_identity_goldens(entries: &[Value]) {
+    let goldens: Value =
+        serde_json::from_str(include_str!("../fixtures/audit-identity-goldens.json"))
+            .expect("audit identity goldens parse");
+    for entry in entries {
+        let record = &entry["record"];
+        if let Some(revision) = record.get("packageRevision") {
+            let revision = revision
+                .as_str()
+                .expect("packageRevision is a digest string");
+            assert!(
+                revision.starts_with("sha256:") && revision.len() == 71,
+                "packageRevision must carry a package digest: {entry}"
+            );
+            assert!(revision[7..].bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+        for field in ["activationId", "authorityActivationId"] {
+            if let Some(id) = record.get(field) {
+                assert!(
+                    uuid::Uuid::parse_str(id.as_str().expect("activation is a UUID string"))
+                        .is_ok(),
+                    "{field} must carry an activation UUID: {entry}"
+                );
+            }
+        }
+        let schema = entry["schema"].as_str().expect("audit schema");
+        let key = if schema == "breg-access-log/v2" {
+            format!("{schema}/{}", entry["phase"].as_str().expect("audit phase"))
+        } else {
+            schema.to_owned()
+        };
+        if let Some(expected_fields) = goldens.get(&key) {
+            let actual_fields = ["activationId", "authorityActivationId", "packageRevision"]
+                .into_iter()
+                .filter(|field| record.get(*field).is_some())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                serde_json::json!(actual_fields),
+                *expected_fields,
+                "audit identity projection golden for {key}: {entry}"
+            );
+        }
+    }
 }

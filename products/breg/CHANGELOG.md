@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: request, operator, access-log and webhook audit records now name activation UUIDs
+  `activationId`, reserving `packageRevision` for package digests. The affected
+  audit schemas advance as documented in [audit identity](contracts/audit-identity.md).
+  Import authority records preserve their original binding as `authorityActivationId`.
+  Reference-hash inputs and domains are unchanged.
+- Expire and audit every webhook delivery after its shared payload expires,
+  including siblings whose payload was already erased.
+- Classify added events as disclosure widening and removed events as narrowing.
+  Changed projections and destinations require disclosure review in diff output;
+  event changes remain applicable without reviewed migration SQL.
+
 - Apply this release to a fresh database; it carries no state migration
   from 0.41.
 - `bregctl init --from publicschema` derives a bounded `structured` list for
