@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Proposal steps use the same public clients and retained attempts as record steps.
 use super::*;
+use std::{future::Future, time::Duration};
 
 pub(super) const PENDING_OBSERVATION: &str = "Proposal state differs from the authored expectation; resume this attempt after independent work completes";
+/// Automatic application completes after submit returns, so an inspect step
+/// expecting `applied` re-reads the Proposal at this interval, up to the limit.
+const APPLICATION_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const APPLICATION_WAIT_LIMIT: Duration = Duration::from_secs(10);
 
 pub(super) fn validate_step(
     step: &Step,
@@ -121,6 +126,7 @@ pub(super) async fn execute(
     attempt: &mut Attempt,
 ) -> Result<Value> {
     let key = BRegIdempotencyKey::parse(format!("examples-{}-{}", attempt.id, step.id))?;
+    let mut waited = None;
     let outcome = if step.operation == Operation::Start {
         let action = binding(contract, step)?;
         let inputs = action_inputs(step, &action, input, &attempt.captures)?;
@@ -152,7 +158,21 @@ pub(super) async fn execute(
             .context("Proposal capture missing")?
             .clone();
         let get = contract.select_proposal_get(&step.access_profile)?;
-        let current = client.get_proposal(&get, &capture.id.to_string()).await;
+        let id = capture.id.to_string();
+        let mut current = client.get_proposal(&get, &id).await;
+        if step.operation == Operation::Inspect {
+            (current, waited) = await_application(
+                step.expect
+                    .as_ref()
+                    .and_then(|expect| expect.state.as_deref()),
+                current,
+                |response| &response.value,
+                || client.get_proposal(&get, &id),
+                APPLICATION_POLL_INTERVAL,
+                APPLICATION_WAIT_LIMIT,
+            )
+            .await;
+        }
         if !matches!(step.operation, Operation::Revise | Operation::Rebase) {
             if let Ok(response) = &current {
                 require_submission(&capture, &response.value)?;
@@ -198,13 +218,12 @@ pub(super) async fn execute(
                 bail!("Proposal step succeeded where a refusal was expected");
             }
             let value = serde_json::to_value(&response.value)?;
-            if step
+            let expected = step
                 .expect
                 .as_ref()
-                .and_then(|expect| expect.state.as_deref())
-                .is_some_and(|state| value["state"].as_str() != Some(state))
-            {
-                bail!(PENDING_OBSERVATION);
+                .and_then(|expect| expect.state.as_deref());
+            if expected.is_some_and(|state| value["state"].as_str() != Some(state)) {
+                return Err(observation_refusal(expected, &response.value, waited));
             }
             #[cfg(test)]
             super::tests::interrupt_after_commit(step);
@@ -267,6 +286,96 @@ pub(super) async fn execute(
     Ok(result)
 }
 
+/// Whether an inspect expecting `applied` observed automatic application still in progress.
+fn awaits_automatic_application(expected: Option<&str>, observed: &BRegProposal) -> bool {
+    expected == Some("applied")
+        && observed.application_status().is_some_and(|status| {
+            status.mode == BRegProposalApplicationMode::Automatic
+                && matches!(
+                    status.state,
+                    BRegProposalApplicationState::Pending | BRegProposalApplicationState::Applying
+                )
+        })
+}
+
+/// Automatic application ended short of `applied`; resuming the attempt cannot change it.
+#[derive(Debug)]
+pub(super) struct SettledApplication(&'static str);
+
+impl std::fmt::Display for SettledApplication {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "automatic application settled as {}; the Proposal cannot reach the authored applied state",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for SettledApplication {}
+
+/// Refuses an observation that differs from the authored state. Automatic
+/// application that settled short of `applied` cannot change on resume, so it
+/// is named instead. The resume refusal keeps `PENDING_OBSERVATION` last,
+/// which the review example matches on, and mentions the wait only when the
+/// final read was still in progress.
+fn observation_refusal(
+    expected: Option<&str>,
+    observed: &BRegProposal,
+    waited: Option<Duration>,
+) -> anyhow::Error {
+    if let Some(status) = observed.application_status().filter(|status| {
+        expected == Some("applied") && status.mode == BRegProposalApplicationMode::Automatic
+    }) {
+        let settled = match status.state {
+            BRegProposalApplicationState::Blocked => Some("blocked"),
+            BRegProposalApplicationState::Cancelled => Some("cancelled"),
+            BRegProposalApplicationState::Rejected => Some("rejected"),
+            _ => None,
+        };
+        if let Some(settled) = settled {
+            return SettledApplication(settled).into();
+        }
+    }
+    let refusal = anyhow::anyhow!(PENDING_OBSERVATION);
+    match waited {
+        Some(waited) if awaits_automatic_application(expected, observed) => {
+            refusal.context(format!(
+                "automatic application was still pending after waiting {:.1} s",
+                waited.as_secs_f64()
+            ))
+        }
+        _ => refusal,
+    }
+}
+
+/// Re-reads while automatic application is in progress, until it settles or
+/// `limit` elapses. Returns the last read and, when it re-read at all, how long it waited.
+async fn await_application<R, E, F>(
+    expected: Option<&str>,
+    mut current: Result<R, E>,
+    proposal: impl Fn(&R) -> &BRegProposal,
+    mut read: impl FnMut() -> F,
+    interval: Duration,
+    limit: Duration,
+) -> (Result<R, E>, Option<Duration>)
+where
+    F: Future<Output = Result<R, E>>,
+{
+    let started = std::time::Instant::now();
+    let mut waited = None;
+    while let Ok(response) = &current {
+        if !awaits_automatic_application(expected, proposal(response)) || started.elapsed() >= limit
+        {
+            break;
+        }
+        tokio::time::sleep(interval).await;
+        current = read().await;
+        waited = Some(started.elapsed());
+    }
+    (current, waited)
+}
+
 /// A later revision of the same Proposal must not satisfy an earlier submission's wait.
 fn require_submission(capture: &ProposalCapture, current: &BRegProposal) -> Result<()> {
     if current.action_id() != capture.action
@@ -321,6 +430,145 @@ mod tests {
                 BRegProposal::from_slice(&serde_json::to_vec(&changed_value).unwrap()).unwrap();
             assert!(require_submission(&capture, &current).is_err(), "{key}");
         }
+    }
+
+    fn proposal(state: &str, application: Option<(&str, &str)>) -> BRegProposal {
+        let mut value = json!({"id":uuid::Uuid::new_v4(),"actionId":"register-contact",
+            "actionRevision":format!("sha256:{}", "a".repeat(64)),"submissionVersion":1,"revision":2,
+            "state":state,"effectDigest":format!("sha256:{}", "b".repeat(64)),"links":{}});
+        if let Some((state, mode)) = application {
+            let mut status = json!({"state":state,"mode":mode});
+            if mode == "automatic" && state != "applied" {
+                status["automaticRetry"] = json!({"scheduled":state == "pending",
+                    "attempts":u8::from(state != "pending"),"maximumAttempts":3});
+            }
+            if state == "blocked" {
+                status["reason"] = json!("dependency-outage");
+                status["recovery"] = json!("retry");
+            }
+            if state == "applied" {
+                value["application"] = json!({"applicationId":uuid::Uuid::new_v4(),"submissionVersion":1,
+                    "effectDigest":value["effectDigest"],"resultLinks":[]});
+            }
+            value["applicationStatus"] = status;
+        }
+        BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn only_in_progress_automatic_application_delays_an_applied_expectation() {
+        let pending = proposal("submitted", Some(("pending", "automatic")));
+        assert!(awaits_automatic_application(Some("applied"), &pending));
+        assert!(awaits_automatic_application(
+            Some("applied"),
+            &proposal("submitted", Some(("applying", "automatic")))
+        ));
+        assert!(!awaits_automatic_application(Some("submitted"), &pending));
+        assert!(!awaits_automatic_application(None, &pending));
+        for settled in [
+            proposal("submitted", None),
+            proposal("submitted", Some(("pending", "manual"))),
+            proposal("submitted", Some(("blocked", "automatic"))),
+            proposal("applied", Some(("applied", "automatic"))),
+        ] {
+            assert!(!awaits_automatic_application(Some("applied"), &settled));
+        }
+    }
+
+    fn block_on<T>(future: impl Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[test]
+    fn application_wait_returns_the_settled_read() {
+        let mut reads = 0;
+        let (current, waited) = block_on(await_application(
+            Some("applied"),
+            Ok::<_, ()>(proposal("submitted", Some(("pending", "automatic")))),
+            |response| response,
+            || {
+                reads += 1;
+                let next = if reads < 3 {
+                    proposal("submitted", Some(("applying", "automatic")))
+                } else {
+                    proposal("applied", Some(("applied", "automatic")))
+                };
+                async move { Ok(next) }
+            },
+            Duration::from_millis(1),
+            Duration::from_secs(10),
+        ));
+        assert_eq!(reads, 3);
+        assert_eq!(
+            serde_json::to_value(current.unwrap()).unwrap()["state"],
+            "applied"
+        );
+        assert!(waited.is_some());
+    }
+
+    #[test]
+    fn application_wait_is_bounded_and_skipped_when_nothing_is_pending() {
+        let limit = Duration::from_millis(20);
+        let (current, waited) = block_on(await_application(
+            Some("applied"),
+            Ok::<_, ()>(proposal("submitted", Some(("pending", "automatic")))),
+            |response| response,
+            || async { Ok(proposal("submitted", Some(("pending", "automatic")))) },
+            Duration::from_millis(2),
+            limit,
+        ));
+        assert_eq!(
+            serde_json::to_value(current.unwrap()).unwrap()["state"],
+            "submitted"
+        );
+        let waited = waited.unwrap();
+        assert!(waited >= limit);
+        let pending = proposal("submitted", Some(("pending", "automatic")));
+        let refusal = format!(
+            "{:#}",
+            observation_refusal(Some("applied"), &pending, Some(waited))
+        );
+        assert!(refusal.starts_with("automatic application was still pending after waiting 0.0"));
+        assert!(refusal.ends_with(PENDING_OBSERVATION), "{refusal}");
+        assert_eq!(
+            format!("{:#}", observation_refusal(Some("applied"), &pending, None)),
+            PENDING_OBSERVATION
+        );
+        let (_, waited) = block_on(await_application(
+            Some("applied"),
+            Ok::<_, ()>(proposal("submitted", Some(("pending", "manual")))),
+            |response| response,
+            || async { panic!("a manual application is never polled") },
+            Duration::from_millis(2),
+            limit,
+        ));
+        assert!(waited.is_none());
+    }
+
+    #[test]
+    fn settled_application_is_named_without_claiming_pending_or_resume() {
+        let (current, waited) = block_on(await_application(
+            Some("applied"),
+            Ok::<_, ()>(proposal("submitted", Some(("pending", "automatic")))),
+            |response| response,
+            || async { Ok(proposal("submitted", Some(("blocked", "automatic")))) },
+            Duration::from_millis(1),
+            Duration::from_secs(10),
+        ));
+        let refusal = observation_refusal(Some("applied"), &current.unwrap(), waited);
+        assert!(
+            refusal.downcast_ref::<SettledApplication>().is_some(),
+            "the run skips its resume advice for a settled application"
+        );
+        let refusal = format!("{refusal:#}");
+        assert!(waited.is_some());
+        assert!(refusal.contains("settled as blocked"), "{refusal}");
+        assert!(!refusal.contains("pending"), "{refusal}");
+        assert!(!refusal.contains("resume"), "{refusal}");
     }
 
     #[test]

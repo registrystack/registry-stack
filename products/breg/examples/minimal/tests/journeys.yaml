@@ -46,3 +46,69 @@ journeys:
           outcome: refusal
           status: 404
           problemCode: resource.not_found
+      - id: obtain-email-condition
+        action: update-contact-email
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: target-conditions
+          input: {contactId: {recordCapture: contact}}
+        expect: {outcome: success, status: 200}
+        capture: email-condition
+      - id: update-contact-email
+        action: update-contact-email
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: invoke
+          idempotencyKey: update-contact-email
+          input: {contactId: {recordCapture: contact}, email: updated@example.test}
+          preconditions:
+            contactId: {conditionCapture: email-condition}
+        expect: {outcome: success, status: 200}
+        captureResults: {contact-email: updated-contact}
+      - id: read-updated-contact
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: updated-contact}
+        expect:
+          outcome: success
+          status: 200
+          fields: {name: Example contact, email: updated@example.test, jurisdiction: zone-a}
+      - id: start-registration
+        action: register-contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: proposal
+          transition: start
+          input: {name: Registered contact, email: registered@example.test, jurisdiction: zone-a}
+        expect: {outcome: success, status: 201, fields: {state: draft}}
+        capture: registration-draft
+      - id: submit-registration
+        action: register-contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-directory-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: submit, proposalCapture: registration-draft, idempotencyKey: submit-registration}
+        expect: {outcome: success, status: 200, fields: {state: submitted}}

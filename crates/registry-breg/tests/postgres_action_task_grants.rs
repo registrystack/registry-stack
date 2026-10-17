@@ -43,6 +43,12 @@ fn registry() -> registry_breg::CompiledRegistry {
         {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}],
         "plan":{"type":"fixed","effects":[{"id":"contact","target":{"recordType":"contact"},"operation":"create",
             "set":{"name":{"fromInput":"name"},"email":{"fromInput":"email"},"jurisdiction":{"fromInput":"jurisdiction"}}}]}}]);
+    // The replaced Actions take the canonical profile's Action grants with them.
+    let editor = source["accessProfiles"][0]["permissions"]
+        .as_object_mut()
+        .unwrap();
+    editor.remove("actions");
+    editor.remove("proposals");
     source["accessProfiles"].as_array_mut().unwrap().push(json!({"id":"task-creator","actorKind":"agent",
         "requesterClients":["agent-client"],"principalClaim":"registry_principal","requiredScopes":["contact:create"],
         "requiredPurposes":["directory-administration"],"taskGrant":{"sourceIssuer":"https://casework.example"},

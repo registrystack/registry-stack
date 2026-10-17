@@ -8,7 +8,7 @@ project:
   defaultLanguage: en
   display:
     label: Local directory
-    description: A small registry maintained through generated CRUD.
+    description: A small registry maintained through generated CRUD and two Actions.
 
 package:
   sourceRevision: local-directory-0.1.0
@@ -28,6 +28,43 @@ recordTypes:
       - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
 
+actions:
+  - id: update-contact-email
+    display: {label: Update contact email, description: Replace one contact's email address as soon as the Action is invoked.}
+    execution: {mode: immediate}
+    inputs:
+      - {id: contact, apiName: contactId, type: reference, target: contact, required: true, classification: internal}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: contact-email
+          target: {fromInput: contact}
+          operation: patch
+          set:
+            email: {fromInput: email}
+  - id: register-contact
+    display: {label: Register contact, description: Create one contact through a Proposal that applies on submit without external review.}
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        retention: {mode: retain}
+    inputs:
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: contact
+          target: {recordType: contact}
+          operation: create
+          set:
+            name: {fromInput: name}
+            email: {fromInput: email}
+            jurisdiction: {fromInput: jurisdiction}
+
 accessProfiles:
   - id: directory-editor
     default: true
@@ -42,3 +79,26 @@ accessProfiles:
           writableFields: [name, email, jurisdiction]
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      actions:
+        - action: update-contact-email
+          operations: [invoke]
+          targets:
+            - recordType: contact
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          results: [contact-email]
+        - action: register-contact
+          operations: [start]
+          targets:
+            - recordType: contact
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      proposals:
+        - action: register-contact
+          operations: [get, list, edit, submit, cancel]
+          readableInputs: [name, email, jurisdiction]
+          ownership: caller
+          targets:
+            - recordType: contact
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
