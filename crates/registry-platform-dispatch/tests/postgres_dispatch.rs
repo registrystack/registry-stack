@@ -3311,7 +3311,7 @@ async fn refused_direct_intents_prevent_every_protected_operator_and_claim_path_
 
 #[tokio::test]
 async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction() {
-    use registry_platform_dispatch::postgres::{prune_terminal, MAX_PRUNE_BATCH};
+    use registry_platform_dispatch::postgres::{prune_terminal, RetentionError, MAX_PRUNE_BATCH};
 
     let harness = harness().await;
     let cutoff = SystemTime::now() - Duration::from_secs(60);
@@ -3357,7 +3357,7 @@ async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction
             cutoff
         )
         .await,
-        Err(DispatchError::Unavailable),
+        Err(RetentionError::BatchBound),
     );
     let deleted = prune_terminal(&transaction, &harness.table, &keys, cutoff)
         .await

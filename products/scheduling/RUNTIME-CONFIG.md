@@ -347,12 +347,13 @@ or actionable by its former owner, and a receipt containing that claim cannot be
 the independent receipt window remains open. Live claims
 keep their owner across audit-key rotation. Claim and history rows remain;
 their retention is deferred. Each retention tick prunes up to 256 delivered
-reminder intents whose delivery time is at or before the receipt-period cutoff,
+outbox intents of any purpose (confirmation, change, cancellation, reminder)
+whose delivery time is at or before the receipt-period cutoff,
 and up to 256 terminal observer deliveries whose last transition is at or
 before that cutoff. Observer dead letters and expired deliveries also require
 completed payload expiry and erasure before their metadata ages out. Pending,
 leased, retryable and uncertain work remains, including local, failed and
-suppressed reminder intents. Hook state is removed before delivery metadata;
+suppressed outbox intents. Hook state is removed before delivery metadata;
 a shared event remains until its last delivery is removed. These deletions
 share one transaction and never erase audit entries or spent-key tombstones. `audit.retentionDays` bounds rotated
 audit files. An idempotency receipt past its period is erased, so an
