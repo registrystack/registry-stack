@@ -158,7 +158,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "startup.database.catalog-drift",
             "database.catalog",
             &format!(
-                "the managed database catalog differs from the runtime package at: {}; restore these objects from the package migration or reapply the active package, then rerun doctor",
+                "the managed database catalog differs from the runtime package at: {}; restore the database from a backup taken under the active package, or, as the migration role, make each named object outside registry_internal match the active package's database/ddl.sql (drop one it does not declare, recreate one it declares), then rerun doctor",
                 objects.join(", ")
             ),
         );
@@ -727,6 +727,24 @@ mod tests {
         assert_eq!(package.path, "package");
         assert!(package.message.contains("bregctl plan --package DIR"));
         assert!(package.message.contains("bregctl apply --package DIR"));
+    }
+
+    #[test]
+    fn catalog_drift_names_only_repairs_the_engine_supports() {
+        // Applying the active package again is refused as already active, so
+        // the recovery is a restore from backup or a hand repair against the
+        // package's own DDL script.
+        let diagnostic = startup_diagnostic(StartupError::DatabaseCatalogDrift {
+            objects: vec!["registry_data.example_idx".to_owned()],
+        });
+        assert_eq!(diagnostic.code, "startup.database.catalog-drift");
+        assert!(diagnostic.message.contains("registry_data.example_idx"));
+        assert!(diagnostic.message.contains("backup"));
+        assert!(diagnostic.message.contains("database/ddl.sql"));
+        assert!(diagnostic.message.contains("registry_internal"));
+        assert!(!diagnostic.message.contains("reapply"));
+        assert!(!diagnostic.message.contains("apply the active package"));
+        assert!(!diagnostic.message.contains("migration plan"));
     }
 
     #[test]
