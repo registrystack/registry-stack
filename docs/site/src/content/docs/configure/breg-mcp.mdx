@@ -19,6 +19,12 @@ chat host, for example an AI assistant, to read their own Record and prepare a c
 citizen then submits that change on a review page you host. You need a registry project with a
 proposal-mode Action, an issuer that exchanges tokens and carries task grants, and a TLS proxy.
 
+Both services ship in releases as an
+[experimental surface](../../reference/api-stability/#experimental-surfaces): they stay outside
+the compatibility promise and may change in any minor release. Neither provides the task authority
+that issues the citizen's grants, so your deployment integrates its own (see
+[An issuer and a task authority](#an-issuer-and-a-task-authority)).
+
 ## What the two services do
 
 `breg-mcp` is a Model Context Protocol (MCP) gateway. A chat host calls it at `/mcp` with a token
@@ -210,7 +216,9 @@ the agent profile's Record and Action permissions, plus one entry for each Propo
 ```
 
 Whoever issues grants must therefore learn each Proposal the gateway starts and name it in that
-citizen's later grants. The task authority answers BReg's status request at
+citizen's later grants; a Start grant gives no later Get, List, or Edit access. Neither service
+provides this task authority or provisions those grants, and token exchange alone creates no
+per-Proposal authority. The task authority answers BReg's status request at
 `/v1/task-grants/{grantId}/status`, unless `statusPath` names another route.
 
 For the review page, the issuer must offer OpenID Connect discovery, the code flow with PKCE (S256),
@@ -532,13 +540,19 @@ BReg supplied one. Each code has one fixed message:
 | `record-not-resolved` | BReg returned no single Record for the citizen |
 | `not-found` | No such application for this citizen |
 | `application-not-editable` | The application is no longer a draft |
-| `stale-application` | The application changed, or the task authority withdrew the grant |
+| `stale-application` | The gateway compared revisions and found the application or its Action definition changed |
+| `change-refused` | BReg refused a required condition, a current-state conflict, or an expired idempotency receipt |
 | `idempotency-conflict` | An earlier request with the same key is running or differed |
 | `not-permitted` | The Action refused the request |
-| `authorization-failed` | The issuer refused the exchange, or BReg refused the delegated token |
+| `authorization-failed` | A credential is missing, unusable, or no longer accepted; signing in again resolves it |
+| `authorization-refused` | The issuer refused delegated access or granted too few scopes; signing in again alone may not resolve it |
 | `registry-unavailable` | BReg, the issuer, or the task authority did not answer |
 | `service-unavailable` | The gateway cannot record or run the call |
 | `unexpected-response` | BReg answered in a form the gateway cannot use |
+
+`change-refused` establishes neither a stale revision nor a withdrawn grant. BReg answers a
+withdrawn grant with the same value-free `412` as any other failed condition, so the gateway
+cannot tell the two apart and never reports a withdrawn grant as `stale-application`.
 
 Generate one `startAttemptId` for each application the citizen intends, and reuse it on every
 retry, including after an uncertain answer. The same ID replays the original Start, and a new ID
@@ -557,6 +571,9 @@ A request refused before any tool runs gets an RFC 9457 problem:
 
 {/* Evidence: crates/registry-breg-mcp/src/problems.rs, ToolErrorCode, ToolError, problem_code,
     token_code; crates/registry-breg/src/mutation.rs, check_task_authority;
+    crates/registry-breg-mcp/tests/mcp_gateway.rs,
+    exchange_refusals_and_unavailability_have_distinct_bounded_recovery,
+    runtime_condition_refusal_is_distinct_from_a_locally_stale_revision;
     crates/registry-breg-mcp/src/gateway/tests.rs,
     terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft;
     crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg/src/idempotency.rs;
