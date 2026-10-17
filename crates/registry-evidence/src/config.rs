@@ -3054,6 +3054,12 @@ pub struct OidcAuthenticationConfig {
 shared_block_host!(OidcAuthenticationConfig, block = "provider");
 
 impl OidcAuthenticationConfig {
+    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.provider.allow_insecure_http.then_some(
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+        )
+    }
+
     /// The exact issuer accepted in `iss`.
     pub fn issuer(&self) -> &str {
         &self.provider.issuer
@@ -3082,10 +3088,24 @@ impl OidcAuthenticationConfig {
             .map_err(|_| ConfigError::Invalid("authentication issuer is invalid"))?;
         let jwks_uri = Url::parse(self.jwks_uri())
             .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
-        if issuer.scheme() == "http" || jwks_uri.scheme() == "http" {
-            if assurance_profile != AssuranceProfile::Local {
-                return invalid("production and evidence-grade authentication requires HTTPS");
+        let plain_http = issuer.scheme() == "http" || jwks_uri.scheme() == "http";
+        // Deployable bundles require HTTPS for the issuer and the JWKS URI.
+        // The plain HTTP opt-in exists for the local profile alone, so a
+        // deployable bundle that sets it is refused rather than ignored.
+        if assurance_profile != AssuranceProfile::Local {
+            if self.provider.allow_insecure_http {
+                return Err(ConfigError::InvalidField(
+                    "production and evidence-grade authentication requires HTTPS; remove allowInsecureHttp, which only the local assurance profile accepts",
+                    "authentication.oidc.allowInsecureHttp",
+                ));
             }
+            if plain_http {
+                return invalid(
+                    "production and evidence-grade authentication requires HTTPS for the issuer and JWKS URI; plain HTTP is accepted only under the local assurance profile",
+                );
+            }
+        }
+        if plain_http && !self.provider.allow_insecure_http {
             // The local permission is for a supervised issuer on this
             // deployment's own loopback: a canonical numeric origin, with the
             // JWKS served from that exact origin. It is not a permission for
@@ -3111,9 +3131,25 @@ impl OidcAuthenticationConfig {
                     "a local HTTP authentication JWKS URI cannot use a TLS trust profile",
                 );
             }
-        } else {
+        } else if issuer.scheme() == "https" && jwks_uri.scheme() == "https" {
             validate_https_issuer(self.issuer())?;
             validate_https_url(self.jwks_uri(), false)?;
+        } else {
+            if issuer.scheme() == "https" {
+                validate_https_issuer(self.issuer())?;
+            }
+            if jwks_uri.scheme() == "https" {
+                validate_https_url(self.jwks_uri(), false)?;
+            } else {
+                if jwks_uri.fragment().is_some() {
+                    return invalid("authentication JWKS URI cannot carry a fragment");
+                }
+                if self.tls_trust_profile.is_some() {
+                    return invalid(
+                        "a plain HTTP authentication JWKS URI cannot use a TLS trust profile",
+                    );
+                }
+            }
         }
         self.provider
             .check(
@@ -3240,28 +3276,6 @@ impl OidcAuthenticationConfig {
         }
         Ok(())
     }
-
-    pub(crate) fn uses_local_issuer_http(&self, assurance_profile: AssuranceProfile) -> bool {
-        if assurance_profile != AssuranceProfile::Local {
-            return false;
-        }
-        let Ok(issuer) = Url::parse(self.issuer()) else {
-            return false;
-        };
-        let Ok(jwks_uri) = Url::parse(self.jwks_uri()) else {
-            return false;
-        };
-        issuer.scheme() == "http"
-            && jwks_uri.scheme() == "http"
-            && validate_local_issuer_origin(self.issuer()).is_ok()
-            && jwks_uri.host_str() == Some("127.0.0.1")
-            && jwks_uri.port() == issuer.port()
-            && jwks_uri.path().starts_with('/')
-            && jwks_uri.query().is_none()
-            && jwks_uri.fragment().is_none()
-            && jwks_uri.username().is_empty()
-            && jwks_uri.password().is_none()
-    }
 }
 
 /// Registered JWT claims no authority claim may be read from. `sub` is handled
@@ -3286,11 +3300,11 @@ fn validate_local_issuer_origin(value: &str) -> Result<&str, ConfigError> {
         .and_then(|port| port.parse::<u16>().ok())
         .filter(|port| *port != 0)
         .ok_or(ConfigError::Invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
         ))?;
     if value != format!("http://127.0.0.1:{port}") {
         return invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
         );
     }
     Ok(value)
@@ -7966,6 +7980,106 @@ mod tests {
             assert!(
                 candidate.validate().is_err(),
                 "{profile:?} inherited the local HTTP exception"
+            );
+        }
+    }
+
+    fn plain_http_issuer_candidate(profile: &str, opt_in: bool) -> serde_json::Value {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        let mut candidate = serde_json::to_value(config).expect("configuration serializes");
+        candidate["assuranceProfile"] = serde_json::json!(profile);
+        candidate["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.internal:8080");
+        candidate["authentication"]["oidc"]["jwksSource"] = serde_json::json!({
+            "type": "uri",
+            "uri": "http://identity.internal:8080/oauth2/jwks"
+        });
+        if opt_in {
+            candidate["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        }
+        candidate
+    }
+
+    #[test]
+    fn local_runtime_reads_the_explicit_http_issuer_opt_in() {
+        let mut candidate = plain_http_issuer_candidate("local", true);
+        let parsed = EvidenceConfig::parse_projection(&candidate)
+            .expect("explicit HTTP issuer opt-in parses and validates under local");
+        assert!(parsed.authentication.oidc.provider.allow_insecure_http);
+        assert_eq!(
+            parsed
+                .authentication
+                .oidc
+                .insecure_http_startup_diagnostic(),
+            Some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+            )
+        );
+
+        candidate["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
+        let error = EvidenceConfig::parse_projection(&candidate)
+            .expect_err("plain HTTP has no TLS trust profile")
+            .to_string();
+        assert!(
+            error.contains("plain HTTP authentication JWKS URI cannot use a TLS trust profile"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn local_http_issuer_refusal_names_the_explicit_opt_in() {
+        let error = EvidenceConfig::parse_projection(&plain_http_issuer_candidate("local", false))
+            .expect_err("a non-loopback HTTP issuer needs the opt-in")
+            .to_string();
+        assert!(
+            error.contains("authentication.oidc.allowInsecureHttp: true"),
+            "{error}"
+        );
+        assert!(!error.contains("identity.internal"), "{error}");
+    }
+
+    /// The frozen contract promises HTTPS for deployable bundles, so the
+    /// plain HTTP opt-in is refused there rather than honored.
+    #[test]
+    fn deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in() {
+        for profile in ["production", "evidence-grade"] {
+            for opt_in in [false, true] {
+                let error =
+                    EvidenceConfig::parse_projection(&plain_http_issuer_candidate(profile, opt_in))
+                        .expect_err("deployable bundles require HTTPS")
+                        .to_string();
+                assert!(
+                    error.contains("production and evidence-grade authentication requires HTTPS"),
+                    "{profile}: {error}"
+                );
+                assert!(
+                    error.contains("local assurance profile"),
+                    "{profile}: {error}"
+                );
+                assert!(!error.contains("identity.internal"), "{profile}: {error}");
+            }
+
+            // The opt-in is refused on its own, even when every URL is https.
+            let config = EvidenceConfig::parse_yaml(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ))
+            .expect("strict fixture validates");
+            let mut https = serde_json::to_value(config).expect("configuration serializes");
+            https["assuranceProfile"] = serde_json::json!(profile);
+            https["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+            let error = EvidenceConfig::parse_projection(&https)
+                .expect_err("deployable bundles refuse the opt-in")
+                .to_string();
+            assert!(
+                error.contains("remove allowInsecureHttp"),
+                "{profile}: {error}"
+            );
+            assert!(
+                error.contains("authentication.oidc.allowInsecureHttp"),
+                "{profile}: {error}"
             );
         }
     }

@@ -11,15 +11,14 @@ use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     actor_kind, grant_claims, ActorKind, Audience, ClaimError, ClaimNames, GrantClaims,
-    GrantContextError, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
-    TokenVerifierConfig, VerifiedToken,
+    GrantContextError, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::config::{
-    AccessTokenAlgorithm, AccessTokenType, AssuranceProfile, AuthenticationConfig,
-    OidcAuthenticationConfig,
+    AccessTokenAlgorithm, AccessTokenType, AuthenticationConfig, OidcAuthenticationConfig,
 };
 
 const MAX_PRINCIPAL_BYTES: usize = 512;
@@ -263,10 +262,12 @@ impl Authenticator {
     /// when the bundle names no profile.
     pub fn from_config(
         config: &AuthenticationConfig,
-        assurance_profile: AssuranceProfile,
         issuer_roots: Vec<reqwest::Certificate>,
     ) -> Self {
         let config = &config.oidc;
+        if let Some(diagnostic) = config.insecure_http_startup_diagnostic() {
+            tracing::warn!("{diagnostic}");
+        }
         let algorithms = config
             .algorithms
             .iter()
@@ -306,7 +307,7 @@ impl Authenticator {
         let fetcher = Arc::new(JwksFetcher::new_trusting_additional_roots(
             config.jwks_uri().to_owned(),
             JwksFetcherConfig::defaults(),
-            jwks_fetch_policy(config, assurance_profile),
+            jwks_fetch_policy(config),
             issuer_roots,
         ));
         let verifier = Arc::new(TokenVerifier::new(verifier_config, fetcher));
@@ -642,26 +643,12 @@ fn exactly_matched_resource<'a>(
     }
 }
 
-fn jwks_fetch_policy(
-    config: &OidcAuthenticationConfig,
-    assurance_profile: AssuranceProfile,
-) -> FetchUrlPolicy {
-    if config.uses_local_issuer_http(assurance_profile) {
-        return FetchUrlPolicy {
-            allowed_schemes: vec!["http".to_owned()],
-            allow_localhost: true,
-            allow_http_private_network: false,
-            deny_private_ranges: true,
-            deny_cloud_metadata: true,
-        };
-    }
-    FetchUrlPolicy {
-        allowed_schemes: vec!["https".to_owned()],
-        allow_localhost: true,
-        allow_http_private_network: false,
-        deny_private_ranges: false,
-        deny_cloud_metadata: true,
-    }
+/// The key endpoint is operator-declared configuration, so it inherits the
+/// declared issuer's network allowance whatever its origin.
+fn jwks_fetch_policy(config: &OidcAuthenticationConfig) -> FetchUrlPolicy {
+    IssuerNetworkPolicy::new(config.issuer(), config.provider.allow_insecure_http)
+        .map(|network| network.declared_jwks_fetch_policy())
+        .unwrap_or_else(|_| FetchUrlPolicy::strict())
 }
 
 /// Whether a verification failure was this deployment's key source rather than
@@ -828,67 +815,78 @@ mod tests {
     }
 
     #[test]
-    fn jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer() {
-        let mut exact = authentication_config();
-        set_issuer(
-            &mut exact,
-            "http://127.0.0.1:8081",
-            "http://127.0.0.1:8081/.well-known/jwks.json",
-        );
-        let local = jwks_fetch_policy(&exact, AssuranceProfile::Local);
-        assert_eq!(local.allowed_schemes, ["http"]);
-        assert!(local.allow_localhost);
-        assert!(local.deny_private_ranges);
+    fn jwks_fetch_policy_uses_the_shared_declared_endpoint_rule() {
+        let validate = |config: &OidcAuthenticationConfig| {
+            jwks_fetch_policy(config).validate_dns_pinned_for_immediate_fetch(
+                &reqwest::Url::parse(config.jwks_uri()).expect("JWKS URL"),
+            )
+        };
 
-        // The JWKS path is the issuer's to choose; what stays fixed is the
-        // exact same numeric loopback origin.
-        let mut other_path = exact.clone();
-        set_issuer(
-            &mut other_path,
-            "http://127.0.0.1:8081",
-            "http://127.0.0.1:8081/oauth2/jwks",
-        );
-        assert_eq!(
-            jwks_fetch_policy(&other_path, AssuranceProfile::Local).allowed_schemes,
-            ["http"]
-        );
-
-        for (profile, issuer, jwks_uri) in [
+        // The declared key endpoint inherits the declared issuer's allowance,
+        // whatever its origin: the same loopback origin, another loopback
+        // port, or a private address the operator wrote down.
+        for (issuer, jwks_uri) in [
             (
-                AssuranceProfile::Production,
                 "http://127.0.0.1:8081",
                 "http://127.0.0.1:8081/.well-known/jwks.json",
             ),
+            ("http://127.0.0.1:8081", "http://127.0.0.1:8081/oauth2/jwks"),
             (
-                AssuranceProfile::EvidenceGrade,
-                "http://127.0.0.1:8081",
-                "http://127.0.0.1:8081/.well-known/jwks.json",
-            ),
-            (
-                AssuranceProfile::Local,
-                "http://localhost:8081",
-                "http://localhost:8081/.well-known/jwks.json",
-            ),
-            (
-                AssuranceProfile::Local,
-                "http://127.0.0.2:8081",
-                "http://127.0.0.2:8081/.well-known/jwks.json",
-            ),
-            (
-                AssuranceProfile::Local,
                 "http://127.0.0.1:8081",
                 "http://127.0.0.1:8082/.well-known/jwks.json",
             ),
+            ("https://10.20.30.40:8443", "https://10.20.30.41:8443/jwks"),
         ] {
             let mut candidate = authentication_config();
             set_issuer(&mut candidate, issuer, jwks_uri);
-            let policy = jwks_fetch_policy(&candidate, profile);
-            assert_eq!(
-                policy.allowed_schemes,
-                ["https"],
-                "{profile:?} opened HTTP for {jwks_uri}"
-            );
+            validate(&candidate).unwrap_or_else(|error| panic!("{jwks_uri} was refused: {error}"));
         }
+
+        // Plain http beyond loopback needs the opt-in; without it the issuer
+        // itself is refused and the strict policy applies.
+        let mut without_opt_in = authentication_config();
+        set_issuer(
+            &mut without_opt_in,
+            "http://issuer.example.test:8081",
+            "http://issuer.example.test:8081/.well-known/jwks.json",
+        );
+        assert_eq!(jwks_fetch_policy(&without_opt_in), FetchUrlPolicy::strict());
+        let mut http_keys = authentication_config();
+        set_issuer(
+            &mut http_keys,
+            "https://10.20.30.40:8443",
+            "http://10.20.30.41:8080/jwks",
+        );
+        assert!(matches!(
+            validate(&http_keys),
+            Err(registry_platform_httputil::FetchUrlError::SchemeDenied { .. })
+        ));
+
+        let mut metadata = authentication_config();
+        set_issuer(
+            &mut metadata,
+            "https://10.20.30.40:8443",
+            "https://169.254.169.254/jwks",
+        );
+        assert!(matches!(
+            validate(&metadata),
+            Err(registry_platform_httputil::FetchUrlError::CloudMetadataDenied { .. })
+        ));
+
+        let mut opted_in = authentication_config();
+        set_issuer(
+            &mut opted_in,
+            "http://issuer.example.test:8081",
+            "http://issuer.example.test:8081/.well-known/jwks.json",
+        );
+        opted_in.provider.allow_insecure_http = true;
+        assert_eq!(
+            opted_in.insecure_http_startup_diagnostic(),
+            Some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+            )
+        );
+        assert!(jwks_fetch_policy(&opted_in).allow_http_non_loopback);
     }
 
     fn segment(input: &str) -> String {

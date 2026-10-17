@@ -492,6 +492,7 @@ fn issuer(issuer: &str, audience: &str, jwks_source: JwksSource) -> OidcIssuerCo
         issuer: Url::new(issuer).unwrap(),
         audience: audience.to_owned(),
         jwks_source,
+        allow_insecure_http: false,
     }
 }
 
@@ -508,6 +509,22 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
     issuer("http://127.0.0.1:8082", "api", JwksSource::default())
         .check(field, true)
         .expect("supervised loopback issuer");
+    for loopback in ["http://localhost:8082", "http://[::1]:8082"] {
+        issuer(loopback, "api", JwksSource::default())
+            .check(field, true)
+            .expect("every loopback spelling is admitted");
+    }
+
+    let opted_in: ProductOidc = read_block(
+        "issuer: http://issuer.example.test\naudience: urn:example:api\n\
+         allowInsecureHttp: true\ntokenTypes: [at+jwt]",
+    )
+    .expect("explicit HTTP issuer opt-in parses");
+    assert!(opted_in.issuer.allow_insecure_http);
+    opted_in
+        .issuer
+        .check(field, false)
+        .expect("explicit HTTP issuer opt-in validates");
 
     for (candidate, loopback, expected_field) in [
         (

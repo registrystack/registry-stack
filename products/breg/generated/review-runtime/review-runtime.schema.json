@@ -327,6 +327,11 @@
       "additionalProperties": false,
       "description": "The OpenID Provider the page signs people in with, and the confidential\nclient it authenticates as.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP to the declared issuer beyond loopback.",
+          "type": "boolean"
+        },
         "clientId": {
           "$ref": "#/$defs/ExternalId",
           "description": "The page's client identifier at the provider."
@@ -337,7 +342,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted only on a loopback host under `development-loopback`."
+          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted on a loopback host under `development-loopback`, or\nelsewhere when `allowInsecureHttp` explicitly permits it."
         },
         "scopes": {
           "description": "Scopes requested beside `openid`, such as the review scope the\nregistry profile requires. The page always requests `openid`, so the\nlist does not name it.",

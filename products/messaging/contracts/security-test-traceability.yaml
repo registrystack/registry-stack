@@ -19,6 +19,7 @@ entries:
       - {path: crates/registry-messaging/src/auth.rs, name: an_admitted_client_without_a_profile_is_not_authorized}
       - {path: crates/registry-messaging/src/http.rs, name: a_client_without_a_profile_or_scope_is_not_authorized}
       - {path: crates/registry-messaging/src/http.rs, name: only_the_sender_role_submits_and_only_through_what_its_profile_lists}
+      - {path: crates/registry-messaging/src/config.rs, name: runtime_reads_the_explicit_http_issuer_opt_in}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_outside_the_callers_role_or_profile_is_refused_before_the_store}
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_configuration_uses_scope_and_static_issuer_keys}
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_client_tokens_preserve_messaging_authorization}

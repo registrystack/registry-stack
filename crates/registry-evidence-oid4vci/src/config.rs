@@ -302,6 +302,7 @@ pub struct OfferAuthorizationConfig {
     /// against a token's `iss`.
     pub issuer: String,
     pub jwks_uri: String,
+    pub allow_insecure_http: bool,
     /// The audiences this service answers to. A token issued for anything else
     /// is refused, so an adopter's token for another resource server cannot be
     /// replayed here.
@@ -316,6 +317,13 @@ pub struct OfferAuthorizationConfig {
     /// configurations state `oid4vci:offer`.
     pub required_scopes: Restriction,
     pub maximum_token_lifetime_seconds: u64,
+}
+
+impl OfferAuthorizationConfig {
+    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.allow_insecure_http
+            .then_some("offers.allowInsecureHttp permits plain HTTP to the configured issuer")
+    }
 }
 
 /// The bounds of the in-memory store.
@@ -743,6 +751,9 @@ pub struct OffersDocument {
     pub issuer: Url,
     /// The offer-token issuer's key set. https in strict mode.
     pub jwks_uri: Url,
+    /// Permit plain HTTP to the offer-token issuer beyond loopback.
+    #[serde(default)]
+    pub allow_insecure_http: bool,
     /// The audiences this service answers to, each at most 256 bytes. A token
     /// issued for anything else is refused.
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
@@ -920,6 +931,12 @@ impl DeliveryDocument {
             ValidationMode::Strict => {
                 credential_issuer_findings(issuer, findings);
                 for (pointer, origin) in self.called_origins() {
+                    url_query_or_fragment_findings(pointer, origin, findings);
+                    if self.offers.allow_insecure_http
+                        && matches!(pointer, "/offers/issuer" | "/offers/jwksUri")
+                    {
+                        continue;
+                    }
                     https_origin_findings(pointer, origin, findings);
                 }
             }
@@ -969,6 +986,12 @@ impl DeliveryDocument {
             }
         }
         for (pointer, origin) in self.called_origins() {
+            url_query_or_fragment_findings(pointer, origin, findings);
+            if self.offers.allow_insecure_http
+                && matches!(pointer, "/offers/issuer" | "/offers/jwksUri")
+            {
+                continue;
+            }
             if origin.is_https() {
                 https_origin_findings(pointer, origin, findings);
             } else if !is_supervised_local_endpoint(origin) {
@@ -1062,6 +1085,7 @@ impl DeliveryDocument {
                 claims: self.offers.claims.to_claim_names(),
                 issuer: self.offers.issuer.into_string(),
                 jwks_uri: self.offers.jwks_uri.into_string(),
+                allow_insecure_http: self.offers.allow_insecure_http,
                 audiences: self
                     .offers
                     .audiences
@@ -1221,7 +1245,7 @@ fn normalized_credential_issuer(written: &str) -> &str {
     written.trim_end_matches('/')
 }
 
-/// Require an `https` URL with no variable parts.
+/// Require an `https` URL.
 ///
 /// The credential issuer is compared exactly by every wallet that reads it, and
 /// the outbound endpoints are what this service authenticates against, so a
@@ -1229,16 +1253,28 @@ fn normalized_credential_issuer(written: &str) -> &str {
 /// already refuses a URL without a host or with embedded credentials.
 fn https_origin_findings(pointer: &'static str, origin: &Url, findings: &mut Vec<Finding>) {
     if !origin.is_https() {
+        let action = if matches!(pointer, "/offers/issuer" | "/offers/jwksUri") {
+            "Write an https URL, or set offers.allowInsecureHttp: true for the declared issuer."
+        } else {
+            "Write an https URL, or set validationMode: supervised-local-development for a loopback process group."
+        };
         findings.push(
             Finding::error(
                 HTTPS_REQUIRED,
                 pointer,
                 "this origin must use https in strict validation mode",
-                "Write an https URL, or set validationMode: supervised-local-development for a loopback process group.",
+                action,
             )
             .reading(TRANSPORT_READS),
         );
     }
+}
+
+fn url_query_or_fragment_findings(
+    pointer: &'static str,
+    origin: &Url,
+    findings: &mut Vec<Finding>,
+) {
     let parsed = origin.to_url();
     if parsed.query().is_some() || parsed.fragment().is_some() {
         findings.push(Finding::error(
@@ -1537,6 +1573,52 @@ store:
             .iter()
             .map(|diagnostic| diagnostic.code.as_str())
             .collect()
+    }
+
+    #[test]
+    fn runtime_reads_the_explicit_http_issuer_opt_in() {
+        let text = VALID.replace(
+            "  issuer: https://mint.example.org",
+            "  issuer: http://mint.example.org\n  allowInsecureHttp: true",
+        );
+        let config = load_from(&text).expect("explicit HTTP issuer opt-in");
+        assert!(config.offers.allow_insecure_http);
+        assert_eq!(
+            config.offers.insecure_http_startup_diagnostic(),
+            Some("offers.allowInsecureHttp permits plain HTTP to the configured issuer")
+        );
+
+        let with_query = text.replace(
+            "  issuer: http://mint.example.org",
+            "  issuer: http://mint.example.org?unexpected",
+        );
+        let error = load_from(&with_query)
+            .expect_err("the HTTP opt-in does not permit an issuer query")
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/offers/issuer")
+            .expect("issuer query refusal")
+            .code
+            .clone();
+        assert_eq!(error, URL_QUERY_OR_FRAGMENT);
+    }
+
+    #[test]
+    fn strict_http_offer_issuer_refusal_names_the_explicit_opt_in() {
+        let text = VALID.replace(
+            "  issuer: https://mint.example.org",
+            "  issuer: http://mint.example.org",
+        );
+        let error = load_from(&text).expect_err("plain HTTP without an opt-in is refused");
+        let refusal = error
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/offers/issuer")
+            .expect("offer issuer refusal");
+        assert!(refusal
+            .suggested_action
+            .contains("offers.allowInsecureHttp: true"));
+        assert!(!refusal.suggested_action.contains("mint.example.org"));
     }
 
     /// The codes `text` is refused with.

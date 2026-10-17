@@ -2435,7 +2435,7 @@ fn failure_cases() -> Vec<FailureCase> {
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.unknown-key] ",
-            suffix: " /authentication/oidc/unknownField\n  `unknownField` is not a member of this mapping\n  next: Remove `unknownField`; the accepted keys are `issuer`, `audience`, `jwksSource`, `tokenTypes`, `algorithms`, `principalClaim`, `requesterTagsClaim`, `evidenceAudienceClaim`, `claims`, `maximumTokenLifetimeSeconds`, `revokedKeyIds`, `allowedClients`, `assertionIssuers`, `requiredScopes`, `actorClaim`, `tlsTrustProfile`.\n1 error, 0 warnings in 1 file\n",
+            suffix: " /authentication/oidc/unknownField\n  `unknownField` is not a member of this mapping\n  next: Remove `unknownField`; the accepted keys are `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `tokenTypes`, `algorithms`, `principalClaim`, `requesterTagsClaim`, `evidenceAudienceClaim`, `claims`, `maximumTokenLifetimeSeconds`, `revokedKeyIds`, `allowedClients`, `assertionIssuers`, `requiredScopes`, `actorClaim`, `tlsTrustProfile`.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
                 "config.unknown-key",

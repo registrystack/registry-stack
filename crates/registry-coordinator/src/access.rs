@@ -5,10 +5,9 @@ use jsonwebtoken::Algorithm;
 use registry_platform_config::{
     JwksSource, OidcClientsConfig, OidcIssuerConfig, SecretProvidersConfig,
 };
-use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_with_policy, parse_static_jwks, JwksFetcher,
-    JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
+    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier, TokenVerifierConfig,
     ASSERTION_ISSUER_CLAIM,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -265,17 +264,23 @@ impl AccessConfig {
             assertion_issuers: self.assertion_issuers.clone(),
         }
     }
+    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.issuer.allow_insecure_http.then_some(
+            "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer",
+        )
+    }
     pub async fn authenticator(
         &self,
         secrets: &SecretProvidersConfig,
         local: bool,
     ) -> Result<Authenticator> {
         self.validate(secrets, local)?;
-        let policy = if local {
-            FetchUrlPolicy::dev()
-        } else {
-            FetchUrlPolicy::strict()
-        };
+        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
+            tracing::warn!("{diagnostic}");
+        }
+        let network =
+            IssuerNetworkPolicy::new(self.issuer.issuer.as_str(), self.issuer.allow_insecure_http)
+                .map_err(|_| refused())?;
         let keys = match &self.issuer.jwks_source {
             JwksSource::Static { document_ref } => {
                 let value = secrets
@@ -292,20 +297,29 @@ impl AccessConfig {
                 let uri = match source {
                     JwksSource::Uri { uri } => uri.to_string(),
                     _ => {
-                        fetch_discovery_with_policy(
+                        let (document, policy) = fetch_discovery_for_issuer(
                             &OidcDiscoveryConfig {
                                 issuer: self.issuer.issuer.to_string(),
                                 jwks_uri_override: None,
                                 discovery_timeout: Duration::from_secs(5),
                                 max_doc_bytes: 1_048_576,
                             },
-                            &policy,
+                            self.issuer.allow_insecure_http,
                         )
                         .await
-                        .map_err(|_| refused())?
-                        .jwks_uri
+                        .map_err(|_| refused())?;
+                        return self
+                            .authenticator_with_keys(Arc::new(
+                                JwksFetcher::new_with_fetch_url_policy(
+                                    document.jwks_uri,
+                                    JwksFetcherConfig::defaults(),
+                                    policy,
+                                ),
+                            ))
+                            .await;
                     }
                 };
+                let policy = network.declared_jwks_fetch_policy();
                 Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     uri,
                     JwksFetcherConfig::defaults(),
@@ -313,6 +327,10 @@ impl AccessConfig {
                 ))
             }
         };
+        self.authenticator_with_keys(keys).await
+    }
+
+    async fn authenticator_with_keys(&self, keys: Arc<JwksFetcher>) -> Result<Authenticator> {
         keys.ensure_key_set().await.map_err(|_| refused())?;
         let profile = TokenVerifierConfig::access_token_profile(
             self.issuer.issuer.clone(),
@@ -486,6 +504,9 @@ impl Serialize for AccessConfig {
         map.serialize_entry("issuer", &self.issuer.issuer)?;
         map.serialize_entry("audience", &self.issuer.audience)?;
         map.serialize_entry("jwksSource", &self.issuer.jwks_source)?;
+        if self.issuer.allow_insecure_http {
+            map.serialize_entry("allowInsecureHttp", &true)?;
+        }
         if !self.assertion_issuers.is_empty() {
             map.serialize_entry("assertionIssuers", &self.assertion_issuers)?;
         }
@@ -498,6 +519,8 @@ impl Serialize for AccessConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::JwksSource;
+    use registry_platform_yaml::Url;
 
     fn caller(actions: Vec<Action>, workflows: &[&str], operator: bool) -> Caller {
         Caller {
@@ -517,6 +540,27 @@ mod tests {
                 operator,
             },
         }
+    }
+
+    #[test]
+    fn http_issuer_opt_in_has_a_startup_diagnostic() {
+        let access = AccessConfig {
+            issuer: OidcIssuerConfig {
+                issuer: Url::new("http://identity.example.test").unwrap(),
+                audience: "urn:coordinator:test".into(),
+                jwks_source: JwksSource::default(),
+                allow_insecure_http: true,
+            },
+            assertion_issuers: BTreeMap::new(),
+            scope_claim: "scope".into(),
+            policies: BTreeMap::new(),
+        };
+        assert_eq!(
+            access.insecure_http_startup_diagnostic(),
+            Some(
+                "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer"
+            )
+        );
     }
 
     #[test]

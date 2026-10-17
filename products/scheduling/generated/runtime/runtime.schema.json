@@ -293,6 +293,11 @@
       "additionalProperties": false,
       "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, and the scopes each route family requires.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP for a declared issuer beyond loopback. TLS remains\nrequired unless the operator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "allowedClients": {
           "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, a repeated client, and `unrestricted`\nare refused.",
           "items": {

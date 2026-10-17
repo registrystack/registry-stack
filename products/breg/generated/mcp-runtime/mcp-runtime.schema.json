@@ -394,6 +394,11 @@
           "type": "array",
           "uniqueItems": true
         },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP to the declared issuer beyond loopback.",
+          "type": "boolean"
+        },
         "allowedClients": {
           "description": "The chat-host clients whose tokens the gateway accepts.",
           "items": {

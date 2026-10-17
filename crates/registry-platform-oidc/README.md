@@ -26,24 +26,26 @@ use std::{sync::Arc, time::Duration};
 
 use jsonwebtoken::Algorithm;
 use registry_platform_oidc::{
-    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    fetch_discovery_for_issuer, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
     TokenVerifier, TokenVerifierConfig,
 };
 
 async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
-    let discovery = fetch_discovery(
+    let (discovery, jwks_policy) = fetch_discovery_for_issuer(
         &OidcDiscoveryConfig {
             issuer: "https://issuer.example".to_string(),
             jwks_uri_override: None,
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 1024 * 1024,
         },
+        false,
     )
     .await?;
 
-    let fetcher = Arc::new(JwksFetcher::new(
+    let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         discovery.jwks_uri,
         JwksFetcherConfig::defaults(),
+        jwks_policy,
     ));
 
     let config = TokenVerifierConfig::access_token_profile(
@@ -61,9 +63,20 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
 
 ## Security Notes
 
-- `fetch_discovery` and `JwksFetcher::new` use `FetchUrlPolicy::strict`.
-- Use `*_with_policy` constructors only for tests or controlled local
-  development.
+- Endpoints the operator declares inherit the declared-issuer allowance: the configured issuer
+  and a configured JWKS URI (`IssuerNetworkPolicy::declared_jwks_fetch_policy`) may resolve to
+  private or loopback addresses on any origin. Endpoints returned by discovery
+  (`IssuerNetworkPolicy::discovered_endpoint_fetch_policy`) inherit it only on the issuer's own
+  origin; a discovered cross-origin endpoint stays strict and may not resolve to a private or
+  loopback address. Cloud metadata and link-local addresses are denied in every case.
+- `fetch_discovery_for_issuer` applies those rules to the issuer, a configured JWKS URI, and a
+  discovered `jwks_uri`, and names the remedy when a policy refuses one, without repeating the
+  address.
+- Plain HTTP is accepted on IPv4 and IPv6 loopback. Elsewhere it requires the product's explicit
+  `allowInsecureHttp: true` operator setting, which covers the issuer's origin and a configured
+  JWKS URI. A discovered cross-origin endpoint must use HTTPS whatever that setting says.
+- `fetch_discovery` and `JwksFetcher::new` retain their strict defaults for callers that do not
+  have an operator-declared issuer policy.
 - Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the
   configured timeout, including DNS validation.
 - Use the named profiles for access-token flows so related ID token and

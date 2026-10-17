@@ -511,6 +511,11 @@
       "additionalProperties": false,
       "description": "The OIDC issuer whose access tokens this runtime accepts, the clients it\nadmits, and the claim carrying their scopes.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP for a declared issuer beyond loopback. TLS remains\nrequired unless the operator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "allowedClients": {
           "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
           "items": {

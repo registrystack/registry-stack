@@ -26,8 +26,8 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
-    OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, ClaimNames, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, BoundedU64};
@@ -455,7 +455,7 @@ impl RuntimeConfigError {
             }
             Self::UnsafePackageRoot => "Point package.root at a path with no symbolic link in it.",
             Self::InvalidOidc => {
-                "Correct authentication.oidc and authentication.authorityClaims: an https issuer (http only on loopback), bounded values with no whitespace, distinct list entries, and claim names that do not repeat."
+                "Correct authentication.oidc and authentication.authorityClaims: use an https issuer, loopback http, or set authentication.oidc.allowInsecureHttp: true for a declared non-loopback http issuer; keep values bounded without whitespace, list entries distinct, and claim names non-repeating."
             }
             Self::InvalidOidcLeeway => {
                 "Set authentication.oidc.leewayMilliseconds to a multiple of 1000 no greater than 300000."
@@ -1713,9 +1713,18 @@ pub struct OidcVerifierConfig {
     leeway: Duration,
     jwks_cache: JwksCacheConfig,
     jwks_source: OidcJwksSource,
+    allow_insecure_http: bool,
 }
 
 impl OidcVerifierConfig {
+    /// The operator-visible warning emitted when the plain HTTP opt-in is active.
+    #[must_use]
+    pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.allow_insecure_http.then_some(
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+        )
+    }
+
     /// The one token issuer this runtime verifies.
     #[must_use]
     pub fn issuer(&self) -> &str {
@@ -1776,6 +1785,7 @@ impl OidcVerifierConfig {
             leeway,
             jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
             jwks_source,
+            allow_insecure_http: raw.provider.allow_insecure_http,
         })
     }
 
@@ -1833,20 +1843,31 @@ impl OidcVerifierConfig {
     }
 
     async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
+        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
+            tracing::warn!("{diagnostic}");
+        }
+        let network = IssuerNetworkPolicy::new(&self.issuer, self.allow_insecure_http)
+            .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         match &self.jwks_source {
             OidcJwksSource::Discovery => {
-                let discovery = fetch_discovery(&self.discovery_config())
-                    .await
-                    .map_err(|_| RuntimeConfigError::InvalidOidc)?;
-                Ok(Arc::new(JwksFetcher::new(
+                let (discovery, policy) =
+                    fetch_discovery_for_issuer(&self.discovery_config(), self.allow_insecure_http)
+                        .await
+                        .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+                Ok(Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     discovery.jwks_uri,
                     self.jwks_fetcher_config(),
+                    policy,
                 )))
             }
-            OidcJwksSource::Uri { uri } => Ok(Arc::new(JwksFetcher::new(
-                uri.clone(),
-                self.jwks_fetcher_config(),
-            ))),
+            OidcJwksSource::Uri { uri } => {
+                let policy = network.declared_jwks_fetch_policy();
+                Ok(Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                    uri.clone(),
+                    self.jwks_fetcher_config(),
+                    policy,
+                )))
+            }
             OidcJwksSource::Static { document_ref } => {
                 let document = resolver
                     .resolve_reference(document_ref)

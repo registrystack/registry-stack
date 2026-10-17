@@ -226,6 +226,41 @@ fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> 
 }
 
 #[test]
+fn runtime_reads_the_explicit_http_issuer_opt_in() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        "    issuer: https://issuer.example",
+        "    issuer: http://issuer.example\n    allowInsecureHttp: true",
+    );
+    let config =
+        parse_runtime_config_with_env(&raw, |_| None).expect("explicit HTTP issuer opt-in");
+    assert_eq!(
+        config.authentication().oidc().issuer(),
+        "http://issuer.example"
+    );
+    assert_eq!(
+        config
+            .authentication()
+            .oidc()
+            .insecure_http_startup_diagnostic(),
+        Some("authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer")
+    );
+}
+
+#[test]
+fn non_loopback_http_issuer_refusal_names_the_opt_in() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("https://issuer.example", "http://issuer.example");
+    let error = parse_runtime_config_with_env(&raw, |_| None)
+        .expect_err("plain HTTP beyond loopback needs an explicit opt-in");
+    assert_eq!(error, RuntimeConfigError::InvalidOidc);
+    let rendered = error.render_human(Some(Path::new("runtime.yaml")));
+    assert!(rendered.contains("authentication.oidc.allowInsecureHttp: true"));
+    assert!(!rendered.contains("issuer.example"));
+}
+
+#[test]
 fn shared_package_envelope_and_pin_are_checked_before_startup() {
     let fixture = RuntimeFixture::new();
     let governed = fixture.package_root.join("package.json");
