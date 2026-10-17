@@ -4,7 +4,7 @@
 
 use std::{env, fs, str::FromStr, time::Duration};
 
-use registry_breg::postgres::{ConnectionConfig, PoolBounds};
+use registry_breg::postgres::{ConnectionConfig, DatabaseConnectionCause, PoolBounds};
 use tokio::{net::TcpStream, time::timeout};
 use tokio_postgres::{config::Host, Config};
 
@@ -68,6 +68,10 @@ async fn custom_ca_requires_a_trusted_tls_server() {
 
     let trusted_pool = trusted.build_pool().expect("TLS pool must build");
     trusted_pool
+        .startup_connection_cause_for_test()
+        .await
+        .expect("the trusted TLS startup acquisition succeeds");
+    trusted_pool
         .startup_probe()
         .await
         .expect("trusted custom CA must establish a PostgreSQL connection");
@@ -115,16 +119,20 @@ async fn custom_ca_requires_a_trusted_tls_server() {
     let hostname_mismatch_pool = hostname_mismatch
         .build_pool()
         .expect("hostname-mismatch pool must build");
-    assert!(
-        hostname_mismatch_pool.startup_probe().await.is_err(),
-        "a trusted chain with a hostname absent from the certificate SAN must be refused"
+    assert_eq!(
+        hostname_mismatch_pool
+            .startup_connection_cause_for_test()
+            .await,
+        Err(DatabaseConnectionCause::Tls),
+        "a trusted chain with a hostname absent from the certificate SAN is a TLS refusal"
     );
 
     let untrusted = ConnectionConfig::require_tls_with_custom_ca(&database_url, &wrong_ca, bounds)
         .expect("the wrong-root fixture must still be valid DER");
     let untrusted_pool = untrusted.build_pool().expect("wrong-root pool must build");
-    assert!(
-        untrusted_pool.startup_probe().await.is_err(),
-        "a valid but untrusted CA must not establish a PostgreSQL connection"
+    assert_eq!(
+        untrusted_pool.startup_connection_cause_for_test().await,
+        Err(DatabaseConnectionCause::Tls),
+        "a valid but untrusted CA is classified as a TLS refusal"
     );
 }

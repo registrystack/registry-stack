@@ -279,7 +279,7 @@ fn project_source() -> &'static str {
 kind: BRegProject
 project:
   id: wasm-schema-test
-  canonicalBaseIri: https://wasm-schema-test.invalid
+  canonicalBaseIri: https://wasm-schema-test.example.test
   version: 0.1.0
   defaultLanguage: en
 package:

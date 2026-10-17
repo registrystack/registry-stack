@@ -224,6 +224,8 @@ pub enum FixtureError {
     CreateRowBoundaryNotWritable,
     AuthorityWideningRefused,
     RequestConstructionRefused,
+    AuthenticationActorKindMissing,
+    AuthenticationCredentialRefused,
     ResponseTooLarge,
     ResponseShapeRefused,
     ExpectationMismatch,
@@ -235,6 +237,8 @@ pub enum FixtureError {
     ResponseStatusMismatch {
         expected: u16,
         actual: u16,
+        problem_code: Option<String>,
+        problem_detail: Option<String>,
     },
     /// A journeys document the shared reader refused: its diagnostics, each
     /// with a code, a path, a position, and the fix, and never an authored
@@ -275,11 +279,21 @@ impl fmt::Display for FixtureError {
         if let Self::LogicalReference(refusal) = self {
             return write!(formatter, "{refusal}");
         }
-        if let Self::ResponseStatusMismatch { expected, actual } = self {
-            return write!(
+        if let Self::ResponseStatusMismatch {
+            expected,
+            actual,
+            problem_code,
+            problem_detail,
+        } = self
+        {
+            write!(
                 formatter,
                 "expected HTTP {expected}, received HTTP {actual}"
-            );
+            )?;
+            if let (Some(code), Some(detail)) = (problem_code, problem_detail) {
+                write!(formatter, "; problem {code}: {detail}")?;
+            }
+            return Ok(());
         }
         if let Self::JourneyDocument(report) = self {
             return write!(
@@ -317,6 +331,12 @@ impl fmt::Display for FixtureError {
             }
             Self::AuthorityWideningRefused => "the fixture authority reference was refused",
             Self::RequestConstructionRefused => "the fixture request could not be constructed",
+            Self::AuthenticationActorKindMissing => {
+                "the fixture credential is missing the configured actor-kind claim"
+            }
+            Self::AuthenticationCredentialRefused => {
+                "the fixture credential failed token verification; check its signing key, signature, issuer, and validity period"
+            }
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
             Self::ResponseShapeRefused => "the fixture response shape was refused",
             Self::ExpectationMismatch => "the fixture expectation did not match",
@@ -2940,10 +2960,13 @@ impl PostgresFixtureTestRunner {
             .ok_or(FixtureError::ExecutionRefused)?;
         let actual = response.status().as_u16();
         if actual != step.expect.status {
+            let (problem_code, problem_detail) = response_problem(response).await;
             return Err(
                 self.current_step_failure(FixtureError::ResponseStatusMismatch {
                     expected: step.expect.status,
                     actual,
+                    problem_code,
+                    problem_detail,
                 }),
             );
         }
@@ -3227,9 +3250,12 @@ async fn execute_schema_test_with_key_source(
             };
             let actual = response.status().as_u16();
             if actual != step.expect.status {
+                let (problem_code, problem_detail) = response_problem(response).await;
                 return Err(step_failure(FixtureError::ResponseStatusMismatch {
                     expected: step.expect.status,
                     actual,
+                    problem_code,
+                    problem_detail,
                 }));
             }
             accept_response(step, response, &mut observations, Some(&runtime.pool))
@@ -3253,6 +3279,24 @@ async fn execute_schema_test_with_key_source(
         candidate_binding_sha256: candidate_binding_sha256(&candidate),
     };
     build_schema_test_receipt(&candidate, suite, &successful)
+}
+
+async fn response_problem(response: Response<Body>) -> (Option<String>, Option<String>) {
+    let Ok(bytes) = to_bytes(response.into_body(), MAX_RESPONSE_BYTES).await else {
+        return (None, None);
+    };
+    let Ok(problem) = serde_json::from_slice::<Value>(&bytes) else {
+        return (None, None);
+    };
+    let code = problem
+        .get("code")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let detail = problem
+        .get("detail")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    (code, detail)
 }
 
 struct SchemaTestRuntime {
@@ -3418,12 +3462,12 @@ impl SchemaTestRuntime {
             .verifier
             .verify(token)
             .await
-            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            .map_err(fixture_verification_error)?;
         let mapped = self
             .authenticator
             .authenticate(token)
             .await
-            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            .map_err(fixture_authentication_error)?;
         assert_exact_claims(
             &step.claims,
             &step.profile,
@@ -3573,6 +3617,26 @@ impl SchemaTestRuntime {
             last = Some(response);
         }
         last.ok_or(FixtureError::RequestConstructionRefused)
+    }
+}
+
+fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> FixtureError {
+    if matches!(error, registry_platform_oidc::OidcError::UnknownKid) {
+        FixtureError::AuthenticationCredentialRefused
+    } else {
+        FixtureError::RequestConstructionRefused
+    }
+}
+
+fn fixture_authentication_error(error: crate::auth::AuthenticationError) -> FixtureError {
+    match error {
+        crate::auth::AuthenticationError::MissingActorKind => {
+            FixtureError::AuthenticationActorKindMissing
+        }
+        crate::auth::AuthenticationError::VerificationRefused => {
+            FixtureError::AuthenticationCredentialRefused
+        }
+        _ => FixtureError::RequestConstructionRefused,
     }
 }
 
@@ -5767,6 +5831,38 @@ mod tests {
         PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
 
+    #[test]
+    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_credential() {
+        assert_eq!(
+            fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
+            FixtureError::AuthenticationActorKindMissing
+        );
+        assert_eq!(
+            fixture_verification_error(registry_platform_oidc::OidcError::UnknownKid),
+            FixtureError::AuthenticationCredentialRefused
+        );
+        // The runtime authenticator erases why verification refused a token:
+        // an unknown key, a bad signature, a wrong issuer, and an expired
+        // token are one refusal, so the message must be true of each.
+        assert_eq!(
+            fixture_authentication_error(crate::auth::AuthenticationError::VerificationRefused),
+            FixtureError::AuthenticationCredentialRefused
+        );
+        let message = FixtureError::AuthenticationCredentialRefused.to_string();
+        for cause in ["signing key", "signature", "issuer", "validity period"] {
+            assert!(message.contains(cause), "{message}");
+        }
+        assert!(!message.contains("unknown"), "{message}");
+        for error in [
+            FixtureError::AuthenticationActorKindMissing,
+            FixtureError::AuthenticationCredentialRefused,
+        ] {
+            let rendered = format!("{error:?}: {error}");
+            assert!(!rendered.contains("claim-canary-value"));
+            assert!(!rendered.contains("key-canary-value"));
+        }
+    }
+
     /// A request decoded the way the journeys reader decodes one: the shape
     /// first, then each HTTP body read from the authored value.
     #[test]
@@ -7141,10 +7237,8 @@ journeys:
         journey_source: &[u8],
     ) -> PackageFixture {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-        let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-            .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module))
-            .into_bytes();
+        let digest = module_digest(&module);
+        let project = production_project_source(&digest, COMPILER_SOURCE_REVISION);
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
@@ -7198,14 +7292,8 @@ journeys:
 
     fn production_prepared_package(source_revision: &str) -> PreparedPackage {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-        let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-            .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module))
-            .replace(
-                "sourceRevision: fixture-project-source",
-                &format!("sourceRevision: {source_revision}"),
-            )
-            .into_bytes();
+        let digest = module_digest(&module);
+        let project = production_project_source(&digest, source_revision);
         prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: source_revision.to_owned(),
@@ -7227,6 +7315,21 @@ journeys:
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
         })
         .expect("Production candidate package prepares")
+    }
+
+    fn production_project_source(module_digest: &str, source_revision: &str) -> Vec<u8> {
+        String::from_utf8(PROJECT_TEMPLATE.to_vec())
+            .expect("project fixture is UTF-8")
+            .replace("MODULE_DIGEST", module_digest)
+            .replace(
+                "canonicalBaseIri: https://fixture.invalid",
+                "canonicalBaseIri: https://fixture.example.test",
+            )
+            .replace(
+                "sourceRevision: fixture-project-source",
+                &format!("sourceRevision: {source_revision}"),
+            )
+            .into_bytes()
     }
 
     fn execution_facts(

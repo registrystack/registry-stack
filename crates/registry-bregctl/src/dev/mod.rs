@@ -963,6 +963,17 @@ fn exact_journey_client<'a>(
     }
 }
 
+/// The diagnostic codes of a compile refusal, which name why it refused
+/// without carrying a source value.
+fn refusal_codes(failure: &crate::FailureReport) -> String {
+    failure
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct CapturedSource {
     files: BTreeMap<String, Vec<u8>>,
     digest: String,
@@ -977,11 +988,12 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
         )
     })?;
     let compiled = crate::compile_captured_project(&source, crate::ProfileArg::Production, "dev")
-        .map_err(|_| {
-        anyhow::anyhow!(
-            "registry must compile for a package; run bregctl check --production on the project"
-        )
-    })?;
+        .map_err(|failure| {
+            anyhow::anyhow!(
+                "registry must compile for a package ({}); run bregctl check --production on the project",
+                refusal_codes(&failure)
+            )
+        })?;
     let identity = compiled
         .package()
         .context("local development requires an authored package identity")?;
@@ -1132,8 +1144,10 @@ fn start(args: StartArgs) -> Result<Value> {
         let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
         state
     } else {
-        let compiled = crate::compile(&project, crate::ProfileArg::Production, "dev")
-            .map_err(|_| anyhow::anyhow!("project no longer compiles"))?;
+        let compiled =
+            crate::compile(&project, crate::ProfileArg::Production, "dev").map_err(|failure| {
+                anyhow::anyhow!("project no longer compiles ({})", refusal_codes(&failure))
+            })?;
         let previous = previous.as_ref();
         let issuer_project = requested_issuer
             .clone()
@@ -2097,18 +2111,47 @@ fn command(
 ) -> Result<Vec<u8>> {
     let (success, bytes) = output(command, root, name, input)?;
     if !success {
-        let logs = root.join("logs").display().to_string();
-        match refused_check(&bytes) {
-            // The child named which check failed. Report it here: the schema
-            // test runs inside the detached supervisor, so a refusal that
-            // stays in the log never reaches the terminal that asked.
-            Some(check) => bail!(
-                "native {name} refused: {check}. The full report and owner-only diagnostics are in {logs}"
-            ),
-            None => bail!("native {name} failed; inspect owner-only diagnostics in {logs}"),
-        }
+        return Err(native_refusal(root, name, &bytes));
     }
     Ok(bytes)
+}
+
+/// The error a refused native command reports from its machine-readable
+/// report, which is already retained in the private logs.
+fn native_refusal(root: &Path, name: &str, report: &[u8]) -> anyhow::Error {
+    let logs = root.join("logs").display().to_string();
+    match refused_check(report) {
+        // The child named which check failed. Report it here: the schema
+        // test runs inside the detached supervisor, so a refusal that
+        // stays in the log never reaches the terminal that asked.
+        Some(check) => anyhow::anyhow!(
+            "native {name} refused: {check}. The full report and owner-only diagnostics are in {logs}"
+        ),
+        None => anyhow::anyhow!("native {name} failed; inspect owner-only diagnostics in {logs}"),
+    }
+}
+
+/// Retain the report of a refusal from a command run in this process, as
+/// `output` retains a child's, and report it as a refused native command.
+fn in_process_refusal(root: &Path, name: &str, refusal: &crate::Refusal) -> anyhow::Error {
+    let mut report = Vec::new();
+    let mut diagnostics = Vec::new();
+    // JSON output writes the whole report to the first writer. Writing to
+    // memory cannot fail, and the exit code is for a process this is not.
+    let _exit = crate::write_refusal(
+        refusal,
+        crate::OutputFormat::Json,
+        &mut report,
+        &mut diagnostics,
+    );
+    let retained = log_file(root, &format!("{name}-report"))
+        .and_then(|mut log| log.write_all(&report).map_err(Into::into));
+    match retained {
+        Ok(()) => native_refusal(root, name, &report),
+        Err(error) => error.context(format!(
+            "native {name} refused and its report could not be retained"
+        )),
+    }
 }
 
 /// The refusal a failed start reports, naming the supervisor's own cause when
@@ -2849,25 +2892,25 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     let fingerprint = report["schemaFingerprint"]
         .as_str()
         .context("schema-test report has no fingerprint")?;
-    let mut package = ctl(state);
-    package
-        .arg("package")
-        .arg(root.join("project"))
-        .arg("--schema-fingerprint")
-        .arg(fingerprint)
-        .arg("--test-receipt")
-        .arg(root.join("schema-test-receipt.json"))
-        .arg("--output")
-        .arg(root.join("build"));
-    if let Some(baseline) = state.baseline_package() {
-        package.arg("--baseline-package").arg(baseline);
-    }
-    let report: Value = serde_json::from_slice(&command(&mut package, &root, "package", None)?)?;
-    let digest = report["packageDigest"]
-        .as_str()
-        .context("package report has no package digest")?;
+    // Packaging runs in this process: the loopback session serves a freshly
+    // initialized project's placeholder identity unchanged, so it packages
+    // without the deployment identity refusals, and no `bregctl package`
+    // spelling can do the same.
+    let args = crate::PackageArgs {
+        candidate: crate::PackageCandidateArgs {
+            project: root.join("project"),
+            baseline_package: state.baseline_package(),
+            reviewed_migrations: None,
+        },
+        schema_fingerprint: Some(fingerprint.to_owned()),
+        test_receipt: root.join("schema-test-receipt.json"),
+        output: root.join("build"),
+        revision: None,
+    };
+    let report = crate::package(&args, false)
+        .map_err(|refusal| in_process_refusal(&root, "package", &refusal))?;
     config::runtime(&root, state, clients, false)?;
-    state.package_digest = Some(digest.into());
+    state.package_digest = Some(report.package_digest);
     state.save()
 }
 

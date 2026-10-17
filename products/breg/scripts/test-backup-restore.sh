@@ -708,6 +708,14 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
+canonical_needle = "canonicalBaseIri: https://generic-registry.example.invalid"
+if source.count(canonical_needle) != 1:
+    raise SystemExit("canonical base IRI placeholder was not found exactly once")
+source = source.replace(
+    canonical_needle,
+    "canonicalBaseIri: https://generic-registry.example.test",
+    1,
+)
 
 def insert_after(needle, addition):
     global source

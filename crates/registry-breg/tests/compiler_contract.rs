@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use registry_breg::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_breg::compiler::{
-    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
-    CompileProfile,
+    compile_project, compile_project_with_assets, deployment_diagnostics, module_digest,
+    module_digest_with_assets, CompileProfile,
 };
 use registry_breg::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
@@ -475,6 +475,47 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         unknown_effective_profile,
         "breg.manifest-projection.dataset-access-profile-unknown",
     );
+}
+
+#[test]
+fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
+    for iri in [
+        "https://invalid",
+        "https://household-registry.example.invalid",
+        "https://HOUSEHOLD-REGISTRY.EXAMPLE.INVALID",
+        "https://household-registry.example.invalid./registry",
+        "https://household-registry.example.invalid.?source=placeholder",
+        "http://household-registry.example.invalid/",
+    ] {
+        let mut project = multi_dataset_project();
+        project.project.canonical_base_iri = iri.to_owned();
+        let diagnostics = deployment_diagnostics(&project);
+        assert_eq!(diagnostics.len(), 1, "{iri}");
+        assert_eq!(
+            diagnostics[0].code,
+            "breg.registry.canonical-base-iri-reserved"
+        );
+        assert_eq!(diagnostics[0].path, "project.project.canonicalBaseIri");
+        // Local development and schema tests compile the placeholder
+        // unchanged; only deployment tooling refuses it.
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("authoring accepts the placeholder IRI");
+        let production = compile_project(&project, &[], CompileProfile::Production)
+            .expect_err("the shared fixture omits production package identity");
+        assert!(production
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
+    }
+
+    for iri in [
+        "https://household-registry.example.invalid.example.org",
+        "https://household-registry.exampleinvalid",
+    ] {
+        let mut project = multi_dataset_project();
+        project.project.canonical_base_iri = iri.to_owned();
+        assert!(deployment_diagnostics(&project).is_empty(), "{iri}");
+    }
 }
 
 #[test]
@@ -3389,6 +3430,32 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
             "{failure:?}"
         );
     }
+}
+
+#[test]
+fn decimal_bound_diagnostic_names_the_record_field_and_scale_rule() {
+    let mut project = multi_dataset_project();
+    let field = project.entities[0]
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "name")
+        .unwrap();
+    field.field_type = registry_breg::contract::FieldTypeSource::Decimal {
+        precision: 6,
+        scale: 2,
+        minimum: Some("1.0".to_owned()),
+        maximum: Some("99.99".to_owned()),
+    };
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+        .unwrap();
+    assert_eq!(diagnostic.path, "recordTypes[id=person].fields[id=name]");
+    assert!(diagnostic
+        .message
+        .contains("exactly scale fractional digits"));
 }
 
 #[test]

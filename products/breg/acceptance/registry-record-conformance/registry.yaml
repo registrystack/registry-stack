@@ -3,7 +3,7 @@
   "kind": "BRegProject",
   "project": {
     "id": "cross-product-conformance",
-    "canonicalBaseIri": "https://cross-product.example.invalid",
+    "canonicalBaseIri": "https://cross-product.example.test",
     "version": "0.1.0",
     "defaultLanguage": "en"
   },

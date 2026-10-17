@@ -2432,6 +2432,57 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
     let check = bregctl(&["--format", "json", "check", path(&destination)]);
     assert!(check.status.success(), "{check:?}");
+    // The generated `.invalid` IRI runs through local development and schema
+    // tests unchanged; asserting production readiness or building a package
+    // for deployment refuses it until the adopter replaces it.
+    let production_check = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--production",
+    ]);
+    assert_eq!(
+        production_check.status.code(),
+        Some(1),
+        "{production_check:?}"
+    );
+    assert_reserved_iri_refusal(&json_stdout(&production_check));
+    let package = bregctl(&[
+        "--format",
+        "json",
+        "package",
+        path(&destination),
+        "--schema-fingerprint",
+        &"0".repeat(64),
+        "--test-receipt",
+        path(&project.path().join("receipt.json")),
+        "--output",
+        path(&project.path().join("build")),
+    ]);
+    assert_eq!(package.status.code(), Some(1), "{package:?}");
+    assert_reserved_iri_refusal(&json_stdout(&package));
+    assert!(!project.path().join("build").exists());
+    // No command-line spelling packages the placeholder for deployment:
+    // `bregctl dev` packages its loopback session in process instead.
+    let bypass = bregctl(&[
+        "package",
+        path(&destination),
+        "--schema-fingerprint",
+        &"0".repeat(64),
+        "--test-receipt",
+        path(&project.path().join("receipt.json")),
+        "--output",
+        path(&project.path().join("build")),
+        "--local-development",
+    ]);
+    assert_eq!(bypass.status.code(), Some(2), "{bypass:?}");
+    let stderr = String::from_utf8(bypass.stderr).expect("usage error is UTF-8");
+    assert!(
+        stderr.contains("unexpected argument --local-development"),
+        "{stderr}"
+    );
+    assert!(!project.path().join("build").exists());
     let journeys =
         fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
     assert!(journeys.contains("scopes: [registry:household-registry:operate]"));
@@ -2443,6 +2494,17 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         "\napiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\nkind: BRegModelSelection\n"
     ));
     assert!(selection.contains("concept: GroupMembership"));
+}
+
+fn assert_reserved_iri_refusal(report: &Value) {
+    assert_eq!(report["ok"], false, "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "breg.registry.canonical-base-iri-reserved"
+        }),
+        "{report}"
+    );
 }
 
 #[test]
@@ -3016,6 +3078,26 @@ fn init_writes_a_bare_relative_destination_into_the_working_directory() {
         );
     }
     assert_eq!(json_stdout(&output)["command"], "init");
+}
+
+#[cfg(unix)]
+#[test]
+fn init_names_a_symlinked_destination_and_its_resolved_target() {
+    use std::os::unix::fs::symlink;
+
+    let project = TestProject::asset_fixture();
+    let real = project.path().join("real-destination");
+    let linked = project.path().join("linked-destination");
+    fs::create_dir(&real).unwrap();
+    symlink(&real, &linked).unwrap();
+    let output = bregctl(&["--format", "json", "init", path(&linked)]);
+    assert_eq!(output.status.code(), Some(1));
+    let message = json_stdout(&output)["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.contains(linked.to_str().unwrap()), "{message}");
+    assert!(message.contains(real.to_str().unwrap()), "{message}");
 }
 
 #[test]
@@ -5405,6 +5487,12 @@ fn test_output_symlink_parent_is_refused_before_candidate_or_database_work() {
         json_stdout(&result)["diagnostics"][0]["code"],
         "test.output.refused"
     );
+    let report = json_stdout(&result);
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("diagnostic message");
+    assert!(message.contains(&linked.display().to_string()), "{message}");
+    assert!(message.contains(&real.display().to_string()), "{message}");
     assert!(!real.join("receipt.json").exists());
 }
 
