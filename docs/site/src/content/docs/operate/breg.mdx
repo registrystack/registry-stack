@@ -265,8 +265,8 @@ schema cannot tell you:
   loopback host. The key set comes from the issuer's discovery document unless `jwksSource`
   names a URI or pins a static document.
 
-Three optional sections matter only for some projects. `taskGrantStatus` pins, per Casework
-issuer, the endpoint and the registry's own credentials it uses to check that a task grant is still
+Three optional sections matter only for some projects. `taskGrantStatus` pins, per task-grant
+issuer such as Casework or a chat assistant's task authority, the endpoint and the registry's own credentials it uses to check that a task grant is still
 current. `wasmExecution` sets the backend and the module and guest-memory ceilings for WASM
 handlers. `authentication.oidc.assertionIssuers` lists, per client, the assertion authorities
 that client may exchange a subject token from; once written, a client it does not list may

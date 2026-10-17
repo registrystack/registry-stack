@@ -125,7 +125,7 @@ BReg's count datasets use explicit calendar periods in UTC and closed boolean or
 
 Minimum-count suppression and deterministic rounding can reveal suppressed values through interval arithmetic. For example, two positive suppressed cells under minimum five are each at most four; a rounded total of ten with base five constrains their sum to at least eight, revealing two fours. Exact zeros reveal absence; overlapping populations and successive versions permit differencing. There is no privacy budget or differential privacy.
 
-The [statistical dataset explanation](../breg-statistical-datasets/) describes these residual risks and the separation between live, publisher, and released-reader profiles.
+[Publish statistics](../../configure/breg-statistics/#review-what-a-release-discloses) describes these residual risks and the separation between live, publisher, and released-reader profiles.
 
 {/* Evidence: crates/registry-breg/tests/statistics.rs;
     crates/registry-breg/src/compiler/statistics.rs;
