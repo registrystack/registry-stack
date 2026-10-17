@@ -1,57 +1,290 @@
 ---
-title: Connect an institution source from OpenAPI
-description: Adapt a normalized Evidence project to a reviewed institution source while keeping source access, assertion meaning, and caller authority separate.
+title: Connect an institution API
+description: Read one operation from an institution API's OpenAPI description, prove a reviewed Evidence project offline, then return a verified assertion from a local server.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
 last_reviewed: "2026-08-07"
-doc_type: how-to
+doc_type: tutorial
 persona:
   - assertion provider
 locale: en
-standards_referenced: []
+standards_referenced:
+  - fhir-r4
+tutorial_test:
+  toolset: evidence
+  checkout: true
 ---
 
-Connect an institution source by adapting the normalized project used in
-[Return your first Evidence assertion](../first-evidence-assertion/). That journey covers a
-synthetic HTTP source, complete local grants, fixtures, caller credentials, and independent
-verification. Keep that working boundary while replacing its synthetic source with your reviewed
-institution endpoint.
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-## Keep each decision with its owner
+If your institution publishes an API with an OpenAPI description, this tutorial connects one of
+its operations to Evidence Gateway. You prove an assertion definition over a FHIR R4 `Coverage`
+read offline, then return a verified answer through a local server.
 
-An OpenAPI description identifies transport operations and data shapes. It does not decide the
-assertion's purpose, the facts to disclose, the subject mapping, or who may request an answer.
-The source owner and assertion provider must review those choices before deployment.
+<QuickstartMeta
+  outcome="A verified coverage-status assertion from a FHIR API."
+  time="About 20 minutes"
+  level="Local development with a synthetic public server"
+  prerequisites={[
+    'evidence and evidencectl on PATH',
+    'The source archive of the same release',
+    'Running Docker',
+    'Python 3, curl, and jq',
+    'Internet access',
+  ]}
+/>
 
-Author named Sources and Functions inside `evidence.yaml`. A Source fixes its request, selector
-inputs, bounded response and private fact projection. A definition selects that Source and a
-named derivation Function, then governs its purpose, subjects, Outputs and grant ceiling. The
-separate target supplies source connections and credentials; its authority supplies complete
-caller grants within the project ceilings. Source access never grants caller authority.
+## Copy the project
 
-{/* Evidence: crates/registry-evidence-authoring/src/project.rs, EvidenceProject, Source and AssertionDefinition;
-    crates/registry-evidence-authoring/src/target.rs, EvidenceTarget, EvidenceTargetAuthority and validate_authority();
-    products/evidence/examples/standalone/evidence.yaml. */}
+From the archive root, copy the FHIR example out of the tree:
 
-## Adapt and prove the project
+```sh
+mkdir connect-an-institution-api
+cp -R products/evidence/examples/fhir connect-an-institution-api/fhir-record-evidence
+cd connect-an-institution-api/fhir-record-evidence
+```
 
-Use [Configure Registry Evidence](../../configure/evidence/) to edit the owning document and
-check the selected target. The [configuration reference](../../reference/evidence-configuration/)
-provides accepted key shapes. `evidencectl source suggest` can help draft Source configuration
-from an OpenAPI description; review its output as authoring input, then supply assertion meaning
-and caller grants yourself.
+Check it and run its fixtures offline:
 
-For a Base Registry Engine (BReg) source, follow [Compose BReg sources with an offline Evidence project](../evidence-from-breg/)
-for the export/import boundary. Importing a Source does not supply assertion definitions or caller
-authority.
+```sh
+evidencectl check . --target local-target.yaml
+evidencectl test . --target local-target.yaml --deny-warnings
+```
 
-Add synthetic cases for unique matches, missing and ambiguous subjects, invalid source responses,
-and refused caller shapes. Run the project checks and fixtures before
-[building and deploying a candidate](../build-and-deploy-evidence-project/). Keep real identifiers,
-source responses, private keys and credential values out of authored files and test logs.
+```text test-expect
+Evidence project check: complete
+Project: .
+Target: local-target.yaml
+0 errors, 0 warnings
+PASS: check
+PASS: fixtures/coverage-status.yaml (8 cases)
+PASS: fixtures/healthcare-establishment.yaml (11 cases)
+3 passed, 0 failed (19 cases evaluated)
+Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
+```
 
-{/* Evidence: crates/registry-evidencectl/src/source_cli.rs, SourceCommand;
-    crates/registry-evidencectl/src/check.rs; crates/registry-evidencectl/src/fixtures.rs;
-    products/evidence/reference/authoring-projects/CONFIG.md. */}
+The project holds two definitions; this tutorial requests `fhir-coverage-status`.
+
+## Read the API from its OpenAPI description
+
+`source.openapi.yaml` is the API's OpenAPI description. List what one operation returns:
+
+```sh
+evidencectl source suggest --openapi source.openapi.yaml \
+  --operation 'GET /Coverage/{coverage_id}' --list-pointers
+```
+
+```text test-expect
+  /beneficiary/reference
+  /id
+  /resourceType
+  /status
+```
+
+Print a source draft that selects two of them:
+
+```sh
+evidencectl source suggest --openapi source.openapi.yaml \
+  --operation 'GET /Coverage/{coverage_id}' --source-id coverage-record \
+  --select /status --select /beneficiary/reference
+```
+
+```text test-excerpt
+Still needs your input (the source block below):
+  - source origin, posture, authentication, selector bindings, preparation,
+    and request limits are intentionally absent from the mechanical draft.
+```
+
+The draft is mechanical: it copies shapes and leaves every decision to you. The reviewed source
+in `evidence.yaml` is what you ship:
+
+```yaml test-excerpt="evidence.yaml"
+coverage-record:
+  type: http-json
+  connection: fhir-read-through
+  acquisitionPosture: record-transformed
+  selectors:
+  - role: coverage-record
+    profiles:
+    - coverage-by-id
+  request:
+    method: GET
+    path: /Coverage/{coverage_id}
+```
+
+It projects four fields and keeps two as private facts, `status` and `beneficiary-reference`.
+The acquisition posture `record-transformed` records that the API returns a broader record, so
+the integration claims disclosure minimization only.
+
+For your own API, `evidencectl init <dir> --openapi <doc> --profile local` writes a project, and
+`evidencectl source suggest <dir>` writes the draft into it.
+
+{/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, intentionally absent from the mechanical draft;
+    crates/registry-evidence/src/config.rs, AcquisitionPosture; products/evidence/OPERATOR-CONTRACT.md, record-transformed;
+    products/evidence/examples/fhir/evidence.yaml, coverage-record. */}
+
+## Serve the API locally
+
+FHIR servers answer with `application/fhir+json`; an Evidence HTTP source accepts
+`application/json`. The project's adapter reads each allowed resource through and re-serves it.
+The adapter is project code, not part of Evidence. In a second terminal, start it:
+
+```sh test-cwd="connect-an-institution-api/fhir-record-evidence" test-background="http://127.0.0.1:8000/healthz"
+python3 serve-source.py
+```
+
+It reads a synthetic public server; send it no real identifiers. Back in the first terminal,
+pick one coverage record and its patient. The script writes owner-only subject files in the
+parent directory:
+
+```sh
+cd ..
+python3 fhir-record-evidence/discover-records.py
+cd fhir-record-evidence
+```
+
+```text test-expect
+Coverage selector file: ready
+Organization selector file: ready
+```
+
+The derivation refuses a coverage whose beneficiary is not the requested patient:
+
+```rhai test-excerpt="functions/derive-coverage-status.rhai"
+fn derive(facts, selectors, context) {
+    if facts["beneficiary-reference"] != "Patient/" + selectors.patient.values.patient_id {
+        throw("derivation_input_error");
+    }
+    [#{output: "coverage-record-reports-active", value: facts.status == "active"}]
+}
+```
+
+{/* Evidence: products/evidence/examples/fhir/{serve-source.py,discover-records.py}, application/fhir+json, O_EXCL;
+    products/evidence/examples/fhir/functions/derive-coverage-status.rhai, derivation_input_error. */}
+
+## Register a client
+
+`test` wrote disposable, owner-only signing and HMAC keys under `.generated/secrets`; keep that
+directory out of version control. Register a client under the `fhir-service` access profile:
+
+```sh
+evidencectl access client add fhir-client --access-profile fhir-service --generate-local-key
+```
+
+```text test-expect
+Added client fhir-client with access profile fhir-service.
+```
+
+{/* Evidence: crates/registry-evidencectl/src/authoring.rs, ensure_local_project_key_material. */}
+
+## Start Evidence Gateway and request one assertion
+
+```sh
+evidencectl dev start . --target local-target.yaml --evidence-port 18080 --issuer-port 8082
+```
+
+```text test-excerpt
+Evidence ready at http://127.0.0.1:18080
+Issuer ready at http://127.0.0.1:8082
+```
+
+Prepare the request from the subject file:
+
+```sh
+evidencectl request prepare fhir-coverage-status \
+  --client fhir-client \
+  --purpose coverage-record-verification \
+  --subjects-file ../fhir-coverage-subjects.json \
+  --name fhir-coverage
+```
+
+```text test-expect
+Prepared request: .evidence/requests/fhir-coverage/request.json
+Prepared verification context: .evidence/requests/fhir-coverage/verification.json
+Prepared authorization: .evidence/requests/fhir-coverage/authorization.curl
+```
+
+:::caution
+`authorization.curl` holds a bearer token. Keep it out of logs and shared terminals.
+:::
+
+Send it and verify the signed response offline:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/fhir-coverage/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:18080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/fhir-coverage/request.json \
+  --output fhir-coverage.jws.json
+evidencectl verify fhir-coverage.jws.json \
+  --context .evidence/requests/fhir-coverage/verification.json \
+  --output fhir-coverage.verified.json
+```
+
+```text test-expect
+VERIFIED
+```
+
+```sh
+jq '{audience, issuedBy, providedBy, supportedValues}' fhir-coverage.verified.json
+```
+
+```json test-expect
+{
+  "audience": "urn:example:audience:fhir-record-evidence",
+  "issuedBy": "urn:registrystack:evidence:local:issuer",
+  "providedBy": "urn:registrystack:evidence:local:provider",
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:concept:coverage-record-reports-active:v1",
+      "value": true
+    }
+  ]
+}
+```
+
+The [assertion](../../reference/glossary/#assertion) carries one Boolean: whether the coverage is
+active. `dev start` signs as a local issuer and provider; a deployed target names its own.
+
+{/* Evidence: crates/registry-evidencectl/src/{request,verify}.rs, prepare_local;
+    crates/registry-evidencectl/src/authoring.rs, local_resource_identity. */}
+
+## Inspect the audit and stop
+
+`audit show` reads only a stopped session:
+
+```sh
+evidencectl dev stop .
+evidencectl audit show --last-operation
+```
+
+```text test-excerpt
+ACCESS AUTHORIZED fhir-coverage-status coverage-record-verification requester=<pseudonym>
+DISCLOSURE RELEASED coverage-record-reports-active
+```
+
+Remove the stopped session's generated state. The project, its clients, and its audit stay:
+
+```sh
+evidencectl dev clean .
+```
+
+```text test-expect
+Removed stopped local Evidence state
+```
+
+Press `Ctrl+C` in the adapter's terminal, then remove the subject files:
+
+```sh
+cd ..
+rm -f fhir-coverage-subjects.json fhir-organization-subjects.json
+```
+
+## Next
+
+[Connect a published SQLite extract](../connect-a-sqlite-extract/)
