@@ -158,12 +158,14 @@
           "$ref": "#/$defs/LocalId"
         },
         "capture": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "Local capture alias for this step's result. For create and invoke steps,\nRecord capture aliases must be unique throughout the scenario, including\naliases in captureResults; the reader checks this semantic rule."
         },
         "captureResults": {
           "additionalProperties": {
             "$ref": "#/$defs/LocalId"
           },
+          "description": "Maps disclosed Action result aliases to distinct local capture aliases.\nRecord capture aliases must be unique throughout the scenario, including\nearlier Record captures; the reader checks this semantic rule.",
           "maxProperties": 100,
           "minProperties": 1,
           "propertyNames": {

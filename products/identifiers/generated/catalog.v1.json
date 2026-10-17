@@ -3686,7 +3686,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/example-scenarios.v1alpha1.schema.json",
-        "sha256": "392694c8f91536bcfdc3468385025c27b0c8aaa1be16001a369c80d20b1a9383",
+        "sha256": "6cf55caa1d39f0b653e96a84dae76d14148f6e56a411d14a1e9b458ee2c74432",
         "mediaType": "application/schema+json"
       }
     },
@@ -3704,7 +3704,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/journeys.v1.schema.json",
-        "sha256": "85981cb0536fb0fbe2779320d1ffdcea12695b4fc8ac1ca916d5c4574f80d45c",
+        "sha256": "10006d4e4cd3b8ef2d9e742793967293c7bbdca89a8c11676310a7c4f4c1adc8",
         "mediaType": "application/schema+json"
       }
     },

@@ -381,9 +381,15 @@ struct StepSource {
     claims: ClaimsSource,
     request: ActionSource,
     expect: ExpectationSource,
+    /// Local capture alias for this step's result. Capture aliases must be unique
+    /// throughout the journey, including aliases in captureResults; the reader
+    /// checks this semantic rule.
     #[serde(default, deserialize_with = "members::optional_local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     capture: Option<String>,
+    /// Maps disclosed Action result aliases to distinct local capture aliases.
+    /// Capture aliases must be unique throughout the journey, including earlier
+    /// captures; the reader checks this semantic rule.
     #[serde(default, deserialize_with = "members::local_id_map")]
     #[cfg_attr(
         feature = "schema",
@@ -7699,6 +7705,33 @@ journeys:
             journey_ids: sorted_journey_ids(suite),
             candidate_binding_sha256: candidate_binding_sha256(candidate),
         })
+    }
+
+    #[test]
+    fn journey_action_result_captures_are_unique_within_the_map_and_across_the_journey() {
+        let fixture = package_fixture(DIGEST_A);
+        let source = String::from_utf8(JOURNEY_SOURCE.to_vec())
+            .unwrap()
+            .replacen(
+                "      - id: list-widgets\n        recordType: widget",
+                "      - id: invoke-widget-action\n        action: register-widgets",
+                1,
+            );
+        for capture_results in [
+            "captureResults: {first: repeated, second: repeated}",
+            "captureResults: {first: first-widget}",
+        ] {
+            let changed = source.replacen(
+                "        request: {type: list}",
+                &format!("        request: {{type: invoke}}\n        {capture_results}"),
+                1,
+            );
+            assert!(matches!(
+                validate_fixture_journeys(changed.as_bytes(), fixture.package.registry()),
+                Err(FixtureError::StepFailed { error, .. })
+                    if *error == FixtureError::DuplicateIdentifier
+            ));
+        }
     }
 
     #[test]

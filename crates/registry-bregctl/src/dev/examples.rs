@@ -193,6 +193,9 @@ struct Step {
     #[serde(default, deserialize_with = "optional_local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     input: Option<String>,
+    /// Local capture alias for this step's result. For create and invoke steps,
+    /// Record capture aliases must be unique throughout the scenario, including
+    /// aliases in captureResults; the reader checks this semantic rule.
     #[serde(default, deserialize_with = "optional_local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     capture: Option<String>,
@@ -213,6 +216,9 @@ struct Step {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     result: Option<String>,
+    /// Maps disclosed Action result aliases to distinct local capture aliases.
+    /// Record capture aliases must be unique throughout the scenario, including
+    /// earlier Record captures; the reader checks this semantic rule.
     #[serde(
         default,
         deserialize_with = "optional_local_id_map",

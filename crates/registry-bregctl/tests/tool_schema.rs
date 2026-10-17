@@ -175,6 +175,57 @@ fn the_journeys_schema_refuses_an_empty_suite() {
 }
 
 #[test]
+fn capture_schemas_describe_reader_checked_alias_uniqueness() {
+    let documents = documents().expect("the tool schemas generate");
+    for (file, step, scope) in [
+        ("example-scenarios.v1alpha1.schema.json", "Step", "scenario"),
+        ("journeys.v1.schema.json", "StepSource", "journey"),
+    ] {
+        let schema: Value = serde_json::from_str(&documents[file]).unwrap();
+        let captures = &schema["$defs"][step]["properties"]["captureResults"];
+        let description = captures["description"]
+            .as_str()
+            .expect("captureResults explains its semantic rules to editors")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            description
+                .contains("Maps disclosed Action result aliases to distinct local capture aliases"),
+            "{file}: the mapping direction is shared by both formats"
+        );
+        assert!(
+            description.contains(&format!("unique throughout the {scope}"))
+                && description.contains("the reader checks this semantic rule"),
+            "{file}: JSON Schema cannot express capture-value uniqueness across steps"
+        );
+        assert_eq!(captures["type"], "object");
+        assert_eq!(captures["propertyNames"]["$ref"], "#/$defs/LocalId");
+        assert_eq!(captures["additionalProperties"]["$ref"], "#/$defs/LocalId");
+
+        let singular_description = schema["$defs"][step]["properties"]["capture"]["description"]
+            .as_str()
+            .expect("singular captures share the semantic uniqueness rule")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            singular_description.contains(&format!("unique throughout the {scope}"))
+                && singular_description.contains("including aliases in captureResults")
+                && singular_description.contains("the reader checks this semantic rule"),
+            "{file}: singular and multiple-result Record captures share one namespace"
+        );
+        if scope == "scenario" {
+            assert!(
+                singular_description
+                    .contains("For create and invoke steps, Record capture aliases"),
+                "example Proposal captures have separate validation"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_example_scenarios_schema_bounds_multi_result_captures() {
     let documents = documents().expect("the tool schemas generate");
     let schema = compile(&documents["example-scenarios.v1alpha1.schema.json"]);
