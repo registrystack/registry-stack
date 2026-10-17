@@ -1019,6 +1019,23 @@ async fn successor_apply_waits_for_publication_locks_before_it_publishes() {
         blocked,
         "the successor apply never waited on the supply anchor"
     );
+    // A row-lock wait holds a tuple lock in AccessExclusive mode, so only
+    // relation locks show a migration's DDL.
+    let exclusive: i64 = deployment
+        .admin
+        .query_one(
+            "SELECT count(*) FROM pg_locks JOIN pg_stat_activity USING (pid) \
+             WHERE usename=$1 AND granted AND locktype='relation' \
+             AND mode='AccessExclusiveLock'",
+            &[&migration_role],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        exclusive, 0,
+        "the apply held migration locks while it waited on supply"
+    );
     assert!(
         !waiting.is_finished(),
         "the successor applied while blocked"

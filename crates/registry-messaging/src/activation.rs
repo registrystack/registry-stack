@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::audit::MessagingAudit;
 use crate::store::{
-    migrate_in, PostgresStore, StoreError, MIGRATIONS, MIGRATION_LOCK_KEY,
+    is_beta_ledger, migrate_in, PostgresStore, StoreError, MIGRATIONS, MIGRATION_LOCK_KEY,
     PRE_1_0_BETA_SCHEMA_MAX_VERSION,
 };
 
@@ -42,12 +42,7 @@ fn known_schema_versions() -> Vec<i64> {
 }
 
 fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRefusal> {
-    if schema.applied.len() > 1
-        && schema
-            .applied
-            .iter()
-            .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))
-    {
+    if is_beta_ledger(&schema.applied) {
         return Some(ActivationRefusal::new(
             "messagingctl.activation.schema-invalid",
             "database",
