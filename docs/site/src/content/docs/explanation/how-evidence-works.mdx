@@ -29,7 +29,7 @@ control. It declares four things.
 - **Selector profiles.** A selector profile, under `selectorProfiles`, bounds what a caller may
   send to identify a subject. `record-by-id` admits one string field of 1 to 64 bytes, and a
   source's path takes its value only from that field.
-- **Functions.** A Function is a small Rhai script with a declared interface. A
+- **Functions.** A Function is a small [Rhai](../../reference/glossary/#rhai) script with a declared interface. A
   `source-extract/v1` Function turns the source response into facts, or reports no match or an
   ambiguous one. An `assertion-derive/v1` Function turns those facts into outputs. Functions run
   under fixed operation and size limits and cannot import or evaluate code.
@@ -59,7 +59,7 @@ and authority as read at startup; a change means a new package or activation and
 Each request passes the stages `evidence evaluate --explain` names: `prepare` checks the
 selectors, `acquire` makes the fixed read, `extract` and `derive` run the Functions, `validate`
 accepts only declared outputs, and `sign` signs the assertion, which carries its requirement's
-`configurationRevision`.
+[`configurationRevision`](../../reference/glossary/#configuration-revision).
 
 Evidence keeps no database. Its only durable state is the audit trail: an access event before
 the source is read, and a release event before the response leaves. If the release event cannot

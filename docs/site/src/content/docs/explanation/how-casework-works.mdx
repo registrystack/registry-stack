@@ -35,7 +35,7 @@ caseworkctl explain tutorial-work/casework
 }
 ```
 
-The producer is the system that sends a ReviewRequest; in the project it is the `requester` under
+The [producer](../../reference/glossary/#producer) is the system that sends a ReviewRequest; in the project it is the `requester` under
 `trustedProducers`. The human reviewer is a person holding a staff or supervisor access profile.
 The downstream executor is whatever system later acts on the answer, under its own authority.
 Each sends its own token and selects one access profile per request; Casework never unions two
@@ -94,7 +94,7 @@ With `context.mode: submitted`, the producer sends a snapshot that Casework vali
 policy's `displaySchema` and keeps. Casework runs without any source service, and the snapshot is
 review input, not current source data.
 
-With `context.mode: current-source`, the policy names a context provider, the source's read-only
+With `context.mode: current-source`, the policy names a [context provider](../../reference/glossary/#context-provider), the source's read-only
 review interface, listed under `contextProviders` (empty in your project). Casework keeps an exact
 reference and task metadata, never the source's data. Each time a reviewer opens a task, Casework
 asks the source again under that reviewer's own credential, and `contextCustody` reads
@@ -110,7 +110,7 @@ authority, so a review never becomes a change at the source by itself.
 
 ## Who may decide at each stage?
 
-A policy's `stages` run in order. Each names its [queue](../../reference/glossary/#queue), the
+A policy's [`stages`](../../reference/glossary/#stage) run in order. Each names its [queue](../../reference/glossary/#queue), the
 profiles that may decide, and how many independent reviewers must approve. When a stage becomes
 active, Casework creates a [ReviewTask](../../reference/glossary/#review-task). A person sees it only
 as a member of a directory team serving that queue, holding a deciding profile, and not excluded as
