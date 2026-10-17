@@ -7,6 +7,7 @@ source_repos:
   - registry-platform
   - registry-evidence
   - registry-breg
+  - registry-casework
 last_reviewed: "2026-10-03"
 doc_type: how-to
 locale: en
@@ -66,6 +67,35 @@ Use this checklist after product configuration is valid and before exposing a de
     crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
     crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic. */}
+
+## Check BReg and Casework authority
+
+1. Use separate migration and runtime database roles with TLS. Run the product's doctor against
+   the deployed runtime configuration and confirm the serving credential cannot activate packages.
+2. Bind the service behind your controlled TLS edge. Verify the exact issuer, audience, admitted
+   clients, scopes, and selected access profiles with both permitted and refused synthetic calls.
+3. For BReg, verify the installed package, required package signatures, and current database
+   activation before serving. Test row and field disclosure with a least-privilege caller as well
+   as the administrator.
+4. For Casework, bootstrap only the intended teams and queues. Test requester, reviewer, and
+   supervisor separation, initiator exclusion, distinct approvals, and a revoked Directory member.
+   Resolve the doctor's distinct-approver warning before relying on a multi-approval stage.
+5. Keep current-source human display on the caller's own token and source profile. Give the
+   service status credential only its declared read purpose. Deploy BReg and Casework at matching
+   versions, and verify that Casework approval alone cannot apply a producer mutation.
+6. Exercise an unavailable audit destination and reconcile a mutation whose response was lost.
+   Archive service and operator audit streams, and test the separate database restore and payload
+   retention procedures with synthetic data.
+
+Treat a failed negative test as an authorization or deployment defect.
+Correct the responsible policy, grants, or credentials and rerun it before exposing traffic.
+
+{/* Evidence: crates/registry-breg/src/startup.rs; crates/registry-breg/src/auth.rs;
+    crates/registry-breg/tests/http_auth.rs;
+    crates/registry-casework/src/auth.rs; crates/registry-casework/src/review.rs;
+    crates/registry-casework/tests/review_postgres.rs;
+    crates/registry-casework/tests/breg_review_journey.rs;
+    products/casework/RUNTIME-CONFIG.md. */}
 
 ## Freeze the Evidence Gateway package and target
 

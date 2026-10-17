@@ -1917,6 +1917,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::ProposalRejected => {
             "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."
         }
+        Code::ProposalReviewResultMismatch => "The current review result does not match the retained approval.",
         Code::ProposalSubmissionExpired => {
             "The review result and application receipt of the submission are no longer retained."
         }

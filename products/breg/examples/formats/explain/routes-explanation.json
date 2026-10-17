@@ -223,6 +223,18 @@
     },
     {
       "accessProfiles": [
+        "proposal-reviewer"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.get-review-context-batch",
+      "method": "GET",
+      "path": "/v1/proposals/review-context",
+      "requiresIdempotencyKey": false,
+      "requiresIfMatch": false,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
         "facility-correction-applier",
         "facility-correction-author"
       ],

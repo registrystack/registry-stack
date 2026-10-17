@@ -210,6 +210,41 @@ for the Casework state and audit boundary.
     products/casework/CHANGELOG.md;
     products/scheduling/CHANGELOG.md. */}
 
+## Registry Casework review retention
+
+Casework retains review requests, submitted snapshots, task state, decisions, notes, history,
+clock state, and replay responses in PostgreSQL.
+Current-source display fields are read for the caller rather than stored as review snapshots.
+The pinned policy defines two periods measured from terminal settlement:
+`terminalRetentionDays` for review payloads and `accountabilityRetentionDays` for protected
+decision accountability and remaining recovery metadata.
+An open review has no terminal expiry.
+
+The serving maintenance worker erases eligible payloads in bounded passes.
+At terminal expiry, result reads expire and cleanup removes task, context, history, and clock data;
+at accountability expiry, cleanup removes the remaining protected records and request state.
+Staffing cursors and previews have their own short expiry and cannot extend payload retention.
+Keep the process and audit destination healthy, then inspect readiness and maintenance warnings
+when cleanup falls behind.
+
+:::caution
+Payload erasure cannot be undone through Casework.
+Fetch results before their availability deadline, and set backup and external-result retention
+separately: automatic cleanup does not erase copies held by producers, backups, or audit archives.
+:::
+
+The current CLI has no `caseworkctl retention erase` command.
+Use the configured automatic policy, rather than deleting rows directly.
+A producer-authorized cancellation starts terminal retention; it does not erase immediately.
+[Review retention and audit](../casework-retention/) describes expiry, recovery, and the
+independently retained external journal.
+
+{/* Evidence: crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at();
+    crates/registry-casework/src/review/staffing.rs, erase_expired_review_staffing();
+    crates/registry-casework-core/src/review.rs, ReviewRetentionPolicy;
+    crates/registry-caseworkctl/src/lib.rs, Command;
+    crates/registry-casework/tests/review_postgres.rs, terminal_retention_scrubs_private_work_and_expires_owned_idempotency(). */}
+
 ## Base Registry Engine retention
 
 A Base Registry Engine registry keeps record history and the webhook outbox in PostgreSQL. Its
