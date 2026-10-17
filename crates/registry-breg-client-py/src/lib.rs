@@ -56,6 +56,7 @@ struct MappedError {
     refusal_code: Option<String>,
     reason_code: Option<String>,
     field_path: Option<String>,
+    constraint: Option<Box<breg_client_sdk::BRegConstraintViolation>>,
     status: Option<u16>,
     trace_id: Option<String>,
     transport_kind: Option<&'static str>,
@@ -90,6 +91,13 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("field_path", mapped.field_path)
+        .expect("fresh exception accepts attributes");
+    instance
+        .setattr(
+            "constraint",
+            serialize_to_python(py, &mapped.constraint)
+                .expect("bounded constraint identifiers convert to Python"),
+        )
         .expect("fresh exception accepts attributes");
     instance
         .setattr("status", mapped.status)
@@ -162,6 +170,7 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             code,
             trace_id,
             field_path,
+            constraint,
             refusal_code,
         } => {
             mapped.status = Some(status);
@@ -174,6 +183,7 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
                 mapped.reason_code = mapped.refusal_code.take();
             }
             mapped.field_path = field_path.map(|value| value.as_str().to_owned());
+            mapped.constraint = constraint;
         }
         RustClientError::UnrecognizedProblem { status, trace_id } => {
             mapped.status = Some(status);

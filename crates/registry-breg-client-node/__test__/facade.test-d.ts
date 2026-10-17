@@ -30,6 +30,17 @@ import {
 } from '..'
 
 declare const client: BaseRegistryClient
+declare const failure: BaseRegistryClientError
+if (failure.constraint?.constraintKind === 'compare') {
+  failure.constraint.left.toUpperCase()
+  failure.constraint.right.toUpperCase()
+  // @ts-expect-error Compare constraints name left and right fields.
+  failure.constraint.field.toUpperCase()
+} else if (failure.constraint) {
+  failure.constraint.field.toUpperCase()
+  // @ts-expect-error Single-field constraints do not name a left field.
+  failure.constraint.left.toUpperCase()
+}
 declare const create: BRegCreateBinding
 declare const patch: BRegPatchBinding
 declare const metadata: BRegMetadata

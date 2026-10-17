@@ -178,3 +178,4 @@ traceability:
   - {"id": "BREG-SEC-177", "state": "enforced", "negativeId": "BREG-NEG-177", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "submission_read_reports_each_version_separately_and_is_gone_after_its_windows"}}
   - {"id": "BREG-SEC-178", "state": "enforced", "negativeId": "BREG-NEG-178", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "review_rejection_is_terminal_and_changes_requested_returns_to_the_party"}}
   - {"id": "BREG-SEC-179", "state": "enforced", "negativeId": "BREG-NEG-179", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "application_actor_requires_its_dedicated_get_grant_and_is_issuer_scoped"}}
+  - {"id": "BREG-SEC-180", "state": "enforced", "negativeId": "BREG-NEG-180", "negativeTest": {"path": "crates/registry-breg/tests/postgres_mutation.rs", "name": "real_postgres_row_local_constraint_problems_name_only_readable_declarations"}}

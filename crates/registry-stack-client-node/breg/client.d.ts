@@ -790,12 +790,26 @@ export declare class BRegMetadata {
   selectBatch(recordTypeIdentifier: string, expectedProfile: string): BRegBatchBinding
 }
 
+/** Bounded declared identifiers; absent when any referenced field is unreadable. */
+export type BRegConstraintViolation = {
+  readonly recordType: string
+  readonly constraintId: string
+} & ({
+  readonly constraintKind: 'compare'
+  readonly left: string
+  readonly right: string
+} | {
+  readonly constraintKind: 'int-range' | 'vocabulary'
+  readonly field: string
+})
+
 export interface BaseRegistryClientFailure extends Error {
   readonly kind: string
   readonly code?: string
   readonly refusalCode?: string
   readonly reasonCode?: string
   readonly fieldPath?: string
+  readonly constraint?: BRegConstraintViolation
   readonly status?: number
   readonly traceId?: string
   readonly transportKind?: string
@@ -822,6 +836,7 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
   readonly refusalCode?: string
   readonly reasonCode?: string
   readonly fieldPath?: string
+  readonly constraint?: BRegConstraintViolation
   readonly status?: number
   readonly traceId?: string
   readonly transportKind?: string

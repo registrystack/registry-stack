@@ -2686,7 +2686,8 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
             trace_id,
         };
     };
-    if (extensions.declared_field && code != BRegProblemCode::MutationConflict)
+    if ((extensions.declared_field || extensions.constraint.is_some())
+        && code != BRegProblemCode::MutationConflict)
         || extensions
             .field_path
             .as_ref()
@@ -2716,6 +2717,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         code,
         trace_id,
         field_path: extensions.field_path.map(|(_, path)| path),
+        constraint: extensions.constraint,
         refusal_code: extensions.refusal_code.or(extensions.reason_code),
     }
 }
@@ -2793,6 +2795,7 @@ impl BRegProblemPath {
 /// parsing of its common members.
 struct BRegProblemExtensions {
     declared_field: bool,
+    constraint: Option<Box<BRegConstraintViolation>>,
     field_path: Option<(BRegProblemPath, BRegProblemFieldPath)>,
     refusal_code: Option<BRegRefusalCode>,
     reason_code: Option<BRegRefusalCode>,
@@ -2827,6 +2830,7 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
             )
         });
     }
+    let constraint = parse_constraint_violation(&mut object)?;
     let declared_field = match (object.remove("recordType"), object.remove("fieldId")) {
         (None, None) => false,
         (Some(serde_json::Value::String(entity)), Some(serde_json::Value::String(field)))
@@ -2868,11 +2872,60 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
         document,
         BRegProblemExtensions {
             declared_field,
+            constraint,
             field_path,
             refusal_code,
             reason_code,
         },
     ))
+}
+
+fn parse_constraint_violation(
+    object: &mut serde_json::Map<String, Value>,
+) -> Result<Option<Box<BRegConstraintViolation>>, ()> {
+    let members = ["constraintId", "constraintKind", "left", "right", "field"];
+    if !members.iter().any(|key| object.contains_key(*key)) {
+        return Ok(None);
+    }
+    let declared_id = |object: &mut serde_json::Map<String, Value>, key| match object.remove(key) {
+        Some(Value::String(value))
+            if !value.is_empty()
+                && value.chars().count() <= 128
+                && !value.chars().any(char::is_control) =>
+        {
+            Ok(value)
+        }
+        _ => Err(()),
+    };
+    let record_type = declared_id(object, "recordType")?;
+    let constraint_id = declared_id(object, "constraintId")?;
+    let kind = object.remove("constraintKind").ok_or(())?;
+    let constraint = match kind.as_str() {
+        Some("compare") => BRegConstraintViolation::Compare {
+            record_type,
+            constraint_id,
+            left: declared_id(object, "left")?,
+            right: declared_id(object, "right")?,
+        },
+        Some("int-range") => BRegConstraintViolation::IntRange {
+            record_type,
+            constraint_id,
+            field: declared_id(object, "field")?,
+        },
+        Some("vocabulary") => BRegConstraintViolation::Vocabulary {
+            record_type,
+            constraint_id,
+            field: declared_id(object, "field")?,
+        },
+        _ => return Err(()),
+    };
+    if ["left", "right", "field", "fieldId"]
+        .iter()
+        .any(|key| object.contains_key(*key))
+    {
+        return Err(());
+    }
+    Ok(Some(Box::new(constraint)))
 }
 
 fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {

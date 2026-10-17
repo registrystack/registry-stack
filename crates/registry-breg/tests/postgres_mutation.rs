@@ -1729,6 +1729,381 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_row_local_constraint_problems_name_only_readable_declarations() {
+    let database = TestDatabase::create(8).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"test-dataset"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"constraint-problem-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "vocabularies":[{"id":"status-codes","values":["open","closed","held"]}],
+          "recordTypes":[{
+            "id":"window","primaryDataset":"test-dataset","route":"windows","mutationMode":"mutable","classification":"public",
+            "batch":{"maximumItems":4,"maximumBytes":16384},
+            "constraints":[
+              {"id":"chronological","type":"compare","left":"valid-from","operator":"less-than-or-equal","right":"valid-to"},
+              {"id":"bounded-score","type":"int-range","field":"score","minimum":0,"maximum":10},
+              {"type":"vocabulary","field":"status","values":["open","closed"]},
+              {"id":"unique-label","type":"unique","fields":["label"]}
+            ],
+            "fields":[
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"public"},
+              {"id":"valid-from","type":"int64","required":true,"classification":"public"},
+              {"id":"valid-to","type":"int64","required":true,"classification":"public"},
+              {"id":"score","type":"int64","required":true,"classification":"public"},
+              {"id":"status","type":"vocabulary-code","vocabulary":"status-codes","required":true,"classification":"public"}
+            ]
+          },{
+            "id":"period","primaryDataset":"test-dataset","route":"periods","mutationMode":"mutable","classification":"public",
+            "temporal":{"startField":"valid-from","endField":"valid-to"},
+            "constraints":[{
+              "id":"no-overlap","type":"temporal-non-overlap","scopeFields":["scope"],
+              "startField":"valid-from","endField":"valid-to"
+            }],
+            "fields":[
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"scope","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"valid-from","type":"date","validTimeRole":"valid-from","required":true,"classification":"public"},
+              {"id":"valid-to","type":"date","validTimeRole":"valid-to","classification":"public"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+            "permissions":{"records":[{
+              "recordType":"window","operations":["create","get","patch","batch"],
+              "readableFields":["jurisdiction","label","valid-from","valid-to","score","status"],
+              "writableFields":["jurisdiction","label","valid-from","valid-to","score","status"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            },{
+              "recordType":"period","operations":["create"],
+              "readableFields":["jurisdiction","scope","valid-from","valid-to"],
+              "writableFields":["jurisdiction","scope","valid-from","valid-to"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]}
+          },{
+            "id":"write-only-end","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+            "permissions":{"records":[{
+              "recordType":"window","operations":["create"],
+              "readableFields":["jurisdiction","label","valid-from","score","status"],
+              "writableFields":["jurisdiction","label","valid-from","valid-to","score","status"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]}
+          }]
+        }"#,
+    )
+    .expect("constraint problem fixture parses");
+    let compiled = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("constraint problem fixture compiles"),
+    );
+    let derived_vocabulary_constraint = compiled
+        .entities()
+        .get("window")
+        .expect("window compiles")
+        .constraints
+        .keys()
+        .find(|constraint| {
+            !matches!(
+                constraint.as_str(),
+                "chronological" | "bounded-score" | "unique-label"
+            )
+        })
+        .expect("the only constraint without an explicit id is compiled")
+        .clone();
+    assert!(derived_vocabulary_constraint.starts_with("vocabulary-"));
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs btree_gist for temporal exclusion constraints");
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "constraint-problem-registry",
+            database_id: "constraint-problem-database",
+            label: "constraint-problem-package-1",
+        },
+    )
+    .await
+    .expect("migration initializes state");
+    migration_task.abort();
+
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x7d; 32].into())
+            .expect("test owns keyed audit"),
+    );
+    let app = mutation_router(
+        pool,
+        compiled,
+        identity,
+        RegistryLockKey::derive("constraint-problem-registry").expect("lock id is bounded"),
+        profile,
+        None,
+    );
+    let claims = api_claims("case-management", Some("zone-a"));
+    let headers = |key: &'static str| {
+        [
+            ("content-type", "application/json"),
+            ("idempotency-key", key),
+        ]
+    };
+    let body = |label: &str, valid_from: i64, valid_to: i64, score: i64, status: &str| {
+        serde_json::to_vec(&json!({"data":{
+            "jurisdiction":"zone-a", "label":label, "validFrom":valid_from,
+            "validTo":valid_to, "score":score, "status":status
+        }}))
+        .unwrap()
+    };
+
+    for (key, payload, expected, submitted_canary) in [
+        (
+            "constraint-compare",
+            body("submitted-compare-canary", 2, 1, 5, "open"),
+            json!({
+                "recordType":"window", "constraintId":"chronological",
+                "constraintKind":"compare", "left":"valid-from", "right":"valid-to"
+            }),
+            "submitted-compare-canary",
+        ),
+        (
+            "constraint-range",
+            body("submitted-range-canary", 1, 2, 11, "open"),
+            json!({
+                "recordType":"window", "constraintId":"bounded-score",
+                "constraintKind":"int-range", "field":"score"
+            }),
+            "submitted-range-canary",
+        ),
+        (
+            "constraint-vocabulary",
+            body("submitted-vocabulary-canary", 1, 2, 5, "held"),
+            json!({
+                "recordType":"window", "constraintId":derived_vocabulary_constraint,
+                "constraintKind":"vocabulary", "field":"status"
+            }),
+            "submitted-vocabulary-canary",
+        ),
+    ] {
+        let problem = body_json(
+            send(
+                &app,
+                Method::POST,
+                "/v1/records/windows",
+                Some(claims.clone()),
+                &headers(key),
+                payload,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(problem["code"], "mutation.conflict", "{problem}");
+        for (name, value) in expected.as_object().unwrap() {
+            assert_eq!(&problem[name], value, "{problem}");
+        }
+        let rendered = serde_json::to_string(&problem).unwrap();
+        assert!(!rendered.contains(submitted_canary), "{problem}");
+        assert!(!rendered.contains("breg_c_"), "{problem}");
+    }
+
+    let batch_problem = body_json(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/windows:batch",
+            Some(claims.clone()),
+            &headers("constraint-batch"),
+            serde_json::to_vec(&json!({"items":[{
+                "operation":"create",
+                "data":{
+                    "jurisdiction":"zone-a", "label":"submitted-batch-canary",
+                    "validFrom":2, "validTo":1, "score":5, "status":"open"
+                }
+            }]}))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        batch_problem["code"], "mutation.conflict",
+        "{batch_problem}"
+    );
+    assert_eq!(batch_problem["recordType"], "window", "{batch_problem}");
+    assert_eq!(
+        batch_problem["constraintId"], "chronological",
+        "{batch_problem}"
+    );
+    assert_eq!(
+        batch_problem["constraintKind"], "compare",
+        "{batch_problem}"
+    );
+    assert_eq!(batch_problem["left"], "valid-from", "{batch_problem}");
+    assert_eq!(batch_problem["right"], "valid-to", "{batch_problem}");
+    assert!(!batch_problem.to_string().contains("submitted-batch-canary"));
+
+    let patch_target = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/windows",
+            Some(claims.clone()),
+            &headers("constraint-patch-seed"),
+            body("patch", 1, 2, 5, "open"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(patch_target.status, StatusCode::CREATED);
+    let patch_record_id = patch_target.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("created record carries its identifier");
+    let patch_key = "constraint-patch";
+    let patch_problem = body_json(
+        send(
+            &app,
+            Method::PATCH,
+            &format!("/v1/records/windows/{patch_record_id}"),
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json-patch+json"),
+                ("idempotency-key", patch_key),
+                ("if-match", patch_target.etag.as_str()),
+            ],
+            serde_json::to_vec(&json!([{
+                "op":"replace", "path":"/data/validTo", "value":0
+            }]))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        patch_problem["code"], "mutation.conflict",
+        "{patch_problem}"
+    );
+    assert_eq!(patch_problem["recordType"], "window", "{patch_problem}");
+    assert_eq!(
+        patch_problem["constraintId"], "chronological",
+        "{patch_problem}"
+    );
+    assert_eq!(
+        patch_problem["constraintKind"], "compare",
+        "{patch_problem}"
+    );
+    assert_eq!(patch_problem["left"], "valid-from", "{patch_problem}");
+    assert_eq!(patch_problem["right"], "valid-to", "{patch_problem}");
+
+    let hidden = body_json(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/windows?accessProfile=write-only-end",
+            Some(claims.clone()),
+            &headers("constraint-hidden"),
+            body("hidden", 2, 1, 5, "open"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(hidden["code"], "mutation.conflict", "{hidden}");
+    for name in [
+        "recordType",
+        "constraintId",
+        "constraintKind",
+        "left",
+        "right",
+        "field",
+    ] {
+        assert!(hidden.get(name).is_none(), "{hidden}");
+    }
+
+    let created = send(
+        &app,
+        Method::POST,
+        "/v1/records/windows",
+        Some(claims.clone()),
+        &headers("constraint-unique-seed"),
+        body("duplicate", 1, 2, 5, "open"),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let unique = body_json(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/windows",
+            Some(claims.clone()),
+            &headers("constraint-unique-conflict"),
+            body("duplicate", 1, 2, 5, "closed"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(unique["code"], "mutation.conflict", "{unique}");
+    for name in [
+        "recordType",
+        "constraintId",
+        "constraintKind",
+        "left",
+        "right",
+        "field",
+    ] {
+        assert!(unique.get(name).is_none(), "{unique}");
+    }
+
+    let period_body = |valid_from: &str, valid_to: &str| {
+        serde_json::to_vec(&json!({"data":{
+            "jurisdiction":"zone-a", "scope":"same",
+            "validFrom":valid_from, "validTo":valid_to
+        }}))
+        .unwrap()
+    };
+    let first_period = send(
+        &app,
+        Method::POST,
+        "/v1/records/periods",
+        Some(claims.clone()),
+        &headers("constraint-temporal-seed"),
+        period_body("2026-01-01", "2026-03-01"),
+    )
+    .await;
+    assert_eq!(first_period.status(), StatusCode::CREATED);
+    let temporal = body_json(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/periods",
+            Some(claims),
+            &headers("constraint-temporal-conflict"),
+            period_body("2026-02-01", "2026-04-01"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(temporal["code"], "mutation.conflict", "{temporal}");
+    for name in [
+        "recordType",
+        "constraintId",
+        "constraintKind",
+        "left",
+        "right",
+        "field",
+    ] {
+        assert!(temporal.get(name).is_none(), "{temporal}");
+    }
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     let database = TestDatabase::create(12).await;
     let (migration, migration_task) = database.connect_migration().await;

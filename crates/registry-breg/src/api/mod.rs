@@ -5170,6 +5170,9 @@ fn mutation_problem(error: MutationError) -> Response {
             entity_id,
             field_id,
         } => crate::correlation::field_pattern_response(entity_id, field_id),
+        MutationError::RowLocalConstraintViolation(violation) => {
+            crate::correlation::row_local_constraint_response(violation)
+        }
         MutationError::FieldEncryptionUnavailable => {
             fixed_problem(ProblemCode::RuntimeFieldEncryptionUnavailable)
         }

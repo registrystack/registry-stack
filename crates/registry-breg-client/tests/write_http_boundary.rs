@@ -966,6 +966,8 @@ async fn retired_plan_problems_have_only_generic_unknown_problem_semantics() {
         "traceId": TRACE_ID,
         "fieldPath": "/private/legacy-location",
         "refusalCode": "private-legacy-refusal",
+        "constraintId": {"future": "private-legacy-constraint"},
+        "constraintKind": null,
     }))
     .without_header("content-type")
     .with_header("content-type", "application/problem+json")
@@ -992,10 +994,161 @@ async fn retired_plan_problems_have_only_generic_unknown_problem_semantics() {
     assert_eq!(error.problem_code(), None);
     assert!(error.field_path().is_none());
     assert!(error.refusal_code().is_none());
+    assert!(error.constraint().is_none());
     assert!(!error.is_outcome_unknown());
     assert!(!error.to_string().contains("planner"));
     assert!(!format!("{error:?}").contains("private-legacy"));
     assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn row_local_constraint_conflicts_remain_typed() {
+    let generic = problem_response(BRegProblemCode::MutationConflict);
+    let base: Value = serde_json::from_slice(&generic.body).unwrap();
+    let compare = json!({
+        "recordType": "company", "constraintId": "valid-period",
+        "constraintKind": "compare", "left": "valid-from", "right": "valid-to",
+    });
+    let accepted = [
+        compare.clone(),
+        json!({"recordType": "company", "constraintId": "int-range-0123456789abcdef",
+            "constraintKind": "int-range", "field": "quantity"}),
+        json!({"recordType": "company", "constraintId": "allowed-status",
+            "constraintKind": "vocabulary", "field": "status"}),
+        json!({"recordType": "x".repeat(128), "constraintId": "y".repeat(128),
+            "constraintKind": "compare", "left": "l".repeat(128), "right": "r".repeat(128)}),
+    ];
+    let response_for = |extension: &Value| {
+        let mut body = base.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(extension.as_object().unwrap().clone());
+        MockResponse {
+            body: serde_json::to_vec(&body).unwrap(),
+            ..generic.clone()
+        }
+    };
+    let mut refused = Vec::new();
+    for member in [
+        "recordType",
+        "constraintId",
+        "constraintKind",
+        "left",
+        "right",
+    ] {
+        let mut incomplete = compare.clone();
+        incomplete.as_object_mut().unwrap().remove(member);
+        refused.push(response_for(&incomplete));
+        for value in [
+            Value::Null,
+            json!(42),
+            json!(""),
+            json!("x".repeat(129)),
+            json!("id\ncanary"),
+        ] {
+            let mut malformed = compare.clone();
+            malformed[member] = value;
+            refused.push(response_for(&malformed));
+        }
+        let response = response_for(&compare);
+        refused.push(MockResponse {
+            body: format!(
+                "{{\"{member}\":\"duplicate-canary\",{}",
+                &String::from_utf8(response.body.clone()).unwrap()[1..]
+            )
+            .into_bytes(),
+            ..response
+        });
+    }
+    for kind in ["unique", "temporal-non-overlap", "future-kind"] {
+        let mut malformed = compare.clone();
+        malformed["constraintKind"] = json!(kind);
+        refused.push(response_for(&malformed));
+    }
+    for member in ["field", "fieldId"] {
+        let mut mixed = compare.clone();
+        mixed[member] = json!("extra-field");
+        refused.push(response_for(&mixed));
+    }
+    for kind in ["int-range", "vocabulary"] {
+        let mut malformed = compare.clone();
+        malformed["constraintKind"] = json!(kind);
+        malformed["field"] = json!("quantity");
+        refused.push(response_for(&malformed));
+        let mut incomplete = accepted[1].clone();
+        incomplete["constraintKind"] = json!(kind);
+        incomplete.as_object_mut().unwrap().remove("field");
+        refused.push(response_for(&incomplete));
+    }
+    let mut misplaced: Value =
+        serde_json::from_slice(&problem_response(BRegProblemCode::RequestInvalid).body).unwrap();
+    misplaced
+        .as_object_mut()
+        .unwrap()
+        .extend(compare.as_object().unwrap().clone());
+    refused.push(MockResponse {
+        body: serde_json::to_vec(&misplaced).unwrap(),
+        ..problem_response(BRegProblemCode::RequestInvalid)
+    });
+    let refused_count = refused.len();
+    let mut additive = compare.clone();
+    additive["futureMember"] = json!({"ignored": true});
+    let fixture = single_attempt_client(
+        accepted
+            .iter()
+            .map(response_for)
+            .chain([response_for(&additive), generic.clone()])
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    for expected in accepted.iter().chain([&compare]) {
+        let error = fixture
+            .client
+            .get_record("companies", RECORD_ID, &Default::default())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.problem_code(),
+            Some(BRegProblemCode::MutationConflict)
+        );
+        assert!(!error.is_outcome_unknown());
+        let constraint = error.constraint().expect("declared constraint retained");
+        assert_eq!(serde_json::to_value(constraint).unwrap(), *expected);
+        assert_eq!(constraint.record_type(), expected["recordType"]);
+        assert_eq!(constraint.id(), expected["constraintId"]);
+        assert_eq!(constraint.kind(), expected["constraintKind"]);
+        for value in [constraint.record_type(), constraint.id()] {
+            assert!(!error.to_string().contains(value));
+            assert!(!format!("{error:?}").contains(value));
+        }
+    }
+    let generic = fixture
+        .client
+        .get_record("companies", RECORD_ID, &Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        generic.problem_code(),
+        Some(BRegProblemCode::MutationConflict)
+    );
+    assert!(generic.constraint().is_none());
+    for _ in 0..refused_count {
+        let error = fixture
+            .client
+            .get_record("companies", RECORD_ID, &Default::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::Problem,
+                ..
+            }
+        ));
+        assert!(error.constraint().is_none());
+        assert!(!format!("{error:?}").contains("canary"));
+    }
 }
 
 #[tokio::test]

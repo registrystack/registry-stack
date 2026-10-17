@@ -43,8 +43,8 @@ pub use batch::*;
 pub use client::BaseRegistryClient;
 pub use config::BaseRegistryClientConfig;
 pub use error::{
-    BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRefusalCode,
-    BaseRegistryClientError, TransportKind,
+    BRegConstraintViolation, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
+    BRegRefusalCode, BaseRegistryClientError, TransportKind,
 };
 pub use geojson::*;
 pub use ingestion::*;

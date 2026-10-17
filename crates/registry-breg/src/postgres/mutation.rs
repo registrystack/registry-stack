@@ -1865,7 +1865,8 @@ impl PostgresRecordMutationService {
                     | MutationError::Conflict
                     | MutationError::ProposalRejected
                     | MutationError::AuthorizationRefused
-                    | MutationError::FieldPatternViolation { .. } => (
+                    | MutationError::FieldPatternViolation { .. }
+                    | MutationError::RowLocalConstraintViolation(_) => (
                         IngestionAttemptOutcome::Refused,
                         Some(IngestionServiceError::PreconditionFailed),
                     ),

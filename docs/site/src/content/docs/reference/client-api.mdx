@@ -931,7 +931,20 @@ only against the original binding and idempotency key.
 when known,
 validated trace identifier, bounded
 transport or token category, the validated field path an accepted Problem names, and the bounded
-refusal code a declared immediate-action refusal names.
+refusal code a declared immediate-action refusal names. A row-local constraint conflict also
+exposes `constraint()`, a typed `BRegConstraintViolation` containing `recordType`, `constraintId`,
+`constraintKind`, and `left`/`right` for `compare` or `field` for `int-range` and `vocabulary`.
+The identifiers are bounded to 128 characters and contain no control characters.
+The server omits this extension when any referenced field is unreadable; conflicts involving
+other rows remain generic. Node.js and Python expose the same members in `error.constraint`.
+The constraint is omitted from default error rendering, including Node's enumerable properties.
+
+{/* Evidence: crates/registry-breg-client/src/error.rs, BRegConstraintViolation,
+    crates/registry-breg-client/src/client.rs, parse_constraint_violation,
+    crates/registry-breg-client/tests/write_http_boundary.rs,
+    row_local_constraint_conflicts_remain_typed,
+    crates/registry-breg-client-node/__test__/action-refusals.test.js,
+    crates/registry-breg-client-py/tests/python/test_action_refusals.py */}
 
 A known Problem code requires its exact status, title, detail, type URI, and validated extensions.
 Unknown object members are ignored after duplicate rejection.
@@ -947,10 +960,10 @@ Request, metadata, ETag, idempotency-key, and lifecycle validation errors do not
 response-controlled values.
 
 Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
-attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `status`, `trace_id`,
+attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `constraint`, `status`, `trace_id`,
 `transport_kind`, `token_kind`, and the boolean `outcome_unknown`; an absent member is `None`. Node
 rejects with `breg.BaseRegistryClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`,
-and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `traceId`,
+and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `constraint`, `status`, `traceId`,
 `transportKind`, and `tokenKind`; an absent member is undefined.
 
 `kind` is one of:

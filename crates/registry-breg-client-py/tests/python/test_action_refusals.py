@@ -127,6 +127,40 @@ class ActionRefusalTests(unittest.TestCase):
                 self.assertIsNone(error.refusal_code)
                 self.assertIsNone(error.field_path)
 
+    def test_row_local_constraints_retain_only_bounded_declared_identifiers(self) -> None:
+        base = {
+            "type": "https://id.registrystack.org/problems/registry-breg/mutation/conflict",
+            "title": "Conflict", "status": 409,
+            "detail": "The mutation conflicts with current state.",
+            "code": "mutation.conflict", "traceId": TRACE_ID,
+        }
+        constraints = [
+            {"recordType": "item", "constraintId": "valid-period", "constraintKind": "compare",
+             "left": "valid-from", "right": "valid-to"},
+            {"recordType": "item", "constraintId": "quantity-range", "constraintKind": "int-range",
+             "field": "quantity"},
+            {"recordType": "item", "constraintId": "allowed-status", "constraintKind": "vocabulary",
+             "field": "status"},
+        ]
+        for constraint in constraints:
+            error = self.answer({**base, **constraint})
+            self.assertEqual(error.kind, "problem")
+            self.assertEqual(error.code, "mutation.conflict")
+            self.assertFalse(error.outcome_unknown)
+            self.assertEqual(error.constraint, constraint)
+            self.assertNotIn(constraint["constraintId"], str(error))
+            self.assertNotIn(constraint["constraintId"], repr(error))
+        self.assertIsNone(self.answer(base).constraint)
+        for malformed in [
+            {**constraints[0], "right": None},
+            {**constraints[0], "constraintKind": "unique"},
+            {**constraints[1], "field": "x" * 129},
+            {**constraints[2], "field": "value\ncanary"},
+        ]:
+            error = self.answer({**base, **malformed})
+            self.assertEqual(error.kind, "protocol")
+            self.assertIsNone(error.constraint)
+
 
 if __name__ == "__main__":
     unittest.main()
