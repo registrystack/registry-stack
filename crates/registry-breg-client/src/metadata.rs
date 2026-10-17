@@ -1735,7 +1735,7 @@ fn action_field_type(value: Value) -> Result<(), BRegMetadataError> {
             }
         }
         "vocabulary-code" => {
-            identifier(required(&mut field_type, "vocabulary")?)?;
+            bounded_string(required(&mut field_type, "vocabulary")?)?;
             let values = identifier_array(required(&mut field_type, "values")?)?;
             if values.is_empty() || ensure_unique(values.iter().map(String::as_str)).is_err() {
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
@@ -2559,7 +2559,7 @@ fn parse_statistical_datasets(value: Value) -> Result<Value, BRegMetadataError> 
             if !fields.insert(field) {
                 return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
             }
-            identifier(required(&mut dimension, "vocabulary")?)?;
+            bounded_string(required(&mut dimension, "vocabulary")?)?;
             let codes = text_array(required(&mut dimension, "codes")?)?;
             ensure_unique(codes.iter().map(String::as_str))?;
             if !codes.iter().any(|code| code == "_T") {
@@ -3713,6 +3713,14 @@ fn bounded_text(value: Value) -> Result<String, BRegMetadataError> {
     Ok(value)
 }
 
+fn bounded_string(value: Value) -> Result<String, BRegMetadataError> {
+    let value = string(value)?;
+    if value.len() > MAX_STRING_BYTES {
+        return Err(metadata_error(BRegMetadataErrorKind::Bound));
+    }
+    Ok(value)
+}
+
 fn bounded_short_text(value: Value) -> Result<String, BRegMetadataError> {
     let value = bounded_text(value)?;
     if value.len() > MAX_IDENTIFIER_BYTES {
@@ -3793,3 +3801,7 @@ fn ensure_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<(), BRegMe
 #[cfg(test)]
 #[path = "metadata_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "metadata_vocabulary_tests.rs"]
+mod vocabulary_tests;
