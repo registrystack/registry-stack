@@ -340,7 +340,7 @@ impl fmt::Display for FixtureError {
                 "the fixture credential is missing the configured actor-kind claim"
             }
             Self::AuthenticationCredentialRefused => {
-                "the fixture credential failed token verification; check its signing key, signature, issuer, audience, and validity period"
+                "the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client"
             }
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
             Self::ResponseShapeRefused => "the fixture response shape was refused",
@@ -3830,7 +3830,9 @@ fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> Fixtu
         | OidcError::TokenNotYetValid
         | OidcError::AudienceMismatch
         | OidcError::SignatureInvalid
-        | OidcError::InvalidToken => FixtureError::AuthenticationCredentialRefused,
+        | OidcError::InvalidToken
+        | OidcError::ClientNotAllowed
+        | OidcError::AssertionIssuerNotAllowed => FixtureError::AuthenticationCredentialRefused,
         _ => FixtureError::RequestConstructionRefused,
     }
 }
@@ -6108,6 +6110,8 @@ mod tests {
             registry_platform_oidc::OidcError::AudienceMismatch,
             registry_platform_oidc::OidcError::SignatureInvalid,
             registry_platform_oidc::OidcError::InvalidToken,
+            registry_platform_oidc::OidcError::ClientNotAllowed,
+            registry_platform_oidc::OidcError::AssertionIssuerNotAllowed,
         ] {
             assert_eq!(
                 fixture_verification_error(error),
@@ -6142,6 +6146,7 @@ mod tests {
             "issuer",
             "audience",
             "validity period",
+            "client",
         ] {
             assert!(message.contains(cause), "{message}");
         }
