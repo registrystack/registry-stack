@@ -329,3 +329,31 @@ test('test-background and test-cwd mistakes are errors that name the line', () =
     'line 21: test-cwd applies only to sh fences',
   ]);
 });
+
+test('test-retry runs an sh fence again until the blocks below it match, for at most its seconds', () => {
+  const { steps, errors } = readJourney(
+    '```sh test-retry="10" test-cwd="first"\nbregctl dev events\n```\n\n```json test-excerpt\n{"status": "received"}\n```\n',
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(steps[0], { kind: 'run', line: 1, heading: '', code: 'bregctl dev events', cwd: 'first', retry: 10 });
+  assert.equal(steps[1].runIndex, 0);
+});
+
+test('test-retry mistakes are errors that name the line', () => {
+  const { errors } = readJourney(
+    '```sh test-retry\nls\n```\n\n```sh test-retry="0"\nls\n```\n\n```sh test-retry="1.5"\nls\n```\n\n' +
+      '```sh test-retry="5" test-exit="1"\nls\n```\n\n```sh test-retry="5" test-background="http://x/"\nserve\n```\n\n' +
+      '```sh test-retry="5" test-skip="offline"\nls\n```\n\n```text test-retry="5"\nx\n```\n\n' +
+      '```sh test-retry="5"\nls\n```\n\n```sh\nls\n```\n\n```text test-expect\nx\n```\n',
+  );
+  assert.deepEqual(errors, [
+    'line 1: test-retry takes the seconds to keep trying, as test-retry="10"',
+    'line 5: test-retry takes the seconds to keep trying, as test-retry="10"',
+    'line 9: test-retry takes the seconds to keep trying, as test-retry="10"',
+    'line 13: a test-retry fence runs until its output arrives, so it cannot also be test-exit',
+    'line 17: a test-retry fence runs until its output arrives, so it cannot also be test-background',
+    'line 21: a test-retry fence is run, so it cannot also be test-skip',
+    'line 25: test-retry applies only to sh fences',
+    'line 29: test-retry needs a test-expect or test-excerpt block below it to say when the output has arrived',
+  ]);
+});

@@ -339,6 +339,45 @@ test('an excerpt that is not there fails after the journey, and a missing file s
   });
 });
 
+test('a test-retry fence runs again until the output the page shows arrives', async () => {
+  const counted = (meta) =>
+    '## Read\n\n' + fence(meta, "echo x >>count\nprintf 'run %s\\n' \"$(wc -l <count | tr -d ' ')\"") + fence('text test-expect', 'run 3');
+  await withPage(counted('sh test-retry="5"'), async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /^again \(1\/5\)\nagain \(2\/5\)\nrun 3$/mu);
+    assert.doesNotMatch(output, /again \(3\/5\)/u);
+    assert.match(output, /expect line 12: ok/u);
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /run {3}line 7 \(Read\): echo x >>count \(again for up to 5s until its output arrives\)/u);
+  });
+  await withPage(counted('sh'), async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /expected:\n {2}run 3\nactual:\n {2}run 1/u);
+  });
+});
+
+test('a test-retry fence whose output never arrives fails after the journey, and a failing run stops it', async () => {
+  const never = '## Read\n\n' + fence('sh test-retry="2"', "echo '{\"deliveries\": []}'") + fence('json test-excerpt', '{"status": "received"}');
+  await withPage(never, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /^again \(2\/2\)$/mu);
+    assert.doesNotMatch(output, /again \(3\/2\)/u);
+    assert.match(output, /excerpt line 11: the output of the sh fence at line 7 does not contain it/u);
+  });
+  const failing =
+    '## Read\n\n' + fence('sh test-retry="5"', 'echo x >>count\ntest "$(wc -l <count)" -lt 2\necho first') + fence('text test-expect', 'never') + fence('sh', 'echo after');
+  await withPage(failing, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /^again \(1\/5\)$/mu);
+    assert.doesNotMatch(output, /^after$/mu);
+    assert.match(output, /the sh fence at line 7 \(Read\) failed/u);
+  });
+});
+
 async function withGateDocs(pages, fn) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-runner-gate.')));
   try {

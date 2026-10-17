@@ -31,6 +31,12 @@
 // the URL answers. test-cwd="<dir>" on an sh fence names the directory, inside
 // the reader directory, that the page tells the reader to return to first.
 //
+// test-retry="<seconds>" on an sh fence is for output that arrives after the
+// command returns, such as a delivery the registry makes from its own queue:
+// the fence runs again, once a second for at most that many seconds, until
+// the test-expect or test-excerpt blocks below it match. The page must already
+// tell the reader to run the command again when the output is not there yet.
+//
 // The page is parsed as Markdown rather than MDX, as check-draft-links.mjs
 // does: fences, including fences indented inside list items, parse the same
 // way, and JSX or comment lines read as paragraphs the journey never runs.
@@ -50,6 +56,7 @@ const ANNOTATIONS = new Set([
   'test-append',
   'test-background',
   'test-cwd',
+  'test-retry',
 ]);
 
 // Parse the test- tokens of a fence meta string: bare flags and key="value"
@@ -106,7 +113,7 @@ function* walk(node) {
 }
 
 // Return { steps, errors }. A step is one of
-//   { kind: 'run', line, heading, code, exit?, background?, cwd? }
+//   { kind: 'run', line, heading, code, exit?, background?, cwd?, retry? }
 //   { kind: 'skip', line, heading, code, reason }
 //   { kind: 'expect', line, heading, format, text, runIndex }
 //   { kind: 'edit', line, heading, path, before, after }
@@ -139,6 +146,7 @@ export function readJourney(text) {
     const append = annotations['test-append'];
     const background = annotations['test-background'];
     const cwd = annotations['test-cwd'];
+    const retry = annotations['test-retry'];
 
     if (node.lang === 'sh') {
       if (expect !== undefined) {
@@ -175,6 +183,17 @@ export function readJourney(text) {
           errors.push(`line ${line}: test-cwd takes a directory inside the reader directory, as test-cwd="first-project"`);
         } else step.cwd = cwd;
       }
+      if (retry !== undefined) {
+        if (typeof retry !== 'string' || !/^[1-9]\d*$/u.test(retry)) {
+          errors.push(`line ${line}: test-retry takes the seconds to keep trying, as test-retry="10"`);
+        } else if (exit !== undefined) {
+          errors.push(`line ${line}: a test-retry fence runs until its output arrives, so it cannot also be test-exit`);
+        } else if (background !== undefined) {
+          errors.push(`line ${line}: a test-retry fence runs until its output arrives, so it cannot also be test-background`);
+        } else if (skip !== undefined) {
+          errors.push(`line ${line}: a test-retry fence is run, so it cannot also be test-skip`);
+        } else step.retry = Number(retry);
+      }
       lastCommand = steps.push(step) - 1;
       continue;
     }
@@ -183,6 +202,7 @@ export function readJourney(text) {
     if (exit !== undefined) errors.push(`line ${line}: test-exit applies only to sh fences`);
     if (background !== undefined) errors.push(`line ${line}: test-background applies only to sh fences`);
     if (cwd !== undefined) errors.push(`line ${line}: test-cwd applies only to sh fences`);
+    if (retry !== undefined) errors.push(`line ${line}: test-retry applies only to sh fences`);
     if ([file, append, edit, expect, excerpt].filter((value) => value !== undefined).length > 1) {
       errors.push(`line ${line}: a block is one of test-file, test-append, test-edit, test-expect, or test-excerpt`);
       continue;
@@ -244,6 +264,11 @@ export function readJourney(text) {
       text: node.value,
       runIndex: lastCommand,
     });
+  }
+  for (const [index, step] of steps.entries()) {
+    if (step.retry !== undefined && !steps.some((block) => block.runIndex === index)) {
+      errors.push(`line ${step.line}: test-retry needs a test-expect or test-excerpt block below it to say when the output has arrived`);
+    }
   }
   return { steps, errors };
 }
