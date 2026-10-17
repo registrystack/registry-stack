@@ -34,6 +34,10 @@
 //! events likewise move artifact revisions only.
 //! Declared row-local constraint locations in the Problem schema likewise move
 //! artifact revisions only; the SQL and Action fingerprints remain unchanged.
+//! The explicit cross-major PostgreSQL text collation, grouped immediate-action
+//! policies, and policy definition markers deliberately move every fixture's
+//! SQL digest and compiled artifact revision. Action contract fingerprints stay
+//! unchanged because their authored contracts did not change.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -55,8 +59,8 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/organization-membership-access/registry.yaml"
         ),
         module: None,
-        ddl_sha256: "da05fb62cb07ea689d7351c76d609a552a5a8fb9e1e5231877d103dd1e33fe88",
-        revision: "sha256:be02d4f6bf22cc33d501c78a621944c399b1187743775edc2142f2fbd4372885",
+        ddl_sha256: "b29dd51145e008de342526941bada68781b9d8067a8384643ede258e9471c28a",
+        revision: "sha256:fa2b1b82a2c96e8bad4ef3080ee7b3c6677065eb9067bb93893baca76c005c19",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -66,8 +70,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
-        ddl_sha256: "dfb8cefaa8059cda62c5d2d39bb14fcbf33f589061ca6fe81402e948048caaf6",
-        revision: "sha256:0eb9224425b7553774a9023d92205f0035050c3227081d417bda189d9806c598",
+        ddl_sha256: "19e503d71d515e5a9e2af9c109b91cce856eb041849d9d0208dfeb454365e7ba",
+        revision: "sha256:8f28bb4bb233ed4eb357aa3944b3abf56e1d5eea7c4259573a0f2448b702cae7",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -77,8 +81,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
-        ddl_sha256: "603a8c6c8ab8500fe5beff9b78657c667de7e90c91578700091086e2f1a82380",
-        revision: "sha256:4c22016139a9c8126c331d341c5e86df81c74ec1ffc16ce6b6f671196d758b74",
+        ddl_sha256: "92c531b3cf49292bcbaa33b663fd2fc2fdd934d0f96635261f0f9d463ef914d8",
+        revision: "sha256:062bb21577c658c7794a5c7e826c74f5ccd56b64e9b2a6e9adafa4674aac0b73",
     },
     Fixture {
         name: "household-contact-actions",
@@ -88,8 +92,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
-        ddl_sha256: "451d62c09089364c81f343acfbc175f82db449f00446886fedc6e8cc03ef86ad",
-        revision: "sha256:b9d5ca50e524048f3e8f503243e28b567e8ee5a8c2d11f223a021c0ff567cb5d",
+        ddl_sha256: "6699bf442105e684adbe6ca506cfbbef90700b0298decdd9ec3f7a3a90cf4e67",
+        revision: "sha256:bb95087d30ca855e3929a323766bcb8a474ac24ea5a7c94668f827f81f993db4",
     },
 ];
 

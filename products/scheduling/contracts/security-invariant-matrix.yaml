@@ -636,9 +636,9 @@ invariants:
       Refuse an apply or records apply under another identity.databaseId,
       naming only the key and leaving the ledger, schema, and policy
       unchanged; a second apply waits for the lock and then runs against the
-      state the first committed. An apply takes every supply anchor and the
-      meta row before it migrates, so no migration lock is held while it
-      waits on a capacity transaction.
+      state the first committed. A successor apply takes every supply anchor
+      and the meta row before recording its activation, so it never publishes
+      a package over a concurrent capacity transaction.
     negativeTest:
       path: crates/registry-schedulingctl/tests/activation_postgres.rs
       name: apply_refuses_the_active_package_and_a_foreign_database_without_writing

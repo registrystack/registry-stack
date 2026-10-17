@@ -9,7 +9,10 @@ use tokio_postgres::NoTls;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::{Client, GenericClient};
 
-use crate::generated_ddl::{policy_sql, DdlObjectOwner, DdlPolicyRole, DdlStatementKind};
+use crate::generated_ddl::{
+    policy_definition_sql, policy_marker, policy_sql, DdlObjectOwner, DdlPolicyRole,
+    DdlStatementKind,
+};
 #[cfg(any(feature = "tooling", feature = "postgres-test"))]
 use crate::history_commit::install_empty_history_baseline;
 use crate::history_store::install_history_schema_store;
@@ -182,12 +185,30 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
                     "spatial bbox role membership is incomplete or invalid",
                 ));
             }
+            let sql = policy_sql(&table_name, policy, role);
+            let definition = policy_definition_sql(&table_name, policy, role);
+            let expected_marker = policy_marker(&definition);
+            let current_marker = client
+                .query_opt(
+                    "SELECT pg_catalog.obj_description(p.oid, 'pg_policy')
+                       FROM pg_catalog.pg_policy p
+                       JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+                       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                      WHERE n.nspname = 'registry_data'
+                        AND c.relname = $1
+                        AND p.polname = $2",
+                    &[&table.physical_name, &policy.name],
+                )
+                .await?
+                .and_then(|row| row.get::<_, Option<String>>(0));
+            if current_marker.as_deref() == Some(expected_marker.as_str()) {
+                continue;
+            }
             client
                 .batch_execute(&format!(
                     "DROP POLICY IF EXISTS {} ON registry_data.{table_name};
-{};",
+{sql};",
                     crate::generated_ddl::quote_identifier(&policy.name),
-                    policy_sql(&table_name, policy, role),
                 ))
                 .await?;
         }
@@ -626,16 +647,24 @@ fn postgres_version_num_is_supported(version_num: u32) -> bool {
 }
 
 pub(crate) async fn verify_postgres_17_or_newer(client: &impl GenericClient) -> Result<()> {
-    let version_num: String = client
-        .query_one("SELECT current_setting('server_version_num')", &[])
-        .await?
-        .get(0);
+    let server = client
+        .query_one(
+            "SELECT current_setting('server_version_num'), current_setting('server_encoding')",
+            &[],
+        )
+        .await?;
+    let version_num: String = server.get(0);
     let version_num = version_num
         .parse::<u32>()
         .map_err(|_| PostgresKernelError::Configuration("PostgreSQL 17 or newer is required"))?;
     if !postgres_version_num_is_supported(version_num) {
         return Err(PostgresKernelError::Configuration(
             "PostgreSQL 17 or newer is required",
+        ));
+    }
+    if server.get::<_, String>(1) != "UTF8" {
+        return Err(PostgresKernelError::Configuration(
+            "the PostgreSQL database server_encoding must be UTF8; create a fresh UTF8 database and apply the package",
         ));
     }
     Ok(())

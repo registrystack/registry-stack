@@ -156,7 +156,6 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
       - {path: crates/registry-scheduling/src/service.rs, name: a_replayed_receipt_records_the_decision_it_carries}
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: migration_refuses_unpublished_audit_and_preserves_a_drained_outbox}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}
   - id: SCHEDULING-SEC-15
     tests:
@@ -265,7 +264,7 @@ entries:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_waits_for_the_migration_lock_another_apply_holds, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_rejects_a_different_deployment_identity_without_writing, features: [postgres-test]}
-      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_takes_the_publication_locks_before_it_migrates, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: successor_apply_waits_for_publication_locks_before_it_publishes, features: [postgres-test]}
   - id: SCHEDULING-SEC-32
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_to_activate_without_its_audit_destination, features: [postgres-test]}

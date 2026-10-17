@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Apply this release to a fresh database. Messaging now installs its complete
+  schema as one version 1 baseline and explicitly refuses a database left at a
+  beta schema version with fresh-install recovery guidance.
 - BREAKING: `authentication.oidc.scopeClaim` defaults to `scope` (was
   `registry_scopes`), the default Scheduling uses and the claim stock
   ThunderID emits; `messagingctl dev` tokens carry `scope` to match.

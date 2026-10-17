@@ -72,51 +72,8 @@ pub use activation::{
 pub use attempt_key::attempt_key_reference;
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
-const FACTS_REVISION_MIGRATION: &str =
-    include_str!("../migrations/0002_facts_revision_and_suppressed.sql");
-const HOOK_DELIVERY_MIGRATION_VERSION: i64 = 3;
-const POLICY_DOCUMENT_MIGRATION: &str = include_str!("../migrations/0004_policy_document.sql");
-const POLICY_DOCUMENT_MIGRATION_VERSION: i64 = 4;
-const WINDOW_RECORDS_MIGRATION: &str = include_str!("../migrations/0005_window_records.sql");
-const WINDOW_RECORDS_MIGRATION_VERSION: i64 = 5;
-const WINDOW_REVISION_HEADS_MIGRATION: &str =
-    include_str!("../migrations/0006_window_revision_heads.sql");
-const WINDOW_REVISION_HEADS_MIGRATION_VERSION: i64 = 6;
-const DUPLICATE_LOOKUP_INDEX_MIGRATION: &str =
-    include_str!("../migrations/0007_duplicate_lookup_index.sql");
-const DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION: i64 = 7;
-const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0008_audit_writer.sql");
-const AUDIT_WRITER_MIGRATION_VERSION: i64 = 8;
-const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0009_activations.sql");
-const ACTIVATIONS_MIGRATION_VERSION: i64 = 9;
-const EXTERNAL_REFERENCES_MIGRATION: &str =
-    include_str!("../migrations/0010_external_references.sql");
-const EXTERNAL_REFERENCES_MIGRATION_VERSION: i64 = 10;
-const ATTEMPT_KEY_REFERENCE_MIGRATION: &str =
-    include_str!("../migrations/0011_attempt_key_reference.sql");
-const ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION: i64 = 11;
-const CLAIM_OWNER_MIGRATION: &str = include_str!("../migrations/0012_claim_owner.sql");
-const CLAIM_OWNER_MIGRATION_VERSION: i64 = 12;
-const CLAIM_OWNER_RETENTION_MIGRATION: &str =
-    include_str!("../migrations/0013_claim_owner_retention.sql");
-const CLAIM_OWNER_RETENTION_MIGRATION_VERSION: i64 = 13;
-
-/// Every schema version in ledger order.
-const SCHEMA_VERSIONS: [i64; 13] = [
-    1,
-    2,
-    HOOK_DELIVERY_MIGRATION_VERSION,
-    POLICY_DOCUMENT_MIGRATION_VERSION,
-    WINDOW_RECORDS_MIGRATION_VERSION,
-    WINDOW_REVISION_HEADS_MIGRATION_VERSION,
-    DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
-    AUDIT_WRITER_MIGRATION_VERSION,
-    ACTIVATIONS_MIGRATION_VERSION,
-    EXTERNAL_REFERENCES_MIGRATION_VERSION,
-    ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION,
-    CLAIM_OWNER_MIGRATION_VERSION,
-    CLAIM_OWNER_RETENTION_MIGRATION_VERSION,
-];
+const SCHEMA_VERSIONS: [i64; 1] = [1];
+const PRE_1_0_BETA_SCHEMA_MAX_VERSION: i64 = 13;
 
 /// Serializes schema migration and package activation on one transaction
 /// lock. A second `schedulingctl apply` waits here until the first commits or
@@ -159,6 +116,11 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
+    #[error(
+        "the Scheduling database uses a pre-1.0 beta schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
+        schema_versions(versions)
+    )]
+    BetaSchema { versions: Vec<i64> },
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
     /// A commit whose acknowledgment never arrived and whose outcome could
@@ -167,15 +129,11 @@ pub enum StoreError {
         "a Scheduling commit was not acknowledged and its outcome could not be read back; it may have taken effect"
     )]
     Unacknowledged,
-    #[error(
-        "the Scheduling database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then run `schedulingctl apply --runtime-config FILE` again"
-    )]
-    UnpublishedAuditWouldBeDropped { version: i64, rows: i64 },
     /// The schema is behind this release. Only `schedulingctl apply`
     /// migrates it.
     #[error(
         "the Scheduling database schema is behind this release (pending versions {}); run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`",
-        versions(pending)
+        schema_versions(pending)
     )]
     SchemaPending { pending: Vec<i64> },
     #[error(
@@ -284,7 +242,7 @@ pub enum StoreError {
     Pool(#[from] deadpool_postgres::PoolError),
 }
 
-fn versions(versions: &[i64]) -> String {
+fn schema_versions(versions: &[i64]) -> String {
     versions
         .iter()
         .map(ToString::to_string)
@@ -300,7 +258,8 @@ impl StoreError {
     pub fn is_activation_refusal(&self) -> bool {
         matches!(
             self,
-            Self::SchemaPending { .. }
+            Self::BetaSchema { .. }
+                | Self::SchemaPending { .. }
                 | Self::SchemaNewer { .. }
                 | Self::NotActivated
                 | Self::DatabaseIdMismatch
@@ -315,7 +274,6 @@ impl StoreError {
                 | Self::PolicyInUse(_)
                 | Self::CombinedInvariant(_)
                 | Self::SupplyIdentifierCollision(_)
-                | Self::UnpublishedAuditWouldBeDropped { .. }
         )
     }
 }

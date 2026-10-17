@@ -139,7 +139,7 @@ const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 64;
 const MAX_BINDING_BYTES: usize = 256;
 const MAX_BEARER_TOKEN_BYTES: usize = 32 * 1024;
-const MIN_SUPPORTED_POSTGRES_MAJOR: u16 = 15;
+const MIN_SUPPORTED_POSTGRES_MAJOR: u16 = 17;
 const MAX_SUPPORTED_POSTGRES_MAJOR: u16 = 18;
 
 type CredentialMap = BTreeMap<(String, String), Zeroizing<String>>;
@@ -6314,7 +6314,7 @@ journeys:
         let fixture = package_fixture(DIGEST_A);
         let suite = validate_fixture_journeys(JOURNEY_SOURCE, fixture.package.registry())
             .expect("strict suite validates");
-        let execution = execution_facts(&fixture.package, DIGEST_A, 16);
+        let execution = execution_facts(&fixture.package, DIGEST_A, 17);
         let candidate = validated_candidate(&fixture, &execution, &suite)
             .expect("verified package and database facts close the candidate");
         let successful = execute_scripted(&suite, &candidate, ScriptMode::Success)
@@ -6582,7 +6582,7 @@ journeys:
         let prepared = production_prepared_package("fixture-project-source");
         let suite = validate_fixture_journeys(JOURNEY_SOURCE, prepared.registry())
             .expect("Production journey suite validates");
-        let (candidate, _) = derive_prepared_schema_test_candidate(&prepared, &suite, 16)
+        let (candidate, _) = derive_prepared_schema_test_candidate(&prepared, &suite, 17)
             .expect("unsigned candidate derives without activation authority");
         let bytes = receipt_for_candidate(&candidate, &suite)
             .canonical_bytes()
@@ -6649,7 +6649,7 @@ journeys:
         let suite = validate_fixture_journeys(RHAI_JOURNEYS, prepared.registry())
             .expect("planner journey suite validates");
         let (prepared_candidate, prepared_registry) =
-            derive_prepared_schema_test_candidate(&prepared, &suite, 16)
+            derive_prepared_schema_test_candidate(&prepared, &suite, 17)
                 .expect("prepared package rederives its project planner asset");
         assert_eq!(prepared_registry, *prepared.registry());
 
@@ -6686,7 +6686,7 @@ journeys:
                 bytes: &migration_plan,
             },
         };
-        let execution = execution_facts(&package, DIGEST_A, 16);
+        let execution = execution_facts(&package, DIGEST_A, 17);
         let verified_candidate =
             validate_schema_test_candidate(&package, &sources, &execution, &suite)
                 .expect("verified package binds the exact project planner asset");
@@ -6776,7 +6776,7 @@ journeys:
         .unwrap();
         let suite = validate_fixture_journeys(&journeys, prepared.registry()).unwrap();
         let (candidate, registry) =
-            derive_prepared_schema_test_candidate(&prepared, &suite, 16).unwrap();
+            derive_prepared_schema_test_candidate(&prepared, &suite, 17).unwrap();
         assert_eq!(registry, *prepared.registry());
         let migration_plan = prepared.file_bytes()["database/migration-plan.json"].clone();
         let temp = tempfile::tempdir().unwrap();
@@ -6808,7 +6808,7 @@ journeys:
                 bytes: &migration_plan,
             },
         };
-        let execution = execution_facts(&package, DIGEST_A, 16);
+        let execution = execution_facts(&package, DIGEST_A, 17);
         let verified =
             validate_schema_test_candidate(&package, &sources, &execution, &suite).unwrap();
         assert_eq!(
@@ -6898,7 +6898,7 @@ journeys:
         }));
         let suite = validate_fixture_journeys(RHAI_JOURNEYS, prepared.registry())
             .expect("module planner journey suite validates");
-        let (_, rederived) = derive_prepared_schema_test_candidate(&prepared, &suite, 16)
+        let (_, rederived) = derive_prepared_schema_test_candidate(&prepared, &suite, 17)
             .expect("schema test rederives the exact module planner asset");
         assert_eq!(rederived, *prepared.registry());
     }
@@ -7020,20 +7020,27 @@ journeys:
             ));
         }
 
-        let mut unsupported: Value = serde_json::from_slice(bytes).expect("receipt parses");
-        unsupported["postgresMajor"] = json!(19);
-        let unsupported = canonicalize_json(&unsupported).expect("changed receipt canonicalizes");
-        let Err(FixtureError::ReceiptDocument(report)) =
-            validate_schema_test_receipt_for_package(&unsupported, &fixture.prepared, suite)
-        else {
-            panic!("an unsupported PostgreSQL major is refused by the reader");
-        };
-        let found: Vec<_> = report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
-            .collect();
-        assert_eq!(found, [("config.out-of-range", "/postgresMajor")]);
+        for major in [16, 19] {
+            let mut unsupported: Value = serde_json::from_slice(bytes).expect("receipt parses");
+            unsupported["postgresMajor"] = json!(major);
+            let unsupported =
+                canonicalize_json(&unsupported).expect("changed receipt canonicalizes");
+            let Err(FixtureError::ReceiptDocument(report)) =
+                validate_schema_test_receipt_for_package(&unsupported, &fixture.prepared, suite)
+            else {
+                panic!("unsupported PostgreSQL major {major} is refused by the reader");
+            };
+            let found: Vec<_> = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+                .collect();
+            assert_eq!(
+                found,
+                [("config.out-of-range", "/postgresMajor")],
+                "PostgreSQL major {major}"
+            );
+        }
     }
 
     fn assert_candidate_build_substitutions_are_refused(
@@ -7194,7 +7201,7 @@ journeys:
             ("targetManagedSchemaFingerprint", json!(DIGEST_B)),
             ("registryRevision", json!(DIGEST_B)),
             ("priorPackageDigest", json!(DIGEST_B)),
-            ("postgresMajor", json!(17)),
+            ("postgresMajor", json!(18)),
             ("projectSourceRevision", json!("substituted")),
             ("compilerSourceRevision", json!("substituted")),
             ("migrationPlanSha256", json!(DIGEST_B)),
@@ -7260,7 +7267,7 @@ journeys:
                 "compilerSourceRevision": "compiler",
                 "journeyFileSha256": DIGEST_A,
                 "migrationPlanSha256": DIGEST_A,
-                "postgresMajor": 16,
+                "postgresMajor": 17,
                 "projectSourceRevision": "source",
                 "registryRevision": DIGEST_A,
                 "sourceClosureSha256": DIGEST_A,
@@ -7310,7 +7317,7 @@ journeys:
         let current =
             read_schema_test_receipt(RECEIPT_FILE, &receipt(RECEIPT_API_VERSION, RECEIPT_KIND))
                 .expect("a current receipt reads");
-        assert_eq!(current.postgres_major, 16);
+        assert_eq!(current.postgres_major, 17);
         assert_eq!(
             current.canonical_bytes().expect("receipt canonicalizes"),
             receipt(RECEIPT_API_VERSION, RECEIPT_KIND)

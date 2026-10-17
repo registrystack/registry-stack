@@ -8432,69 +8432,57 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
     );
 }
 
-/// An earlier audit outbox with unpublished records remains a named refusal.
-/// Installation never deletes the outbox, including after it is drained.
 #[tokio::test]
-async fn migration_refuses_unpublished_audit_and_preserves_a_drained_outbox() {
-    let fx = fixture().await;
-    // The schema head of the release that published audit from an outbox,
-    // holding one record its publisher has not reached.
-    fx.admin
-        .batch_execute(
-            "CREATE TABLE scheduling_audit_outbox (event_id uuid PRIMARY KEY, \
-                 audit_record jsonb NOT NULL, published_at timestamptz); \
-             INSERT INTO scheduling_audit_outbox(event_id, audit_record) \
-                 VALUES('00000000-0000-4000-8000-0000000000c1', '{}'); \
-             DELETE FROM scheduling_schema_migrations WHERE version=8;",
-        )
+async fn a_pre_1_0_beta_schema_is_refused_with_fresh_install_recovery() {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let schema = format!("scheduling_{}", Uuid::new_v4().simple());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
         .await
-        .expect("simulate the schema before migration 8");
+        .expect("connect the scheduling test database");
+    tokio::spawn(async move { connection.await.expect("the scheduling admin connection") });
+    admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA {schema};
+             CREATE TABLE {schema}.scheduling_schema_migrations (
+                 version bigint PRIMARY KEY CHECK (version > 0),
+                 applied_at timestamptz NOT NULL
+             );
+             INSERT INTO {schema}.scheduling_schema_migrations(version, applied_at)
+                 VALUES (1, now());
+             CREATE TABLE {schema}.scheduling_meta (
+                 singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+                 scheduling_id text NOT NULL,
+                 policy_revision bigint NOT NULL CHECK (policy_revision > 0),
+                 policy_digest text NOT NULL,
+                 updated_at timestamptz NOT NULL DEFAULT now()
+             );"
+        ))
+        .await
+        .expect("install the identifying shape of the pre-1.0 0001 baseline");
+    let secret_name = format!("SCHEDULING_SCHEMA_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret_name, &scoped);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the scheduling test secret resolver");
+    let database = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret_name}"),
+        migration_url_ref: format!("secret:env/{secret_name}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    let store = PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
 
-    let refusal = fx
-        .store
+    let refusal = store
         .migrate()
         .await
-        .expect_err("migration must not drop unpublished audit records");
-    assert!(
-        matches!(
-            refusal,
-            StoreError::UnpublishedAuditWouldBeDropped {
-                version: 8,
-                rows: 1
-            }
-        ),
-        "{refusal:?}"
-    );
-    let outbox_rows: i64 = fx
-        .admin
-        .query_one("SELECT count(*) FROM scheduling_audit_outbox", &[])
-        .await
-        .expect("the outbox survives the refusal")
-        .get(0);
-    assert_eq!(outbox_rows, 1);
-
-    fx.admin
-        .batch_execute("UPDATE scheduling_audit_outbox SET published_at=now()")
-        .await
-        .expect("the earlier release publishes the record");
-    fx.store
-        .migrate()
-        .await
-        .expect("a drained outbox is preserved");
-    let dropped: bool = fx
-        .admin
-        .query_one("SELECT to_regclass('scheduling_audit_outbox') IS NULL", &[])
-        .await
-        .expect("inspect the audit outbox")
-        .get(0);
-    assert!(
-        !dropped,
-        "installation does not discard earlier audit state"
-    );
-    fx.store
-        .ready()
-        .await
-        .expect("the schema is at this release");
+        .expect_err("the beta schema is never upgraded in place");
+    assert!(matches!(
+        &refusal,
+        StoreError::BetaSchema { versions } if versions == &vec![1]
+    ));
+    assert!(refusal.to_string().contains("fresh database"), "{refusal}");
 }
 
 /// The single `response` entry that answers the commitment's `request`

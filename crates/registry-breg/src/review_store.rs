@@ -1517,38 +1517,9 @@ pub(crate) async fn install(
                      OR (state <> 'applied' AND application_id IS NULL)),
                  CONSTRAINT registry_proposal_application_jobs_receipt_recovered_check
                      CHECK (NOT receipt_recovered OR state = 'applied'),
-                 CHECK ((action_href IS NULL) = (action_if_match IS NULL))
+                 CONSTRAINT registry_proposal_application_jobs_action_binding_check
+                     CHECK ((action_href IS NULL) = (action_if_match IS NULL))
              );",
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    client
-        .batch_execute(
-            "DO $$ BEGIN
-                 ALTER TABLE registry_internal.registry_proposal_application_jobs
-                     ADD CONSTRAINT registry_proposal_application_jobs_action_binding_check
-                     CHECK ((action_href IS NULL) = (action_if_match IS NULL));
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    // A database installed before Cancel closed application jobs lacks the
-    // `cancelled` state. Widening the check keeps every existing row valid.
-    client
-        .batch_execute(
-            "DO $$ BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                     WHERE conrelid='registry_internal.registry_proposal_application_jobs'::regclass
-                       AND conname='registry_proposal_application_jobs_state_check'
-                       AND pg_catalog.pg_get_constraintdef(oid) LIKE '%cancelled%'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_proposal_application_jobs
-                         DROP CONSTRAINT IF EXISTS registry_proposal_application_jobs_state_check,
-                         ADD CONSTRAINT registry_proposal_application_jobs_state_check
-                         CHECK (state IN ('queued','applying','applied','blocked','cancelled'));
-                 END IF;
-             END $$;",
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
