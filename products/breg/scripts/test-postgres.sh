@@ -82,6 +82,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_import_authority \
     --test postgres_refactor \
     --test postgres_proposal \
+    --test postgres_proposal_shape_activation \
     --test postgres_native_retention \
     --test postgres_proposal_human_recovery \
     --test postgres_reviewed_change_example \
