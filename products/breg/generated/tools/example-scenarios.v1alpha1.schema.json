@@ -80,6 +80,17 @@
         "capture": {
           "$ref": "#/$defs/LocalId"
         },
+        "captureResults": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxProperties": 100,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
         "client": {
           "$ref": "#/$defs/LocalId"
         },
@@ -111,7 +122,6 @@
       "required": [
         "id",
         "operation",
-        "recordType",
         "client",
         "accessProfile"
       ],

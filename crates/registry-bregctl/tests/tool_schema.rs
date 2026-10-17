@@ -175,6 +175,32 @@ fn the_journeys_schema_refuses_an_empty_suite() {
 }
 
 #[test]
+fn the_example_scenarios_schema_bounds_multi_result_captures() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["example-scenarios.v1alpha1.schema.json"]);
+    let mut catalogue = example("products/breg/examples/minimal/examples/scenarios.json");
+    let step = catalogue["scenarios"][0]["steps"][0]
+        .as_object_mut()
+        .expect("the minimal scenario step is an object");
+    step.insert("operation".to_owned(), json!("invoke"));
+    step.insert("action".to_owned(), json!("register-entry"));
+    step.insert("captureResults".to_owned(), json!({"entry":"entry"}));
+    step.remove("recordType");
+    step.remove("result");
+    step.remove("capture");
+    assert!(schema.is_valid(&catalogue));
+
+    catalogue["scenarios"][0]["steps"][0]["captureResults"] = json!({});
+    assert!(!schema.is_valid(&catalogue));
+    catalogue["scenarios"][0]["steps"][0]["captureResults"] = Value::Object(
+        (0..101)
+            .map(|index| (format!("result{index}"), json!(format!("capture{index}"))))
+            .collect(),
+    );
+    assert!(!schema.is_valid(&catalogue));
+}
+
+#[test]
 fn a_wrong_header_a_missing_header_and_an_explicit_null_are_refused() {
     let documents = documents().expect("the tool schemas generate");
     let schema = compile(&documents["backup-binding.v1alpha1.schema.json"]);

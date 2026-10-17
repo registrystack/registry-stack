@@ -19,13 +19,14 @@
         {
           "id": "register",
           "operation": "invoke",
-          "recordType": "facility",
           "client": "registrar",
           "accessProfile": "facility-registrar",
           "action": "register-facility",
-          "result": "facility",
           "input": "facility",
-          "capture": "facility"
+          "captureResults": {
+            "facility": "facility",
+            "assignment": "assignment"
+          }
         },
         {
           "id": "read-facility",
@@ -34,6 +35,14 @@
           "client": "reader",
           "accessProfile": "facility-reader",
           "record": "facility"
+        },
+        {
+          "id": "read-assignment",
+          "operation": "get",
+          "recordType": "facility-assignment",
+          "client": "reader",
+          "accessProfile": "facility-reader",
+          "record": "assignment"
         }
       ]
     },
