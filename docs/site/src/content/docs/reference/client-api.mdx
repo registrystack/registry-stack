@@ -469,18 +469,19 @@ in both languages.
 
 The private-key-JWT configuration requires `token_endpoint`, `client_id`, and `client_key` (Node:
 `tokenEndpoint`, `clientId`, `clientKey`). Its optional members in Python are `audience`,
-`assertion_lifetime_seconds`, `refresh_margin_seconds`, `request_timeout_seconds`,
-`connect_timeout_seconds`, and `user_agent`. Node takes the same six in camel case, with
-`requestTimeoutMs` and `connectTimeoutMs` for the timeouts, and adds string-valued
+`resource`, `scopes`, `assertion_lifetime_seconds`, `refresh_margin_seconds`,
+`request_timeout_seconds`, `connect_timeout_seconds`, and `user_agent`. Node takes the same eight
+in camel case, with `requestTimeoutMs` and `connectTimeoutMs` for the timeouts, and adds string-valued
 `trustedRootCertificates` for the token endpoint. Python has no nested trust anchor for the token
 endpoint: its top-level `trusted_root_certificates` crosses as genuine `bytes` and the nested
 configuration crosses as JSON, which carries no byte values. `client_key` holds the private half; it
 stays in the process and reaches nothing but the token endpoint. Rust passes an
 `Arc<dyn TokenProvider>` instead, and can implement a custom provider.
 
-The built-in exchange sends only `grant_type`, `client_assertion_type`, and `client_assertion`. It
-sends no scope, no RFC 8707 resource, no body `client_id`, and no deployment-defined form member.
-Use a pre-acquired short-lived static bearer when an issuer requires those members.
+The built-in exchange sends `grant_type`, `client_id`, `client_assertion_type`, and
+`client_assertion`, adds `scope` when `scopes` is set, and adds the RFC 8707 `resource` when
+`resource` is set. It sends no other form member. Use a pre-acquired short-lived static bearer when
+an issuer requires one.
 
 ### Read a client from a profile
 
@@ -601,7 +602,7 @@ the category it handles and let the rest propagate. Node throws `evidence.Eviden
 | `token` | `TokenError` | The configured credential source could not supply a bearer |
 | `transport` | `TransportError` | The exchange failed below HTTP |
 | `denied` | `DeniedError` | Evidence refused the request |
-| `not-available` | `NotAvailableError` | The source could not answer the request |
+| `not-available` | `NotAvailableError` | Evidence could not be produced: no match, an ambiguous match, a missing fact, or a source that answered with no record, all collapsed into one answer |
 | `protocol` | `ProtocolError` | The response violated the contract |
 | `verification` | `VerificationError` | The response did not satisfy the pinned verification |
 

@@ -1,6 +1,6 @@
 ---
-title: Registry Evidence API
-description: "Narrative context for the Registry Evidence OpenAPI reference: authentication, response formats, the frozen Version 1 contract, and documented limitations."
+title: Evidence Gateway API
+description: "Narrative context for the Evidence Gateway OpenAPI reference: what the API answers, authentication, the frozen Version 1 contract, and the response encodings."
 status: current
 owner: registry-docs
 source_repos:
@@ -11,148 +11,70 @@ locale: en
 standards_referenced:
   - openapi
   - sd-jwt-vc
-  - cccev
 ---
 
-[Open the Registry Evidence API operations](../evidence/)
-
-That generated API reference is the authoritative route reference. It is built from
-Registry Evidence's generated OpenAPI document. The development docset reads the checked-out current
-source; archived docsets read their selected release ref. This page carries the context the
-specification does not: what the service asserts, how authentication works, which response formats
-exist, and what stays out of scope.
-
-For exact routes and schemas, read the generated API reference. For deployment and operator
-duties, see the [Registry Evidence product documentation](../../../products/registry-evidence/).
+Read this page before you call Evidence Gateway (Evidence) from a relying party: it says what the
+API answers, how you authenticate, and which response encodings you can ask for. Every route,
+request body, response schema, and problem is in the
+[generated Evidence Gateway API operations](../evidence/), rendered from the OpenAPI document the
+runtime serves.
 
 ## What the API is
 
-Registry Evidence is a minimum-disclosure assertion service. Given an authenticated requester, an
-authorized purpose, a predefined requirement, and the configured selector data an authoritative
-provider needs, `POST /v1/evidence` returns the smallest sufficient JSON assertion in an
-authorized response format. `POST /v1/evidence/batch` evaluates between one and sixteen ordered
-audience-scoped subject sets for one common requirement and purpose. `GET /v1/evidence-definitions`
-is an authenticated, requester-scoped
-description of the complete request shapes the deployed bundle already authorizes; it is not a
-public catalog. The remaining routes are operational: `GET /health`, `GET /ready`,
-`GET /openapi.json`, the signing keys at `GET /.well-known/evidence/jwks.json`, and JWT VC issuer
-metadata at `GET /.well-known/jwt-vc-issuer`.
+You send `POST /v1/evidence` with the requirement's Requirement URI, a purpose, and the selector
+values that identify the subject. Evidence returns the smallest assertion that answers the
+requirement, signed, and never the source records behind it. `POST /v1/evidence/batch` asks the
+same requirement and purpose for one to sixteen ordered subject sets in one request.
+`GET /v1/evidence-definitions` lists only the requirements, purposes, and selector profiles your
+token is authorized for; it is not a public catalog. [How Evidence
+works](../../../explanation/how-evidence-works/) explains the model.
 
-The assertion is the product's CCCEV-aligned domain object, expressed as a documented Registry Evidence
-JSON profile rather than RDF or XML (`products/evidence/CONCEPT.md`). The Version 1 contract is
-frozen: the three versioned operations and their envelopes are the complete evidence surface.
+The Version 1 contract is frozen: those three versioned operations and their envelopes are the
+complete Evidence request surface.
 
-## Source of truth
-
-The OpenAPI document is a generated artifact committed at
-`products/evidence/generated/registry-evidence.openapi.json`. Regenerate it into a separate
-directory with:
-
-```sh
-cargo run -p registry-evidence --example evidence-contracts -- --output "<directory>"
-```
-
-Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which
-regenerates the contracts and fails on any byte difference from the committed artifacts, so the
-committed document cannot drift from the code. The docs build then selects the current checkout or
-the archived docset's release ref (`scripts/fetch-openapi.mjs`) and renders the generated operations
-pages.
-
-A running Registry Evidence service publishes the same document at `GET /openapi.json` with media type
-`application/json`. The route requires no authentication and reaches no dependency; the
-handler in `crates/registry-evidence/src/server.rs` takes no credential, and the unit test
-`the_served_openapi_document_is_the_generated_release_artifact` in
-`crates/registry-evidence/src/contracts.rs` pins the served bytes to the generated artifact.
+{/* Evidence: products/evidence/generated/registry-evidence.openapi.json, createEvidence,
+    createEvidenceRequestBatch, listEvidenceDefinitions, and EvidenceRequest;
+    products/evidence/contracts/README.md; products/evidence/CONCEPT.md. */}
 
 ## Authentication
 
-The two evidence-production routes and definition discovery require exactly one `Authorization`
-header containing one Bearer token.
-Registry Evidence verifies OIDC access tokens against one reviewed profile: exactly one trusted issuer with
-exact audience, token type, and algorithm allowlists, and one configured principal claim with no
-`client_id`, `azp`, header, or request fallback (`products/evidence/OPERATOR-CONTRACT.md`). There
-is no API-key mode. The operational routes take no credential and reveal no deployment
-definitions or entitlements.
+The three versioned operations require exactly one `Authorization` header with one Bearer token.
+The token is an OIDC access token from the one issuer the deployment trusts, for Evidence's
+audience, with an accepted token type and signing algorithm, and it carries the principal claim
+the deployment names. Evidence reads no `client_id`, `azp`, header, or request field in its place.
+`GET /.well-known/oauth-protected-resource` names the issuer to ask.
+[Request an access token from your own code](../../../configure/request-an-access-token/) shows the
+exchange. The other routes take no credential and reveal no definition or entitlement.
 
-Every response on the Evidence request listener carries `Cache-Control: no-store` and a W3C
-`traceparent` header. A problem response also carries the same trace identifier in its
-`traceId` member. Registry Evidence may reuse a valid inbound trace identifier,
-but never echoes `tracestate`; the public trace is not its internal audit
-identifier.
+{/* Evidence: products/evidence/generated/registry-evidence.openapi.json, bearerAuth and
+    getProtectedResourceMetadata;
+    crates/registry-evidence/src/auth.rs, AuthenticationClaimsConfig and principal_claim;
+    products/evidence/OPERATOR-CONTRACT.md. */}
 
-## Singular response formats
+## Response encodings
 
-`POST /v1/evidence` governs three single-assertion formats; signed flattened JWS is the mandatory
-default:
+`POST /v1/evidence` negotiates its encoding from the `Accept` header:
 
-- `application/jose+json`: the signed flattened JWS, the default and the durable-verification
-  format.
-- `application/vnd.registrystack.evidence-unsigned+json`: a visibly unsigned JSON envelope that a
-  governed authority grant must explicitly permit. It is transport-authenticated convenience data,
-  not later-verifiable evidence, and never a fallback from signing failure.
-- `application/dc+sd-jwt`: the same assertion serialized as an SD-JWT VC under the frozen profile
-  in `products/evidence/contracts/sd-jwt-vc-profile.yaml`. Values use one root disclosure by
-  default. A governed structured value can instead disclose each direct field independently.
-  Enabling the format adds a serialization, not a credential lifecycle.
+- `application/jose+json`, the default when `Accept` is missing or `*/*`: the assertion as a
+  signed flattened JWS that you can verify later against the published keys.
+- `application/dc+sd-jwt`: the same assertion as an SD-JWT VC response under the frozen profile in
+  [`sd-jwt-vc-profile.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/sd-jwt-vc-profile.yaml).
+  It is a second encoding of one response, never a credential lifecycle
+  ([Request evidence as an SD-JWT VC](../../../tutorials/request-evidence-as-sd-jwt-vc/)).
 
-A holder-bound requirement can also select
-`application/vnd.registrystack.evidence.batch+json`. That holder-bound issuance envelope performs
-one subject evaluation and carries one SD-JWT VC credential per distinct presented holder key. It
-is not the multi-subject request batch.
+A grant may also permit the visibly unsigned envelope
+`application/vnd.registrystack.evidence-unsigned+json`, which is not later-verifiable evidence, and
+a holder-bound requirement offers one more encoding the operations page lists.
+`POST /v1/evidence/batch` accepts only
+`application/vnd.registrystack.evidence.request-batch+json` and returns one signed flattened JWS
+per available item. Either route refuses an `Accept` value it does not offer with
+`format.unsupported` ([Evidence Gateway errors and problems reference](../../evidence-problems/)).
 
-## Multi-subject request batch
+{/* Evidence: crates/registry-evidence-verifier/src/lib.rs, EVIDENCE_JWS_MEDIA_TYPE,
+    EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE, and EVIDENCE_REQUEST_BATCH_MEDIA_TYPE;
+    products/evidence/contracts/problem-contract.yaml, response_format_rules;
+    products/evidence/contracts/sd-jwt-vc-profile.yaml. */}
 
-`POST /v1/evidence/batch` requires the exact
-`Accept: application/vnd.registrystack.evidence.request-batch+json` value. Missing, wildcard,
-combined, parameterized, and singular-response values are rejected before source access. The
-request has one common `requirement` and `purpose` plus one to sixteen ordered items. Each item has
-its own canonical, pairwise-distinct `requestNonce` and complete `subjects` array. The authenticated
-token supplies the common audience, and `holderKeys` are not accepted.
+## Next
 
-The response preserves request order. Each item is one of these closed results:
-
-- `evidence`, with one signed flattened JWS in the `evidence` member.
-- `evidence-not-available`, when the corresponding singular evaluation produced `no_match`,
-  `ambiguous`, `required_fact_missing`, `derivation_input_unresolved`, or an exact
-  source-declared unresolved outcome at a singular or search stage.
-
-Registry Evidence authenticates once, uses one evaluation instant, charges rate admission for the
-complete item count, and validates and authorizes every item before source access. Any malformed,
-unauthorized, dependency, protocol, signing, serialization, or audit failure, any derivation failure
-outside the closed `derivation_input_unresolved` class, and a source-declared unresolved fetch or
-member aborts the complete request without releasing item material. The serialized envelope is
-limited to 1 MiB and is released only after one durable terminal audit event.
-
-Every existing audience-scoped source works through sequential item evaluation. For an eligible
-fixed-path HTTP source, operators can enable the optional `source-batch` capability in both the
-[governed bundle and runtime](../../../products/registry-evidence/operator-contract/). Its closed
-`prepare_batch` and `extract_batch` scripts can construct and map one physical source call. The
-optimization does not change the public response, transport authority, or failure contract, and a
-started optimized call never falls back to sequential fanout.
-
-## What the specification does not cover
-
-- Deployment definitions: the generated document describes the generic operations, envelopes,
-  media types, and safe problems. It contains no deployment's requirement definitions or
-  entitlements; those are discovered through the authenticated `GET /v1/evidence-definitions`
-  route.
-- Credential lifecycle: there is no OID4VCI, credential offer, status list, holder proof, or
-  wallet interaction. The SD-JWT VC response format is a second encoding of one response.
-- Wallet interoperability and presentation: outside the Version 1 boundary
-  (`products/evidence/SD-JWT-VC-DEMO.md`).
-
-## Behavior the schema cannot express
-
-- Audit durability: the access record is durably accepted before source access, and the
-  disclosure-release record is durably accepted before the response bytes reach the caller
-  (`products/evidence/contracts/security-invariant-matrix.yaml`; the measured cost is recorded in
-  `products/evidence/PERFORMANCE.md`).
-- Request-batch atomicity: all item admission gates precede source access, each physical source call
-  has a durable access event, and one terminal event gates the complete response or records a
-  value-free failure (`products/evidence/contracts/request-batch-audit-event.schema.yaml`).
-
-:::caution
-Because release is gated on durable audit acceptance, an unavailable audit store surfaces as
-request failure, not as a silently unaudited response. Monitor the audit store as part of the
-operational runbook.
-:::
+[Evidence Gateway API operations](../evidence/)

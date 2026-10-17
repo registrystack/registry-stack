@@ -10,69 +10,82 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Evidence returns RFC 9457 problem details as `application/problem+json`.
-The frozen source contract is
-`products/evidence/contracts/problem-contract.yaml`.
-The generated schema and OpenAPI documents are reproduced from the runtime and
-must not be edited by hand.
+Look up a problem response from Evidence Gateway (Evidence) and decide what your relying party does
+next. Evidence returns RFC 9457 problem details as `application/problem+json`, under the frozen
+contract
+[`problem-contract.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/problem-contract.yaml).
 
 ## Read a problem response
 
-Every problem body has exactly these six members: `type`, `title`, `status`,
-`detail`, `code`, and `traceId`.
-`detail` is static and value-free.
-It never includes a selector, token, source value, audit operation, or internal
-failure category.
-`type` always begins with
-`https://id.registrystack.org/problems/registry-evidence/`.
+Every problem body has exactly six members: `type`, `title`, `status`, `detail`, `code`, and
+`traceId`. `type` is `https://id.registrystack.org/problems/registry-evidence/` followed by the code
+with each `.` replaced by `/`. `detail` is static, value-free text chosen by the code alone: it never
+carries a selector, token, source value, or internal failure category.
 
-```json
-{
-  "type": "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
-  "title": "Evidence could not be produced",
-  "status": 422,
-  "detail": "evidence could not be produced for this request",
-  "code": "evidence.unavailable",
-  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
-}
-```
+Every response carries a W3C `traceparent` header. For a problem response, its trace identifier is
+the same value as `traceId`. Evidence accepts a valid inbound trace identifier for correlation or
+mints one, but does not echo `tracestate`. The trace identifier is not the internal audit operation
+identifier. All responses use `Cache-Control: no-store`.
 
-Every response carries a W3C `traceparent` header.
-For a problem response, its trace identifier is the same value as `traceId`.
-Registry Evidence accepts a valid inbound trace identifier for correlation or
-mints one, but does not echo `tracestate`.
-The trace identifier is not the internal server-minted audit operation
-identifier.
-All responses use `Cache-Control: no-store`.
+{/* Evidence: products/evidence/contracts/problem-contract.yaml, exact_members, type_uri_prefix,
+    response_headers, and prohibited;
+    crates/registry-evidence/src/problem.rs, PROBLEM_BASE and type_uri(). */}
 
-## Problem code matrix
+## Problem codes
 
 | Code | Status | Title | Detail | Recovery |
 | --- | --- | --- | --- | --- |
 | `evidence.invalid-request` | 400 | Evidence request is invalid | the Evidence request is invalid | Correct the request body or headers. |
-| `request.selector-invalid` | 400 | Selector is invalid | selector does not match an available request profile | Fetch authenticated definitions and use an available selector profile. A value the deployment places in a source request path must also fit one path segment: not empty, not `.` or `..`, and free of `/`, `\`, `%`, and control characters. This code is returned before any source is contacted, never as `source.unavailable`. |
-| `auth.invalid-credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Supply one valid Bearer access token. The response also carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
-| `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Obtain an appropriate entitlement. The response does not identify the failed authorization condition. |
-| `resource.not-found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. Unknown paths and unsupported methods use this code. |
+| `request.selector-invalid` | 400 | Selector is invalid | selector does not match an available request profile | Read `GET /v1/evidence-definitions` and send a selector profile it lists. A value placed in a source request path must fit one path segment: not empty, not `.` or `..`, and free of `/`, `\`, `%`, and control characters. No source was contacted. |
+| `auth.invalid-credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Send one valid Bearer access token. The response carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
+| `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Ask the operator for a grant that covers the requirement, purpose, and selector profile. The response does not say which condition failed. |
+| `resource.not-found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. |
 | `format.unsupported` | 406 | Requested format is not supported | the requested format is not supported | Send one exact supported `Accept` value. |
-| `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not infer the cause or retry blindly. Retry after request inputs or authoritative source state may have changed, or follow operator guidance. The service does not disclose the unavailable class. |
-| `evidence.rate-limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait one second, as stated in `Retry-After: 1`, then retry. |
-| `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff or contact the source operator. |
-| `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff or contact the Registry Evidence operator. |
+| `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not infer a cause or retry blindly. Retry only after the request inputs or the source's records may have changed. |
+| `evidence.rate-limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait the one second `Retry-After: 1` states, then retry. |
+| `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff, or contact the source operator. |
+| `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff, or contact the Evidence operator. |
 
-`Retry-After` is present only on `429` responses.
+`evidence.denied` never appears without its audit record: when Evidence cannot append the
+authorization-refusal audit event, it returns `service.unavailable` instead. A requirement that does
+not exist and one you are not authorized for are indistinguishable to you, and so are the reasons
+behind `evidence.unavailable`.
+
+{/* Evidence: products/evidence/contracts/problem-contract.yaml, codes, authorization_refusal_audit,
+    unknown_definition_rule, existence_disclosure, selector_refusal, and response_headers. */}
+
+## Client error kinds
+
+The Evidence clients map a problem onto one error kind, so your code catches the kind and reads the
+problem code from the error's `code`. Python raises the exception in the table; Node throws
+`EvidenceClientError` with `kind` set to the first column. The full contract is in the
+[Evidence error contract](../client-api/#evidence-error-contract).
+
+| Kind | Problem codes | Python |
+| --- | --- | --- |
+| `denied` | `auth.invalid-credential`, `evidence.denied`, `evidence.rate-limited` | `DeniedError` |
+| `not-available` | `evidence.unavailable` | `NotAvailableError` |
+| `protocol` | `evidence.invalid-request`, `request.selector-invalid`, `resource.not-found`, `format.unsupported`, `source.unavailable`, `service.unavailable` | `ProtocolError` |
+
+Only `evidence.rate-limited` sets the retry delay (`retry_after_seconds` in Python,
+`retryAfterSeconds` in Node). A problem whose status, title, detail, type, or `traceId` departs from
+the contract also becomes `protocol`, with no `code`: a `protocol` error with a `code` is one of the
+codes in this table, and one without is a contract violation.
+
+{/* Evidence: crates/registry-evidence-client/src/problem.rs, REGISTERED_PROBLEMS, map_problem(),
+    and exact_registered_problems_preserve_the_typed_mapping;
+    crates/registry-evidence-client-py/src/lib.rs, exception_for_kind();
+    crates/registry-evidence-client-node/client.d.ts, EvidenceClientError. */}
 
 ## Request batches
 
-`POST /v1/evidence/batch` uses the same outer problem contract for any failure
-that aborts the batch.
-Its successful envelope keeps the item discriminator
-`evidence-not-available` unchanged for the closed unavailable outcome.
-It is not the outer `evidence.unavailable` problem code.
+`POST /v1/evidence/batch` uses the same problem contract for a failure that aborts the whole batch.
+Inside a successful response, an item that could not be produced is the result
+`evidence-not-available`, not the `evidence.unavailable` problem.
 
-## Source
+{/* Evidence: products/evidence/contracts/problem-contract.yaml, request_batch;
+    products/evidence/contracts/request-batch-response.schema.yaml. */}
 
-The code, status, title, detail, headers, and batch semantics are transcribed from
-`products/evidence/contracts/problem-contract.yaml` and the generated runtime artifacts. The
-Recovery column is operational guidance. The complete generated route mapping is in
-`products/evidence/generated/registry-evidence.openapi.json`.
+## Next
+
+[Evidence Gateway API](../apis/registry-evidence/)
