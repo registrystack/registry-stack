@@ -100,7 +100,7 @@ The registry commits the contact first, then delivers the event from its own que
 
 ## Read the delivery
 
-```sh
+```sh test-retry="10"
 bregctl --format json dev events
 ```
 
@@ -117,9 +117,10 @@ bregctl --format json dev events
 `"status": "received"` means the receiver verified the signature and kept the first attempt. The
 report leaves out the projected `name`; add `--include-payload` to see it.
 
-If `deliveries` is empty, the registry may still be retrying; run the command again after a few
-seconds. On a deployed registry, `bregctl webhook list` shows the deliveries still waiting or
-failed, as [Bind webhook receivers](../../operate/breg-webhooks/) describes.
+If `deliveries` is empty, the first delivery has not arrived yet or the registry is still
+retrying; run the command again after a few seconds. On a deployed registry,
+`bregctl webhook list` shows the deliveries still waiting or failed, as
+[Bind webhook receivers](../../operate/breg-webhooks/) describes.
 
 The local receiver proves only that an attempt arrived. A real receiving service stores each
 event before acting on it. A retry resends an event with the same `idempotencyKey`; an operator
