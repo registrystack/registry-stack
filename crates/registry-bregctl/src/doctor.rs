@@ -158,7 +158,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "startup.database.catalog-drift",
             "database.catalog",
             &format!(
-                "the managed database catalog differs from the runtime package at: {}; restore the database from a backup taken under the active package, or, as the migration role, make each named object outside registry_internal match the active package's database/ddl.sql (drop one it does not declare, recreate one it declares), then rerun doctor",
+                "the managed database catalog differs from the runtime package at: {}; keep the registry stopped, restore the database from a backup taken under the active package by following the backup-and-restore runbook, then rerun doctor; the named identifiers locate drift but do not establish that deleting or reconstructing an object preserves its data",
                 objects.join(", ")
             ),
         );
@@ -730,18 +730,34 @@ mod tests {
     }
 
     #[test]
-    fn catalog_drift_names_only_repairs_the_engine_supports() {
-        // Applying the active package again is refused as already active, so
-        // the recovery is a restore from backup or a hand repair against the
-        // package's own DDL script.
+    fn catalog_drift_recovery_is_safe_for_data_bearing_objects() {
+        for object in ["registry_data.entry", "registry_data.entry.required_label"] {
+            let diagnostic = startup_diagnostic(StartupError::DatabaseCatalogDrift {
+                objects: vec![object.to_owned()],
+            });
+            assert_eq!(diagnostic.code, "startup.database.catalog-drift");
+            assert!(diagnostic.message.contains(object));
+            assert!(diagnostic.message.contains("backup"));
+            assert!(diagnostic.message.contains("registry stopped"));
+            assert!(diagnostic.message.contains("preserves its data"));
+            for unsafe_instruction in ["database/ddl.sql", "drop one", "recreate one"] {
+                assert!(
+                    !diagnostic.message.contains(unsafe_instruction),
+                    "catalog recovery must not recommend `{unsafe_instruction}` for {object}: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_drift_keeps_structural_identifiers_actionable() {
         let diagnostic = startup_diagnostic(StartupError::DatabaseCatalogDrift {
             objects: vec!["registry_data.example_idx".to_owned()],
         });
         assert_eq!(diagnostic.code, "startup.database.catalog-drift");
         assert!(diagnostic.message.contains("registry_data.example_idx"));
         assert!(diagnostic.message.contains("backup"));
-        assert!(diagnostic.message.contains("database/ddl.sql"));
-        assert!(diagnostic.message.contains("registry_internal"));
         assert!(!diagnostic.message.contains("reapply"));
         assert!(!diagnostic.message.contains("apply the active package"));
         assert!(!diagnostic.message.contains("migration plan"));
