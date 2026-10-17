@@ -416,16 +416,16 @@ expect:
   outcome: success
   status: 200
   members:
-    - recordCapture: facility
+    facility:
       fields: {status: active, jurisdiction: zone-a}
 ```
 
-`members` is an unordered exact set of record identities. Missing, extra, or
-duplicate returned identities fail the step, as does a different declared
-field value. An exact membership assertion also requires the response to be
-the terminal page, with no next cursor. The ordinary readable-field ceiling
-is checked independently.
-Omitting `members` keeps the earlier collection shape check; `members: []`
+Each `members` key names a prior Record capture. The mapping is an unordered
+exact set of record identities. Missing, extra, or duplicate returned
+identities fail the step, as does a different declared field value. An exact
+membership assertion also requires the response to be the terminal page, with
+no next cursor. The ordinary readable-field ceiling is checked independently.
+Omitting `members` keeps the earlier collection shape check; `members: {}`
 explicitly requires an empty result. `count` may still be used and, when both
 are present, must equal the number of declared members.
 

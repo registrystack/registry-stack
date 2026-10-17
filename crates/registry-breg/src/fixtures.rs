@@ -725,11 +725,17 @@ struct ExpectationSource {
     #[serde(default, deserialize_with = "members::count")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<BoundedU32<0, 100>>"))]
     count: Option<usize>,
-    /// Exact unordered collection membership. Omission keeps the historical
-    /// shape-only collection check; an empty list explicitly expects no rows.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(length(max = 100)))]
-    members: Option<UniqueList<CollectionMemberExpectationSource>>,
+    /// Exact unordered collection membership, keyed by a prior Record capture.
+    /// Omission keeps the historical shape-only collection check; an empty
+    /// mapping explicitly expects no rows.
+    #[serde(default, deserialize_with = "members::optional_local_id_keyed_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "members::local_id_keyed_map_schema::<CollectionMemberExpectationSource>"
+        )
+    )]
+    members: Option<BTreeMap<String, CollectionMemberExpectationSource>>,
     #[serde(default)]
     problem_code: Option<String>,
     #[serde(default)]
@@ -745,9 +751,6 @@ struct ExpectationSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CollectionMemberExpectationSource {
-    #[serde(deserialize_with = "members::local_id")]
-    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
-    record_capture: String,
     #[serde(default, deserialize_with = "members::http_object")]
     #[cfg_attr(
         feature = "schema",
@@ -756,37 +759,18 @@ struct CollectionMemberExpectationSource {
     fields: Map<String, Value>,
 }
 
-impl PartialEq for CollectionMemberExpectationSource {
-    fn eq(&self, other: &Self) -> bool {
-        self.record_capture == other.record_capture
-    }
-}
-
-impl Eq for CollectionMemberExpectationSource {}
-
-impl std::hash::Hash for CollectionMemberExpectationSource {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::hash::Hash::hash(&self.record_capture, state);
-    }
-}
-
 impl ExpectationSource {
     /// Copy the expected fields from the document, as
     /// [`ActionSource::fill_bodies`] does for request bodies.
     fn fill_bodies(&mut self, body: &dyn Fn(&str) -> Option<Value>) {
         fill_object(&mut self.fields, body("/fields"));
-        if let Some(members) = self.members.take() {
-            let mut members = members.into_vec();
-            for (index, member) in members.iter_mut().enumerate() {
+        if let Some(members) = &mut self.members {
+            for (capture, member) in members {
                 fill_object(
                     &mut member.fields,
-                    body(&format!("/members/{index}/fields")),
+                    body(&format!("/members/{capture}/fields")),
                 );
             }
-            self.members = Some(
-                UniqueList::new(members)
-                    .expect("filling member fields preserves unique record captures"),
-            );
         }
     }
 }
@@ -826,6 +810,21 @@ mod members {
             .into_iter()
             .map(|(key, value)| (key.into_string(), value.into_string()))
             .collect())
+    }
+
+    pub(super) fn optional_local_id_keyed_map<'de, D, V>(
+        deserializer: D,
+    ) -> Result<Option<BTreeMap<String, V>>, D::Error>
+    where
+        D: Deserializer<'de>,
+        V: Deserialize<'de>,
+    {
+        let map = BTreeMap::<LocalId, V>::deserialize(deserializer)?;
+        Ok(Some(
+            map.into_iter()
+                .map(|(key, value)| (key.into_string(), value))
+                .collect(),
+        ))
     }
 
     pub(super) fn external_id_map<'de, D: Deserializer<'de>, V: Deserialize<'de>>(
@@ -934,6 +933,19 @@ mod members {
             "type": "object",
             "propertyNames": names,
             "additionalProperties": generator.subschema_for::<LocalId>(),
+        })
+    }
+
+    #[cfg(feature = "schema")]
+    pub(super) fn local_id_keyed_map_schema<V: schemars::JsonSchema>(
+        generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
+        let names = generator.subschema_for::<LocalId>();
+        schemars::json_schema!({
+            "type": "object",
+            "maxProperties": 100,
+            "propertyNames": names,
+            "additionalProperties": generator.subschema_for::<V>(),
         })
     }
 
@@ -2406,16 +2418,17 @@ fn internalize_expectation(
             .members
             .as_ref()
             .map(|members| {
-                let members = members
+                members
                     .iter()
-                    .map(|member| {
-                        Ok(CollectionMemberExpectationSource {
-                            record_capture: member.record_capture.clone(),
-                            fields: internalize_data(response_entity, &member.fields)?,
-                        })
+                    .map(|(capture, member)| {
+                        Ok((
+                            capture.clone(),
+                            CollectionMemberExpectationSource {
+                                fields: internalize_data(response_entity, &member.fields)?,
+                            },
+                        ))
                     })
-                    .collect::<Result<Vec<_>, FixtureError>>()?;
-                UniqueList::new(members).map_err(|_| FixtureError::JourneyShapeRefused)
+                    .collect::<Result<BTreeMap<_, _>, FixtureError>>()
             })
             .transpose()?,
         problem_code: expectation.problem_code.clone(),
@@ -2585,16 +2598,17 @@ fn externalize_expectation(
             .members
             .as_ref()
             .map(|members| {
-                let members = members
+                members
                     .iter()
-                    .map(|member| {
-                        Ok(CollectionMemberExpectationSource {
-                            record_capture: member.record_capture.clone(),
-                            fields: externalize_data(response_entity, &member.fields)?,
-                        })
+                    .map(|(capture, member)| {
+                        Ok((
+                            capture.clone(),
+                            CollectionMemberExpectationSource {
+                                fields: externalize_data(response_entity, &member.fields)?,
+                            },
+                        ))
                     })
-                    .collect::<Result<Vec<_>, FixtureError>>()?;
-                UniqueList::new(members).map_err(|_| FixtureError::JourneyShapeRefused)
+                    .collect::<Result<BTreeMap<_, _>, FixtureError>>()
             })
             .transpose()?,
         problem_code: expectation.problem_code.clone(),
@@ -2639,7 +2653,7 @@ fn validate_expectation(
         .keys()
         .any(|field| !readable_fields.contains(field) || field.len() > MAX_IDENTIFIER_BYTES)
         || expectation.members.as_ref().is_some_and(|members| {
-            members.iter().any(|member| {
+            members.values().any(|member| {
                 member.fields.keys().any(|field| {
                     !readable_fields.contains(field) || field.len() > MAX_IDENTIFIER_BYTES
                 }) || canonical_size(&Value::Object(member.fields.clone()))
@@ -2741,13 +2755,9 @@ fn validate_collection_member_references(
     if operation != Operation::List || members.len() > 100 {
         return Err(FixtureError::JourneyShapeRefused);
     }
-    let mut referenced = BTreeSet::new();
-    for member in members {
-        if !referenced.insert(member.record_capture.as_str()) {
-            return Err(FixtureError::DuplicateIdentifier);
-        }
+    for record_capture in members.keys() {
         let source = captures
-            .get(&member.record_capture)
+            .get(record_capture)
             .ok_or(FixtureError::LogicalReference(
                 LogicalReferenceRefusal::CaptureSource,
             ))?;
@@ -4468,9 +4478,9 @@ fn assert_response_with_observations(
                 }
                 if let Some(members) = &step.expect.members {
                     let mut expected = BTreeMap::new();
-                    for member in members {
+                    for (record_capture, member) in members {
                         let record_id = match &observations
-                            .get(&member.record_capture)
+                            .get(record_capture)
                             .ok_or(FixtureError::ExpectationMismatch)?
                             .kind
                         {
@@ -6337,38 +6347,44 @@ journeys:
     fn collection_member_expectations_require_distinct_prior_captures_of_the_target_type() {
         let fixture = package_fixture(DIGEST_A);
         let source = String::from_utf8(JOURNEY_SOURCE.to_vec()).unwrap();
+        let member_expectation = "count: 1\n          members:\n            first-widget:\n              fields: {label: first, quantity: 1}";
 
-        let exact_duplicate = source.replace(
-            "count: 1\n          members:\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}",
-            "count: 2\n          members:\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}",
-        );
-        let Err(FixtureError::JourneyDocument(report)) =
-            validate_fixture_journeys(exact_duplicate.as_bytes(), fixture.package.registry())
-        else {
-            panic!("the shared reader must refuse an exact duplicate member declaration");
-        };
-        assert!(report.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "config.duplicate-item"
-                && diagnostic.path == "/journeys/0/steps/2/expect/members/1"
-        }));
+        let count_only = source.replace(member_expectation, "count: 1");
+        let count_only =
+            validate_fixture_journeys(count_only.as_bytes(), fixture.package.registry())
+                .expect("omitted members keeps count-only collection validation");
+        assert!(count_only.journeys[0].steps[2].expect.members.is_none());
 
-        let duplicate = source.replace(
-            "count: 1\n          members:\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}",
-            "count: 2\n          members:\n            - recordCapture: first-widget\n              fields: {label: first}\n            - recordCapture: first-widget\n              fields: {quantity: 1}",
-        );
-        let Err(FixtureError::JourneyDocument(report)) =
-            validate_fixture_journeys(duplicate.as_bytes(), fixture.package.registry())
-        else {
-            panic!("the shared reader must refuse repeated member capture identities");
-        };
-        assert!(report
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "config.duplicate-item"));
+        let empty = source.replace(member_expectation, "count: 0\n          members: {}");
+        let empty = validate_fixture_journeys(empty.as_bytes(), fixture.package.registry())
+            .expect("an explicit empty member mapping expects no rows");
+        assert!(empty.journeys[0].steps[2]
+            .expect
+            .members
+            .as_ref()
+            .is_some_and(BTreeMap::is_empty));
+
+        for second_fields in ["{label: first, quantity: 1}", "{quantity: 1}"] {
+            let duplicate = source.replace(
+                member_expectation,
+                &format!(
+                    "count: 2\n          members:\n            first-widget:\n              fields: {{label: first, quantity: 1}}\n            first-widget:\n              fields: {second_fields}"
+                ),
+            );
+            let Err(FixtureError::JourneyDocument(report)) =
+                validate_fixture_journeys(duplicate.as_bytes(), fixture.package.registry())
+            else {
+                panic!("the shared reader must refuse a repeated member capture key");
+            };
+            assert!(report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "yaml.duplicate-key"
+                    && diagnostic.path == "/journeys/0/steps/2/expect/members/first-widget"
+            }));
+        }
 
         let missing = source.replace(
-            "recordCapture: first-widget",
-            "recordCapture: missing-widget",
+            "members:\n            first-widget:",
+            "members:\n            missing-widget:",
         );
         assert!(matches!(
             validate_fixture_journeys(missing.as_bytes(), fixture.package.registry()),
@@ -6378,7 +6394,7 @@ journeys:
 
         let wrong_operation = source.replacen(
             "fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}",
-            "fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}\n          members: []",
+            "fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}\n          members: {}",
             1,
         );
         assert!(matches!(

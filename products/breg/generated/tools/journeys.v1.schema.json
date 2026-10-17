@@ -402,14 +402,8 @@
           "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
           "type": "object",
           "x-registry-foreign": "breg-http-api"
-        },
-        "recordCapture": {
-          "$ref": "#/$defs/LocalId"
         }
       },
-      "required": [
-        "recordCapture"
-      ],
       "type": "object"
     },
     "DirectClaimSource": {
@@ -444,13 +438,15 @@
           "x-registry-foreign": "breg-http-api"
         },
         "members": {
-          "description": "Exact unordered collection membership. Omission keeps the historical\nshape-only collection check; an empty list explicitly expects no rows.",
-          "items": {
+          "additionalProperties": {
             "$ref": "#/$defs/CollectionMemberExpectationSource"
           },
-          "maxItems": 100,
-          "type": "array",
-          "uniqueItems": true
+          "description": "Exact unordered collection membership, keyed by a prior Record capture.\nOmission keeps the historical shape-only collection check; an empty\nmapping explicitly expects no rows.",
+          "maxProperties": 100,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         },
         "outcome": {
           "$ref": "#/$defs/ExpectedOutcome"

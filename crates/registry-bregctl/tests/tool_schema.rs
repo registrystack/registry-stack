@@ -190,6 +190,21 @@ fn the_example_scenarios_schema_bounds_multi_result_captures() {
     step.remove("capture");
     assert!(schema.is_valid(&catalogue));
 
+    for member in ["recordType", "result", "capture"] {
+        let mut mixed = catalogue.clone();
+        mixed["scenarios"][0]["steps"][0][member] = json!("entry");
+        assert!(!schema.is_valid(&mixed), "mixed capture form: {member}");
+    }
+    for operation in ["create", "get", "history", "start", "apply"] {
+        let mut wrong_operation = catalogue.clone();
+        wrong_operation["scenarios"][0]["steps"][0]["operation"] = json!(operation);
+        wrong_operation["scenarios"][0]["steps"][0]["recordType"] = json!("entry");
+        assert!(
+            !schema.is_valid(&wrong_operation),
+            "captureResults accepted for {operation}"
+        );
+    }
+
     catalogue["scenarios"][0]["steps"][0]["captureResults"] = json!({});
     assert!(!schema.is_valid(&catalogue));
     catalogue["scenarios"][0]["steps"][0]["captureResults"] = Value::Object(
@@ -198,6 +213,74 @@ fn the_example_scenarios_schema_bounds_multi_result_captures() {
             .collect(),
     );
     assert!(!schema.is_valid(&catalogue));
+}
+
+#[test]
+fn the_example_scenarios_schema_requires_record_types_for_record_steps() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["example-scenarios.v1alpha1.schema.json"]);
+    for operation in ["create", "get", "history", "invoke"] {
+        let mut catalogue = example("products/breg/examples/minimal/examples/scenarios.json");
+        let step = &mut catalogue["scenarios"][0]["steps"][0];
+        *step = json!({
+            "id": "record-step", "operation": operation, "recordType": "entry",
+            "client": "writer", "accessProfile": "writer"
+        });
+        if matches!(operation, "create" | "invoke") {
+            step["input"] = json!("entry");
+            step["capture"] = json!("entry");
+        } else {
+            step["record"] = json!("entry");
+        }
+        if operation == "invoke" {
+            step["action"] = json!("register-entry");
+            step["result"] = json!("entry");
+        }
+        assert!(schema.is_valid(&catalogue), "valid {operation} step");
+        catalogue["scenarios"][0]["steps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("recordType");
+        assert!(
+            !schema.is_valid(&catalogue),
+            "{operation} must identify its record type"
+        );
+    }
+
+    // Proposal steps identify an Action instead of a Record type.
+    let mut catalogue = example("products/breg/examples/minimal/examples/scenarios.json");
+    catalogue["scenarios"][0]["steps"][0] = json!({
+        "id": "start", "operation": "start", "client": "writer",
+        "accessProfile": "writer", "action": "register-entry", "input": "entry",
+        "capture": "proposal"
+    });
+    assert!(schema.is_valid(&catalogue));
+}
+
+#[test]
+fn the_journeys_schema_keys_exact_members_by_bounded_capture_identifiers() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["journeys.v1.schema.json"]);
+    let mut suite = example("crates/registry-breg/tests/fixtures/fixture-tooling/journeys.yaml");
+    assert!(schema.is_valid(&suite));
+    suite["journeys"][0]["steps"][2]["expect"]["members"] = json!({});
+    suite["journeys"][0]["steps"][2]["expect"]["count"] = json!(0);
+    assert!(schema.is_valid(&suite));
+
+    for invalid in [
+        json!([]),
+        json!([{"recordCapture": "entry", "fields": {"label": "first"}}]),
+        json!({"not.valid": {"fields": {}}}),
+        json!({"entry": {"recordCapture": "entry", "fields": {}}}),
+        Value::Object(
+            (0..101)
+                .map(|index| (format!("entry{index}"), json!({"fields": {}})))
+                .collect(),
+        ),
+    ] {
+        suite["journeys"][0]["steps"][2]["expect"]["members"] = invalid;
+        assert!(!schema.is_valid(&suite));
+    }
 }
 
 #[test]
