@@ -594,12 +594,16 @@ def validate_postgres_tls_entrypoint(errors: list[str]) -> None:
         return
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     required_workflow_fragments = (
-        "ports:\n          - 5432/tcp",
-        "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
+        "uses: ./.github/actions/postgres-service",
+        "image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+        "database: breg",
+        "database_user: breg",
+        "database_password: breg_test",
+        "DATABASE_PORT: ${{ steps.postgres.outputs.port }}",
         "BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg",
         "BREG_TEST_TLS_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg",
         "BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://breg:breg_test@127.0.0.1:${DATABASE_PORT}/breg",
-        "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+        "POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}",
         "TLS_CA_PEM_PATH: ${{ runner.temp }}/breg-postgres-trusted-ca.pem",
         "run: products/breg/scripts/test-postgres-tls.sh",
     )

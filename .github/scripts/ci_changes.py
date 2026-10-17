@@ -1042,6 +1042,7 @@ def classify(
             ".github/scripts/run_cargo_packages.py",
         }
         or (is_root_workflow(path) and path not in SECURITY_WORKFLOW_GATES)
+        or path.startswith(".github/actions/")
         or path.startswith(".cargo/")
         or path in ROOT_RUST_INPUTS
         for path in paths

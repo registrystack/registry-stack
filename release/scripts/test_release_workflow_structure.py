@@ -38,6 +38,354 @@ def workflow(name: str) -> tuple[str, dict]:
     return text, yaml.safe_load(text)
 
 
+DOCKER_LOGIN_ACTION = (
+    "docker/login-action@dbcb813823bdd20940b903addbd779551569679f"
+)
+
+
+class DockerHubPullAuthenticationTest(unittest.TestCase):
+    POSTGRES_IMAGE = (
+        "docker.io/library/postgres:17.11@sha256:"
+        "67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
+    )
+    POSTGIS_IMAGE = (
+        "postgis/postgis@sha256:"
+        "01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6"
+    )
+    SERVICE_CONSUMERS = (
+        ("ci.yml", "platform-coverage", POSTGRES_IMAGE, "dispatch", "dispatch", "dispatch_test"),
+        ("ci.yml", "casework-postgres", POSTGRES_IMAGE, "casework", "casework", "casework_test"),
+        ("ci.yml", "scheduling-postgres", POSTGRES_IMAGE, "scheduling", "scheduling", "scheduling_test"),
+        ("ci.yml", "messaging-postgres", POSTGRES_IMAGE, "messaging", "messaging", "messaging_test"),
+        ("ci.yml", "coordinator-postgres", POSTGRES_IMAGE, "coordinator", "coordinator", "coordinator_test"),
+        ("ci.yml", "breg-contracts", POSTGIS_IMAGE, "breg", "breg", "breg_test"),
+        ("ci.yml", "breg-wasm", POSTGIS_IMAGE, "breg", "breg", "breg_test"),
+        ("nightly-rust-coverage.yml", "rust", POSTGRES_IMAGE, "dispatch", "dispatch", "dispatch_test"),
+    )
+
+    def test_manual_ci_run_title_distinguishes_full_and_partial_sweeps(self) -> None:
+        _, document = workflow("ci.yml")
+        run_name = document["run-name"]
+        self.assertIn("inputs.full", run_name)
+        self.assertIn("RegistryStack CI full sweep", run_name)
+        self.assertIn("RegistryStack CI partial sweep", run_name)
+
+    def test_docker_hub_service_pulls_use_fork_safe_login_and_owned_containers(
+        self,
+    ) -> None:
+        for filename, job_name, image, database, user, password in self.SERVICE_CONSUMERS:
+            _, document = workflow(filename)
+            job = document["jobs"][job_name]
+            steps = job["steps"]
+            with self.subTest(workflow=filename, job=job_name):
+                self.assertNotIn("postgres", job.get("services", {}))
+                login_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("name") == "Prepare Docker Hub pull authentication"
+                )
+                start_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("id") == "postgres"
+                )
+                stop_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("name") == "Stop PostgreSQL service"
+                )
+                self.assertLess(login_index, start_index)
+                self.assertLess(start_index, stop_index)
+                login = steps[login_index]
+                self.assertEqual(login["uses"], "./.github/actions/dockerhub-login")
+                self.assertEqual(
+                    login["if"],
+                    "github.event_name != 'pull_request' && "
+                    "(github.event_name != 'workflow_dispatch' || "
+                    "github.ref == 'refs/heads/main')",
+                )
+                self.assertEqual(
+                    login["with"],
+                    {
+                        "username": "${{ secrets.DOCKERHUB_USERNAME }}",
+                        "read_token": "${{ secrets.DOCKERHUB_READ_TOKEN }}",
+                    },
+                )
+                container_name = f"registry-stack-{job_name}-postgres"
+                self.assertEqual(
+                    steps[start_index],
+                    {
+                        "name": "Start PostgreSQL service",
+                        "id": "postgres",
+                        "uses": "./.github/actions/postgres-service",
+                        "with": {
+                            "image": image,
+                            "container_name": container_name,
+                            "database": database,
+                            "database_user": user,
+                            "database_password": password,
+                        },
+                    },
+                )
+                self.assertEqual(
+                    steps[stop_index],
+                    {
+                        "name": "Stop PostgreSQL service",
+                        "if": "always()",
+                        "uses": "./.github/actions/postgres-service",
+                        "with": {
+                            "operation": "stop",
+                            "container_id": "${{ steps.postgres.outputs.container_id }}",
+                        },
+                    },
+                )
+
+    def test_postgres_service_action_starts_waits_and_stops_owned_container(
+        self,
+    ) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/postgres-service/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        start, stop = action["runs"]["steps"]
+        self.assertLess(
+            start["run"].index("printf 'container_id=%s"),
+            start["run"].index("for _ in {1..60}"),
+        )
+        self.assertIn("org.registrystack.ci.postgres-service=true", start["run"])
+        self.assertIn("org.registrystack.ci.postgres-service", stop["run"])
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            docker_log = temporary_path / "docker.log"
+            docker_state = temporary_path / "docker-state"
+            github_output = temporary_path / "github-output"
+            docker = temporary_path / "docker"
+            docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -eu\n"
+                "printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
+                "case \"$1\" in\n"
+                "  run) touch \"$DOCKER_STATE\"; printf '%s\\n' fake-container-id ;;\n"
+                "  inspect) printf '%s\\n' healthy ;;\n"
+                "  port) printf '%s\\n' 127.0.0.1:25433 ;;\n"
+                "  container)\n"
+                "    test -f \"$DOCKER_STATE\" || exit 1\n"
+                "    case \"$*\" in *--format*) printf '%s\\n' true ;; esac\n"
+                "    ;;\n"
+                "  rm) rm \"$DOCKER_STATE\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{temporary}{os.pathsep}{os.environ['PATH']}",
+                "DOCKER_LOG": str(docker_log),
+                "DOCKER_STATE": str(docker_state),
+                "GITHUB_OUTPUT": str(github_output),
+                "IMAGE": self.POSTGRES_IMAGE,
+                "CONTAINER_NAME": "registry-stack-canary-postgres",
+                "POSTGRES_DB": "canary_db",
+                "POSTGRES_USER": "canary_user",
+                "POSTGRES_PASSWORD": "canary_password",
+            }
+            completed = subprocess.run(
+                ["bash", "-c", start["run"]],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                github_output.read_text(encoding="utf-8"),
+                "container_id=fake-container-id\nport=25433\n",
+            )
+            start_log = docker_log.read_text(encoding="utf-8")
+            self.assertIn("--publish 127.0.0.1::5432", start_log)
+            self.assertIn(self.POSTGRES_IMAGE, start_log)
+
+            completed = subprocess.run(
+                ["bash", "-c", stop["run"]],
+                env={
+                    **environment,
+                    "CONTAINER_ID": "fake-container-id",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(
+                "rm --force fake-container-id",
+                docker_log.read_text(encoding="utf-8"),
+            )
+
+            docker_state.touch()
+            refused_output = temporary_path / "refused-output"
+            refused_environment = {
+                **environment,
+                "GITHUB_OUTPUT": str(refused_output),
+            }
+            completed = subprocess.run(
+                ["bash", "-c", start["run"]],
+                env=refused_environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse(refused_output.exists())
+            log_before_cleanup = docker_log.read_text(encoding="utf-8")
+
+            completed = subprocess.run(
+                ["bash", "-c", stop["run"]],
+                env={**environment, "CONTAINER_ID": ""},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(docker_state.exists())
+            self.assertEqual(
+                docker_log.read_text(encoding="utf-8"), log_before_cleanup
+            )
+
+    def test_docker_hub_build_pulls_authenticate_when_secrets_are_available(self) -> None:
+        consumers = (
+            ("ci.yml", "release-tool"),
+            ("nightly-release.yml", "linux"),
+            ("nightly-release.yml", "images"),
+            ("release-candidate.yml", "build-canonical-binaries"),
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux-binaries"),
+            ("release-rehearsal.yml", "canonical-linux"),
+            ("release-repeatability.yml", "rebuild"),
+            ("mirror-buildkit.yml", "mirror"),
+        )
+        for filename, job_name in consumers:
+            _, document = workflow(filename)
+            steps = document["jobs"][job_name]["steps"]
+            with self.subTest(workflow=filename, job=job_name):
+                login_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("name") == "Prepare Docker Hub pull authentication"
+                )
+                login = steps[login_index]
+                expected_action = (
+                    "./verifier/.github/actions/dockerhub-login"
+                    if filename == "release-repeatability.yml"
+                    else "./.github/actions/dockerhub-login"
+                )
+                self.assertEqual(login["uses"], expected_action)
+                self.assertEqual(
+                    login["with"],
+                    {
+                        "username": "${{ secrets.DOCKERHUB_USERNAME }}",
+                        "read_token": "${{ secrets.DOCKERHUB_READ_TOKEN }}",
+                    },
+                )
+                if filename == "ci.yml":
+                    self.assertEqual(
+                        login["if"],
+                        "github.event_name != 'pull_request' && "
+                        "(github.event_name != 'workflow_dispatch' || "
+                        "github.ref == 'refs/heads/main')",
+                    )
+                elif filename in (
+                    "release-rehearsal.yml",
+                    "release-repeatability.yml",
+                ):
+                    self.assertEqual(login["if"], "github.ref == 'refs/heads/main'")
+
+    def test_docker_hub_login_action_is_fork_safe_and_pinned(self) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/dockerhub-login/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        check, login = action["runs"]["steps"]
+        self.assertEqual(check["id"], "credentials")
+        self.assertIn("available=false", check["run"])
+        self.assertIn("available=true", check["run"])
+        self.assertIn("exit 1", check["run"])
+        self.assertEqual(login["uses"], DOCKER_LOGIN_ACTION)
+        self.assertEqual(
+            login["if"],
+            "steps.credentials.outputs.available == 'true'",
+        )
+        self.assertEqual(
+            login["with"],
+            {
+                "registry": "docker.io",
+                "username": "${{ inputs.username }}",
+                "password": "${{ inputs.read_token }}",
+            },
+        )
+
+    def test_empty_docker_hub_credentials_select_anonymous_fallback(self) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/dockerhub-login/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        check = action["runs"]["steps"][0]
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            environment = {
+                **os.environ,
+                "DOCKERHUB_USERNAME": "",
+                "DOCKERHUB_READ_TOKEN": "",
+                "GITHUB_OUTPUT": str(output),
+            }
+            completed = subprocess.run(
+                ["bash", "-c", check["run"]],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(output.read_text(encoding="utf-8"), "available=false\n")
+
+    def test_partial_docker_hub_credentials_fail_closed(self) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/dockerhub-login/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        check = action["runs"]["steps"][0]
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            for username, read_token in (("canary", ""), ("", "canary")):
+                with self.subTest(username=bool(username), read_token=bool(read_token)):
+                    completed = subprocess.run(
+                        ["bash", "-c", check["run"]],
+                        env={
+                            **os.environ,
+                            "DOCKERHUB_USERNAME": username,
+                            "DOCKERHUB_READ_TOKEN": read_token,
+                            "GITHUB_OUTPUT": str(output),
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn("must be configured together", completed.stderr)
+
+    def test_operations_names_secret_owner_and_anonymous_fallback(self) -> None:
+        operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
+        self.assertIn("`DOCKERHUB_USERNAME`", operations)
+        self.assertIn("`DOCKERHUB_READ_TOKEN`", operations)
+        self.assertIn("read-only", operations)
+        self.assertIn("organization secrets", operations)
+        self.assertIn("fork", operations.casefold())
+        self.assertIn("anonymous", operations.casefold())
+
+
 def step_run(document: dict, job: str, name: str) -> str:
     return next(
         step["run"]

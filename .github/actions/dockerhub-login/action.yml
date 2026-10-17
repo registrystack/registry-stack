@@ -1,0 +1,38 @@
+name: Prepare Docker Hub pull authentication
+description: Authenticate read-only pulls when organization credentials are available
+
+inputs:
+  username:
+    description: Docker Hub account name
+    required: false
+  read_token:
+    description: Docker Hub read-only access token
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Check Docker Hub pull credentials
+      id: credentials
+      env:
+        DOCKERHUB_USERNAME: ${{ inputs.username }}
+        DOCKERHUB_READ_TOKEN: ${{ inputs.read_token }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${DOCKERHUB_USERNAME}" && -z "${DOCKERHUB_READ_TOKEN}" ]]; then
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+        elif [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_READ_TOKEN}" ]]; then
+          echo "Docker Hub pull credentials must be configured together" >&2
+          exit 1
+        else
+          echo "available=true" >> "${GITHUB_OUTPUT}"
+        fi
+
+    - name: Authenticate Docker Hub pulls
+      if: steps.credentials.outputs.available == 'true'
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: docker.io
+        username: ${{ inputs.username }}
+        password: ${{ inputs.read_token }}

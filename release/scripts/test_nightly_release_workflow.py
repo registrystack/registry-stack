@@ -101,7 +101,12 @@ class NightlyWorkflowTest(unittest.TestCase):
         for job in self.jobs.values():
             for step in job["steps"]:
                 if "uses" in step:
-                    self.assertRegex(step["uses"], r"@[0-9a-f]{40}$")
+                    if step["uses"].startswith("./"):
+                        self.assertEqual(
+                            step["uses"], "./.github/actions/dockerhub-login"
+                        )
+                    else:
+                        self.assertRegex(step["uses"], r"@[0-9a-f]{40}$")
                 if step.get("uses", "").startswith("actions/checkout@"):
                     self.assertFalse(step["with"]["persist-credentials"])
 

@@ -1,4 +1,5 @@
 name: RegistryStack CI
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.full && 'RegistryStack CI full sweep' || github.event_name == 'workflow_dispatch' && 'RegistryStack CI partial sweep' || github.event_name }}
 
 on:
   schedule:
@@ -244,20 +245,6 @@ jobs:
     timeout-minutes: 15
     # --all-features enables the dispatch and activation PostgreSQL tests,
     # which fail rather than skip without their disposable database.
-    services:
-      postgres:
-        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-        env:
-          POSTGRES_DB: dispatch
-          POSTGRES_USER: dispatch
-          POSTGRES_PASSWORD: dispatch_test
-        options: >-
-          --health-cmd "pg_isready -U dispatch -d dispatch"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -265,6 +252,23 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           submodules: false
+
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+          container_name: registry-stack-platform-coverage-postgres
+          database: dispatch
+          database_user: dispatch
+          database_password: dispatch_test
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -279,8 +283,8 @@ jobs:
 
       - name: Enforce platform line coverage
         env:
-          DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
-          ACTIVATION_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+          DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ steps.postgres.outputs.port }}/dispatch
+          ACTIVATION_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ steps.postgres.outputs.port }}/dispatch
         run: >-
           cargo llvm-cov --locked
           -p 'registry-platform-*'
@@ -305,6 +309,13 @@ jobs:
           path: target/platform-coverage/platform.lcov
           if-no-files-found: error
           retention-days: 1
+
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   platform-coverage-upload:
     name: Upload platform coverage
@@ -770,26 +781,27 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.casework_postgres == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-        env:
-          POSTGRES_DB: casework
-          POSTGRES_USER: casework
-          POSTGRES_PASSWORD: casework_test
-        options: >-
-          --health-cmd "pg_isready -U casework -d casework"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           submodules: false
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+          container_name: registry-stack-casework-postgres-postgres
+          database: casework
+          database_user: casework
+          database_password: casework_test
       - name: Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -823,10 +835,10 @@ jobs:
         # Every maintained Casework target uses a unique schema. The service
         # database is disposable; no test resets public or shares task state.
         env:
-          CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
-          CASEWORK_ACTIVATION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
-          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
-          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+          CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework
+          CASEWORK_ACTIVATION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework
+          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework
+          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework
         run: |
           cargo test --locked -p registry-casework --features postgres-test \
             --test review_acceptance_postgres \
@@ -842,8 +854,8 @@ jobs:
         # dropping the schema-newer and retained-session security proofs.
         shell: bash
         env:
-          CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
-          CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+          CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework
+          CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework
         run: |
           set -euo pipefail
           cargo test --locked -p registry-caseworkctl --features postgres-test,schema --lib \
@@ -853,15 +865,15 @@ jobs:
           grep -q 'test result: ok\. 2 passed' "${RUNNER_TEMP}/caseworkctl-apply.log"
       - name: Create isolated task approval database
         env:
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_task_approval
       - name: Casework task approval through stock issuer to Evidence, BReg, and Scheduling
         # An inexact name filter that selects nothing still exits 0, so the
         # step names each test exactly and fails unless it reports one pass.
         shell: bash
         env:
-          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_task_approval
-          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_task_approval
+          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework_task_approval
+          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ steps.postgres.outputs.port }}/casework_task_approval
         run: |
           set -euo pipefail
           cargo build --locked -p registry-scheduling \
@@ -880,6 +892,13 @@ jobs:
               task_grants::local_session_tests::submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer \
             | tee "${RUNNER_TEMP}/casework-local-session.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-local-session.log" || { echo "::error::expected exactly one passing test for submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer"; exit 1; }
+
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   scheduling-contracts:
     name: Scheduling product contracts
@@ -918,26 +937,27 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.scheduling_postgres == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-        env:
-          POSTGRES_DB: scheduling
-          POSTGRES_USER: scheduling
-          POSTGRES_PASSWORD: scheduling_test
-        options: >-
-          --health-cmd "pg_isready -U scheduling -d scheduling"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           submodules: false
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+          container_name: registry-stack-scheduling-postgres-postgres
+          database: scheduling
+          database_user: scheduling
+          database_password: scheduling_test
       - name: Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -957,60 +977,67 @@ jobs:
         run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-checkpoint.sh
       - name: Verify commitment ledger transactions
         env:
-          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling
+          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/scheduling
         run: cargo test --locked -p registry-scheduling --features postgres-test --test postgres_commitments
       - name: Create isolated authoring-apply test database
         env:
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling scheduling_records_apply
       - name: Verify offline authoring record application
         env:
-          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_records_apply
+          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/scheduling_records_apply
         run: cargo test --locked -p registry-schedulingctl --features postgres-test --test records_apply_postgres
       - name: Create isolated delivery-intent test database
         env:
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling scheduling_intents
       - name: Verify undelivered delivery intent reads
         env:
-          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_intents
+          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/scheduling_intents
         run: cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres
       - name: Create isolated package-activation test database
         env:
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling scheduling_activation
       - name: Verify package activation, role separation, and startup refusals
         env:
-          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_activation
+          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/scheduling_activation
         run: cargo test --locked -p registry-schedulingctl --features postgres-test --test activation_postgres
       - name: Verify shared package activation primitives
         env:
-          ACTIVATION_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_activation
+          ACTIVATION_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/scheduling_activation
         run: cargo test --locked -p registry-platform-activation --features postgres-test --test postgres_activation
       - name: Create isolated dispatch-core test database
         env:
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling dispatch
       - name: Verify the shared dispatch core's fenced lease transitions
         env:
-          DISPATCH_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+          DISPATCH_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/dispatch
         run: cargo test --locked -p registry-platform-dispatch --features postgres-test
       - name: Create isolated hook-delivery test database
         env:
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling hooks
       - name: Verify the shared hook delivery schema installs and reinstalls
         # These tests are ignored without a database, and a run that selects
         # nothing still exits 0, so the step fails unless at least one passes.
         shell: bash
         env:
-          HOOKS_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/hooks
+          HOOKS_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ steps.postgres.outputs.port }}/hooks
         run: |
           set -euo pipefail
           cargo test --locked -p registry-platform-hooks --features postgres --lib \
             -- --ignored \
             | tee "${RUNNER_TEMP}/platform-hooks-postgres.log"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "${RUNNER_TEMP}/platform-hooks-postgres.log" || { echo "::error::expected at least one passing PostgreSQL test for registry-platform-hooks"; exit 1; }
+
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   messaging-contracts:
     name: Messaging product contracts and vendor neutrality
@@ -1052,26 +1079,27 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_postgres == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-        env:
-          POSTGRES_DB: messaging
-          POSTGRES_USER: messaging
-          POSTGRES_PASSWORD: messaging_test
-        options: >-
-          --health-cmd "pg_isready -U messaging -d messaging"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           submodules: false
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+          container_name: registry-stack-messaging-postgres-postgres
+          database: messaging
+          database_user: messaging
+          database_password: messaging_test
       - name: Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -1091,36 +1119,43 @@ jobs:
         run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-checkpoint.sh
       - name: Verify migrations, readiness, and the served runtime
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate
       - name: Verify package activation and template stability
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_package
       - name: Verify message submission, visibility, and cancellation routes
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_messages
       - name: Verify dispatch worker outcomes and settlement
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_dispatch
       - name: Verify provider callbacks and delivery reports
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_callbacks
       - name: Verify retention erasure
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_retention
       - name: Verify messagingctl messages commands
         env:
-          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ steps.postgres.outputs.port }}/messaging
         run: cargo test --locked -p registry-messagingctl --features postgres-test --tests
       - name: Send one email and one SMS through messagingctl dev
         env:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
+
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
@@ -1128,26 +1163,27 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.coordinator == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-        env:
-          POSTGRES_DB: coordinator
-          POSTGRES_USER: coordinator
-          POSTGRES_PASSWORD: coordinator_test
-        options: >-
-          --health-cmd "pg_isready -U coordinator -d coordinator"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           submodules: false
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+          container_name: registry-stack-coordinator-postgres-postgres
+          database: coordinator
+          database_user: coordinator
+          database_password: coordinator_test
       - name: Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -1160,15 +1196,22 @@ jobs:
       - name: Prepare the Messaging test database
         env:
           PGHOST: 127.0.0.1
-          PGPORT: ${{ job.services.postgres.ports['5432'] }}
+          PGPORT: ${{ steps.postgres.outputs.port }}
           PGUSER: coordinator
           PGPASSWORD: coordinator_test
         run: createdb coordinator_messaging
       - name: Verify coordinator restart, fencing, and real Messaging recovery
         env:
-          COORDINATOR_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator
-          COORDINATOR_MESSAGING_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator_messaging
+          COORDINATOR_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ steps.postgres.outputs.port }}/coordinator
+          COORDINATOR_MESSAGING_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ steps.postgres.outputs.port }}/coordinator_messaging
         run: products/coordinator/scripts/test-postgres.sh
+
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   messaging-smtp:
     name: Messaging SMTP provider
@@ -1217,22 +1260,6 @@ jobs:
         # Review runs the contracts lane; the merge queue, the nightly sweep
         # and a ci:full pull request add the PostgreSQL lanes.
         lane: ${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}
-    services:
-      postgres:
-        # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
-        # remain extension-free unless a spatial test explicitly installs it.
-        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
-        env:
-          POSTGRES_DB: breg
-          POSTGRES_PASSWORD: breg_test
-          POSTGRES_USER: breg
-        options: >-
-          --health-cmd "pg_isready -U breg -d breg"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1240,10 +1267,27 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+          container_name: registry-stack-breg-contracts-postgres
+          database: breg
+          database_user: breg
+          database_password: breg_test
+
       - name: Configure Base Registry Engine test environment
         env:
-          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
-          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          DATABASE_PORT: ${{ steps.postgres.outputs.port }}
+          POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
           TLS_CA_PEM_PATH: ${{ runner.temp }}/breg-postgres-trusted-ca.pem
         run: |
           {
@@ -1373,6 +1417,13 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/quickstart/run.sh --spatial --smoke
 
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
+
   breg-wasm:
     # The WASM action-handler executor runs under the `wasm` feature, which
     # registry-breg and registry-bregctl carry by default. This lane runs
@@ -1387,28 +1438,29 @@ jobs:
     if: needs.changes.outputs.breg_integration == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
-        # remain extension-free unless a spatial test explicitly installs it.
-        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
-        env:
-          POSTGRES_DB: breg
-          POSTGRES_PASSWORD: breg_test
-          POSTGRES_USER: breg
-        options: >-
-          --health-cmd "pg_isready -U breg -d breg"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           submodules: false
+
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
+      - name: Start PostgreSQL service
+        id: postgres
+        uses: ./.github/actions/postgres-service
+        with:
+          image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+          container_name: registry-stack-breg-wasm-postgres
+          database: breg
+          database_user: breg
+          database_password: breg_test
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -1431,8 +1483,15 @@ jobs:
 
       - name: Base Registry Engine WASM handler PostgreSQL journeys
         env:
-          BREG_TEST_DATABASE_URL: postgresql://breg:breg_test@localhost:${{ job.services.postgres.ports['5432'] }}/breg
+          BREG_TEST_DATABASE_URL: postgresql://breg:breg_test@localhost:${{ steps.postgres.outputs.port }}/breg
         run: cargo test --locked -p registry-breg --features postgres-test,tooling,wasm --test postgres_wasm_action_handlers
+
+      - name: Stop PostgreSQL service
+        if: always()
+        uses: ./.github/actions/postgres-service
+        with:
+          operation: stop
+          container_id: ${{ steps.postgres.outputs.container_id }}
 
   identifiers:
     name: Public identifier catalog
@@ -1622,6 +1681,13 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
+
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0

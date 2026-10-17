@@ -69,6 +69,38 @@ CONTRACTS = {
 }
 
 
+def expected_fallback_paths(
+    platform: str,
+    artifacts: str,
+    caller: str,
+) -> tuple[str, ...]:
+    preserved = artifacts + os.pathsep + caller
+    if platform == "darwin":
+        return artifacts, preserved
+    return (preserved,)
+
+
+class RuntimeFallbackExpectationTests(unittest.TestCase):
+    def test_darwin_accepts_protected_or_hosted_runner_behavior(self):
+        artifacts = "/absolute/target/artifacts"
+        caller = "/caller/runtime"
+        self.assertEqual(
+            expected_fallback_paths("darwin", artifacts, caller),
+            (
+                artifacts,
+                artifacts + os.pathsep + caller,
+            ),
+        )
+
+    def test_non_darwin_requires_the_caller_path_to_be_preserved(self):
+        artifacts = "/absolute/target/artifacts"
+        caller = "/caller/runtime"
+        self.assertEqual(
+            expected_fallback_paths("linux", artifacts, caller),
+            (artifacts + os.pathsep + caller,),
+        )
+
+
 class CargoRuntimeScriptContractTests(unittest.TestCase):
     def test_every_reported_gate_keeps_its_runtime_and_override_contract(self):
         self.assertEqual(len(CONTRACTS), 17)
@@ -113,27 +145,35 @@ Path(os.environ["TEST_ENVIRONMENT_LOG"]).write_text(json.dumps({
             "DYLD_FALLBACK_LIBRARY_PATH": "/caller/runtime",
         }
         environment.pop("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH", None)
-        completed = subprocess.run(
-            [
-                str(ROOT / "products/platform/scripts/run-config-conformance.sh"),
-                "--bin-dir",
-                "relative-target/debug",
-            ],
-            cwd=root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        invocation = json.loads(environment_log.read_text())
-        self.assertEqual(invocation["runtime"], str(artifacts.resolve()))
-        expected_fallback = str(artifacts.resolve())
-        # macOS's protected /usr/bin/env launcher strips the caller's DYLD_*
-        # variables; other platforms preserve the existing fallback path.
-        if sys.platform != "darwin":
-            expected_fallback += os.pathsep + environment["DYLD_FALLBACK_LIBRARY_PATH"]
-        self.assertEqual(invocation["fallback"], expected_fallback)
+        script = str(ROOT / "products/platform/scripts/run-config-conformance.sh")
+        launchers = ((script,),)
+        if sys.platform == "darwin":
+            # A direct protected launcher may strip DYLD_* while an explicit
+            # shell launch reproduces the hosted runner that preserves it.
+            launchers += (("/bin/bash", script),)
+        for launcher in launchers:
+            with self.subTest(launcher=launcher):
+                completed = subprocess.run(
+                    [*launcher, "--bin-dir", "relative-target/debug"],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                invocation = json.loads(environment_log.read_text())
+                self.assertEqual(invocation["runtime"], str(artifacts.resolve()))
+                expected_fallbacks = expected_fallback_paths(
+                    sys.platform,
+                    str(artifacts.resolve()),
+                    environment["DYLD_FALLBACK_LIBRARY_PATH"],
+                )
+                self.assertIn(invocation["fallback"], expected_fallbacks)
+                fallback_parts = invocation["fallback"].split(os.pathsep)
+                self.assertEqual(fallback_parts[0], str(artifacts.resolve()))
+                self.assertTrue(Path(fallback_parts[0]).is_absolute())
+                self.assertEqual(fallback_parts.count(str(artifacts.resolve())), 1)
 
 
 class CaseworkCheckpointRuntimeTests(unittest.TestCase):

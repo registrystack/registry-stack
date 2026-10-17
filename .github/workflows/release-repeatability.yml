@@ -41,6 +41,13 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Prepare Docker Hub pull authentication
+        if: github.ref == 'refs/heads/main'
+        uses: ./verifier/.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
       - name: Resolve exact published tag
         id: release
         env:

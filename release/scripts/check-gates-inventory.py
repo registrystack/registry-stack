@@ -277,8 +277,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         # the other product's copy and would stop reporting its own removal.
         "Casework PostgreSQL 17 image pin",
         "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-        "        env:\n"
-        "          POSTGRES_DB: casework",
+        "          container_name: registry-stack-casework-postgres-postgres\n"
+        "          database: casework",
     ),
     (
         "Casework product checkpoint wrapper",
@@ -419,8 +419,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling PostgreSQL 17 image pin",
         "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-        "        env:\n"
-        "          POSTGRES_DB: scheduling",
+        "          container_name: registry-stack-scheduling-postgres-postgres\n"
+        "          database: scheduling",
     ),
     (
         "Scheduling product checkpoint wrapper",
@@ -485,8 +485,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Messaging PostgreSQL 17 image pin",
         "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-        "        env:\n"
-        "          POSTGRES_DB: messaging",
+        "          container_name: registry-stack-messaging-postgres-postgres\n"
+        "          database: messaging",
     ),
     (
         "Messaging product checkpoint wrapper",

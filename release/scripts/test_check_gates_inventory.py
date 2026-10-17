@@ -998,9 +998,11 @@ class GateInventoryTest(unittest.TestCase):
             ),
             (
                 "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-                "        env:\n"
-                "          POSTGRES_DB: scheduling",
-                "image: docker.io/library/postgres:17.11\n        env:\n          POSTGRES_DB: scheduling",
+                "          container_name: registry-stack-scheduling-postgres-postgres\n"
+                "          database: scheduling",
+                "image: docker.io/library/postgres:17.11\n"
+                "          container_name: registry-stack-scheduling-postgres-postgres\n"
+                "          database: scheduling",
                 "Scheduling PostgreSQL 17 image pin",
             ),
             (

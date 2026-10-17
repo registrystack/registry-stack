@@ -2541,6 +2541,80 @@ def workflow_run_identity(run: dict[str, Any], label: str) -> tuple[int, str]:
     return run_id, url
 
 
+def protected_ci_run_has_provenance(
+    run: dict[str, Any],
+    *,
+    repository: str,
+    source_sha: str,
+) -> bool:
+    repository_value = run.get("repository")
+    repository_name = (
+        repository_value.get("full_name")
+        if isinstance(repository_value, dict)
+        else None
+    )
+    path = run.get("path")
+    workflow_path = path.split("@", 1)[0] if isinstance(path, str) else None
+    event = run.get("event")
+    if (
+        not isinstance(repository_name, str)
+        or repository_name.casefold() != repository.casefold()
+        or workflow_path != ".github/workflows/ci.yml"
+        or run.get("head_sha") != source_sha
+        or event not in {"merge_group", "schedule", "workflow_dispatch"}
+    ):
+        return False
+    if event == "merge_group":
+        head_branch = run.get("head_branch")
+        return isinstance(head_branch, str) and head_branch.startswith(
+            "gh-readonly-queue/main/"
+        )
+    if run.get("head_branch") != "main":
+        return False
+    if event == "workflow_dispatch":
+        return run.get("display_title") == "RegistryStack CI full sweep"
+    return True
+
+
+def protected_ci_run_is_accepted(
+    run: dict[str, Any],
+    *,
+    repository: str,
+    source_sha: str,
+) -> bool:
+    return (
+        protected_ci_run_has_provenance(
+            run,
+            repository=repository,
+            source_sha=source_sha,
+        )
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    )
+
+
+def exact_protected_ci_runs(repository: str, source_sha: str) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    for event in ("merge_group", "schedule", "workflow_dispatch"):
+        runs.extend(
+            workflow_runs(
+                repository,
+                "ci.yml",
+                event=event,
+                head_sha=source_sha,
+            )
+        )
+    return [
+        run
+        for run in runs
+        if protected_ci_run_has_provenance(
+            run,
+            repository=repository,
+            source_sha=source_sha,
+        )
+    ]
+
+
 def wait_for_exact_protected_ci(
     repository: str,
     source_sha: str,
@@ -2549,16 +2623,16 @@ def wait_for_exact_protected_ci(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + 120
     while True:
-        runs = [
-            run for run in workflow_runs(
-                repository,
-                "ci.yml",
-                event="push",
-                head_sha=source_sha,
+        runs = exact_protected_ci_runs(repository, source_sha)
+        successful = [
+            run
+            for run in runs
+            if protected_ci_run_is_accepted(
+                run,
+                repository=repository,
+                source_sha=source_sha,
             )
-            if run.get("head_branch") == "main"
         ]
-        successful = [run for run in runs if run.get("conclusion") == "success"]
         if successful:
             return max(successful, key=lambda run: int(run.get("id", 0)))
         active = [
@@ -2575,15 +2649,14 @@ def wait_for_exact_protected_ci(
                 "protected-main CI",
                 verbose=verbose_wait,
             )
-            repeated = workflow_runs(
-                repository,
-                "ci.yml",
-                event="push",
-                head_sha=source_sha,
-            )
+            repeated = exact_protected_ci_runs(repository, source_sha)
             successful = [
                 item for item in repeated
-                if item.get("head_branch") == "main" and item.get("conclusion") == "success"
+                if protected_ci_run_is_accepted(
+                    item,
+                    repository=repository,
+                    source_sha=source_sha,
+                )
             ]
             if successful:
                 return max(successful, key=lambda item: int(item.get("id", 0)))

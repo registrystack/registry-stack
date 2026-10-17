@@ -7,6 +7,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 import unittest
 import unittest.mock as mock
@@ -362,6 +363,23 @@ class BRegProductCatalogTests(unittest.TestCase):
         errors: list[str] = []
         VALIDATOR.validate_postgres_tls_entrypoint(errors)
         self.assertEqual([], errors)
+
+    def test_postgres_tls_entrypoint_requires_captured_service_outputs(self) -> None:
+        workflow = VALIDATOR.CI_WORKFLOW.read_text(encoding="utf-8").replace(
+            "POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}",
+            "POSTGRES_CONTAINER_ID: registry-stack-breg-contracts-postgres",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            workflow_path = Path(temporary) / "ci.yml"
+            workflow_path.write_text(workflow, encoding="utf-8")
+            errors: list[str] = []
+            with mock.patch.object(VALIDATOR, "CI_WORKFLOW", workflow_path):
+                VALIDATOR.validate_postgres_tls_entrypoint(errors)
+        self.assertIn(
+            "PostgreSQL TLS entrypoint: CI is missing required integration "
+            "'POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}'",
+            errors,
+        )
 
     def test_planned_invariant_cannot_claim_an_executable_test(self) -> None:
         original = VALIDATOR.load_yaml

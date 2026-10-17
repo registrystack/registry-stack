@@ -1,0 +1,125 @@
+name: PostgreSQL service
+description: Start or stop an owned, pinned PostgreSQL service container
+
+inputs:
+  operation:
+    description: Start or stop the service
+    required: false
+    default: start
+  image:
+    description: Exact pinned PostgreSQL or PostGIS image reference
+    required: false
+  container_name:
+    description: Unique name for the owned service container
+    required: false
+  container_id:
+    description: Exact ID returned by a successful start operation
+    required: false
+  database:
+    description: Database created by the image entrypoint
+    required: false
+  database_user:
+    description: Database role created by the image entrypoint
+    required: false
+  database_password:
+    description: Synthetic password for the disposable CI database
+    required: false
+
+outputs:
+  container_id:
+    description: ID of the owned PostgreSQL container
+    value: ${{ steps.start.outputs.container_id }}
+  port:
+    description: Random localhost port published for PostgreSQL
+    value: ${{ steps.start.outputs.port }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start owned PostgreSQL container
+      id: start
+      if: inputs.operation == 'start'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        CONTAINER_NAME: ${{ inputs.container_name }}
+        POSTGRES_DB: ${{ inputs.database }}
+        POSTGRES_USER: ${{ inputs.database_user }}
+        POSTGRES_PASSWORD: ${{ inputs.database_password }}
+      run: |
+        set -euo pipefail
+
+        for required in IMAGE CONTAINER_NAME POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD; do
+          if [ -z "${!required}" ]; then
+            echo "postgres-service requires ${required} when starting" >&2
+            exit 1
+          fi
+        done
+
+        if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+          echo "postgres-service container already exists: ${CONTAINER_NAME}" >&2
+          exit 1
+        fi
+
+        container_id="$(
+          docker run --detach \
+            --name "${CONTAINER_NAME}" \
+            --label org.registrystack.ci.postgres-service=true \
+            --env "POSTGRES_DB=${POSTGRES_DB}" \
+            --env "POSTGRES_USER=${POSTGRES_USER}" \
+            --env "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" \
+            --health-cmd "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            --publish 127.0.0.1::5432 \
+            "${IMAGE}"
+        )"
+        printf 'container_id=%s\n' "${container_id}" >> "${GITHUB_OUTPUT}"
+
+        status=starting
+        for _ in {1..60}; do
+          status="$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")"
+          if [ "${status}" = healthy ]; then
+            break
+          fi
+          sleep 1
+        done
+        if [ "${status}" != healthy ]; then
+          echo "PostgreSQL service did not become healthy: ${CONTAINER_NAME} (${status})" >&2
+          docker logs --tail 100 "${container_id}" >&2 || true
+          exit 1
+        fi
+
+        published="$(docker port "${container_id}" 5432/tcp)"
+        port="${published##*:}"
+        if [[ ! "${port}" =~ ^[0-9]+$ ]]; then
+          echo "PostgreSQL service returned an invalid localhost port" >&2
+          exit 1
+        fi
+        printf 'port=%s\n' "${port}" >> "${GITHUB_OUTPUT}"
+
+    - name: Stop owned PostgreSQL container
+      if: inputs.operation == 'stop'
+      shell: bash
+      env:
+        CONTAINER_ID: ${{ inputs.container_id }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${CONTAINER_ID}" ]; then
+          exit 0
+        fi
+        if ! docker container inspect "${CONTAINER_ID}" >/dev/null 2>&1; then
+          exit 0
+        fi
+        owner="$(
+          docker container inspect \
+            --format '{{ index .Config.Labels "org.registrystack.ci.postgres-service" }}' \
+            "${CONTAINER_ID}"
+        )"
+        if [ "${owner}" != true ]; then
+          echo "refusing to remove container not owned by postgres-service: ${CONTAINER_ID}" >&2
+          exit 1
+        fi
+        docker rm --force "${CONTAINER_ID}"
