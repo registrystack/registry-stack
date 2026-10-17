@@ -1,6 +1,6 @@
 ---
-title: Evidence Gateway security model
-description: "The security invariants Evidence Gateway enforces, how each traces to a named test, and the duties that remain with the operator."
+title: Registry Evidence security model
+description: "The security invariants Registry Evidence enforces, how each traces to a named test, and the duties that remain with the operator."
 status: current
 owner: registry-docs
 source_repos:
@@ -11,7 +11,7 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway's security model is contract-driven. The invariant matrix in
+Registry Evidence's security model is contract-driven. The invariant matrix in
 `products/evidence/contracts/security-invariant-matrix.yaml` is the source of
 truth for what the runtime guarantees, `products/evidence/contracts/security-test-traceability.yaml`
 binds every invariant to the named tests that prove it, and continuous
@@ -32,7 +32,7 @@ change that adds it, whether or not this summary has caught up.
 
 ### Closed request and requirement scope
 
-Evidence Gateway evaluates only predefined, versioned requirement revisions
+Registry Evidence evaluates only predefined, versioned requirement revisions
 (`V1-I01`). The request schema is closed, so callers cannot supply
 thresholds, expressions, scripts, paths, headers, source fields, relationship
 types, adapter parameters, or response projections (`V1-I02`). Because a
@@ -75,7 +75,7 @@ returned; if that audit fails, the caller receives the generic 503 instead
 Source calls are fixed by trusted configuration and executed only by the
 core, closing off SSRF, credential forwarding, and script-directed
 networking (`V1-I09`). Provider lookup exposes only `match`, `no_match`, or
-`ambiguous`; Evidence Gateway never surfaces or chooses candidates (`V1-I10`). Rhai
+`ambiguous`; Registry Evidence never surfaces or chooses candidates (`V1-I10`). Rhai
 scripts return one closed lookup result and declared typed concept values
 only (`V1-I11`), and the core rejects undeclared concepts, extra fields, and
 any value that violates its type, codelist, cardinality, precision, or size
@@ -120,7 +120,7 @@ integrity; it does not assert legal-signature status or source truth
 
 ### Discovery, nonce handling, and response-format authorization
 
-Evidence Gateway definition discovery is authenticated and requester-scoped; it never
+Registry Evidence definition discovery is authenticated and requester-scoped; it never
 creates authority or exposes deployment internals such as selectors, source
 plans, or credentials (`V1-I26`). Provider discovery is a deterministic,
 closed projection of governed public service identity, endpoint, roles,
@@ -146,7 +146,7 @@ unique role-bound subject bindings, and the expected concept identifiers,
 forms, and cardinalities, and returns one generic policy-mismatch error
 rather than revealing which comparison failed (`V1-I31`). An access token
 carrying a proof-of-possession confirmation claim is denied rather than
-accepted as an ordinary bearer token, because Evidence Gateway validates no sender
+accepted as an ordinary bearer token, because Registry Evidence validates no sender
 proof and accepting one would discard the constraint the token was issued
 under (`V1-I32`).
 
@@ -209,7 +209,7 @@ request content (`V1-I33`).
 
 ### Public trace correlation
 
-Evidence Gateway returns a bounded W3C trace identifier for public correlation,
+Registry Evidence returns a bounded W3C trace identifier for public correlation,
 including in a problem's `traceId`, but keeps the server-minted audit operation
 identifier internal. It does not echo `tracestate`, so caller tracing metadata
 cannot become a response or audit channel.
@@ -292,7 +292,7 @@ Owner-only key files. Each secret file below the configured
 service identity with mode `0400` or `0600`; the file provider rejects anything else.
 Audit and subject-binding secret files must contain independently generated
 raw key bytes and be at least 32 bytes. The runtime expands the audit master into the key that
-computes identifier pseudonyms, and Evidence Gateway also requires the two secret references and
+computes identifier pseudonyms, and Registry Evidence also requires the two secret references and
 resolved master bytes to be distinct.
 
 Immutable bundle and runtime file. The operator mounts one reviewed governed
@@ -304,7 +304,7 @@ merge, mutation, governed-field override, or fallback bundle or runtime
 file: a new revision is a new deployment, not a live change.
 
 Secret handling. Source credentials and local-development private signing material reach
-Evidence Gateway only through the secret-reference mechanism and must not appear in
+Registry Evidence only through the secret-reference mechanism and must not appear in
 YAML values, Rhai, command arguments, environment dumps, logs, audit,
 errors, snapshots, or generated contracts. Production and evidence-grade deployment uses a
 workload-local Vault or OpenBao Transit proxy over a Unix socket, leaving the service private key
@@ -314,7 +314,7 @@ validity plus allowed clock skew. A revoked key can be neither active nor publis
 
 ## Report a vulnerability
 
-Suspected Evidence Gateway vulnerabilities, including credential disclosure,
+Suspected Registry Evidence vulnerabilities, including credential disclosure,
 authentication bypass, audit redaction failure, source connector data
 leakage, and signing-key handling bugs, go through the private disclosure
 process in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md),

@@ -58,8 +58,8 @@ For a narrative explanation with worked examples, see the [architecture overview
 | 0.4.0 | 2026-07-07 | draft | Clarified REQ-ARC-G-009's replay storage scope: shared within a deployment's own replicas, never across a federation trust boundary. Reframed Registry Lab as a non-normative demonstration topology. |
 | 0.4.1 | 2026-07-07 | draft | Stated plainly in REQ-ARC-G-009 that the per-peer replay storage isolation is deployment topology and that Registry Notary enforces no runtime gate for it. REQ-ARC-G-009 is retired as of 0.6.0. |
 | 0.5.0 | 2026-07-16 | draft | Defined four formal Registry Stack products and moved the non-normative demo boundary to the separate Solmara Lab adopter project. |
-| 0.6.0 | 2026-08-03 | draft | Registry Notary is retired. Removed its component section, its federation flow step, and REQ-ARC-G-008, REQ-ARC-G-009, REQ-ARC-G-012, and REQ-ARC-G-013. Restated REQ-ARC-G-007 with Evidence Gateway as the owner of requirement evaluation. Added Evidence Gateway and Registry Mint as components and added REQ-ARC-G-014, REQ-ARC-G-015, and REQ-ARC-G-016. |
-| 0.7.0 | 2026-08-09 | draft | Added the Evidence Gateway multi-subject request-batch boundary and REQ-ARC-G-017, preserving one independently signed assertion per available evaluation and separating request batching from holder-bound issuance batching. |
+| 0.6.0 | 2026-08-03 | draft | Registry Notary is retired. Removed its component section, its federation flow step, and REQ-ARC-G-008, REQ-ARC-G-009, REQ-ARC-G-012, and REQ-ARC-G-013. Restated REQ-ARC-G-007 with Registry Evidence as the owner of requirement evaluation. Added Registry Evidence and Registry Mint as components and added REQ-ARC-G-014, REQ-ARC-G-015, and REQ-ARC-G-016. |
+| 0.7.0 | 2026-08-09 | draft | Added the Registry Evidence multi-subject request-batch boundary and REQ-ARC-G-017, preserving one independently signed assertion per available evaluation and separating request batching from holder-bound issuance batching. |
 | 0.8.0 | 2026-08-11 | draft | Replaced the Registry Relay component with the contract-compiled Relay runtime, added its `relayctl` authoring tool and the Evidence wallet delivery front end, and removed the retired Relay policy decision point. Retired REQ-ARC-G-006 (manifest-to-Relay runtime binding) and REQ-ARC-G-011 (the Relay PDP profile), which have no successor. Restated REQ-ARC-G-002, REQ-ARC-G-003, REQ-ARC-G-007, and REQ-ARC-G-010 without the retired coupling. Added REQ-ARC-G-018 through REQ-ARC-G-021. |
 | 0.8.1 | 2026-09-25 | draft | Described Relay's audit as a log without a hash chain in the serving flow and REQ-ARC-G-020. |
 | 0.9.0 | 2026-10-03 | draft | Retired the Registry Relay component and REQ-ARC-G-003, REQ-ARC-G-018, REQ-ARC-G-019, and REQ-ARC-G-020 without reassigning their identifiers. Retained the maintained product boundaries, portable metadata, shared platform, and wallet delivery. |
@@ -88,7 +88,7 @@ The **runtime services layer** is responsible for enforcing what a registry prom
 
 This split separates two distinct obligations: the obligation to describe (what a registry declares it can expose and under what policy) from the obligation to enforce (what a running service will actually return to an authorized caller). The separation enables offline audit of published descriptions, offline validation of schemas and assertion shapes, and governance updates without touching a running process.
 
-The two layers share a design principle rather than a file. Evidence Gateway loads its own governed bundle and runtime configuration; it does not read a portable metadata manifest, and Registry Manifest does not configure a runtime service.
+The two layers share a design principle rather than a file. Registry Evidence loads its own governed bundle and runtime configuration; it does not read a portable metadata manifest, and Registry Manifest does not configure a runtime service.
 
 The diagram in this section shows the retained portable, runtime, and supporting boundaries.
 
@@ -100,7 +100,7 @@ flowchart TD
 
     subgraph runtime["Runtime services layer"]
         breg["Base Registry Engine<br/>(registry-breg)<br/>Runs a governed PostgreSQL registry;<br/>owns mutations, history, authorization, audit"]
-        evidence["Evidence Gateway<br/>(registry-evidence)<br/>Evaluates predefined requirements;<br/>returns independently signed<br/>minimum-disclosure assertions"]
+        evidence["Registry Evidence<br/>(registry-evidence)<br/>Evaluates predefined requirements;<br/>returns independently signed<br/>minimum-disclosure assertions"]
         discovery["Registry Discovery<br/>(registry-discovery)<br/>Serves one immutable, curated<br/>Evidence-provider index"]
         casework["Registry Casework<br/>(registry-casework)<br/>Coordinates source-owned work;<br/>source retains action authority"]
         scheduling["Registry Scheduling<br/>(registry-scheduling)<br/>Owns its capacity ledger;<br/>commits under a task grant"]
@@ -127,7 +127,7 @@ flowchart TD
     evidence -. "published image" .-> solmara
 ```
 
-This section restates the essential relationships as text. Registry Manifest produces a static discovery bundle for static publishers and for clients that inspect a description offline. Registry Platform supplies shared primitives to the runtime services, including the bounded read-only SQLite boundary. Base Registry Engine (BReg), Registry Casework, Registry Scheduling, and Registry Messaging each own their product state and authority. Registry Discovery serves an inert, immutable index of Evidence providers and grants no trust or invocation authority. A BReg authenticated route can be one optional fixed bounded HTTP source for Evidence Gateway, but each product keeps its own authorization boundary. Each Evidence Gateway evaluation answers one bounded question about one complete subject-role set from its own configured sources, and a request batch can group up to sixteen independent audience-scoped evaluations. The wallet delivery front end carries an Evidence-signed credential to a holder wallet over the one protocol Evidence declines to speak. Solmara Lab runs published Evidence images in local and hosted runnable topologies, but it is not a formal Registry Stack product and carries no conformance weight.
+This section restates the essential relationships as text. Registry Manifest produces a static discovery bundle for static publishers and for clients that inspect a description offline. Registry Platform supplies shared primitives to the runtime services, including the bounded read-only SQLite boundary. Base Registry Engine (BReg), Registry Casework, Registry Scheduling, and Registry Messaging each own their product state and authority. Registry Discovery serves an inert, immutable index of Evidence providers and grants no trust or invocation authority. A BReg authenticated route can be one optional fixed bounded HTTP source for Registry Evidence, but each product keeps its own authorization boundary. Each Registry Evidence evaluation answers one bounded question about one complete subject-role set from its own configured sources, and a request batch can group up to sixteen independent audience-scoped evaluations. The wallet delivery front end carries an Evidence-signed credential to a holder wallet over the one protocol Evidence declines to speak. Solmara Lab runs published Evidence images in local and hosted runnable topologies, but it is not a formal Registry Stack product and carries no conformance weight.
 
 ## 3. Components
 
@@ -143,7 +143,7 @@ Registry Manifest (`registry-manifest`) is a pure Rust library and command-line 
 
 ### Base Registry Engine
 
-Base Registry Engine (`registry-breg`) is a PostgreSQL system of record whose data model and REST surface are compiled from governed configuration. The runtime loads one verified Registry package and owns configured reads and mutations, per-profile authorization, record revisions and history, events, audit ordering, idempotency, and governed migrations. This maintained writable product is why the former global read-only invariant REQ-ARC-G-003 is retired. BReg can expose an authenticated route as one fixed bounded HTTP source for Evidence Gateway, but that integration creates no Evidence authority or inherited authorization.
+Base Registry Engine (`registry-breg`) is a PostgreSQL system of record whose data model and REST surface are compiled from governed configuration. The runtime loads one verified Registry package and owns configured reads and mutations, per-profile authorization, record revisions and history, events, audit ordering, idempotency, and governed migrations. This maintained writable product is why the former global read-only invariant REQ-ARC-G-003 is retired. BReg can expose an authenticated route as one fixed bounded HTTP source for Registry Evidence, but that integration creates no Evidence authority or inherited authorization.
 
 ### Registry Discovery
 
@@ -161,15 +161,15 @@ Registry Scheduling (`registry-scheduling`) is a capacity ledger over anchored s
 
 Registry Messaging (`registry-messaging`) delivers one operational message to one destination and channel for an authorized caller. The caller owns why and when to send, the recipient and contact source, and consent to be contacted. Messaging owns rendering from reviewed templates, delivery through operator-configured providers, and the accountable record and delivery report for each attempt. It inherits no authorization from another product and writes no other product's database.
 
-### Evidence Gateway
+### Registry Evidence
 
-Evidence Gateway (`registry-evidence`) is a single-crate Rust service and the `evidence` binary, depending on the portable `registry-evidence-verifier` library for the response formats, the Evidence payload contract, and relying-party verification, so client tooling can verify a signed response without the service. Each evaluation answers one bounded question about one complete subject-role set with one signed assertion that carries the answer and not the record. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose, while preserving one independently signed assertion per available item. It loads one reviewed governed bundle and one closed operator runtime file at startup, treats both as immutable for the process lifetime, and holds no application database: it persists no selector, no source payload, no evidence value, and no response body. It authenticates callers with strict OIDC bearer tokens against exactly one trusted issuer, matches exactly one authority path per evaluation, calls the fixed bounded HTTP JSON or SQLite extract sources its bundle declares, and releases an assertion as a flattened JWS JSON document by default. Where the bundle and the matched grant both enable it, the same assertion can also be serialized as an SD-JWT VC (`application/dc+sd-jwt`) or as a visibly unsigned envelope for local diagnosis.
+Registry Evidence (`registry-evidence`) is a single-crate Rust service and the `evidence` binary, depending on the portable `registry-evidence-verifier` library for the response formats, the Evidence payload contract, and relying-party verification, so client tooling can verify a signed response without the service. Each evaluation answers one bounded question about one complete subject-role set with one signed assertion that carries the answer and not the record. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose, while preserving one independently signed assertion per available item. It loads one reviewed governed bundle and one closed operator runtime file at startup, treats both as immutable for the process lifetime, and holds no application database: it persists no selector, no source payload, no evidence value, and no response body. It authenticates callers with strict OIDC bearer tokens against exactly one trusted issuer, matches exactly one authority path per evaluation, calls the fixed bounded HTTP JSON or SQLite extract sources its bundle declares, and releases an assertion as a flattened JWS JSON document by default. Where the bundle and the matched grant both enable it, the same assertion can also be serialized as an SD-JWT VC (`application/dc+sd-jwt`) or as a visibly unsigned envelope for local diagnosis.
 
-Evidence Gateway Version 1 supports its declared holder-bound subject-binding mode and bounded issuance envelope, but has no credential lifecycle, no interactive holder-binding ceremony or issuance session, no status list, no revocation, no delegated or federated evaluation between peers, no policy decision point, no replay subsystem, and no worker or document subsystem. It does not read a metadata manifest.
+Registry Evidence Version 1 supports its declared holder-bound subject-binding mode and bounded issuance envelope, but has no credential lifecycle, no interactive holder-binding ceremony or issuance session, no status list, no revocation, no delegated or federated evaluation between peers, no policy decision point, no replay subsystem, and no worker or document subsystem. It does not read a metadata manifest.
 
 ### Wallet delivery front end
 
-The wallet delivery front end (`registry-evidence-oid4vci`) is a supporting service outside the runtime product patterns. It speaks OID4VCI 1.0 Final to a holder wallet, the wallet-facing protocol Evidence Gateway deliberately refuses to speak, and delivers an Evidence-signed credential over it. It never signs a credential and holds no Evidence signing key. It never holds a holder private key: it receives holder public keys inside wallet-signed proofs and passes them to Evidence Gateway unchanged. It adds no Evidence semantics, so every authorization decision, every source acquisition, and every signature stays behind the Evidence Gateway runtime contract.
+The wallet delivery front end (`registry-evidence-oid4vci`) is a supporting service outside the runtime product patterns. It speaks OID4VCI 1.0 Final to a holder wallet, the wallet-facing protocol Registry Evidence deliberately refuses to speak, and delivers an Evidence-signed credential over it. It never signs a credential and holds no Evidence signing key. It never holds a holder private key: it receives holder public keys inside wallet-signed proofs and passes them to Registry Evidence unchanged. It adds no Evidence semantics, so every authorization decision, every source acquisition, and every signature stays behind the Registry Evidence runtime contract.
 
 Everything the service remembers lives in memory, bounded, for minutes. A restart therefore invalidates every outstanding offer, and single use is enforced per process. Both are documented limits of a single-replica deployment.
 
@@ -193,7 +193,7 @@ The following ordered flow is one example showing how portable description and a
 
 2. **Description.** An operator authors a portable `metadata.yaml` document and Registry Manifest renders a static discovery bundle from it. The bundle can be hosted as static files without running any runtime service. This step is independent: it does not produce input for a runtime service, and a runtime service does not wait on it.
 
-3. **Assertion.** Evidence Gateway authenticates the caller's access token against its one trusted issuer, matches exactly one authority path per evaluation, evaluates one predefined requirement over its own fixed bounded sources, and returns one signed minimum-disclosure assertion per available evaluation. A singular request carries one evaluation; a request batch groups up to sixteen ordered audience-scoped evaluations under one common requirement and purpose. Caller identity and authorization details may authorize or parameterize an evaluation, but do not become evidence. Each assertion carries the answer the requirement defines, not the source record behind it.
+3. **Assertion.** Registry Evidence authenticates the caller's access token against its one trusted issuer, matches exactly one authority path per evaluation, evaluates one predefined requirement over its own fixed bounded sources, and returns one signed minimum-disclosure assertion per available evaluation. A singular request carries one evaluation; a request batch groups up to sixteen ordered audience-scoped evaluations under one common requirement and purpose. Caller identity and authorization details may authorize or parameterize an evaluation, but do not become evidence. Each assertion carries the answer the requirement defines, not the source record behind it.
 
 4. **Wallet delivery.** Where a deployment enables it, the wallet delivery front end carries an Evidence-signed credential to a holder wallet over OID4VCI. It adds no claim and no signature of its own.
 
@@ -209,23 +209,23 @@ REQ-ARC-G-004: Every request that touches person-level data MUST be audited. Reg
 
 REQ-ARC-G-005: A primitive that must behave identically across runtime services (authentication, OIDC, audit, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers, bounded read-only SQLite access) SHOULD be sourced from Registry Platform rather than reimplemented in each runtime product. This keeps cross-service security behavior consistent and auditable in one place.
 
-REQ-ARC-G-007: Evidence Gateway MUST own requirement evaluation, disclosure shape, and assertion signing.
+REQ-ARC-G-007: Registry Evidence MUST own requirement evaluation, disclosure shape, and assertion signing.
 
 REQ-ARC-G-010: The portable metadata layer describes; it does not authorize and it does not assert facts about live data. Publishing a dataset, schema, policy, evidence offering, or ecosystem binding in a discovery artifact MUST NOT be construed as granting access to it, as enforcing it, or as asserting that any particular record exists or satisfies it. Access control and the existence or value of a record are determined only by an authorized runtime read under the governed input the serving process verified. A published ODRL policy is descriptive. A conformance claim against a metadata artifact MUST NOT imply a runtime guarantee that the runtime layer has not made.
 
-REQ-ARC-G-014: Evidence Gateway MUST return only the answer its predefined requirement defines, never the source record behind that answer. The response MUST be constructed by the service core after the complete declared concept set has been produced and validated; configured bundle logic MUST NOT construct a response envelope, a subject identifier, or any claim outside that declared set.
+REQ-ARC-G-014: Registry Evidence MUST return only the answer its predefined requirement defines, never the source record behind that answer. The response MUST be constructed by the service core after the complete declared concept set has been produced and validated; configured bundle logic MUST NOT construct a response envelope, a subject identifier, or any claim outside that declared set.
 
-REQ-ARC-G-015: Every signed Evidence Gateway assertion, whether returned directly or nested in a request-batch envelope, MUST be a flattened JWS JSON document over the exact evidence payload, and a signing failure MUST fail closed rather than release unsigned output. Where a deployment enables the SD-JWT VC serialization (`application/dc+sd-jwt`), that serialization MUST project the identical payload and MUST NOT be read as a credential lifecycle: Evidence Gateway Version 1 defines no issuance session, no holder-binding ceremony, no status list, no revocation, and no presentation verification.
+REQ-ARC-G-015: Every signed Registry Evidence assertion, whether returned directly or nested in a request-batch envelope, MUST be a flattened JWS JSON document over the exact evidence payload, and a signing failure MUST fail closed rather than release unsigned output. Where a deployment enables the SD-JWT VC serialization (`application/dc+sd-jwt`), that serialization MUST project the identical payload and MUST NOT be read as a credential lifecycle: Registry Evidence Version 1 defines no issuance session, no holder-binding ceremony, no status list, no revocation, and no presentation verification.
 
-REQ-ARC-G-017: An Evidence Gateway request batch MUST preserve the boundary of each independent audience-scoped evaluation. The service MUST validate and authorize every item before source access, return results in request order, sign each available assertion independently, and release the complete response or nothing. An unavailable item MAY be represented only by its closed positional sentinel; any other item failure MUST abort the complete request. Request batching several subject sets MUST remain distinct from holder-bound issuance batching several credentials for one subject evaluation. An optional source-batch optimization MAY reduce physical HTTP calls but MUST NOT transfer authorization, source transport, result association, evidence construction, signing, or audit authority out of the Rust core.
+REQ-ARC-G-017: A Registry Evidence request batch MUST preserve the boundary of each independent audience-scoped evaluation. The service MUST validate and authorize every item before source access, return results in request order, sign each available assertion independently, and release the complete response or nothing. An unavailable item MAY be represented only by its closed positional sentinel; any other item failure MUST abort the complete request. Request batching several subject sets MUST remain distinct from holder-bound issuance batching several credentials for one subject evaluation. An optional source-batch optimization MAY reduce physical HTTP calls but MUST NOT transfer authorization, source transport, result association, evidence construction, signing, or audit authority out of the Rust core.
 
-REQ-ARC-G-021: A wallet delivery front end MUST NOT sign a credential, hold an Evidence signing key, hold a holder private key, or add a claim of its own. It MUST pass a wallet-supplied holder public key to Evidence Gateway unchanged, and the dependency MUST run one way: no Evidence Gateway crate depends on it at runtime.
+REQ-ARC-G-021: A wallet delivery front end MUST NOT sign a credential, hold an Evidence signing key, hold a holder private key, or add a claim of its own. It MUST pass a wallet-supplied holder public key to Registry Evidence unchanged, and the dependency MUST run one way: no Registry Evidence crate depends on it at runtime.
 
 REQ-ARC-G-003 is retired. It required every runtime service to expose no source-registry data mutation route and required governed runtime changes to arrive only through immutable replacement input. Base Registry Engine owns governed record mutation routes, so that global read-only invariant no longer describes the maintained stack. Per RS-DOC REQ-DOC-008 the identifier is reserved and MUST NOT be reused.
 
 REQ-ARC-G-006, REQ-ARC-G-008, REQ-ARC-G-009, REQ-ARC-G-011, REQ-ARC-G-012, and REQ-ARC-G-013 remain retired. REQ-ARC-G-008, REQ-ARC-G-009, REQ-ARC-G-012, and REQ-ARC-G-013 constrained the retired `registry-notary` component's credential format, federation topology, issuance provenance, or state ownership. REQ-ARC-G-006 bound a metadata manifest's logical concepts to Relay runtime configuration, and REQ-ARC-G-011 scoped the Relay policy decision point to the `registry-evidence-gateway-pdp/v1` profile. Neither requirement has a subject or a successor. Per RS-DOC REQ-DOC-008 the identifiers are reserved and MUST NOT be reused.
 
-REQ-ARC-G-016 remains retired with Registry Mint. It required the dependency between Registry Mint and a resource server to run one way: Mint issued an access token that the resource server verified as an ordinary OIDC token, Evidence Gateway did not depend on Mint, and a deployment with another identity provider could run Evidence Gateway without Mint. Per RS-DOC REQ-DOC-008 the identifier is reserved and MUST NOT be reused.
+REQ-ARC-G-016 remains retired with Registry Mint. It required the dependency between Registry Mint and a resource server to run one way: Mint issued an access token that the resource server verified as an ordinary OIDC token, Registry Evidence did not depend on Mint, and a deployment with another identity provider could run Registry Evidence without Mint. Per RS-DOC REQ-DOC-008 the identifier is reserved and MUST NOT be reused.
 
 REQ-ARC-G-018, REQ-ARC-G-019, and REQ-ARC-G-020 are retired with Registry Relay. REQ-ARC-G-018 required a Relay deployment to serve only from a sealed package whose compiled model and generated artifacts it re-derived before opening resources, and forbade an administrative or reload surface. REQ-ARC-G-019 required authoring and serving to remain separate processes and binaries over one shared implementation. REQ-ARC-G-020 required Relay to own no source of truth, read through its bounded read-only boundary, persist no record value, and write only its audit log. Per RS-DOC REQ-DOC-008 the identifiers are reserved and MUST NOT be reused.
 
@@ -235,7 +235,7 @@ The two-layer design supports a capability sequence: describe what the registry 
 
 **Describe.** Registry Manifest compiles a portable description and renders a standards-shaped discovery bundle. Other teams can inspect fields, schemas, policies, services, and evidence offerings before any integration is built.
 
-**Assert.** Evidence Gateway evaluates one predefined requirement over its own configured sources and
+**Assert.** Registry Evidence evaluates one predefined requirement over its own configured sources and
 returns one signed assertion per available evaluation. A caller can submit one evaluation or group
 up to sixteen independent audience-scoped evaluations in a request batch. Each assertion is narrower
 than the source record by construction: it carries the answer the requirement defines and nothing
@@ -255,9 +255,9 @@ An implementation conforms to this specification when it respects the following 
 - REQ-ARC-G-002: a portable description contains no runtime bindings.
 - REQ-ARC-G-004: every request touching person-level data produces an audit record.
 - REQ-ARC-G-005: shared security primitives that must behave identically across services are sourced from Registry Platform (recommended).
-- REQ-ARC-G-007: requirement evaluation and assertion signing are owned by Evidence Gateway.
+- REQ-ARC-G-007: requirement evaluation and assertion signing are owned by Registry Evidence.
 - REQ-ARC-G-010: discovery artifacts are treated as description, not as authorization, enforcement, or proof that a record exists.
-- REQ-ARC-G-014: an Evidence Gateway response carries the defined answer and not the source record behind it.
+- REQ-ARC-G-014: a Registry Evidence response carries the defined answer and not the source record behind it.
 - REQ-ARC-G-015: a signed response is a flattened JWS JSON document, signing failure fails closed, and the SD-JWT VC serialization projects the same payload without adding a credential lifecycle.
 - REQ-ARC-G-017: request batching preserves independent evaluation boundaries, ordered results, per-assertion signing, atomic release, and Rust ownership of source and result association.
 - REQ-ARC-G-021: a wallet delivery front end signs nothing, holds no holder private key, and adds no claim.
@@ -290,7 +290,7 @@ This specification is `verified`: it is distilled from published artifacts a rea
      define the immutable Evidence-only index and inert selection boundary. */}
 {/* Evidence: crates/registry-evidence-oid4vci/src/lib.rs states the three non-negotiable
      properties of the wallet delivery front end. */}
-{/* Evidence: an Evidence Gateway source request reaches its source over one of two coequal
+{/* Evidence: a Registry Evidence source request reaches its source over one of two coequal
      transports, contract registry.evidence.fixed-http-json-source/v1 in
      products/evidence/contracts/source-contract.yaml and contract
      registry.evidence.fixed-sqlite-extract-source/v1 in
@@ -298,7 +298,7 @@ This specification is `verified`: it is distilled from published artifacts a rea
 
 - The [boundary map](../../map/boundaries-and-map/) records each component's boundaries with their source citations. It is a distillation source for the components (Section 3) and the invariants (Section 5).
 - The [architecture overview](../../explanation/architecture/) gives the narrative data and contract flow that Section 4 makes precise.
-- The [Evidence Gateway API reference](../../reference/apis/registry-evidence/) shows the Evidence surface named in Section 3.
+- The [Registry Evidence API reference](../../reference/apis/registry-evidence/) shows the Evidence surface named in Section 3.
 - The [standards register](../../reference/standards/) records the adoption mode for each standard listed in `standards_referenced`.
 
 ## Next
@@ -306,4 +306,4 @@ This specification is `verified`: it is distilled from published artifacts a rea
 - [RS-DOC](../rs-doc/) defines the documentation framework this specification conforms to.
 - [RS-TERMS](../rs-terms/) defines the shared vocabulary the other specifications use.
 - [Architecture overview](../../explanation/architecture/) is the narrative explanation with a worked data flow and capability table.
-- [RS-PR-EVIDENCE](../rs-pr-evidence/) defines the protocol surface of the Evidence Gateway service this architecture places.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) defines the protocol surface of the Registry Evidence service this architecture places.

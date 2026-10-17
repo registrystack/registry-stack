@@ -88,7 +88,7 @@ enum Command {
     /// Manage target access profiles and local caller clients.
     #[command(subcommand)]
     Access(access::AccessCommand),
-    /// Generate Evidence Gateway deployment key material as owner-only files.
+    /// Generate Registry Evidence deployment key material as owner-only files.
     #[command(subcommand)]
     Keygen(keygen::KeygenCommand),
     /// Assemble a public JWKS document from public JWK files.
@@ -110,12 +110,12 @@ enum Command {
     /// Inspect deployment artifact custody.
     #[command(subcommand)]
     Artifact(ArtifactCommand),
-    /// Run the private local issuer and Evidence Gateway pair.
+    /// Run the private local issuer and Registry Evidence pair.
     Dev(dev::DevArgs),
     /// Prepare a closed request for the active local project.
     #[command(subcommand)]
     Request(request::RequestCommand),
-    /// Verify one retained Evidence Gateway response offline.
+    /// Verify one retained Registry Evidence response offline.
     Verify(verify::VerifyArgs),
     /// Inspect stopped local audit history.
     #[command(subcommand)]
@@ -1716,7 +1716,7 @@ mod tests {
     fn busy_dev_port_keeps_the_safe_numeric_recovery_in_both_formats() {
         let error = safe_dev_command(Err(dev::PortConflict {
             port: 48123,
-            service: "Evidence Gateway",
+            service: "Registry Evidence",
             flag: "--evidence-port",
         }
         .into()))

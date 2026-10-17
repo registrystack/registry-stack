@@ -476,7 +476,6 @@ fn get_path_pointer(extended_pointer: &str) -> Result<String> {
 pub(super) fn provenance_label(provenance: &Provenance) -> Option<&'static str> {
     match provenance {
         Provenance::Spec => Some("the OpenAPI schema"),
-        Provenance::Format => Some("its declared format"),
         Provenance::Sample => Some("the sample response (widened)"),
         Provenance::PageSize => Some("a page-size parameter in the spec"),
         Provenance::SubsetCeiling => {

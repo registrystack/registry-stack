@@ -148,7 +148,7 @@ pub struct DevArgs {
     #[command(subcommand)]
     action: DevAction,
 
-    /// Loopback port for the local Evidence Gateway service.
+    /// Loopback port for the local Registry Evidence service.
     #[arg(long, global = true)]
     evidence_port: Option<u16>,
 
@@ -191,7 +191,7 @@ enum DevAction {
     Check(CheckArgs),
     /// Start or restart the retained local issuer and Evidence pair.
     Start(StartArgs),
-    /// Stop the active local issuer and Evidence Gateway pair.
+    /// Stop the active local issuer and Registry Evidence pair.
     Stop(StopArgs),
     /// Remove one completed stopped local generation.
     Clean(CleanArgs),
@@ -2050,7 +2050,7 @@ fn select_resource<'a>(retained: Option<&'a str>, requested: Option<&'a str>) ->
 /// is the same definition asked where the answer can still be acted on.
 fn probe_local_ports(ports: LocalServicePorts, borrowed_issuer: bool) -> Result<()> {
     for (port, service, flag) in [
-        (ports.evidence, "Evidence Gateway", "--evidence-port"),
+        (ports.evidence, "Registry Evidence", "--evidence-port"),
         (ports.issuer, "issuer", "--issuer-port"),
     ] {
         if borrowed_issuer && service == "issuer" {
@@ -3146,12 +3146,12 @@ fn startup_failure_summary(failure: Option<FailureKind>, ports: LocalServicePort
         }
         Some(FailureKind::EvidenceStart) => {
             format!(
-                "the local Evidence Gateway service could not be started on 127.0.0.1:{evidence}"
+                "the local Registry Evidence service could not be started on 127.0.0.1:{evidence}"
             )
         }
         Some(FailureKind::EvidenceReadiness) => {
             format!(
-                "the local Evidence Gateway service did not become ready on 127.0.0.1:{evidence}"
+                "the local Registry Evidence service did not become ready on 127.0.0.1:{evidence}"
             )
         }
         Some(FailureKind::ChildExited) => {

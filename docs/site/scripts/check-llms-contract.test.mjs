@@ -52,7 +52,7 @@ test('current corpus contract samples retained products', () => {
   assert.equal(docset.id, 'latest');
   assert.deepEqual(
     corpusRequirements(docset).map(({ label }) => label),
-    ['Registry Manifest', 'Evidence Gateway'],
+    ['Registry Manifest', 'Registry Evidence'],
   );
   assert.deepEqual(sampleMarkdownFiles(docset), [
     'explanation/architecture.md',

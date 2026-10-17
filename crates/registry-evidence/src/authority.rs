@@ -17,6 +17,9 @@ use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reade
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::audit::{
+    ActivationOutcome, ActivationRequestRecord, EvidenceAuditError, EvidenceAuditLog,
+};
 use crate::config::{AuthorityProfile, EvidenceConfig, OrderedMap};
 
 pub const AUTHORITY_API_VERSION: &str =
@@ -73,6 +76,35 @@ pub enum AuthorityError {
     CommitFailed,
     #[error("target authority activation history reached its storage bound")]
     HistoryFull,
+    #[error("target authority revision {revision} is already active for this package as sequence {sequence}; nothing needs activating")]
+    AlreadyActive { revision: String, sequence: u64 },
+    #[error("operator reference must be 1 to 256 bytes with no control characters")]
+    InvalidOperatorReference,
+}
+
+/// A refused, failed, or unaudited `evidence authority activate`.
+#[derive(Debug, Error)]
+pub enum ActivationError {
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+    /// The audit destination refused the `request` entry, so the activation
+    /// never took the authority lock and nothing changed.
+    #[error("the audit destination did not accept the activation's request entry")]
+    RequestUnaudited(#[source] EvidenceAuditError),
+    /// The activation did not commit, and the audit destination also refused
+    /// the `response` entry that would have recorded why.
+    #[error("{cause}; the audit destination also did not accept the activation's response entry")]
+    ResponseUnaudited { cause: AuthorityError },
+    /// The activation committed, but the audit destination did not accept its
+    /// `response` entry. This is never a failed activation.
+    #[error(
+        "target authority revision {revision} ({digest}) is active as sequence {sequence}, but the audit destination did not accept the activation's response entry; restore the audit destination, then confirm the activation with `evidence authority history --runtime-config FILE`"
+    )]
+    AppliedUnaudited {
+        revision: String,
+        digest: String,
+        sequence: u64,
+    },
 }
 
 impl AuthorityDocument {
@@ -275,9 +307,11 @@ pub fn history(root: &Path) -> Result<Vec<AuthorityActivation>, AuthorityError> 
 }
 
 /// Validate completely, then atomically commit the active snapshot and history
-/// as one document. A repeated exact activation is idempotent. One file lock
-/// serializes concurrent operators, and every acknowledged activation is fsynced.
-pub fn activate(
+/// as one document. An exact repeat of the active package and revision is
+/// refused as already active. One file lock serializes concurrent operators,
+/// and every acknowledged activation is fsynced. It writes no audit record;
+/// the operator command audits through [`activate_with_operator`].
+pub(crate) fn activate(
     root: &Path,
     target: &str,
     config: &EvidenceConfig,
@@ -292,6 +326,83 @@ pub fn activate(
         document,
         &mut File::sync_all,
     )
+}
+
+/// Audit, validate, and commit one activation as the operator command does.
+///
+/// The `request` entry is accepted before the authority lock is taken; a
+/// refused request leaves the authority store untouched. The commit is the
+/// same single atomic history document [`activate`] writes, and refusals never
+/// touch it. The `response` entry follows: `applied` with the activation
+/// sequence, `refused` for a validation refusal, or `failed` for a commit
+/// failure. A crash between the commit and the response leaves a request
+/// with no response, and authority history says what happened. A response
+/// the destination refuses after the commit is reported as
+/// [`ActivationError::AppliedUnaudited`], never as a failed activation.
+pub async fn activate_with_operator(
+    root: &Path,
+    target: &str,
+    config: &EvidenceConfig,
+    package_digest: &str,
+    document: &AuthorityDocument,
+    operator_reference: Option<&str>,
+    audit: &EvidenceAuditLog,
+) -> Result<AuthoritySnapshot, ActivationError> {
+    if operator_reference.is_some_and(|value| {
+        value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+    }) {
+        return Err(AuthorityError::InvalidOperatorReference.into());
+    }
+    if !is_sha256_label(package_digest) {
+        return Err(AuthorityError::BindingMismatch.into());
+    }
+    let (revision, digest) = document_identity(document)?;
+    let activation_id = ulid::Ulid::generate().to_string();
+    let operator_reference_hash = operator_reference
+        .map(|reference| audit.activation_operator_reference(&activation_id, reference))
+        .transpose()
+        .map_err(ActivationError::RequestUnaudited)?;
+    audit
+        .activation_request(&ActivationRequestRecord {
+            activation_id: activation_id.clone(),
+            package_digest: package_digest.to_owned(),
+            authority_revision: revision,
+            authority_digest: digest,
+            operator_reference_hash,
+        })
+        .await
+        .map_err(ActivationError::RequestUnaudited)?;
+    // The authority lock is a blocking file lock; take it off the executor.
+    let committed = {
+        let root = root.to_owned();
+        let target = target.to_owned();
+        let config = config.clone();
+        let package_digest = package_digest.to_owned();
+        let document = document.clone();
+        tokio::task::spawn_blocking(move || {
+            activate(&root, &target, &config, &package_digest, &document)
+        })
+        .await
+        .unwrap_or(Err(AuthorityError::CommitFailed))
+    };
+    let (outcome, sequence) = match &committed {
+        Ok(snapshot) => (ActivationOutcome::Applied, Some(snapshot.sequence())),
+        Err(AuthorityError::CommitFailed) => (ActivationOutcome::Failed, None),
+        Err(_) => (ActivationOutcome::Refused, None),
+    };
+    let response = audit
+        .activation_response(&activation_id, outcome, sequence)
+        .await;
+    match (committed, response) {
+        (Ok(snapshot), Ok(())) => Ok(snapshot),
+        (Ok(snapshot), Err(_)) => Err(ActivationError::AppliedUnaudited {
+            revision: snapshot.revision().to_owned(),
+            digest: snapshot.digest().to_owned(),
+            sequence: snapshot.sequence(),
+        }),
+        (Err(cause), Ok(())) => Err(cause.into()),
+        (Err(cause), Err(_)) => Err(ActivationError::ResponseUnaudited { cause }),
+    }
 }
 
 /// The committed file and every directory entry naming it must be durable
@@ -364,8 +475,13 @@ fn activate_with_sync(
             return Err(AuthorityError::BindingMismatch);
         }
         if active.package_digest == package_digest && active.authority_revision == revision {
+            // A retry after a failed durability barrier must still complete
+            // it before reporting what is active.
             sync_committed(root, &directory, sync)?;
-            return load(root, target, config, package_digest);
+            return Err(AuthorityError::AlreadyActive {
+                revision,
+                sequence: active.sequence,
+            });
         }
     }
     if state.activations.len() >= MAX_ACTIVATIONS {
@@ -479,13 +595,17 @@ mod tests {
     }
 
     #[test]
-    fn authority_activation_is_atomic_idempotent_and_keeps_durable_history() {
+    fn authority_activation_is_atomic_refuses_a_repeat_and_keeps_durable_history() {
         let (config, document, package) = fixture();
         let root = tempfile::tempdir().unwrap();
         let first = activate(root.path(), "local", &config, &package, &document).unwrap();
-        let again = activate(root.path(), "local", &config, &package, &document).unwrap();
-        assert_eq!(first.revision(), again.revision());
-        assert_eq!(again.sequence(), 1);
+        match activate(root.path(), "local", &config, &package, &document) {
+            Err(AuthorityError::AlreadyActive { revision, sequence }) => {
+                assert_eq!(revision, first.revision());
+                assert_eq!(sequence, 1);
+            }
+            other => panic!("an exact repeat must be refused as already active: {other:?}"),
+        }
         assert_eq!(history(root.path()).unwrap().len(), 1);
         let mut changed = document.clone();
         for profile in changed.access_profiles.values_mut() {
@@ -560,10 +680,15 @@ mod tests {
             }
             file.sync_all()
         };
-        let active =
-            activate_with_sync(&root, "local", &config, &package, &document, &mut sync).unwrap();
-        assert_eq!(active.sequence(), 1);
-        assert_eq!(history(&root).unwrap().len(), 1);
+        assert!(
+            matches!(
+                activate_with_sync(&root, "local", &config, &package, &document, &mut sync),
+                Err(AuthorityError::AlreadyActive { sequence: 1, .. })
+            ),
+            "the completed barrier reports the visible activation as already active"
+        );
+        let committed = history(&root).unwrap();
+        assert_eq!(committed.len(), 1);
         assert_eq!(files_synced, 1, "retry syncs the committed state file");
         assert_eq!(
             directories_synced,
@@ -572,7 +697,7 @@ mod tests {
         );
         assert_eq!(
             load(&root, "local", &config, &package).unwrap().revision(),
-            active.revision()
+            committed[0].authority_revision
         );
     }
 
@@ -722,5 +847,333 @@ mod tests {
         assert!(AuthorityDocument::parse("authority.yaml", old).is_err());
         let duplicate = format!("apiVersion: {AUTHORITY_API_VERSION}\nkind: {AUTHORITY_KIND}\ntarget: local\ntarget: other\nproject: standalone-evidence\naccessProfiles: {{}}\n");
         assert!(AuthorityDocument::parse("authority.yaml", duplicate.as_bytes()).is_err());
+    }
+
+    /// An audit sink that keeps every accepted line and refuses every line
+    /// after the first `accepted` ones.
+    #[derive(Clone)]
+    struct RecordingSink {
+        lines: Arc<std::sync::Mutex<Vec<u8>>>,
+        written: Arc<std::sync::Mutex<usize>>,
+        accepted: usize,
+    }
+
+    impl Write for RecordingSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let mut written = self.written.lock().unwrap();
+            if *written >= self.accepted {
+                return Err(std::io::Error::other("audit sink refusal canary"));
+            }
+            *written += bytes.iter().filter(|byte| **byte == b'\n').count();
+            self.lines.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl RecordingSink {
+        fn accepting(accepted: usize) -> (Self, EvidenceAuditLog) {
+            let sink = Self {
+                lines: Arc::default(),
+                written: Arc::default(),
+                accepted,
+            };
+            let log = EvidenceAuditLog::with_writer(
+                registry_platform_audit::AuditWriter::from_line_sink(Box::new(sink.clone())),
+                b"activation-audit-key-canary-32-bytes".to_vec(),
+                1,
+            )
+            .unwrap();
+            (sink, log)
+        }
+
+        fn entries(&self) -> Vec<serde_json::Value> {
+            String::from_utf8(self.lines.lock().unwrap().clone())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        }
+    }
+
+    fn narrowed(document: &AuthorityDocument, tag: &str) -> AuthorityDocument {
+        let mut changed = document.clone();
+        for profile in changed.access_profiles.values_mut() {
+            profile.requester_tags =
+                registry_platform_yaml::UniqueList::new(vec![tag.to_owned()]).unwrap();
+        }
+        changed
+    }
+
+    #[tokio::test]
+    async fn applied_activation_writes_a_correlated_request_and_response() {
+        let (config, document, package) = fixture();
+        let root = tempfile::tempdir().unwrap();
+        let (sink, audit) = RecordingSink::accepting(usize::MAX);
+        let active = activate_with_operator(
+            root.path(),
+            "local",
+            &config,
+            &package,
+            &document,
+            Some("operator-reference-canary"),
+            &audit,
+        )
+        .await
+        .unwrap();
+        let entries = sink.entries();
+        assert_eq!(entries.len(), 2);
+        let (request, response) = (&entries[0], &entries[1]);
+        assert_eq!(request["schema"], "evidence-activation-audit/v1");
+        assert_eq!(request["phase"], "request");
+        assert_eq!(response["phase"], "response");
+        assert_eq!(request["correlation"], response["correlation"]);
+        assert_eq!(request["record"]["activationId"], request["correlation"]);
+        assert_eq!(request["record"]["packageDigest"], package);
+        assert_eq!(request["record"]["authorityRevision"], active.revision());
+        assert_eq!(request["record"]["authorityDigest"], active.digest());
+        assert_eq!(
+            request["record"]["operatorReferenceHash"],
+            audit
+                .activation_operator_reference(
+                    request["correlation"].as_str().unwrap(),
+                    "operator-reference-canary"
+                )
+                .unwrap()
+        );
+        assert_eq!(response["record"]["outcome"], "applied");
+        assert_eq!(response["record"]["activationSequence"], 1);
+        let text = String::from_utf8(sink.lines.lock().unwrap().clone()).unwrap();
+        assert!(!text.contains("operator-reference-canary"));
+        assert!(!text.contains("requesterTags"));
+        assert!(!text.contains("grants"));
+        let state = fs::read_to_string(root.path().join(STATE_FILE)).unwrap();
+        assert!(!state.contains("operator-reference-canary"));
+        assert!(!state.contains("activationId"));
+    }
+
+    #[tokio::test]
+    async fn refused_request_entry_leaves_authority_state_untouched() {
+        let (config, document, package) = fixture();
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store");
+        let (_, refusing) = RecordingSink::accepting(0);
+        assert!(matches!(
+            activate_with_operator(&store, "local", &config, &package, &document, None, &refusing)
+                .await,
+            Err(ActivationError::RequestUnaudited(_))
+        ));
+        assert!(
+            !store.exists(),
+            "a refused request creates no authority store"
+        );
+        let active = activate(&store, "local", &config, &package, &document).unwrap();
+        let before = fs::read(store.join(STATE_FILE)).unwrap();
+        assert!(matches!(
+            activate_with_operator(
+                &store,
+                "local",
+                &config,
+                &package,
+                &narrowed(&document, "next-service"),
+                None,
+                &refusing
+            )
+            .await,
+            Err(ActivationError::RequestUnaudited(_))
+        ));
+        assert_eq!(fs::read(store.join(STATE_FILE)).unwrap(), before);
+        assert_eq!(
+            load(&store, "local", &config, &package).unwrap().revision(),
+            active.revision()
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_refusals_are_audited_and_never_fill_history() {
+        let (config, document, package) = fixture();
+        let root = tempfile::tempdir().unwrap();
+        let (sink, audit) = RecordingSink::accepting(usize::MAX);
+        let mut other_project = document.clone();
+        other_project.project = "other-project".to_owned();
+        assert!(matches!(
+            activate_with_operator(
+                root.path(),
+                "local",
+                &config,
+                &package,
+                &other_project,
+                None,
+                &audit
+            )
+            .await,
+            Err(ActivationError::Authority(AuthorityError::BindingMismatch))
+        ));
+        let entries = sink.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["phase"], "request");
+        assert_eq!(entries[1]["phase"], "response");
+        assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+        assert_eq!(entries[1]["record"]["outcome"], "refused");
+        assert!(entries[1]["record"]["activationSequence"].is_null());
+        assert!(
+            !root.path().join(STATE_FILE).exists(),
+            "a refusal never writes authority state"
+        );
+
+        activate_with_operator(
+            root.path(),
+            "local",
+            &config,
+            &package,
+            &document,
+            None,
+            &audit,
+        )
+        .await
+        .unwrap();
+        let before = fs::read(root.path().join(STATE_FILE)).unwrap();
+        // More refusals than the history bound holds leave history alone.
+        for _ in 0..=MAX_ACTIVATIONS {
+            assert!(activate_with_operator(
+                root.path(),
+                "local",
+                &config,
+                &package,
+                &other_project,
+                None,
+                &audit
+            )
+            .await
+            .is_err());
+        }
+        assert!(matches!(
+            activate_with_operator(
+                root.path(),
+                "local",
+                &config,
+                &package,
+                &document,
+                None,
+                &audit
+            )
+            .await,
+            Err(ActivationError::Authority(AuthorityError::AlreadyActive {
+                sequence: 1,
+                ..
+            }))
+        ));
+        assert_eq!(fs::read(root.path().join(STATE_FILE)).unwrap(), before);
+        let next = activate_with_operator(
+            root.path(),
+            "local",
+            &config,
+            &package,
+            &narrowed(&document, "next-service"),
+            None,
+            &audit,
+        )
+        .await
+        .expect("refusals never consume the activation history bound");
+        assert_eq!(next.sequence(), 2);
+        let entries = sink.entries();
+        let outcomes = entries
+            .iter()
+            .filter(|entry| entry["phase"] == "response")
+            .map(|entry| entry["record"]["outcome"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.len(), MAX_ACTIVATIONS + 5);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| *outcome == "applied")
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn response_refused_after_commit_reports_applied_unaudited() {
+        let (config, document, package) = fixture();
+        let root = tempfile::tempdir().unwrap();
+        let (sink, audit) = RecordingSink::accepting(1);
+        let error = activate_with_operator(
+            root.path(),
+            "local",
+            &config,
+            &package,
+            &document,
+            None,
+            &audit,
+        )
+        .await
+        .unwrap_err();
+        let committed = history(root.path()).unwrap();
+        assert_eq!(committed.len(), 1);
+        match &error {
+            ActivationError::AppliedUnaudited {
+                revision,
+                digest,
+                sequence,
+            } => {
+                assert_eq!(revision, &committed[0].authority_revision);
+                assert_eq!(digest, &committed[0].authority_digest);
+                assert_eq!(*sequence, 1);
+            }
+            other => panic!("a committed activation is never reported as failed: {other:?}"),
+        }
+        assert!(error
+            .to_string()
+            .contains("evidence authority history --runtime-config"));
+        let entries = sink.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["phase"], "request");
+    }
+
+    #[tokio::test]
+    async fn audited_activations_stay_serialized_by_the_authority_lock() {
+        let (config, document, package) = fixture();
+        let root = Arc::new(tempfile::tempdir().unwrap());
+        let (sink, audit) = RecordingSink::accepting(usize::MAX);
+        let audit = Arc::new(audit);
+        let mut tasks = Vec::new();
+        for index in 0..6 {
+            let root = Arc::clone(&root);
+            let audit = Arc::clone(&audit);
+            let config = config.clone();
+            let package = package.clone();
+            let document = narrowed(&document, &format!("service-{index}"));
+            tasks.push(tokio::spawn(async move {
+                activate_with_operator(
+                    root.path(),
+                    "local",
+                    &config,
+                    &package,
+                    &document,
+                    None,
+                    &audit,
+                )
+                .await
+                .unwrap()
+                .sequence()
+            }));
+        }
+        let mut sequences = Vec::new();
+        for task in tasks {
+            sequences.push(task.await.unwrap());
+        }
+        sequences.sort();
+        assert_eq!(sequences, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(history(root.path()).unwrap().len(), 6);
+        let mut applied = sink
+            .entries()
+            .iter()
+            .filter(|entry| entry["phase"] == "response")
+            .map(|entry| entry["record"]["activationSequence"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        applied.sort();
+        assert_eq!(applied, vec![1, 2, 3, 4, 5, 6]);
     }
 }

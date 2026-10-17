@@ -294,8 +294,8 @@ export function applyRepoDisplayName(md, repoId) {
 
       let displayLine = line
         .replace(/^### Evidence\s*$/, '### Assertion evidence')
-        .replace(/^## Discover available Evidence\s*$/, '## Discover available Evidence Gateway definitions')
-        .replace(/^## Request Evidence\s*$/, '## Request an assertion from Evidence Gateway');
+        .replace(/^## Discover available Evidence\s*$/, '## Discover available Registry Evidence definitions')
+        .replace(/^## Request Evidence\s*$/, '## Request an assertion from Registry Evidence');
 
       const segments = displayLine.split(/(`+[^`]*`+)/g);
       displayLine = segments
@@ -311,7 +311,8 @@ export function applyRepoDisplayName(md, repoId) {
           for (const [placeholder, term] of placeholders) {
             prose = prose.replaceAll(term, placeholder);
           }
-          prose = prose.replace(/\bEvidence\b(?! Gateway\b)/g, 'Evidence Gateway');
+          prose = prose.replace(/(?<!Registry )\bEvidence(?: Gateway)?\b/g, 'Registry Evidence')
+            .replace(/\b([Aa])n(\s+)Registry Evidence/g, '$1$2Registry Evidence');
           for (const [placeholder, term] of placeholders) {
             prose = prose.replaceAll(placeholder, term);
           }

@@ -30,7 +30,7 @@ governed record boundary described below.
 - Governed packages and runtime configuration.
 - Audit integrity and availability of required service and recovery paths.
 
-Evidence Gateway is a minimum-disclosure assertion service. Registry Platform supplies shared
+Registry Evidence is a minimum-disclosure assertion service. Registry Platform supplies shared
 security primitives so authentication, HTTP policy, audit, cryptography, and secret handling remain
 reviewable in one place instead of diverging between services. Demo integrations sit outside this
 production boundary and do not establish a production freshness or replay-protection profile.
@@ -48,7 +48,7 @@ production boundary and do not establish a production freshness or replay-protec
 
 ## Evidence authentication and source boundaries
 
-Evidence Gateway runs one reviewed OIDC bearer profile with one trusted issuer and exact audience,
+Registry Evidence runs one reviewed OIDC bearer profile with one trusted issuer and exact audience,
 token-type, and algorithm allowlists. One configured principal claim is authoritative; it does not
 fall back to `client_id`, `azp`, a proxy header, or a request field. Only operational and discovery
 routes are unauthenticated, and none reveals enabled definitions or requester permissions.
@@ -205,7 +205,7 @@ Suppression and deterministic rounding accept inference through totals, interval
 These are non-goals for this version. None of them should be read into a Registry Stack
 conformance claim:
 
-- A credential lifecycle: Evidence Gateway's SD-JWT VC output is a second serialization of the same
+- A credential lifecycle: Registry Evidence's SD-JWT VC output is a second serialization of the same
   stateless assertion. There is no issuance session, credential offer, status list, revocation,
   reissuance, persisted credential state, or OID4VCI endpoint of any kind, in either subject
   binding mode. Under the default audience-scoped mode there is no holder binding ceremony either,
@@ -216,7 +216,7 @@ conformance claim:
 - Delegated or federated evaluation between peers: no service in this model evaluates a
   question on another deployment's behalf, and there is no trust-chain discovery, peer
   registry, or cross-institution evaluation route.
-- Identity resolution: lookup is match, no-match, or ambiguous. Evidence Gateway is not an
+- Identity resolution: lookup is match, no-match, or ambiguous. Registry Evidence is not an
   identity-resolution or record-linkage engine and returns no candidate material.
 - Cross-verifier credential use under the default binding mode: an audience-scoped subject binding
   makes an assertion meaningful to one relying party and correlatable across none. A requirement
@@ -253,7 +253,7 @@ conformance claim:
        crates/registry-bregctl/src/safe_path.rs; path-based directory creation in
        ensure_private_dir_impl and ensure_parent_dir, crates/registry-evidencectl/src/keygen.rs,
        and ensure_private_parents, crates/registry-bregctl/src/field_encryption.rs. */}
-- Non-Unix targets: Evidence Gateway is Unix-only. Its secret and audit invariants depend on
+- Non-Unix targets: Registry Evidence is Unix-only. Its secret and audit invariants depend on
   owner, mode, no-follow, link-count, and open-file identity checks, so the runtime does not
   compile for a non-Unix target rather than degrading those checks.
   {/* Evidence: compile_error under #[cfg(not(unix))], crates/registry-evidence/src/lib.rs;

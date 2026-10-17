@@ -621,7 +621,7 @@ async fn assemble<A>(
             .map_err(|_| RuntimeInitializationError::Secrets)?,
     );
 
-    let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
+    let mut material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
     let destination = runtime_config
         .audit
         .destination()
@@ -633,9 +633,11 @@ async fn assemble<A>(
     )
     .await?;
 
-    let source_diagnostics = Arc::new(SourceDiagnostics::new(
-        bundle.config.sources.iter().map(|(source_id, _)| source_id),
-    ));
+    let source_diagnostics = Arc::new(
+        SourceDiagnostics::new(bundle.config.sources.iter().map(|(source_id, _)| source_id))
+            .with_build(bundle.package_digest(), bundle.authority_revision()),
+    );
+    material.signer.observe(source_diagnostics.signer());
     let sources = build_sources(&bundle, &runtime_document, &secrets, &source_diagnostics)?;
 
     let rate_limiter = rate_limiter(&bundle)?;
@@ -782,7 +784,8 @@ impl EvidenceRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn replace_signer_for_test(&mut self, signer: EvidenceSigner) {
+    pub(crate) fn replace_signer_for_test(&mut self, mut signer: EvidenceSigner) {
+        signer.observe(self.source_diagnostics.signer());
         self.signer = signer;
     }
 
@@ -1128,6 +1131,9 @@ impl EvidenceRuntime {
                 name: name.to_owned(),
                 minimum_bytes: minimum_bytes.get(),
                 maximum_bytes: maximum_bytes.get(),
+            },
+            SelectorField::Uuid {} => EvidenceSelectorField::Uuid {
+                name: name.to_owned(),
             },
             SelectorField::Date {} => EvidenceSelectorField::Date {
                 name: name.to_owned(),
@@ -2059,7 +2065,11 @@ impl EvidenceRuntime {
                     }
                 }
             }
-            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+            AcquisitionConfig::SearchThenFetch {
+                search,
+                fetch,
+                on_fetch_no_match,
+            } => {
                 let search_stage = self
                     .execute_source_stage(
                         &material,
@@ -2131,6 +2141,22 @@ impl EvidenceRuntime {
                 match fetch_stage.lookup {
                     SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
                         (facts, fetch_stage.source_id, fetch_stage.adapter_id)
+                    }
+                    SourceStageLookup::DeclaredUnresolved
+                    | SourceStageLookup::Lookup(LookupResult::NoMatch)
+                        if on_fetch_no_match == crate::config::FetchNoMatchPolicy::Unavailable =>
+                    {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::Unresolved,
+                            "unresolved",
+                            &fetch_stage.source_id,
+                            &fetch_stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
                     }
                     SourceStageLookup::DeclaredUnresolved
                     | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
@@ -3032,7 +3058,11 @@ impl EvidenceRuntime {
                     }
                 }
             }
-            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+            AcquisitionConfig::SearchThenFetch {
+                search,
+                fetch,
+                on_fetch_no_match,
+            } => {
                 let search_stage = self
                     .execute_request_batch_source_stage(
                         audit_material,
@@ -3084,6 +3114,12 @@ impl EvidenceRuntime {
                 };
                 match fetch_stage.lookup {
                     SourceStageLookup::Lookup(LookupResult::Match(facts)) => Ok(Some(facts)),
+                    SourceStageLookup::DeclaredUnresolved
+                    | SourceStageLookup::Lookup(LookupResult::NoMatch)
+                        if on_fetch_no_match == crate::config::FetchNoMatchPolicy::Unavailable =>
+                    {
+                        Ok(None)
+                    }
                     SourceStageLookup::DeclaredUnresolved
                     | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
                         Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"))

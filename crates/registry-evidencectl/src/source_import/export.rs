@@ -66,6 +66,18 @@ pub(super) struct ExportDocument {
     pub(super) source_id: String,
     pub(super) provenance: BTreeMap<String, String>,
     pub(super) artifacts: Vec<ExportDocumentArtifact>,
+    #[serde(default, rename = "dependencies")]
+    _dependencies: Option<ExportDependencies>,
+}
+
+// BReg-only advisory inventory. It never enters imported Evidence authority.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportDependencies {
+    #[serde(rename = "fields")]
+    _fields: BTreeMap<String, String>,
+    #[serde(rename = "relatedEntities")]
+    _related_entities: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]

@@ -1,6 +1,6 @@
 ---
-title: Evidence Gateway errors and problems reference
-description: Evidence Gateway problem responses, their stable codes, and safe recovery actions.
+title: Registry Evidence errors and problems reference
+description: Registry Evidence problem responses, their stable codes, and safe recovery actions.
 status: current
 owner: registry-docs
 source_repos: [registry-stack]
@@ -10,7 +10,7 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway returns RFC 9457 problem details as `application/problem+json`.
+Registry Evidence returns RFC 9457 problem details as `application/problem+json`.
 The frozen source contract is
 `products/evidence/contracts/problem-contract.yaml`.
 The generated schema and OpenAPI documents are reproduced from the runtime and
@@ -39,7 +39,7 @@ failure category.
 
 Every response carries a W3C `traceparent` header.
 For a problem response, its trace identifier is the same value as `traceId`.
-Evidence Gateway accepts a valid inbound trace identifier for correlation or
+Registry Evidence accepts a valid inbound trace identifier for correlation or
 mints one, but does not echo `tracestate`.
 The trace identifier is not the internal server-minted audit operation
 identifier.
@@ -58,7 +58,7 @@ All responses use `Cache-Control: no-store`.
 | `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not infer the cause or retry blindly. Retry after request inputs or authoritative source state may have changed, or follow operator guidance. The service does not disclose the unavailable class. |
 | `evidence.rate-limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait one second, as stated in `Retry-After: 1`, then retry. |
 | `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff or contact the source operator. |
-| `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff or contact the Evidence Gateway operator. |
+| `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff or contact the Registry Evidence operator. |
 
 `Retry-After` is present only on `429` responses.
 

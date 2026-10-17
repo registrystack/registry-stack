@@ -38,7 +38,7 @@ pub fn validate(project: &EvidenceProject) -> Vec<Finding> {
             Acquisition::Single { source } => {
                 initial_sources.insert(source.to_string());
             }
-            Acquisition::SearchThenFetch { search, fetch } => {
+            Acquisition::SearchThenFetch { search, fetch, .. } => {
                 initial_sources.insert(search.to_string());
                 fetch_sources.insert(fetch.to_string());
                 validate_classic_fetch_bindings(

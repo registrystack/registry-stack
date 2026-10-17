@@ -28,7 +28,7 @@ reference for its keys.
 One shared reader reads the runtime configuration file of each of these programs:
 
 - Base Registry Engine (BReg), `BRegRuntimeConfig`
-- Evidence Gateway, `EvidenceRuntimeConfig`
+- Registry Evidence, `EvidenceRuntimeConfig`
 - Registry Casework, `CaseworkRuntimeConfig`
 - Registry Scheduling, `SchedulingRuntimeConfig`
 - Registry Render, `RenderRuntimeConfig`
@@ -552,7 +552,7 @@ apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 ```
 
-The reader treats that line as a comment. For an Evidence Gateway authoring project,
+The reader treats that line as a comment. For a Registry Evidence authoring project,
 `evidencectl tooling editor <project>` writes the mappings for you, as
 [editor support](../evidencectl/#editor-support) describes. A schema catches shape errors as you
 type. It does not replace the check command, which also applies rules a schema cannot state, such
@@ -571,7 +571,7 @@ The Stability column gives each format's label in the format registry:
   formats the promise covers; where the two differ, that table holds.
 - **Experimental**: shipped, and may change in a minor release, announced with a `BREAKING:` note.
 - **Unpromised**: no compatibility promise, for files such as fixtures, test journeys,
-  development clients, and the Evidence Gateway authoring files.
+  development clients, and the Registry Evidence authoring files.
 
 Before `v1.0.0`, the [pre-1.0 rule](../api-stability/#versioning) applies to every format:
 a minor release may change one, with a `BREAKING:` entry and migration steps in the release note.
@@ -604,7 +604,7 @@ Generated files, which no one writes by hand, are left out.
 ## Next
 
 - [Base Registry Engine configuration reference](../breg-configuration/) for every BReg key.
-- [Evidence Gateway configuration reference](../evidence-configuration/) for every Evidence Gateway
+- [Registry Evidence configuration reference](../evidence-configuration/) for every Registry Evidence
   key.
 - [Registry Scheduling configuration reference](../scheduling-configuration/) for every Scheduling key.
 - [Environment variable reference](../environment-variables/) for fixed variables and secret

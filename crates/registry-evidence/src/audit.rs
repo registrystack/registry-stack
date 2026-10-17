@@ -30,6 +30,51 @@ pub const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-ba
 /// Envelope schema of an authenticated authorization refusal.
 pub const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str =
     "registry.evidence.audit.authorization-refusal/v2";
+/// Envelope schema of an `evidence authority activate` request or response.
+pub const ACTIVATION_AUDIT_SCHEMA: &str = "evidence-activation-audit/v1";
+const ACTIVATION_EVENT: &str = "evidence.authority-activation";
+
+/// How one audited activation ended, written in its `response` entry.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationOutcome {
+    /// The activation committed as the active authority.
+    Applied,
+    /// Validation refused the activation; nothing changed.
+    Refused,
+    /// The commit failed; authority history says whether it took effect.
+    Failed,
+}
+
+/// What one activation asked for. Operator records share the platform
+/// envelope but are not Evidence requests.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ActivationRequestRecord {
+    pub activation_id: String,
+    pub package_digest: String,
+    pub authority_revision: String,
+    pub authority_digest: String,
+    pub operator_reference_hash: Option<String>,
+}
+
+impl ActivationRequestRecord {
+    fn validate(&self) -> Result<(), EvidenceAuditError> {
+        if self.activation_id.parse::<ulid::Ulid>().is_err()
+            || !registry_platform_config::is_sha256_label(&self.package_digest)
+            || !registry_platform_config::is_sha256_label(&self.authority_revision)
+            || !registry_platform_config::is_sha256_label(&self.authority_digest)
+            || self.operator_reference_hash.as_ref().is_some_and(|hash| {
+                hash.strip_prefix("hmac-sha256:").is_none_or(|digest| {
+                    digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            })
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        Ok(())
+    }
+}
+
 const AUTHORIZATION_REFUSAL_ERROR_CATEGORY: &str = "not-authorized";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1010,6 +1055,75 @@ impl EvidenceAuditLog {
             .strip_prefix("hmac-sha256:")
             .ok_or(EvidenceAuditError::InvalidEvent)?;
         Ok(format!("hmac-sha256:v{}:{digest}", self.key_version))
+    }
+
+    /// Key the reference to one activation, using the shared operator contract.
+    pub(crate) fn activation_operator_reference(
+        &self,
+        activation_id: &str,
+        reference: &str,
+    ) -> Result<String, EvidenceAuditError> {
+        self.key_hasher
+            .audit_reference_hash(
+                "evidence-activation-operator-reference-v1",
+                activation_id,
+                reference,
+            )
+            .map_err(|_| EvidenceAuditError::InvalidEvent)
+    }
+
+    /// Append the `request` entry of one activation, before the authority
+    /// lock is taken. Refused, the activation changes nothing.
+    pub(crate) async fn activation_request(
+        &self,
+        record: &ActivationRequestRecord,
+    ) -> Result<(), EvidenceAuditError> {
+        record.validate()?;
+        self.write(
+            ACTIVATION_AUDIT_SCHEMA,
+            EntryPhase::Request,
+            &record.activation_id,
+            &serde_json::json!({
+                "event": ACTIVATION_EVENT,
+                "activationId": record.activation_id,
+                "packageDigest": record.package_digest,
+                "authorityRevision": record.authority_revision,
+                "authorityDigest": record.authority_digest,
+                "operatorReferenceHash": record.operator_reference_hash,
+            }),
+        )
+        .await
+    }
+
+    /// Append the `response` entry of one activation, after its commit
+    /// succeeded, was refused, or failed. Only `applied` names a sequence.
+    pub(crate) async fn activation_response(
+        &self,
+        activation_id: &str,
+        outcome: ActivationOutcome,
+        activation_sequence: Option<u64>,
+    ) -> Result<(), EvidenceAuditError> {
+        if activation_id.parse::<ulid::Ulid>().is_err()
+            || !matches!(
+                (outcome, activation_sequence),
+                (ActivationOutcome::Applied, Some(1..))
+                    | (ActivationOutcome::Refused | ActivationOutcome::Failed, None)
+            )
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        self.write(
+            ACTIVATION_AUDIT_SCHEMA,
+            EntryPhase::Response,
+            activation_id,
+            &serde_json::json!({
+                "event": ACTIVATION_EVENT,
+                "activationId": activation_id,
+                "outcome": outcome,
+                "activationSequence": activation_sequence,
+            }),
+        )
+        .await
     }
 
     /// Append an authorized-material event. An access attempt is a `request`

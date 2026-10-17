@@ -15,7 +15,7 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Start with a complete governed deployment project. Evidence Gateway can serialize the same
+Start with a complete governed deployment project. Registry Evidence can serialize the same
 stateless assertion as signed JWS or SD-JWT VC. The question, source access, derivation, supported
 values, subject binding, purpose, audience, signing key, and audit boundaries remain the same.
 
@@ -81,7 +81,7 @@ concepts:
       disclosure: top-level
 ```
 
-`businessRegistration` is adopter configuration, not a built-in Evidence Gateway claim. A direct
+`businessRegistration` is adopter configuration, not a built-in Registry Evidence claim. A direct
 nested object remains one atomic disclosure. Review the complete and combined disclosure surfaces
 before widening a production requirement.
 
@@ -152,7 +152,7 @@ Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys
 provider identifier must be a stable HTTPS origin. It becomes the signed `iss`, and issuer
 metadata publishes its exact `issuer` and `jwks_uri`.
 
-Approve trust independently through [Manage Evidence Gateway verifier trust](../../tutorials/manage-evidence-verifier-trust/).
+Approve trust independently through [Manage Registry Evidence verifier trust](../../tutorials/manage-evidence-verifier-trust/).
 
 ## Keep the boundary explicit
 
@@ -186,6 +186,6 @@ For deterministic source-tree proof of the format and tamper refusals, see the
 ## Next
 
 - [Configure OID4VCI wallet delivery](../evidence-oid4vci/) to deliver this SD-JWT VC response to
-  a wallet over the protocol Evidence Gateway itself refuses to speak.
-- [Evidence Gateway security model](../../security/evidence/) for the complete boundary this
+  a wallet over the protocol Registry Evidence itself refuses to speak.
+- [Registry Evidence security model](../../security/evidence/) for the complete boundary this
   response sits inside, beyond the credential-lifecycle exclusions listed above.

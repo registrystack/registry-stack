@@ -382,6 +382,37 @@ mod tests {
     }
 
     #[test]
+    fn uuid_selector_metadata_retains_validation_for_governed_actions() {
+        let selector = SelectorField::Uuid {
+            name: "reference".into(),
+        };
+        assert!(validate_selector_field(
+            &selector,
+            &serde_json::json!("12345678-1234-1234-1234-123456789abc")
+        )
+        .is_ok());
+        for refused in [
+            "zzzzzzzz-1234-1234-1234-123456789abc",
+            "12345678-1234-1234-1234-123456789ABC",
+        ] {
+            assert!(validate_selector_field(&selector, &serde_json::json!(refused)).is_err());
+        }
+        for kind in [
+            crate::contract::FieldTypeSource::Uuid,
+            crate::contract::FieldTypeSource::Reference {
+                target: "record".into(),
+                on_delete: Default::default(),
+            },
+        ] {
+            assert!(
+                crate::action_evidence_contracts::selector_field_matches_field_type(
+                    &selector, &kind
+                )
+            );
+        }
+    }
+
+    #[test]
     fn observation_age_is_distinct_from_signature_lifetime() {
         let now = DateTime::parse_from_rfc3339("2026-09-08T00:01:00Z")
             .unwrap()

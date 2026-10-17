@@ -1,5 +1,5 @@
 ---
-title: See Evidence Gateway refuse unsafe requests
+title: See Registry Evidence refuse unsafe requests
 description: Cross the HTTP boundary with an unauthorized request and refuse a response changed after signing.
 status: current
 owner: registry-docs
@@ -20,7 +20,7 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Return a governed value](../return-a-governed-value/) before starting. You will reuse its
-normalized project to observe both sides of the trust boundary: Evidence Gateway denies a purpose
+normalized project to observe both sides of the trust boundary: Registry Evidence denies a purpose
 outside the complete target grant, and the verifier rejects a response changed after signing.
 
 <QuickstartMeta
@@ -61,7 +61,7 @@ Evidence ready at http://127.0.0.1:18080
 ## Prepare one authorized request
 
 Preparation records the exact verification expectations and obtains authorization for the
-registered client. It performs no Evidence Gateway request and no source access.
+registered client. It performs no Registry Evidence request and no source access.
 
 ```sh
 evidencectl request prepare adult-status \
@@ -195,5 +195,5 @@ The tutorial runner stops the source. If you started it by hand, press `Ctrl+C` 
 ## Next
 
 - [Control who can request Evidence](../control-who-can-request-evidence/)
-- [Configure Evidence Gateway](../../configure/evidence/)
-- [Review the Evidence Gateway security model](../../security/evidence/)
+- [Configure Registry Evidence](../../configure/evidence/)
+- [Review the Registry Evidence security model](../../security/evidence/)

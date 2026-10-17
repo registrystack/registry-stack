@@ -275,6 +275,9 @@ pub enum EvidenceSelectorField {
     Date {
         name: String,
     },
+    Uuid {
+        name: String,
+    },
     Integer {
         name: String,
         minimum: i64,

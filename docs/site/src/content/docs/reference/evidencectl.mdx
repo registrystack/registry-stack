@@ -1,6 +1,6 @@
 ---
 title: Evidencectl workflow reference
-description: Operational boundaries for Evidence Gateway authoring, production build, deployment inspection, fixtures, local development, and editor integration.
+description: Operational boundaries for Registry Evidence authoring, production build, deployment inspection, fixtures, local development, and editor integration.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,14 +11,14 @@ locale: en
 standards_referenced: []
 ---
 
-`evidencectl` is Evidence Gateway adopter tooling. It creates key material and editable projects, compiles
-production candidates, and invokes the `evidence` binary for Evidence Gateway semantic decisions. It does
+`evidencectl` is Registry Evidence adopter tooling. It creates key material and editable projects, compiles
+production candidates, and invokes the `evidence` binary for Registry Evidence semantic decisions. It does
 not approve, deploy, promote, register production clients, or write production secret values.
 Its client registration commands manage local development only.
 
 ## Contract status
 
-Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. Its command line can
+Evidencectl is outside the frozen Registry Evidence Version 1 runtime contract. Its command line can
 change before a compatibility promise covers it. Evidencectl compiles editable authoring input into
 a closed bundle. The `evidence` runtime remains the authority for bundle validation and semantic
 acceptance, fixture evaluation, secret validation, and startup acceptance.
@@ -96,7 +96,7 @@ code.
 The workflow exit classes are `0` for success, `1` for a domain refusal, denied warning, or failing
 fixture, `2` for command-line usage, and `3` for an operational failure, such as a file, process,
 or local session the command depends on being unavailable. These classes belong to adopter tooling;
-they do not change the Evidence Gateway runtime verifier's frozen exit contract.
+they do not change the Registry Evidence runtime verifier's frozen exit contract.
 
 `evidencectl test` and `evidencectl fixtures run` also accept `--format junit`. The run is the same;
 standard output carries one JUnit XML document with a `check` suite for the bundle check and one
@@ -165,9 +165,9 @@ these modes do not establish production authority or live readiness.
 
 {/* Evidence: crates/registry-evidencectl/src/scaffold.rs, NewArgs and STARTER_TOP_LEVEL_FILES. */}
 
-`evidencectl dev start [<project>]` starts Evidence Gateway and the pinned local issuer on loopback.
+`evidencectl dev start [<project>]` starts Registry Evidence and the pinned local issuer on loopback.
 When borrowing a shared issuer, pass `--issuer-project <owner>` and an exact `--resource <URI>`
-registered for this Evidence Gateway service. The default resource is
+registered for this Registry Evidence service. The default resource is
 `urn:registrystack:evidence:local:gateway`; a retained session keeps its selected resource and
 refuses a different one on restart. The compiled governed bundle binds this audience.
 The local issuer container's name starts with `thunderid-<prefix>-`, with the prefix
@@ -221,7 +221,7 @@ are disposable.
 
 Stop the local development session before adding or revoking a client. The next start validates the
 complete client and access-profile registry, then provisions it as one issuer generation. An access-profile change also
-requires a new Evidence Gateway generation.
+requires a new Registry Evidence generation.
 
 The local access commands do not define production authority or production clients. Production
 access profiles remain in the deployment target's `EvidenceTargetAuthority`. Production client
@@ -238,7 +238,7 @@ production candidate input.
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
 | `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports its managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
-| `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
+| `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Registry Evidence authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
 
 `tooling editor` writes a managed manifest and six schemas under `.evidence-editor/`, plus
 VS Code and Zed settings. The mappings cover `evidence.yaml`, `*-target.yaml`,
@@ -285,5 +285,5 @@ No command writes a mapping for them, so copy both into the BReg project and map
 The generated `evidencectl` syntax is published only after its exact source version receives a
 recorded human review.
 
-- [Configure Evidence Gateway](../../configure/evidence/)
-- [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
+- [Configure Registry Evidence](../../configure/evidence/)
+- [Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/)

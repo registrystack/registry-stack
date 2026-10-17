@@ -3326,6 +3326,15 @@ async fn signing_failure_is_transient_audited_and_never_releases_unsigned_eviden
         .expect("a later signed request retries the provider and recovers");
     assert!(runtime.ready().await);
 
+    let metrics = runtime.source_diagnostics();
+    let registry = crate::observability::Metrics::new(runtime.rate_limiter(), metrics);
+    let text = registry.render();
+    assert!(
+        text.contains("evidence_signer_requests_total{signer=\"active\",outcome=\"signing\"} 1")
+    );
+    assert!(
+        text.contains("evidence_signer_requests_total{signer=\"active\",outcome=\"success\"} 1")
+    );
     let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
     assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 2);
     assert_eq!(audit.matches("\"decision\":\"signing-failure\"").count(), 1);
@@ -13224,4 +13233,341 @@ fn signing_initialization_faults_name_distinct_causes() {
         "the Evidence signing boundary could not initialize: the Transit provider did not \
          answer on the configured Unix socket (missing socket, refused connection, or timeout)"
     );
+}
+
+#[tokio::test]
+async fn search_then_fetch_optional_fetch_maps_no_match_to_unavailable() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_search_then_fetch(bundle_root, &source_origin);
+            let path = bundle_root.join("evidence.yaml");
+            let mut configuration = fs::read_to_string(&path).unwrap();
+            replace_exact(
+                &mut configuration,
+                "      fetch: source-a-fetch",
+                "      fetch: source-a-fetch\n      onFetchNoMatch: unavailable",
+                1,
+            );
+            fs::write(path, configuration).unwrap();
+            fs::write(
+                bundle_root.join("adapters/adult-status-fetch-source.rhai"),
+                r#"fn extract(source_response, context) {
+    #{outcome: "no_match"}
+}
+"#,
+            )
+            .expect("unresolved fetch extraction is written");
+        },
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("search-then-fetch runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-unresolved-fetch",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("an optional absent record releases no assertion");
+    assert_eq!(error.problem(), ProblemCode::EvidenceNotAvailable);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .len(),
+        2
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"decision\":\"unresolved\""));
+    assert!(!audit.contains("\"phase\":\"disclosure-release\""));
+    assert!(!audit.contains("record-001"));
+}
+
+#[tokio::test]
+async fn metrics_include_build_source_and_signer_observations() {
+    let fixture = acceptance_runtime().await;
+    let (_, metrics) = build_app_with_metrics(Arc::clone(&fixture.runtime));
+    mount_adult_source_expecting(&fixture.server, None, 1).await;
+    fixture
+        .runtime
+        .evaluate(
+            "metrics-canary-operation",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect("the source and signer succeed");
+    let exposition = TestServer::new(metrics_app(metrics));
+    let body = exposition.get("/metrics").await.text();
+    assert!(body.contains("evidence_build_info{"));
+    assert!(body.contains(&format!(
+        "bundle=\"{}\"",
+        fixture.runtime.bundle().package_digest()
+    )));
+    assert!(body.contains(&format!(
+        "authority=\"{}\"",
+        fixture
+            .runtime
+            .bundle()
+            .authority_revision()
+            .unwrap_or("package")
+    )));
+    assert!(body.contains(concat!("version=\"", env!("CARGO_PKG_VERSION"), "\"")));
+    assert!(body.contains("evidence_source_requests_total{"));
+    assert!(body.contains("evidence_source_request_duration_seconds_count{"));
+    assert!(body.contains("evidence_signer_requests_total{"));
+    assert!(body.contains("evidence_signer_request_duration_seconds_count{"));
+    assert!(!body.contains("metrics-canary-operation"));
+    for canary in privacy_canaries() {
+        assert!(!body.contains(canary), "metrics disclosed {canary}");
+    }
+}
+
+#[tokio::test]
+async fn uuid_selector_refuses_malformed_values_before_source_access() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        |root| {
+            let path = root.join("evidence.yaml");
+            let mut configuration = fs::read_to_string(&path).unwrap();
+            replace_exact(
+                &mut configuration,
+                "family_name: {type: string, minimumBytes: 1, maximumBytes: 200}",
+                "family_name: {type: uuid}",
+                1,
+            );
+            fs::write(path, configuration).unwrap();
+        },
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("UUID selector initializes");
+    for value in [
+        "zzzzzzzz-1234-1234-1234-123456789abc",
+        "12345678_1234-1234-1234-123456789abc",
+        "12345678123412341234123456789abc",
+        "12345678-1234-1234-1234-123456789ABC",
+    ] {
+        let request = adult_request_with_family_name(value);
+        assert_eq!(
+            runtime
+                .evaluate("operation-uuid-invalid", &access_token(None), &request)
+                .await
+                .unwrap_err()
+                .problem(),
+            ProblemCode::InvalidSelector
+        );
+        assert_eq!(
+            runtime
+                .evaluate_request_batch(
+                    "operation-uuid-invalid-batch",
+                    &access_token(None),
+                    &request_batch_from_request(&request, 1)
+                )
+                .await
+                .unwrap_err()
+                .problem(),
+            ProblemCode::InvalidSelector
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert!(fs::read_to_string(&prepared.audit_path).unwrap().is_empty());
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"total":1,"date_of_birth":"2000-01-01"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    runtime
+        .evaluate(
+            "operation-uuid-valid",
+            &access_token(None),
+            &adult_request_with_family_name("12345678-1234-1234-1234-123456789abc"),
+        )
+        .await
+        .expect("a canonical UUID reaches the source and returns signed evidence");
+}
+
+#[tokio::test]
+async fn optional_fetch_policy_preserves_failure_classes_in_single_and_batch_requests() {
+    for (opt_in, outcome, unavailable) in [
+        (false, "no_match", false),
+        (false, "declared", false),
+        (true, "no_match", true),
+        (true, "declared", true),
+        (true, "ambiguous", false),
+        (true, "transport", false),
+    ] {
+        let server = MockServer::start().await;
+        let origin = server.uri();
+        let prepared = prepare_fixture_with_mutation(
+            "subject-binding-secret-canary-32-bytes-minimum",
+            &origin,
+            &FixtureCeilings::deployment_defaults(),
+            |root| {
+                configure_search_then_fetch(root, &origin);
+                declare_unresolved_problem(root, "source-a-fetch");
+                if opt_in {
+                    let path = root.join("evidence.yaml");
+                    let mut config = fs::read_to_string(&path).unwrap();
+                    replace_exact(
+                        &mut config,
+                        "      fetch: source-a-fetch",
+                        "      fetch: source-a-fetch\n      onFetchNoMatch: unavailable",
+                        1,
+                    );
+                    fs::write(path, config).unwrap();
+                }
+                let script = if outcome == "no_match" || outcome == "ambiguous" {
+                    format!(
+                        "fn extract(source_response, context) {{ #{{outcome: \"{outcome}\"}} }}"
+                    )
+                } else {
+                    "fn extract(source_response, context) { throw \"extraction-must-not-run-canary\"; }".to_owned()
+                };
+                fs::write(root.join("adapters/adult-status-fetch-source.rhai"), script).unwrap();
+            },
+        );
+        let runtime =
+            EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+                .await
+                .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/v1/search"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"total":1,"record_id":"record-001"})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let response = match outcome {
+            "declared" => declared_unresolved_response("optional-fetch-trace-canary"),
+            "transport" => ResponseTemplate::new(500),
+            _ => ResponseTemplate::new(200).set_body_json(json!({})),
+        };
+        Mock::given(method("GET"))
+            .and(path("/v1/records/record-001"))
+            .respond_with(response)
+            .expect(2)
+            .mount(&server)
+            .await;
+        let error = runtime
+            .evaluate(
+                "operation-fetch-policy-single",
+                &access_token(None),
+                &adult_request(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.problem(),
+            if unavailable {
+                ProblemCode::EvidenceNotAvailable
+            } else {
+                ProblemCode::DependencyUnavailable
+            },
+            "{opt_in}/{outcome}"
+        );
+        let audit = fs::read_to_string(&prepared.audit_path).unwrap();
+        assert!(!audit.contains("\"phase\":\"disclosure-release\""));
+        if unavailable {
+            assert!(audit.contains("\"decision\":\"unresolved\""));
+        }
+        let metrics = crate::observability::Metrics::new(
+            runtime.rate_limiter(),
+            runtime.source_diagnostics(),
+        )
+        .render();
+        assert!(
+            !metrics.contains("evidence_signer_requests_total{"),
+            "no absent or failed fetch may issue an assertion"
+        );
+        let batch = runtime
+            .evaluate_request_batch(
+                "operation-fetch-policy-batch",
+                &access_token(None),
+                &request_batch_from_request(&adult_request(), 1),
+            )
+            .await;
+        if unavailable {
+            let result: EvidenceRequestBatchResponse =
+                serde_json::from_slice(batch.unwrap().bytes()).unwrap();
+            assert!(matches!(
+                result.items.as_slice(),
+                [EvidenceRequestBatchResponseItem::EvidenceNotAvailable]
+            ));
+        } else {
+            assert_eq!(
+                batch.unwrap_err().problem(),
+                ProblemCode::DependencyUnavailable
+            );
+        }
+        let audit = fs::read_to_string(&prepared.audit_path).unwrap();
+        assert!(!audit.contains("optional-fetch-trace-canary"));
+        assert!(!audit.contains("record-001"));
+    }
+}
+
+#[tokio::test]
+async fn metrics_count_source_failures_without_signing_or_sensitive_labels() {
+    let fixture = acceptance_runtime().await;
+    let (_, metrics) = build_app_with_metrics(Arc::clone(&fixture.runtime));
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("source-failure-body-canary"))
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let error = fixture
+        .runtime
+        .evaluate(
+            "operation-metrics-source-failure",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    let text = TestServer::new(metrics_app(metrics))
+        .get("/metrics")
+        .await
+        .text();
+    assert!(text.contains(
+        "evidence_source_requests_total{source=\"source-a\",outcome=\"server-error\"} 1"
+    ));
+    assert!(!text.contains("evidence_signer_requests_total{"));
+    assert!(!text.contains("source-failure-body-canary"));
+    assert!(!text.contains("operation-metrics-source-failure"));
 }

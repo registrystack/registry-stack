@@ -26,7 +26,7 @@ bounded and value-free.
 
 | Surface | Use | Boundary |
 | --- | --- | --- |
-| `GET /health` | Process liveness | Does not check dependencies or data freshness; Evidence Gateway stays healthy when a source credential is unavailable |
+| `GET /health` | Process liveness | Does not check dependencies or data freshness; Registry Evidence stays healthy when a source credential is unavailable |
 | `GET /ready` | Traffic admission | Evidence checks signing, audit, subject binding, and source credentials; it does not request evidence data |
 | Product audit records | Security and request evidence | Local entries are not chained or signed; use copies shipped to append-only storage and join request phases by `correlation` |
 | `GET /openapi.json` | Released API shape | Evidence serves the release artifact; it does not describe deployment-specific grants or source behavior |
@@ -39,7 +39,7 @@ curl -fsS https://<evidence-host>/health
 curl -fsS https://<evidence-host>/ready
 ```
 
-Evidence Gateway's closed problem-code catalog is the
+Registry Evidence's closed problem-code catalog is the
 [Evidence problems reference](../../../reference/evidence-problems/). It needs no separate CLI
 catalog because the codes are fixed by the public contract.
 

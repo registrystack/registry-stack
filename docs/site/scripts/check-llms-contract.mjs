@@ -6,8 +6,8 @@ const productCorpusRequirements = Object.freeze({
     pattern: /Registry Manifest/i,
   }),
   'registry-evidence': Object.freeze({
-    label: 'Evidence Gateway',
-    pattern: /Evidence Gateway/i,
+    label: 'Registry Evidence',
+    pattern: /Registry Evidence/i,
   }),
   'registry-relay': Object.freeze({
     label: 'Registry Relay',
@@ -45,7 +45,9 @@ export function checkedDocset(manifest, env = process.env) {
 export function corpusRequirements(docset) {
   return Object.entries(productCorpusRequirements)
     .filter(([product]) => Boolean(docset.products?.[product]))
-    .map(([, requirement]) => requirement);
+    .map(([product, requirement]) => product === 'registry-evidence' && docset.status === 'archived'
+      ? { label: 'Evidence Gateway', pattern: /Evidence Gateway/i }
+      : requirement);
 }
 
 /**

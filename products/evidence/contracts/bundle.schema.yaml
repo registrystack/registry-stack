@@ -925,6 +925,13 @@ $defs:
         additionalProperties: false
         required:
           - type
+        properties:
+          type:
+            const: uuid
+      - type: object
+        additionalProperties: false
+        required:
+          - type
           - minimum
           - maximum
         properties:
@@ -1402,6 +1409,12 @@ $defs:
         required: [type, name]
         properties:
           type: {const: date}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      - type: object
+        additionalProperties: false
+        required: [type, name]
+        properties:
+          type: {const: uuid}
           name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
       - type: object
         additionalProperties: false
@@ -2833,6 +2846,13 @@ $defs:
               the fixed second-stage source, or the ordered array of member sources, invoked
               after the search resolves and never chosen from response content.
             $ref: '#/$defs/local-id'
+          onFetchNoMatch:
+            description: >-
+              Selects how an absent optional fetch record is reported. The default preserves
+              dependency failure; unavailable returns evidence.unavailable and an Unresolved
+              audit decision. Ambiguity and transport failures remain dependency failures.
+            enum: [dependency-failure, unavailable]
+            default: dependency-failure
       - type: object
         additionalProperties: false
         required:

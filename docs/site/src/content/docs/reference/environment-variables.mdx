@@ -17,13 +17,13 @@ adopter tooling, and installers.
 
 The stack's other kind of environment variable is operator-named. Secret material is not read
 from a fixed variable name: a configuration field carries a reference that names the variable,
-and the operator chooses the name. Base Registry Engine and Evidence Gateway work that way, and
+and the operator chooses the name. Base Registry Engine and Registry Evidence work that way, and
 the reference grammar is closed rather than free-form. Each reads a secret from an operator-named
 variable only when its runtime file opts in to the environment provider, as its section records.
 
 ## Configuration expansion
 
-Evidence Gateway substitutes `${NAME}`, `${NAME:-fallback}`, and `${NAME:?message}` in string
+Registry Evidence substitutes `${NAME}`, `${NAME:-fallback}`, and `${NAME:?message}` in string
 values of its runtime file while the shared configuration reader builds the document, so a
 substituted value is always text: it fills a string member and never a number or boolean. A bare
 `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the
@@ -48,7 +48,7 @@ expression in the authored project or module files, as [its section](#base-regis
 
 There is no escape for a literal `${` in a runtime file that substitutes. Put the literal text in a variable and reference that variable: a substituted value is not expanded again.
 
-## Evidence Gateway
+## Registry Evidence
 
 `evidence` reads one fixed variable, `EVIDENCE_LOG`, and only in `evidence serve`.
 
@@ -56,7 +56,7 @@ There is no escape for a literal `${` in a runtime file that substitutes. Put th
 | --- | --- | --- |
 | `EVIDENCE_LOG` | Tracing filter for the operational records the serving process writes as line-delimited JSON on standard error. | Defaults to `info`. Read by `evidence serve` only; offline commands install no log subscriber. |
 
-Evidence Gateway reads no variable for the runtime path. Every subcommand that reads the runtime
+Registry Evidence reads no variable for the runtime path. Every subcommand that reads the runtime
 file takes it as the required `--runtime-config <FILE>` flag after the subcommand, for example
 `evidence check --runtime-config /etc/registry-evidence/runtime.yaml`. The global `--runtime` flag
 and the `REGISTRY_EVIDENCE_RUNTIME` variable are removed: `evidence` refuses either one at startup
@@ -64,7 +64,7 @@ and names `--runtime-config` as the replacement, rather than silently ignoring i
 
 ### Secret references
 
-Evidence Gateway resolves secrets through the providers `runtime.yaml` declares under
+Registry Evidence resolves secrets through the providers `runtime.yaml` declares under
 `secretProviders`: `file: {root: <absolute directory>}` enables `secret:file/<name>` references,
 which resolve to an owner-only regular file under that directory, and `environment: {}` enables
 `secret:env/<NAME>` references, which resolve to the operator-named environment variable.
@@ -76,7 +76,7 @@ which resolve to an owner-only regular file under that directory, and `environme
 
 A reference in the runtime file or the governed bundle that names a provider the runtime file does
 not declare is refused at startup, so an environment-backed secret is always an explicit operator
-choice. See [Configure Evidence Gateway](../../configure/evidence/) for the runtime file and the
+choice. See [Configure Registry Evidence](../../configure/evidence/) for the runtime file and the
 bundle it binds.
 
 ## Evidencectl
@@ -85,9 +85,9 @@ bundle it binds.
 | --- | --- | --- |
 | `EVIDENCE_BIN` | Path to the `evidence` binary used by commands that delegate runtime validation or evaluation. An explicit `--evidence-bin` takes precedence, then this variable, then PATH lookup. | Optional. |
 
-### Evidence Gateway toolset installer
+### Registry Evidence toolset installer
 
-The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, and
+The Registry Evidence toolset installer stages `evidence`, `evidencectl`, and
 `evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before anything reaches the
 install directory. The commands switch version together through a single toolset-pointer rename,
 and a failed switch leaves the previously installed toolset active. Checksum verification does
@@ -96,7 +96,7 @@ matters. The installer reads these variables; the installed binaries do not.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `EVIDENCECTL_VERSION` | Registry Stack tag whose Evidence Gateway toolset assets are installed. A published installer pins its own tag. | Defaults to the installer's pinned tag. |
+| `EVIDENCECTL_VERSION` | Registry Stack tag whose Registry Evidence toolset assets are installed. A published installer pins its own tag. | Defaults to the installer's pinned tag. |
 | `EVIDENCECTL_INSTALL_DIR` | Directory that receives the toolset and the `evidence`, `evidencectl`, and `evidence-oid4vci` command symlinks. | Defaults to `~/.local/bin`. |
 | `EVIDENCECTL_ASSET_DIR` | Directory of already-downloaded release assets to use instead of downloading. | Optional. |
 
@@ -179,6 +179,6 @@ from their declared `secret:env/` or `secret:file/` provider. See
 ## Source
 
 The fixed names above are transcribed from the retained binary entry points, runtime loaders, and
-install scripts. Evidence Gateway definitions live in `crates/registry-evidence`, Evidence tooling
+install scripts. Registry Evidence definitions live in `crates/registry-evidence`, Evidence tooling
 in `crates/registry-evidencectl`, and Base Registry Engine definitions in `crates/registry-breg` and
 `crates/registry-bregctl`.

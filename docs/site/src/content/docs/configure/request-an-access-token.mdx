@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 Use a private key JWT client assertion when an application needs its own short-lived access token
-for Evidence Gateway or Base Registry Engine (BReg). The deployment's OAuth issuer owns
+for Registry Evidence or Base Registry Engine (BReg). The deployment's OAuth issuer owns
 client registration and token issuance. The resource server independently verifies the resulting
 token against its configured issuer, audience, algorithm, token type, and authority claims.
 
@@ -33,7 +33,7 @@ public key. Do not add a client secret as a fallback when assertion authenticati
 
 ## Configure a maintained client binding
 
-The Evidence Gateway Node binding performs the exchange, refreshes before token expiry, coalesces
+The Registry Evidence Node binding performs the exchange, refreshes before token expiry, coalesces
 concurrent refreshes, and invalidates a cached token after an authentication refusal. Configure its
 credential source explicitly:
 
@@ -108,5 +108,5 @@ different service.
 ## Next
 
 - [Request Evidence from an application](../../tutorials/request-evidence-from-an-application/)
-- [Configure Evidence Gateway](../evidence/)
-- [Evidence Gateway security model](../../security/evidence/)
+- [Configure Registry Evidence](../evidence/)
+- [Registry Evidence security model](../../security/evidence/)

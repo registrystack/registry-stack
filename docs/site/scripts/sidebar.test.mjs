@@ -29,7 +29,7 @@ test('flattens API groups after plugin middleware while retaining active links a
   };
   const overview = { type: 'link', label: 'Overview', href: '/reference/apis/evidence/', isCurrent: false, attrs: {} };
   const group = (label, entries) => ({ type: 'group', label, collapsed: true, entries });
-  const sidebar = [group('Evidence Gateway', [group('API operations', [
+  const sidebar = [group('Registry Evidence', [group('API operations', [
     overview, group('Operations', [group('Assertions', [operation])]),
   ])])];
   const original = structuredClone(sidebar);
@@ -40,7 +40,7 @@ test('flattens API groups after plugin middleware while retaining active links a
   });
 
   assert.deepEqual(context.locals.starlightRoute.sidebar, [
-    group('Evidence Gateway', [group('API operations', [overview, operation])]),
+    group('Registry Evidence', [group('API operations', [overview, operation])]),
   ]);
   assert.equal(context.locals.starlightRoute.sidebar[0].entries[0].entries[1], operation);
   assert.deepEqual(sidebar, original);

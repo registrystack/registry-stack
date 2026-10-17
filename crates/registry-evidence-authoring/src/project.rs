@@ -52,6 +52,21 @@ pub struct EvidenceProject {
     pub maximum_holder_bound_batch_size: Option<BoundedU64<1, 16>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum FetchNoMatchPolicy {
+    #[default]
+    DependencyFailure,
+    Unavailable,
+}
+
+impl FetchNoMatchPolicy {
+    fn is_default(&self) -> bool {
+        *self == Self::DependencyFailure
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
@@ -322,6 +337,12 @@ pub enum Acquisition {
     SearchThenFetch {
         search: LocalId,
         fetch: LocalId,
+        #[serde(
+            default,
+            rename = "onFetchNoMatch",
+            skip_serializing_if = "FetchNoMatchPolicy::is_default"
+        )]
+        on_fetch_no_match: FetchNoMatchPolicy,
     },
     #[serde(rename_all = "camelCase")]
     SearchThenFetchSet {
@@ -362,7 +383,7 @@ impl Acquisition {
     pub fn source_ids(&self) -> Vec<&LocalId> {
         match self {
             Self::Single { source } => vec![source],
-            Self::SearchThenFetch { search, fetch } => vec![search, fetch],
+            Self::SearchThenFetch { search, fetch, .. } => vec![search, fetch],
             Self::SearchThenFetchSet { search, fetch, .. } => std::iter::once(search)
                 .chain(fetch.iter().map(|member| &member.source))
                 .collect(),
@@ -731,7 +752,7 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
             Acquisition::Single { source } => {
                 vec![(at.clone().key("acquisition").key("source"), source)]
             }
-            Acquisition::SearchThenFetch { search, fetch } => vec![
+            Acquisition::SearchThenFetch { search, fetch, .. } => vec![
                 (at.clone().key("acquisition").key("search"), search),
                 (at.clone().key("acquisition").key("fetch"), fetch),
             ],
@@ -1045,7 +1066,7 @@ pub fn value_schema(value: &Value) -> Value {
         let temporal_format = map
             .get("type")
             .and_then(Value::as_str)
-            .filter(|kind| matches!(*kind, "date" | "date-time"))
+            .filter(|kind| matches!(*kind, "date" | "date-time" | "uuid"))
             .map(str::to_owned);
         if let Some(value) = map.remove("minimumBytes") {
             map.insert("minLength".to_owned(), value);
@@ -1058,7 +1079,7 @@ pub fn value_schema(value: &Value) -> Value {
         }
         if let Some(Value::String(kind)) = map.get_mut("type") {
             match kind.as_str() {
-                "controlled-category" | "bounded-identifier" | "date" | "date-time" => {
+                "controlled-category" | "bounded-identifier" | "date" | "date-time" | "uuid" => {
                     *kind = "string".to_owned()
                 }
                 "bounded-integer" => *kind = "integer".to_owned(),

@@ -24,11 +24,11 @@ export const STABILITIES = ['promised', 'experimental', 'unpromised'];
 export const PRODUCTS = [
   {
     id: 'evidence',
-    title: 'Evidence Gateway',
+    title: 'Registry Evidence',
     docsetProduct: 'registry-evidence',
     checkPage: 'reference/evidence-configuration',
     references: [
-      { label: 'Evidence Gateway configuration reference', page: 'reference/evidence-configuration' },
+      { label: 'Registry Evidence configuration reference', page: 'reference/evidence-configuration' },
     ],
   },
   {

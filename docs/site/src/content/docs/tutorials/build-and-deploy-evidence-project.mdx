@@ -1,6 +1,6 @@
 ---
-title: Build and deploy an Evidence Gateway project
-description: Compile one editable Evidence Gateway project into a reviewed candidate and hand it to an operator without copying local development state.
+title: Build and deploy a Registry Evidence project
+description: Compile one editable Registry Evidence project into a reviewed candidate and hand it to an operator without copying local development state.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,30 +19,30 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Prove an Evidence Gateway project](../prove-an-evidence-project/) and its review before starting
+Complete [Prove a Registry Evidence project](../prove-an-evidence-project/) and its review before starting
 this tutorial. You will turn that editable project into one reviewed production candidate, then
 bind its secrets and runtime paths on the target host. This tutorial uses released `evidence` and
 `evidencectl` binaries. It does not copy `.evidence/dev`, generate a key, register a caller, or
 deploy a service for you.
 
 <QuickstartMeta
-  outcome="A reviewed Evidence Gateway candidate, one target-host validation ceremony, and one independently verified synthetic assertion."
+  outcome="A reviewed Registry Evidence candidate, one target-host validation ceremony, and one independently verified synthetic assertion."
   time="About 45 minutes after the authoring project is reviewed"
   level="Production handoff with synthetic deployment data"
-  prerequisites={['A released Evidence Gateway toolset', 'A reviewed editable Evidence Gateway project', 'A provisioned Vault or OpenBao Transit key', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
+  prerequisites={['A released Registry Evidence toolset', 'A reviewed editable Registry Evidence project', 'A provisioned Vault or OpenBao Transit key', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
 />
 
 ## Before you start
 
-You need a released Evidence Gateway toolset on `PATH`, an editable project that runs locally, and an
+You need a released Registry Evidence toolset on `PATH`, an editable project that runs locally, and an
 operator who can provision owner-only secrets and a private listener on the target host.
-Configure a compatible OpenID Connect (OIDC) issuer for Evidence Gateway access tokens.
+Configure a compatible OpenID Connect (OIDC) issuer for Registry Evidence access tokens.
 
 A production or evidence-grade target also needs a Vault or OpenBao Transit key before you build,
 not after. The target's `target.yaml` names one governed public JWK, and for these profiles
 that JWK is the public half of a non-exportable Transit key, so the key has to exist before the
 target is complete. Provision it with
-[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/).
+[Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/).
 The build itself never contacts Transit; the workload-local proxy is what the target-host ceremony
 and the running service reach.
 
@@ -140,7 +140,7 @@ mapping binds the matching non-exportable Transit key and version. Secret refere
 `secret:file/<name>`, never secret values. The compiler emits process-local `runtime.yaml` and a
 separate `compiled-authority.yaml` alongside the immutable `bundle/`.
 
-Use [Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
+Use [Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/)
 before building the first strict candidate.
 
 ## Build the candidate
@@ -191,9 +191,9 @@ Install the candidate's exact `bundle/` at the stable absolute `package.root` na
 Replacing the package does not require editing that runtime path.
 The operator provisions the audit HMAC key, subject-binding HMAC key,
 and source credentials beneath the runtime secret root. The workload-local Transit proxy holds the
-provider token and auto-auth state; Evidence Gateway receives only access to the configured Unix
+provider token and auto-auth state; Registry Evidence receives only access to the configured Unix
 socket. Its non-exportable signing key remains in Transit.
-Make the installed package and target runtime non-writable to the Evidence Gateway service identity,
+Make the installed package and target runtime non-writable to the Registry Evidence service identity,
 for example `chmod -R a-w "<package.root>" && chmod 444 "<candidate>/runtime.yaml"`.
 Keep the runtime's authority store writable only to the identity authorized to activate grants.
 `evidencectl test` below runs
@@ -213,7 +213,7 @@ evidencectl test "<editable-project>" --target "<deployment-target>"
 ```
 
 Activation validates and records complete grants against the installed package. Restart the intended
-process to adopt a successor authority snapshot. Start Evidence Gateway only after these checks pass:
+process to adopt a successor authority snapshot. Start Registry Evidence only after these checks pass:
 
 ```sh
 evidence serve --runtime-config "<candidate>/runtime.yaml"
@@ -292,6 +292,6 @@ rm -f "<owner-only-curl-config>"
 ## Next
 
 - [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
-- [Integrate an Evidence Gateway candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
-- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
-- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)
+- [Integrate a Registry Evidence candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
+- [Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/)
+- [Manage Registry Evidence verifier trust](../manage-evidence-verifier-trust/)
