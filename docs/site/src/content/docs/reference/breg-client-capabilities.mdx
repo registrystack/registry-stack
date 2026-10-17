@@ -1,6 +1,6 @@
 ---
 title: Base Registry Engine client capabilities
-description: Native spatial, temporal, relationship, action, batch, ingestion, tombstone, and recovery contracts in the unified Registry Stack clients.
+description: Every Base Registry Engine client operation in Rust, Node, and Python, with the bindings, recovery, and error rules a caller needs.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,24 +16,61 @@ import BRegClientCapabilities from '../../../components/BRegClientCapabilities.a
 import BRegProposalQueryKeys from '../../../components/BRegProposalQueryKeys.astro';
 import reference from '../../../data/generated/breg-configuration.json';
 
-The Base Registry Engine (BReg) namespace exposes native registry operations through Rust,
-`@registrystack/client` in Node, and `registry-stack-client` in Python.
-Rust owns validation and protocol behavior; the bindings expose the same selected capabilities.
-The table is generated from the maintained client capability inventory, checked against compiled
-server contracts and language exports.
+The Base Registry Engine (BReg) client is one Rust implementation in three languages: the
+`registry-breg-client` crate (also re-exported as `registry_stack_client::breg`), the `breg`
+namespace of `@registrystack/client` in Node, and the `breg` module of `registry-stack-client` in
+Python. Rust does every validation and protocol check, so the three behave the same.
+
+Construction, the shared outcome shape, and the
+[same-key retry](../client-api/#unknown-outcomes-and-the-same-key-retry) are in the
+[client API reference](../client-api/#base-registry-engine).
+
+## Operations
+
+Python uses the Rust names. The table is generated from the client capability inventory, which a
+gate checks against the server contracts and each language's exports.
 
 <BRegClientCapabilities />
 
-Python takes read options as keyword arguments; Node takes an options object.
-Rust uses an operation-specific request type.
-The [client API reference](../client-api/#base-registry-engine) defines client construction,
-outcomes, errors, attachments, and lifecycle promotion.
+A few methods sit outside the inventory:
+
+| Method (Node) | Purpose |
+| --- | --- |
+| `health`, `ready` | Probes, sent without a bearer token |
+| `openapi`, `registryMetadata`, and the schema read for one Record type | Caller-filtered raw documents for the selected profile |
+| `executeRecoveredCreate`, `executeRecoveredAction`, `executeRecoveredProposalStart` | Send a recovered attempt; see [Recovery after a restart](#recovery-after-a-restart) |
+| `verifyWebhookDelivery` | Authenticate one webhook request; see [Verify a webhook delivery](../client-api/#verify-a-webhook-delivery) |
+
+Python spells each one in snake case. Read options are a request type in Rust, such as
+`BRegListRequest`, keyword arguments in Python, and one object in Node. Mutations take positional
+arguments in all three.
 
 {/* Evidence: products/breg/contracts/client-capabilities.json,
     products/breg/scripts/check_client_capabilities.py,
-    crates/registry-breg-client/src/client.rs,
-    crates/registry-breg-client-node/client.d.ts,
+    crates/registry-breg-client/src/client.rs, BRegListRequest,
+    crates/registry-breg-client-node/client.d.ts, executeRecoveredProposalStart, registryMetadata,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi */}
+
+## Exact JSON text in Node
+
+Three Node methods take JSON text instead of plain objects: `startProposal(binding, inputsJson,
+key)`, `listProposals(collection, queryJson)`, and `prepareProposal(proposal, operation, bodyJson,
+key)`. Python takes dicts for the same arguments, and Rust takes typed values.
+
+```js
+const proposal = await client.startProposal(
+  binding,
+  JSON.stringify({ reason: 'relocation' }),
+  'start-2026-10-17-0001',
+);
+```
+
+Other Node methods take plain values. Many have a `*Json` twin, such as `getRecordJson` or
+`invokeActionJson`, that returns the validated response as exact text in `valueJson`.
+
+{/* Evidence: crates/registry-breg-client-node/client.d.ts, startProposal, listProposals,
+    prepareProposal, getRecordJson, invokeActionJson, valueJson,
+    crates/registry-breg-client-node/__test__/exact-json.test.js */}
 
 ## Proposal list query keys
 
@@ -46,43 +83,44 @@ take the keys as one query object, named below the table.
 
 <BRegProposalQueryKeys keys={reference.client_proposal_query.keys} />
 
-## Metadata and upgrade compatibility
+## Metadata and bindings
 
-Parsed metadata retains operation selectors, relationship paths, reference-operation details,
-vocabulary labels, native Actions, and Proposal capabilities.
-Spatial query descriptors identify the geometry property, CRS84 coordinates, and allowed spans.
-Batch and tombstone descriptors carry their executable request contracts.
-Labels, reference descriptions, and paths convey no additional authority.
-The server filters every descriptor using the current caller and selected profile.
+`registryContract(accessProfile)` returns `BRegMetadata`, the registry's metadata filtered for
+the caller and that profile. Every write, Action, and Proposal call needs an opaque binding
+selected from it:
 
-Select an Action by Action identifier and profile, or a batch or tombstone by Record type
-identifier and profile.
-Selection binds the operation to the source, package revision, profile, route, and request contract.
-A missing optional descriptor on an older server can still be read; an absent executable contract
-cannot produce a binding and returns an unsupported-capability selection error.
+| To | Node and Python (snake case) | Rust |
+| --- | --- | --- |
+| Create a Record | `selectCreate(operationIdentifier, expectedProfile)` | `select_direct_write`, which returns `BRegDirectWrite::Create` |
+| Patch a Record | `selectPatch(operationIdentifier, expectedProfile)` | `select_direct_write`, which returns `BRegDirectWrite::Patch` |
+| Invoke an Action or start a Proposal | `selectAction(actionIdentifier, expectedProfile)` | `select_action` |
+| Tombstone a Record | `selectTombstone(recordTypeIdentifier, expectedProfile)` | `select_tombstone` |
+| Send a batch | `selectBatch(recordTypeIdentifier, expectedProfile)` | `select_batch` |
+| List Proposals | `selectProposals(profile)` | `select_proposals` |
+| Get one Proposal | `selectProposalGet(profile)` | `select_proposal_get` |
+| Read Proposal reviews | `selectProposalReviewContext(profile, action)`, `selectProposalReviewStatus(profile, action)` | `select_proposal_review_context`, `select_proposal_review_status` |
 
-Upgrade the client and server together.
-Older strict metadata decoders can reject the added descriptors even when your application does
-not invoke those operations.
-These additions require no database migration and do not change grants or retention.
+A binding ties the call to the client's origin, the package revision, the profile, the route, and
+the request contract. It exposes nothing and grants nothing the server would not already allow.
+When the metadata does not offer the operation, selection fails with kind `metadata-selection`.
 
-{/* Evidence: crates/registry-breg-client/src/metadata.rs,
-    crates/registry-breg-client/src/metadata_tests.rs,
-    crates/registry-breg/src/api/metadata.rs */}
+Upgrade the client and server together: an older client's strict decoder can reject metadata a
+newer server adds, even for operations the application never calls.
 
-## Native spatial queries
+{/* Evidence: crates/registry-breg-client/src/metadata.rs, select_direct_write, select_action,
+    select_tombstone, select_batch, select_proposals, select_proposal_get,
+    select_proposal_review_context, select_proposal_review_status, BRegMetadataSelectionErrorKind,
+    crates/registry-breg-client-node/client.d.ts, selectCreate, selectPatch,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, select_create,
+    crates/registry-breg-client/src/metadata_tests.rs */}
 
-Direct native lists accept `bbox` alongside the scalar filters permitted by the profile.
-A box is four decimal strings in west, south, east, north order.
-Rust constructs `BRegBoundingBox::new(west, south, east, north)`; Node passes a four-element
-array and Python passes a four-tuple.
-Coordinates use CRS84 longitude and latitude ranges, inclusive edges, and non-crossing bounds.
-Zero-area boxes are valid.
-The client rejects non-finite coordinates, reversed bounds, invalid ranges, and boxes exceeding
-the 256-byte wire bound.
-The server enforces the selected profile's geometry/query grants and maximum spans.
+## Spatial queries
 
-For a configured `establishments` route and `map-reader` profile, a native JSON list uses:
+A direct list accepts `bbox` beside the filters the profile permits. A box is four decimal strings
+in west, south, east, north order, in CRS84 longitude and latitude. The client refuses reversed
+bounds, out-of-range values, boxes that cross the antimeridian, and boxes over the 256-byte wire
+limit. Zero-width boxes are valid. The server enforces the profile's geometry grant and maximum
+span.
 
 ```python
 page = client.list_records(
@@ -97,144 +135,237 @@ const page = await client.listRecords('establishments', {
 });
 ```
 
-Use the separate GeoJSON get/list methods when you need a Feature or FeatureCollection.
-GeoJSON keeps Point or null geometry, selected properties, and revision metadata separate from
-the shared Registry Record decoder.
-Omitting the geometry property with `select` yields null geometry.
-A GeoJSON get supplies no mutation ETag; fetch a native record before a mutation that needs one.
-Use the matching GeoJSON continuation method for subsequent pages.
-The six `/v1/gis` adapter routes serve QGIS directly and have no SDK wrappers.
+```rust
+use registry_breg_client::{BRegBoundingBox, BRegListRequest, BRegRecordOptions};
 
-{/* Evidence: crates/registry-breg-client/src/geojson.rs,
-    crates/registry-breg-client/src/query.rs,
+let request = BRegListRequest::default()
+    .options(BRegRecordOptions::default().access_profile("map-reader")?)
+    .bbox(BRegBoundingBox::new("100", "13", "101", "14")?)
+    .top(20)?;
+let page = client.list_records("establishments", &request).await?;
+```
+
+`registry_stack_client::breg` does not re-export `BRegBoundingBox`; depend on `registry-breg-client`
+for it.
+
+Use the GeoJSON methods when you need a Feature or FeatureCollection. Leaving the geometry field out
+of `select` yields null geometry. The `/v1/gis` adapter routes serve QGIS directly and have no client
+methods.
+
+{/* Evidence: crates/registry-breg-client/src/query.rs, BRegBoundingBox, MAX_BBOX_PARAMETER_BYTES,
+    crates/registry-breg-client/src/geojson.rs,
+    crates/registry-stack-client/src/lib.rs, breg,
+    crates/registry-breg-client/tests/read_parity.rs,
     crates/registry-breg/tests/postgres_spatial_read.rs,
-    crates/registry-breg/src/api/gis.rs */}
+    products/breg/contracts/client-capabilities.json, excludedRoutes */}
 
 ## Temporal, revision, and relationship reads
 
-Current and as-of collection methods use separate routes and request types.
-An as-of request requires `asOf` in Node or `as_of` in Python.
-A snapshot request accepts the server's `snapshot` reference and `validAt` timestamp forms
-(`valid_at` in Python).
-Capture the returned snapshot reference to repeat a read at that committed state.
-Snapshot continuations retain that identity across intervening writes.
-Current authority and retained-history coverage still govern every read.
+| Read | Node | Notes |
+| --- | --- | --- |
+| Current state | `listCurrentRecords` | A separate route from the direct list |
+| State at an instant | `listRecordsAsOf` | Requires `asOf` (`as_of` in Python) |
+| A committed snapshot | `listSnapshotRecords` | Takes `snapshot` or `validAt`; keep the returned snapshot reference to repeat the read |
+| Revision list | `recordRevisions` | The newest 100 retained revisions, with no continuation |
+| One revision | `getRecordRevision` | Returns the revision as bytes (`Buffer` or `bytes`) |
+| Related Records | `listRelationshipRecords(route, recordIdentifier, pathRoute, options)` | Takes the path route from the metadata |
 
-Individual revision retrieval and revision lists return bounded inert JSON bytes.
-Read `body` as a Buffer in Node or bytes in Python and use a lossless JSON parser when needed.
-Revision lists return at most the newest 100 retained revisions and have no continuation.
-Proposal observations use the exact Action revision, submission version, and effect
-digest. Read the bound Proposal through its promoted self link; Revise or Rebase
-makes the earlier binding stale. Current application status is local to that
-frozen submission and never silently follows its successor.
+A relationship path has its own authority and projection, and refuses `bbox` and temporal options.
 
-A relationship read takes the entity route, source-record UUID, and configured path route as three
-separate arguments.
-Discover the path through parsed metadata.
-The server applies path-specific authority and target projections, which can differ from direct
-target-list access.
-Only that path's permitted scalar query options apply; bbox and temporal combinations are refused.
-Pass a complete continuation unchanged to the matching operation's continuation method.
-Continuations bind route, profile, representation, and collection identity and accept no replacement
-first-page query options.
+Pass a continuation unchanged to the matching `continue*` method. It keeps the route, profile, and
+snapshot identity across later writes.
+Current authority and retained history still govern every page.
 
-{/* Evidence: crates/registry-breg-client/src/read.rs,
-    crates/registry-breg-client/src/client.rs,
+{/* Evidence: crates/registry-breg-client/src/client.rs, list_current_records, list_records_as_of,
+    list_snapshot_records, list_relationship_records, record_revisions,
+    crates/registry-breg/src/model.rs, MAX_REVISION_HISTORY_RECORDS,
+    crates/registry-breg-client/src/read.rs,
     crates/registry-breg-client/tests/read_parity.rs,
     crates/registry-breg/tests/postgres_client_capabilities.rs */}
 
-## Immediate actions and atomic mutations
+## Proposals
 
-An immediate action can operate without generic record-get authority.
-Select its binding from metadata, retrieve target conditions explicitly, then invoke using the
-same binding, validated inputs, conditions, and your idempotency key.
-Invocation never refreshes conditions. It resends the identical invocation under the same key only
-when the outcome is unknown, as the
-[same-key retry](../client-api/#unknown-outcomes-and-the-same-key-retry) describes.
-Required, optional, and nullable inputs remain distinct.
-The action contract supplies field types and bounds; receipts expose only effects permitted by the
-selected profile.
-A declared business refusal exposes its bounded refusal code through the ordinary client error.
+Start a Proposal with `startProposal(binding, inputs, key)`, using a binding selected for an Action
+whose mode is Proposal Start. Then:
 
-Batch requests contain same-entity create or patch items allowed by their selected
-contract, with per-item preconditions where required.
-Rust uses `BRegBatchBuilder`; Node and Python provide the equivalent structured request.
-An optional batch-level correction context carries a bounded reason and source references.
-The client validates fields, preconditions, and aggregate item/body limits before sending one atomic
-request.
-A stale item or constraint failure rolls back every item.
-Interval constraints are evaluated on the final batch state.
-The batch receipt has a `snapshot` and `results`, rather than a Registry Record envelope.
+- `getProposal(binding, identifier)` finds one by identifier; `listProposals(collection, query)`
+  pages through them with the query keys above.
+- `readProposal(proposal)` refreshes one you already hold.
+- `prepareProposal(proposal, operation, body, key)` prepares a transition (`edit`, `submit`,
+  `revise`, `rebase`, `retry`, `cancel`, or `apply`), and `executeProposal(prepared)` sends it.
+- `readProposalSubmission(proposal, version)` returns one frozen submission exactly as it was
+  submitted: its Action, version, effect digest, review, application status, and decision. Once
+  retention has removed it, the call fails with `410 proposal.submission_expired`.
+- `readProposalReviewContext(proposal)`, `readProposalReviewStatus(proposal)`,
+  `readProposalReviewById(binding, identifier)`, and `downloadProposalReviewDocument(binding,
+  context, field)` read the review. The review context carries no attachment bytes.
+- `uploadProposalAttachment`, `downloadProposalAttachment`, and `deleteProposalAttachment` work on
+  one declared slot. Submitting freezes the attachment digests, so changed bytes cannot inherit an
+  earlier approval.
 
-Tombstone requires its selected binding, a record ETag, and your idempotency key.
-Its native revision envelope identifies the resulting revision.
-The record disappears from live lists while permitted retained history remains readable.
-Record ETags and lifecycle ETags are distinct.
+Each transition has its own grant, and each link carries the Proposal's `ifMatch` condition, never
+a Record ETag. Read the Proposal again after every transition. A later read does not settle an
+uncertain Start or Submit; recover the original attempt instead.
 
-{/* Evidence: crates/registry-breg-client/src/actions.rs,
-    crates/registry-breg-client/src/batch.rs,
-    crates/registry-breg-client/src/extended_mutation.rs,
-    crates/registry-breg/tests/postgres_client_capabilities.rs,
-    crates/registry-breg/tests/postgres_immediate_actions.rs,
-    crates/registry-breg/tests/postgres_action_handlers.rs */}
+{/* Evidence: crates/registry-breg-client/src/proposal.rs, prepare_proposal, execute_proposal,
+    read_proposal_submission, recover_proposal, BRegProposalLink,
+    crates/registry-breg/src/api/proposals.rs, ProposalSubmissionExpired,
+    crates/registry-breg/src/problem.rs, ProposalSubmissionExpired,
+    crates/registry-breg-client-node/client.d.ts, BRegProposalTransition, BRegProposalSubmission,
+    readProposalReviewById, downloadProposalReviewDocument,
+    crates/registry-breg-client/src/attachment.rs,
+    crates/registry-breg-client-node/__test__/proposals.test.js */}
 
-## Durable ingestion runs
+## Immediate Actions, batch, and tombstone
 
-An ingestion run moves one whole source input through bounded, individually
-committed chunks. Announce the input with the entity route and a run request:
-operation, profile, package revision, schema fingerprint, input digest, input
-length, item count, chunk count, and chunk algorithm version. The run stays
-open across many calls, so a long input survives process restarts without one
-atomic request.
+An immediate Action can run without the general right to read the Record. Select its binding, fetch
+the target conditions with `actionTargetConditions(binding, inputs)`, then call `invokeAction`
+with the same binding, inputs, conditions, and your idempotency key. The client never refreshes the
+conditions for you. A declared refusal arrives as kind `problem` with code `action.refused` and the
+Action's `refusalCode`.
 
-Submit one chunk at a time with the run identifier. The chunk digest is derived
-in Rust from the exact canonical batch body the items hash to, and the
-submitted body carries the announced prefix digest: the lowercase SHA-256 of
-the complete raw source input through the end of that chunk. Rust owns that
-derivation; Node accumulates raw bytes with `BRegIngestionPrefixDigest` and
-encodes a chunk with `encodeIngestionChunk`, and Python uses
-`BRegIngestionPrefixDigest` and `encode_ingestion_chunk`.
-A resubmitted chunk replays its retained receipt instead of executing twice.
+`batchRecords(binding, request, key)` sends create and patch items for one Record type as one
+atomic request. A stale item or a failed constraint rolls back every item, and interval constraints
+are checked on the final state. An optional change context records why: `{ kind: 'change' }` or
+`{ kind: 'correction', reasonCode }`, each with optional `reasonText` and `sourceReferences`
+(snake case in Python). Rust builds the request with
+`BRegBatchBuilder` and `BRegChangeContext`. The receipt carries a `snapshot` and per-item `results`.
 
-Read the run state, one bounded page of runs, or one retained chunk receipt at
-any time. Receipts are durable but not permanent: an erased receipt answers
-with the `ingestion.receipt_erased` problem instead of its batch result.
-Cancelling an open run stops further submissions; committed chunks stay
-committed.
+`tombstoneRecord(binding, recordIdentifier, etag, key)` removes a Record from live lists and
+returns the new revision. Permitted retained history stays readable.
+
+{/* Evidence: crates/registry-breg-client/src/actions.rs, action_target_conditions, invoke_action,
+    crates/registry-breg-client/src/batch.rs, BRegBatchBuilder, BRegChangeContext,
+    crates/registry-breg-client-py/src/lib.rs, change_context_from_value,
+    crates/registry-breg-client/src/extended_mutation.rs, tombstone_record,
+    crates/registry-breg/tests/postgres_batch.rs,
+    real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable,
+    crates/registry-breg/tests/postgres_immediate_actions.rs */}
+
+## Statistical datasets
+
+The `statistics*` methods read live figures and releases, and publish or withdraw a release. A withdrawn version answers `410` with code
+`statistical_dataset.version_withdrawn` and the withdrawal reason in `reasonCode`. A refused release
+carries `refusalCode`. Datasets are declared in the
+[statistics configuration](../../configure/breg-statistics/).
+
+{/* Evidence: crates/registry-breg-client/src/statistics.rs, statistics_withdraw,
+    crates/registry-breg-client-node/src/lib.rs, StatisticalDatasetVersionWithdrawn,
+    StatisticalDatasetReleaseRefused */}
+
+## Ingestion runs
+
+An ingestion run loads one large input in chunks, each committed on its own, so a load survives a
+restart. `createIngestionRun(route, request)` announces the whole input: operation,
+profile, package revision, schema fingerprint, input digest and length, item and chunk counts, and
+chunk algorithm version.
+
+`submitIngestionChunk(route, runId, chunk, profileId)` sends one chunk. Each chunk carries a prefix
+digest, the SHA-256 of the raw input through the end of that chunk. Build it with
+`BRegIngestionPrefixDigest` and `encodeIngestionChunk` (`encode_ingestion_chunk` in Python). A
+resubmitted chunk replays its saved receipt instead of running twice.
+
+An erased chunk receipt answers `ingestion.receipt_erased`. Cancelling a run stops further chunks;
+committed chunks stay.
 
 {/* Evidence: crates/registry-breg-client/src/ingestion.rs,
-    crates/registry-breg-client/tests/write_http_boundary.rs,
+    crates/registry-breg-client/src/error.rs, ingestion.receipt_erased,
+    crates/registry-breg-client-node/client.d.ts, BRegIngestionPrefixDigest, encodeIngestionChunk,
     crates/registry-breg-client-node/__test__/ingestion.test.js,
     crates/registry-breg-client-py/tests/python/test_ingestion_runs.py */}
 
-## Recovery after a process restart
+## Recovery after a restart
 
-Prepare create or lifecycle evidence before the initial send, then persist its byte export in
-application-owned sensitive storage.
-The evidence contains the original request, conditions, profile/package binding, and caller-chosen
-idempotency key, with token-free and redacted string/debug representations.
-It is sensitive even though it carries no bearer token.
+If a process dies between sending a write and reading the answer, replay the same attempt under
+the same key after a restart. Prepare it before the first send and save its bytes. Node names:
 
-After restart, import the bytes, fetch fresh caller-filtered metadata under the original principal,
-and select the matching create binding or lifecycle authority.
-Recovery validates that binding and saved request before you explicitly replay the original attempt.
-An already-applied lifecycle action can be recovered even after it disappears from the current record.
-Do not replace its original conditions or idempotency key after an unknown outcome.
+| Attempt | Before the first send | After a restart | Send |
+| --- | --- | --- | --- |
+| Create a Record | `prepareCreate(binding, data, key)` | `BRegPreparedCreate.fromBytes`, then `recoverCreate(binding, prepared)` | `executeRecoveredCreate` |
+| Invoke an Action | `prepareAction(binding, inputs, key, conditions)` | `BRegPreparedAction.fromBytes`, then `recoverAction(binding, prepared, inputs, key)` | `executeRecoveredAction` |
+| Start a Proposal | `prepareAction(binding, inputs, key)` | as for an Action | `executeRecoveredProposalStart` |
+| Proposal transition | `prepareProposal(proposal, operation, body, key)` | `BRegPreparedProposal.fromBytes`, then `recoverProposal(current, prepared)` | `executeProposal` |
 
-Node uses `BRegPreparedCreate.fromBytes` or `BRegPreparedLifecycle.fromBytes` and `toBytes`.
-Python uses `from_bytes` and `to_bytes`; Rust uses `from_slice` and `as_bytes`.
-Node and Python return opaque recovered attempts for the explicit recovered-execution methods.
-The application owns principal binding, integrity, access control, and lifetime of saved evidence.
-Importing evidence does not authenticate its owner or deserialize executable authority.
-Persisted recovery for other mutation families is outside this contract.
+Save the bytes from `toBytes()`. Python uses snake case, with `from_bytes` and `to_bytes`; Rust
+uses `from_slice` and `as_bytes`. In Rust, `recover_create` returns the request,
+key, and format to send with `create_record`, and `recover_action` returns a request to send with
+`invoke_action` or `start_proposal`.
 
-{/* Evidence: crates/registry-breg-client/src/recovery.rs,
-    crates/registry-breg-client-node/client.d.ts,
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi */}
+Action recovery needs the original inputs and key as well as the saved bytes. Recovery checks the
+saved attempt against a binding freshly selected under the original principal, and reuses the saved
+target conditions exactly. A restored Proposal transition cannot be executed until
+`recoverProposal` has checked it against the current Proposal:
+
+```js
+const restored = breg.BRegPreparedProposal.fromBytes(saved);
+const current = await client.getProposal(getBinding, proposalIdentifier);
+const attempt = client.recoverProposal(current, restored);
+const updated = await client.executeProposal(attempt);
+```
+
+:::caution
+The saved bytes hold the original request body and idempotency key. They hold no bearer token, but
+treat them as sensitive. Your application owns where they are stored, who may read them, and how
+long they live. Importing them authenticates no one and grants no authority.
+:::
+
+{/* Evidence: crates/registry-breg-client/src/recovery.rs, prepare_create, recover_create,
+    BRegPreparedCreate, crates/registry-breg-client/src/actions.rs, prepare_action, recover_action,
+    BRegPreparedAction, crates/registry-breg-client/src/proposal.rs, BRegPreparedProposal,
+    recover_proposal, crates/registry-breg-client-node/client.d.ts, executeRecoveredCreate,
+    executeRecoveredAction, executeRecoveredProposalStart,
+    crates/registry-breg-client-node/__test__/proposals.test.js,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, from_bytes */}
+
+## Errors
+
+Every failure is a `BaseRegistryClientError`: an `Error` in Node, an `Exception` in Python. An
+attribute the failure does not carry is absent in Node and `None` in Python.
+
+| Node | Python | Carries |
+| --- | --- | --- |
+| `kind` | `kind` | One of the kinds below; always set |
+| `outcomeUnknown` | `outcome_unknown` | `true` when a write may have committed |
+| `status` | `status` | HTTP status |
+| `code` | `code` | The BReg Problem code, or a bounded code for the kinds that set one |
+| `traceId` | `trace_id` | Validated trace identifier |
+| `fieldPath` | `field_path` | The field a Problem names |
+| `constraint` | `constraint` | A row-local constraint conflict |
+| `refusalCode` | `refusal_code` | The declared reason for `action.refused` or `statistical_dataset.release_refused` |
+| `reasonCode` | `reason_code` | The reason for `statistical_dataset.version_withdrawn` |
+| `transportKind` | `transport_kind` | The transport failure category |
+| `tokenKind` | `token_kind` | The token failure category |
+
+| Kind | Meaning | Also set |
+| --- | --- | --- |
+| `configuration` | Construction inputs were refused | none |
+| `invalid-request` | An input was refused before any exchange | none |
+| `token` | The token provider could not supply a bearer | `tokenKind`, and `transportKind`, `code`, or `status` depending on the failure |
+| `transport` | The exchange failed below HTTP | `transportKind` |
+| `not-found` | The server answered `resource.not_found` | `status`, `code`, `traceId` |
+| `problem` | The server answered with any other Problem | `status`, `traceId`; a known code adds `code` and any `fieldPath`, `constraint`, `refusalCode`, or `reasonCode` |
+| `protocol` | The response broke the contract | `status`, `traceId` when valid, and `code`: `header-bounds`, `trace-context`, `media-type`, `body`, `problem`, `entity-tag`, `profile-link`, `location`, `cache-policy`, `representation-digest`, `status`, or `protocol` |
+| `metadata-selection` | No binding matched | `code`: `not-found`, `unbound-source`, `profile-mismatch`, `unsupported-operation`, `required-capability`, or `contract-mismatch` |
+| `webhook-verification` | A webhook delivery failed authentication | `code`: `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version` |
+| `client` | Any other client-side failure | none |
+
+A Problem code this client version does not know arrives as kind `problem` with only `status` and
+`traceId`; decide on the status. An unknown `4xx` is a refusal; an unknown `5xx` may have committed.
+The [API reference](../breg-api/) lists every Problem code.
+
+{/* Evidence: hand-written table; client-capabilities.json carries no error kinds.
+    crates/registry-breg-client-node/src/lib.rs, client_error, protocol_code, selection_error,
+    webhook_verification_error, token_error_value,
+    crates/registry-breg-client-py/src/lib.rs, sdk_error, token_error, MappedError,
+    crates/registry-breg-client/src/error.rs, BaseRegistryClientError, BRegConstraintViolation,
+    crates/registry-breg-client-node/client.d.ts, BaseRegistryClientError,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi,
+    crates/registry-breg-client/tests/http_boundary.rs,
+    unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values */}
 
 ## Next
 
-- [Query a registry from Python and Node](../../tutorials/query-breg-client/) for client installation and a complete read/write journey.
-- [Client API reference](../client-api/#base-registry-engine) for outcome and error shapes.
-- [Control access per profile](../../configure/breg-access/) for operation grants and projections.
-- [Retention and erasure](../../operate/breg-retention/) for history and saved-response lifetime.
+- [Query a registry from Python and Node](../../tutorials/query-breg-client/) installs a client and walks a read and write journey.
+- [Client API reference](../client-api/#base-registry-engine) covers construction, outcomes, and the same-key retry.
+- [Control access per profile](../../configure/breg-access/) sets the grants every binding depends on.
+- [Retention and erasure](../../operate/breg-retention/) sets how long history, submissions, and receipts last.

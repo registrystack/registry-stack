@@ -1,6 +1,6 @@
 ---
 title: Base Registry Engine configuration reference
-description: Generated fields, accepted values, defaults, and constraints for Base Registry Engine projects, modules, and runtime configuration.
+description: Keys, accepted values, defaults, and bounds for every file Base Registry Engine reads, from registry.yaml, module.yaml, and runtime.yaml to the tooling documents beside a project.
 status: draft
 owner: registry-docs
 source_repos:
@@ -17,119 +17,109 @@ import ConfigurationFormatChecks from '../../../components/ConfigurationFormatCh
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/breg-configuration.json';
 
-Look up configuration keys for `registry.yaml`, `module.yaml`, and `runtime.yaml`.
-The tables are generated from Base Registry Engine's Rust-derived JSON Schemas, including event
-conditions, webhook destinations, access profiles, and module extensions.
-
-## Scope
-
-This reference describes the current configuration grammar, which is not frozen before `v1.0.0`;
-[API stability and versioning](../api-stability/) states what `v1.0.0` promises.
-Types, required fields, accepted values, defaults, and constraints come from the schemas.
-Descriptions appear where the Rust definition supplies them.
-Internal compatibility fields and test-journey documents are outside this reference.
-
-Use [author a registry project](../../configure/breg/) for worked configurations and
-deployment steps. A schema-valid document still needs the compiler and runtime checks:
-`bregctl check <project>` validates the combined model;
-`bregctl doctor --runtime-config <absolute-file>` checks deployment configuration.
-Cross-field rules and references to other files cannot all be expressed by these tables.
-[Configuration files](../configuration-files/) describes the YAML rules and environment
-substitution that apply when the runtime reads `runtime.yaml`.
+Look up any key of a file Base Registry Engine (BReg) reads: `registry.yaml`,
+`modules/<name>/module.yaml`, `runtime.yaml`, and the tooling documents beside a project. To write
+a project, start from [Author a registry project](../../configure/breg/); to deploy one, from
+[Deploy and serve](../../operate/breg/). The grammar is not frozen before `v1.0.0`
+([API stability and versioning](../api-stability/)).
 
 {/* Evidence: crates/registry-breg/src/schema.rs, documents() and runtime_documents();
     crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
-    crates/registry-bregctl/src/lib.rs, DoctorArgs and check(). */}
+    crates/registry-bregctl/src/tool_schema.rs, documents(). */}
 
-## Read the tables
+## How to read the tables
 
-`fields[]` means an array item; `eventDestinations.*` means a map entry whose name you choose.
-Required fields inside an optional object apply when that object is present.
-Conditional fields depend on the selected variant or another configuration value.
-Accepted values list the union across variants; constraints separated by `or` are alternatives.
-A schema default applies only where that variant declares it. `Not specified` does not mean
-that every value is accepted.
+`fields[]` is an array item; `eventDestinations.*` is a map entry whose name you choose. A required
+key inside an optional object is required only when that object is present. Constraints joined
+by `or` are alternatives. `Not specified` does not mean any value is accepted: the compiler and the
+runtime also check cross-field rules and references that no table can show.
 
-For example, `hooks[].when.afterEquals.*` holds a comparison value for a field you name.
-The schema permits a scalar or null; the compiler also checks that the value matches the
-declared field type and that the condition is valid for the event trigger.
+{/* Evidence: docs/site/scripts/configuration-reference.mjs, collectFields(). */}
 
-{/* Evidence: crates/registry-breg/src/contract.rs, EventScalarValue and EventConditionSource;
-    crates/registry-breg/src/compiler.rs;
-    docs/site/scripts/configuration-reference.mjs, collectFields(). */}
+{/* Generated from src/data/generated/breg-configuration.json by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site.
+    The source schemas are products/breg/generated/authoring/, products/breg/generated/runtime/,
+    and products/breg/generated/tools/. The authoring-schema and runtime-schema examples of
+    registry-breg and the tool-schema example of registry-bregctl regenerate them, and
+    products/breg/scripts/check-generated.sh and check-tool-schemas.sh hold them to the Rust types. */}
+
+<ConfigurationReference contracts={reference.contracts} prefix="server" />
 
 ## Indexes
 
-`recordTypes[].indexes` declares btree indexes by `id` and ordered `fields`. The compiler appends the
-record id as the last column of each declared index, because every list orders by the record id
-last; do not declare it. An index declares at most 31 fields: the appended record id takes the last
-of the 32 key columns PostgreSQL allows in an index, and the compiler refuses a longer index with
-`breg.index.fields-too-many`. Every `reference`
-field is indexed automatically unless a declared index or a unique constraint without `when`
-already leads with it. `bregctl check` reports the authoring findings
-`breg.record-type.list-unindexed-filter` and `breg.record-type.list-unindexed-sort` for a filterable or sortable
-list field that no index leads with. They fail a check only under `--deny-warnings`, and are not
-raised when a package is built.
+The compiler appends the record id, the last sort key of every list, to each index under
+`recordTypes[].indexes`; do not declare it. An index declares at most 31 fields
+(`breg.index.fields-too-many`). Every `reference` field gets an index of its own unless a declared
+index, or a unique constraint without `when`, already leads with it.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities(), validate_indexes(), and
-    unindexed_list_findings(); crates/registry-breg/src/model.rs, leading_field_indexed();
-    crates/registry-breg/src/generated_ddl.rs;
-    crates/registry-breg/tests/compiler_contract.rs. */}
+`bregctl check` reports `breg.record-type.list-unindexed-filter` and
+`breg.record-type.list-unindexed-sort` for a filterable or sortable list field that no index leads
+with; they fail a check only under `--deny-warnings`.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, MAX_AUTHORED_INDEX_FIELDS, validate_indexes(),
+    and unindexed_list_findings();
+    crates/registry-breg/src/model.rs, leading_field_indexed();
+    crates/registry-breg/src/generated_ddl.rs, RECORD_ID_COLUMN and REFERENCE_INDEX_PREFIX. */}
+
+## Statistical dataset declarations
+
+`statisticalDatasets[].unit` names the Record type a dataset counts. `minimumCount` and
+`roundingBase` are required and take no value below 2. At most one access profile holds `publish`
+on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
+without one, no profile may hold `read-releases`. See [Publish a statistical
+series](../../configure/breg-statistics/).
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs, compile() and
+    validate_publisher_independence();
+    crates/registry-breg/src/contract.rs, StatisticalDisclosureSource. */}
 
 ## Attachment storage
 
-Proposal Actions declare `execution.proposal.attachments[]`; deployment storage is selected
-only in `runtime.yaml`. Omit `attachmentStorage` or use `{type: database}` to keep
-content in PostgreSQL without another service. The optional `type: s3` binding
-requires `endpoint`, `bucket`, `region`, `accessKeyIdRef`, and
-`secretAccessKeyRef`. `sessionTokenRef` and `caBundleRef` are optional secret
-references. `pathStyle` defaults to true. `attemptTimeoutMilliseconds` defaults to 10,000
-and accepts 100 to 60,000. Secret references use the configured file or environment
-provider; inline credentials are refused.
+Attachments of Proposal Actions are stored in PostgreSQL unless `runtime.yaml` selects
+`attachmentStorage` of `type: s3`. `breg` checks an S3 binding at startup:
 
-S3 endpoints are canonical root HTTPS URLs; numeric loopback HTTP is accepted
-for local development. Virtual-host addressing requires a DNS endpoint. Give the
-runtime permission to inspect bucket versioning and get, put, and delete objects.
-Keep bucket versioning disabled throughout operation. Enabled or suspended
-versioning is refused because a delete marker does not physically erase older
-object versions. Backup and replication expiry remain the operator's responsibility.
+- `endpoint` is a root HTTPS URL with no path, query, fragment, or user information; plain HTTP
+  is accepted only for a numeric loopback address.
+- `pathStyle: false` (virtual-host addressing) needs a DNS host name in `endpoint`.
+- `bucket` uses lowercase letters, digits, hyphens, and dots, starts and ends with a letter or
+  digit, and is not an IP address. `region` uses lowercase letters, digits, and hyphens.
+- Every credential is a secret reference resolved through the runtime's secret providers.
+- The bucket must never have had versioning enabled. `breg` reads its versioning state at startup
+  and before each deletion, and refuses it when enabled or suspended, because a delete marker does
+  not erase older object versions.
 
-Give each independent database a distinct `identity.databaseId`. Content deduplicates
-by SHA-256 within the database and registry's storage namespace; request
-and proposal references remain independent authorization boundaries. Erasing
-one reference preserves bytes required by another retained reference. External
-deletions are durably retried, and physical deletion is complete only after
-confirmation. Use [attachment cleanup](../../operate/breg-retention/#retry-external-attachment-cleanup)
-to retry pending external deletions independently of request retention eligibility.
-Its `pendingExternalDeletions` count covers the registry; a scoped request erasure
-separately reports `attachmentReferences`. Confirmed S3 deletions retain durable
-tombstones, reported as `externalDeletionTombstones`, so later cleanup runs can
-recheck for a delayed remote write and remove any orphan bytes. These
-rechecks never restore an erased request reference. The first stored attachment pins
-the storage and verification bindings for the database and registry. Configure both
-before that first upload. Changing either binding afterward is unsupported, even
-after content erasure; rotating secrets preserves the binding.
+The runtime needs to read the bucket's versioning state and to get, put, and delete objects.
+Content is stored once per SHA-256 digest within one database and registry, so give each
+independent database its own `identity.databaseId`. Deletion is a retried cleanup
+([Retry external attachment cleanup](../../operate/breg-retention/#retry-external-attachment-cleanup)).
 
-{/* Evidence: crates/registry-breg/src/runtime_config.rs, activate_attachment_storage();
-    crates/registry-breg/src/attachment_storage.rs;
-    crates/registry-breg/src/attachment_store.rs. */}
+:::caution
+The first stored attachment pins the storage binding (database, or S3 bucket URL, region, and
+registry) and the verification binding (disabled, or endpoint and `policyId`) in the database.
+`breg` then refuses to start with a different binding, even after every attachment is erased.
+Configure both before the first upload; rotating a secret or changing a timeout keeps the binding.
+:::
+
+{/* Evidence: crates/registry-breg/src/attachment_storage.rs, RawAttachmentStorageConfig,
+    AttachmentStorageConfig, ensure_unversioned(), validate_unversioned_xml(), and binding_digest();
+    crates/registry-breg/src/runtime_config.rs, activate_attachment_storage();
+    crates/registry-breg/src/attachment_store.rs, pin_backend() and verify_backend_binding();
+    crates/registry-breg/src/startup.rs, AttachmentStorage. */}
 
 ## External attachment verification
 
-`attachmentVerification` is an operator binding. Omit it or use `{type: disabled}`
-to accept attachments without an external verdict. Use `type: http` to quarantine
-uploads until a verifier approves them. Configure `endpoint`, `authorizationRef`,
-and `policyId`; `attemptTimeoutMilliseconds` defaults to 10,000 and accepts 100 to 60,000.
-The endpoint is a full HTTPS URL, with numeric loopback HTTP allowed for local
-verification. A fixed query is allowed; user information and fragments are refused.
-The token referenced by `authorizationRef` is sent as a Bearer credential.
-`policyId` is a nonsecret, 1 to 128 character visible-ASCII identifier for the
-verifier's rules generation.
+`attachmentVerification` of `type: http` holds every uploaded file in quarantine until an external
+verifier approves it; the default, `type: disabled`, needs no verdict. `endpoint` is an HTTPS URL,
+or plain HTTP to a numeric loopback address, and may carry a fixed query but no user information or
+fragment. `policyId` names the verifier's rules generation and is not secret. A background worker
+sends:
 
-The asynchronous worker posts the complete file as raw bytes with its retained
-`Content-Type`, `Accept: application/json`, and lowercase digest in
-`X-Content-SHA256`. The verifier must return
-HTTP 200 with one of these closed JSON responses:
+- `POST` to `endpoint` with the file's raw bytes as the body;
+- `Authorization: Bearer <token>`, the token read from `authorizationRef`;
+- the file's `Content-Type`, `Accept: application/json`, and its lowercase hexadecimal SHA-256
+  digest in `X-Content-SHA256`.
+
+The verifier answers HTTP 200 with at most 1,024 bytes holding exactly one of:
 
 ```json
 {"verdict":"approved"}
@@ -139,105 +129,137 @@ HTTP 200 with one of these closed JSON responses:
 {"verdict":"rejected"}
 ```
 
-The response is bounded to 1,024 bytes. Duplicate or unknown members, invalid
-verdicts, other status codes, timeouts, and unavailable responses leave the file
-pending for retry. The transport follows no redirects and uses no ambient proxy.
-The registry enforces the verdict; the external service owns its content inspection rules.
-The request sends file bytes to that service. Configure its access and retention
-policy separately: registry erasure does not delete verifier logs or retained copies,
-and this hook provides no remote copy-deletion operation.
+Anything else, a timeout, or an unreachable verifier leaves the file pending; the worker retries
+and logs `attachment_verification.retry_pending`. The request follows no redirect and uses no proxy.
 
-A filled pending or rejected slot blocks both content download and request
-submission, including optional slots. Approval is reused only for the exact file
-hash, content type, and policy binding. The binding includes the endpoint and
-`policyId`; token rotation and timeout changes preserve it. Storage and verification
-configuration are pinned on the first upload, so enable verification before storing
-attachments. Changing the endpoint, policy generation, or enabled/disabled mode
-afterward is unsupported. Slot metadata reports progress without exposing the
-verifier URL or credential. Failed attempts retry automatically and emit the
-value-free operational code `attachment_verification.retry_pending`. Restore service
-availability or rotate the credential to recover from transport or authentication
-failures. Replace rejected content; reuploading identical bytes with the same
-content type reuses a retained rejection rather than requesting another verdict.
+A pending or rejected file blocks its download and the submission of its Proposal, optional slots
+included. A verdict is reused for the same digest, content type, and verification binding, so
+re-uploading rejected bytes is rejected again. Registry erasure does not reach the verifier: agree
+its logging and retention separately.
 
-{/* Evidence: crates/registry-breg/src/runtime_config.rs, activate_attachment_verification();
-    crates/registry-breg/src/attachment_verification.rs;
-    crates/registry-breg/src/attachment_verification_worker.rs;
+{/* Evidence: crates/registry-breg/src/attachment_verification.rs,
+    RawAttachmentVerificationConfig, AttachmentVerificationConfig, HttpAttachmentVerifier,
+    VerdictResponse, and MAXIMUM_VERDICT_BYTES;
+    crates/registry-breg/src/attachment_verification_worker.rs, AttachmentVerificationRetryPending;
     crates/registry-breg/src/startup.rs, AttachmentVerificationRetryPending;
-    crates/registry-breg/src/attachment_store.rs. */}
+    crates/registry-breg/src/attachment_store.rs, verification_status(), permits_content(), and
+    manifest();
+    crates/registry-platform-httputil/src/lib.rs, OutboundClientBuilder. */}
 
-## Regeneration
+## Development clients
 
-The source schemas live under `products/breg/generated/authoring/` and
-`products/breg/generated/runtime/`.
-Their owning generators are the `authoring-schema` and `runtime-schema` Rust examples.
-`products/breg/scripts/check-generated.sh` checks that they match the source types.
-Run `npm run generate` in `docs/site` to rebuild these tables from those schemas.
+`dev-clients.yaml` declares the local clients `bregctl dev start` binds to access profiles
+([Create your first registry](../../tutorials/first-breg/)).
 
-`bregctl generate schemas <project> --output <directory>` has a different purpose:
-it generates record schemas for that project's API, not configuration schemas.
+{/* Evidence: crates/registry-bregctl/src/dev/config.rs, DEV_CLIENTS_FORMAT. */}
 
-{/* Generated from src/data/generated/breg-configuration.json by
-    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'dev-clients')} prefix="breg-tool" compact />
 
-<ConfigurationReference contracts={reference.contracts} prefix="server" />
+## Example scenarios
 
-## Statistical dataset declarations
+`examples/scenarios.json` declares the named scenarios `bregctl examples list` describes and
+`bregctl examples run <scenario>` runs against the development instance, each step as one client
+and access profile.
 
-Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, and disclosure parameters. `minimumCount` and `roundingBase` are explicit integers of at least two. Access to a dataset is granted under an access profile's `permissions.datasets`, as an entry holding `dataset` and `operations` only, with the operations `read-live`, `publish`, and `read-releases`. Exactly one profile may hold `publish` on a dataset, and the publisher and every `read-live` profile of a published dataset also write `read-releases`. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. A `read-live` or `publish` grant needs a count-capable ordinary list permission; a `read-releases` grant does not add record access.
+{/* Evidence: crates/registry-bregctl/src/dev/examples.rs, EXAMPLE_SCENARIOS_FORMAT, CATALOGUE_FILE,
+    and ExamplesAction. */}
 
-The generated `registry.yaml` tables include every nested dataset member. Compiler rules additionally reject reserved dimension names and codes, encrypted fields, consent-gated sources, and an unbounded or unauthorized population. See [publish a statistical series](../../configure/breg-statistics/) for the declaration journey.
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'example-scenarios')} prefix="breg-tool" compact />
 
-{/* Evidence: crates/registry-breg/src/contract.rs;
-    crates/registry-breg/src/compiler/statistics.rs;
-    docs/site/scripts/generate-breg-configuration.mjs. */}
+## Journeys
+
+`tests/journeys.yaml` declares the permitted and refused calls a project must keep answering the
+same way; `bregctl test` runs them ([Test with journeys](../../configure/breg-journeys/)).
+
+{/* Evidence: crates/registry-breg/src/fixtures.rs, JOURNEYS_FORMAT and FIXTURE_JOURNEYS_PATH;
+    crates/registry-bregctl/src/test_lifecycle.rs, load_credentials(). */}
+
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'journeys')} prefix="breg-tool" compact />
+
+## Schema test credentials
+
+`bregctl test --credentials <absolute-file>` reads one binding for every step of the packaged
+journeys, and refuses a file that misses a step or binds one twice. Each credential is a bearer
+token named by a secret reference, never inline
+([Check, test, package](../../operate/breg/#check-test-package)).
+
+```yaml
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
+bindings:
+  - journeyId: asset-and-site-caller-surfaces
+    stepId: create-asset
+    credential:
+      type: bearer
+      tokenRef: secret:file/operator-token
+  - journeyId: asset-and-site-caller-surfaces
+    stepId: planner-gets-asset
+    credential:
+      type: bearer
+      tokenRef: secret:env/PLANNER_TOKEN
+```
+
+{/* Evidence: crates/registry-bregctl/src/test_lifecycle.rs, CREDENTIALS_FORMAT,
+    CredentialDocument, and load_credentials();
+    products/breg/examples/formats/credentials.yaml (the first two bindings). */}
+
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'schema-test-credentials')} prefix="breg-tool" compact />
 
 ## Migration descriptor
 
-A reviewed migration's `descriptor.json` declares the steps and assertions that carry stored Records
-from the active package to its successor. [Change an active registry](../../operate/breg-changes/#write-a-reviewed-migration-descriptor)
-explains when a package needs one and what `bregctl test` rehearses.
+A reviewed migration's `descriptor.json` declares the steps and assertions that carry stored
+Records to the successor package
+([Write a reviewed migration descriptor](../../operate/breg-changes/#write-a-reviewed-migration-descriptor)).
 
-{/* Generated from products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json,
-    through src/data/generated/breg-configuration.json, by
-    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+{/* Evidence: crates/registry-breg/src/migration_plan.rs, MIGRATION_DESCRIPTOR_FORMAT and
+    read_migration_descriptor(). */}
 
 <ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'migration-descriptor')} prefix="breg-tool" compact />
 
 ## Backup binding
 
-A backup binding is the JSON document you write beside a database backup and pass to `bregctl plan`
-and `bregctl apply` with `--backup` for a destructive migration. It stays outside the package,
-because each environment backs up its own database.
+A backup binding is the JSON document you write beside a database backup and pass to
+`bregctl plan` and `bregctl apply` as `--backup <backupBindingPath>=<binding file>` for a
+destructive migration. It stays outside the package, because each environment backs up its own
+database ([Activate the successor](../../operate/breg-changes/#activate-the-successor)).
 
-{/* Generated from products/breg/generated/tools/backup-binding.v1alpha1.schema.json,
-    through src/data/generated/breg-configuration.json, by
-    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+{/* Evidence: crates/registry-breg/src/migration_plan.rs, BACKUP_BINDING_FORMAT and
+    read_backup_binding_document(). */}
 
 <ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'backup-binding')} prefix="breg-tool" compact />
 
-## Development clients
+## Model selection
 
-`dev-clients.yaml` declares the local clients `bregctl dev start` binds for evaluation. A client
-requests an access profile; declaring it creates no profile grant.
+`bregctl init <destination> --from publicschema --selection <file>` derives a project from a
+selection and keeps a copy as `model/selection.yaml`. The terminal questions
+([PublicSchema wizard](../bregctl-publicschema-wizard/)) and the shipped starters produce the same
+document.
 
-{/* Generated from products/breg/generated/tools/dev-clients.v1alpha1.schema.json,
-    through src/data/generated/breg-configuration.json, by
-    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+{/* Evidence: crates/registry-bregctl/src/init_from_model/selection.rs, SELECTION_FORMAT and
+    Selection; crates/registry-bregctl/src/init_from_model/render.rs, SELECTION_PATH;
+    crates/registry-bregctl/src/lib.rs, InitArgs. */}
 
-<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'dev-clients')} prefix="breg-tool" compact />
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'model-selection')} prefix="breg-tool" compact />
 
 ## Check commands
 
-Every file Base Registry Engine reads has a command that checks it offline, with no service running. Each prints
-the diagnostics, JSON output, and exit codes that
-[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+`bregctl check <project>` compiles the project offline. Adding `--runtime-config <file>` also
+checks `runtime.yaml` as `breg` reads it at startup, against the project's access profiles, without
+a database, network, or secret. `bregctl doctor --runtime-config <absolute-file>` then checks the
+deployment: the package, database, audit destination, identity provider, and the other dependencies
+`breg` opens. [Check a file before you deploy
+it](../configuration-files/#check-a-file-before-you-deploy-it) describes diagnostics and exit codes.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, CheckArgs and DoctorArgs;
+    crates/registry-bregctl/src/check.rs, check_runtime_file();
+    crates/registry-breg/src/runtime_config.rs, check_runtime_config();
+    crates/registry-bregctl/src/doctor.rs, CHECKED_DEPENDENCIES. */}
 
 <ConfigurationFormatChecks product="breg" />
 
 ## Next
 
-- [Author a registry project](../../configure/breg/) for models, permissions, and webhooks.
-- [Events and webhooks](../breg-api/#events-and-webhooks) for payloads, signatures, retries, and replay.
-- [Create your first registry](../../tutorials/first-breg/) to try the API.
-- [How a configured registry works](../../explanation/configuration-defined-registry/) for the product boundaries.
+- [Author a registry project](../../configure/breg/)
+- [Deploy and serve](../../operate/breg/)
+- [Base Registry Engine API reference](../breg-api/)
+- [Configuration files](../configuration-files/): the YAML rules every product shares

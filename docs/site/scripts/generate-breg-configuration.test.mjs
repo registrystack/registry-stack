@@ -55,10 +55,17 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   assert.ok(runtime.get('retention.hookPayloadRetentionDays').constraints.flat().includes('maximum: 30'));
 });
 
+test('BReg covers every committed tool schema, in the order an adopter meets the files', async () => {
+  const root = new URL('../../../products/breg/generated/tools/', import.meta.url);
+  assert.deepEqual((await readdir(root)).map((name) => `tools/${name}`).sort(),
+    TOOL_CONTRACTS.map((entry) => entry.file.split('/generated/')[1]).sort());
+  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['dev-clients', 'example-scenarios', 'journeys',
+    'schema-test-credentials', 'migration-descriptor', 'backup-binding', 'model-selection']);
+});
+
 test('BReg tool and service references read the committed schemas they name', async () => {
   const document = await buildBRegConfiguration();
-  assert.deepEqual(document.tools.map((entry) => entry.id),
-    ['migration-descriptor', 'backup-binding', 'journeys', 'dev-clients']);
+  assert.deepEqual(document.tools.map((entry) => entry.id), TOOL_CONTRACTS.map((entry) => entry.id));
   assert.deepEqual(document.services.map((entry) => entry.id), ['mcp-runtime', 'review-runtime']);
   const root = new URL('../../../products/breg/generated/', import.meta.url);
   for (const entry of [...TOOL_CONTRACTS, ...SERVICE_CONTRACTS]) {
@@ -90,6 +97,26 @@ test('BReg tool and service references read the committed schemas they name', as
   assert.deepEqual(journeys.get('kind').values, ['BRegJourneys']);
   assert.ok(journeys.has('journeys[].steps[].expect.outcome'));
   assert.ok(fields('tools', 'dev-clients').has('clients[].accessProfiles'));
+
+  const credentials = fields('tools', 'schema-test-credentials');
+  assert.deepEqual(credentials.get('kind').values, ['BRegSchemaTestCredentials']);
+  assert.deepEqual(credentials.get('bindings[].credential.type').values, ['bearer']);
+  for (const key of ['bindings[].journeyId', 'bindings[].stepId', 'bindings[].credential.tokenRef']) {
+    assert.equal(credentials.get(key).required, 'yes', key);
+  }
+  assert.ok(credentials.get('bindings[].credential.tokenRef').constraints.flat()
+    .some((constraint) => constraint.startsWith('pattern: ^(?:secret:env/')));
+
+  const scenarios = fields('tools', 'example-scenarios');
+  assert.deepEqual(scenarios.get('kind').values, ['BRegExampleScenarios']);
+  assert.ok(scenarios.get('scenarios[].steps[].operation').values.includes('submit'));
+  assert.ok(scenarios.has('scenarios[].steps[].expect.problemCode'));
+
+  const selection = fields('tools', 'model-selection');
+  assert.deepEqual(selection.get('kind').values, ['BRegModelSelection']);
+  assert.deepEqual(selection.get('model').values, ['publicschema']);
+  assert.ok(selection.has('recordTypes[].properties[].name'));
+  assert.deepEqual(selection.get('vocabularies[].mode').values, ['code', 'inline']);
 
   const gateway = fields('services', 'mcp-runtime');
   assert.deepEqual(gateway.get('resourceServer.algorithms[]').values, ['ES256', 'ES384', 'EdDSA', 'RS256', 'RS384']);
