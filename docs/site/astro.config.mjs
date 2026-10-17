@@ -349,6 +349,11 @@ export default defineConfig({
     '/start/evaluate-evidence/': internalRedirect('/explanation/how-evidence-works/'),
     '/operate/evidence-requirements/': internalRedirect('/explanation/how-evidence-works/'),
     '/tutorials/refuse-unsafe-evidence-requests/': internalRedirect('/tutorials/control-who-can-request-evidence/'),
+    // The deployment-configuration page and the evidencectl workflow page
+    // were absorbed by the build-and-deploy tutorial and the generated CLI
+    // reference: the tool introduces each noun once, where it is used.
+    '/configure/evidence/': internalRedirect('/tutorials/build-and-deploy-evidence-project/'),
+    '/reference/evidencectl/': internalRedirect('/reference/cli/evidencectl/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
     ...bregRewriteRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
@@ -547,14 +552,15 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Deploy',
+              label: 'Prove and deploy',
               collapsed: true,
               items: [
-                { label: 'Test with fixtures', slug: 'tutorials/prove-an-evidence-project' },
-                { label: 'Configure a deployment', slug: 'configure/evidence' },
-                { label: 'Build a production candidate', slug: 'tutorials/build-and-deploy-evidence-project' },
-                { label: 'Configure Transit signing', slug: 'tutorials/move-evidence-to-production-signing' },
-                { label: 'Deploy with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
+                { label: 'Prove with fixtures', slug: 'tutorials/prove-an-evidence-project' },
+                { label: 'Build and deploy', slug: 'tutorials/build-and-deploy-evidence-project' },
+                { label: 'Sign with Vault Transit', slug: 'tutorials/move-evidence-to-production-signing' },
+                { label: 'Run with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
+                { label: 'Rotate signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
+                { label: 'Audit log', slug: 'operate/evidence-audit' },
               ],
             },
             {
@@ -739,8 +745,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'operate/advanced' },
             { label: 'Operator handoff', slug: 'operate' },
-            { label: 'Operate the Evidence audit log', slug: 'operate/evidence-audit' },
-            { label: 'Rotate Evidence signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
             { label: 'Back up and restore', slug: 'operate/advanced/back-up-and-restore' },
@@ -795,7 +799,6 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },
-            { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             ...cliReferenceSidebar(undefined, { omit: omittedCliBinaries(selectedDocset) }),
             {
               label: 'Compatibility',

@@ -20,8 +20,9 @@ export const RETIRED_NOTARY_ROUTE_TARGETS = {
   '/products/registry-notary/client-sdk-guide/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/identity-and-record-matching/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/source-claim-modeling-guide/':
-    '/configure/evidence/',
-  '/products/registry-notary/operator-config-reference/': '/configure/evidence/',
+    '/tutorials/build-and-deploy-evidence-project/',
+  '/products/registry-notary/operator-config-reference/':
+    '/tutorials/build-and-deploy-evidence-project/',
   '/products/registry-notary/postgresql-state-operations/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/credential-lifecycle-status/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/credential-issuance-migration/': NOTARY_RETIREMENT_ROUTE,
@@ -43,8 +44,8 @@ export const RETIRED_NOTARY_ROUTE_TARGETS = {
   '/products/registry-notary/sidecar-trust-and-secrets/': NOTARY_RETIREMENT_ROUTE,
   '/projects/registry-notary/': NOTARY_RETIREMENT_ROUTE,
   '/projects/registry-notary/run-locally/': NOTARY_RETIREMENT_ROUTE,
-  '/projects/registry-notary/configure-a-claim/': '/configure/evidence/',
-  '/projects/registry-notary/reference/': '/configure/evidence/',
+  '/projects/registry-notary/configure-a-claim/': '/tutorials/build-and-deploy-evidence-project/',
+  '/projects/registry-notary/reference/': '/tutorials/build-and-deploy-evidence-project/',
   '/api/registry-notary.html': '/reference/apis/evidence/',
 };
 

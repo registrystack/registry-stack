@@ -250,6 +250,7 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/scripts/tutorial-runner/**",
     "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
     "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+    "docs/site/src/content/docs/tutorials/build-and-deploy-evidence-project.mdx",
     "docs/site/src/content/docs/tutorials/connect-a-sqlite-extract.mdx",
     "docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx",
     "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
