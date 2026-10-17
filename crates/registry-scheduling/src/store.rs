@@ -73,7 +73,32 @@ pub use attempt_key::attempt_key_reference;
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
 const SCHEMA_VERSIONS: [i64; 1] = [1];
+/// The greatest schema version a pre-1.0 beta release applied. A ledger that
+/// holds more than one version, all within `1..=13`, is a beta schema and is
+/// refused. Every migration after the baseline is therefore numbered above
+/// this value, starting at 14, and the assertion below refuses to compile any
+/// other numbering.
 const PRE_1_0_BETA_SCHEMA_MAX_VERSION: i64 = 13;
+const _: () = assert!(
+    post_baseline_versions_follow_beta(&SCHEMA_VERSIONS),
+    "Scheduling migrations after the baseline must be numbered above PRE_1_0_BETA_SCHEMA_MAX_VERSION"
+);
+
+/// Whether `versions` opens with the baseline and numbers every later version
+/// above the pre-1.0 beta range, so no supported ledger reads as a beta one.
+const fn post_baseline_versions_follow_beta(versions: &[i64]) -> bool {
+    if versions.is_empty() || versions[0] != 1 {
+        return false;
+    }
+    let mut index = 1;
+    while index < versions.len() {
+        if versions[index] <= PRE_1_0_BETA_SCHEMA_MAX_VERSION {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 
 /// Serializes schema migration and package activation on one transaction
 /// lock. A second `schedulingctl apply` waits here until the first commits or

@@ -58,7 +58,11 @@ impl SchemaState {
     /// Refuse a version this release does not know: a newer one belongs to
     /// a later release, and an unknown older one is a damaged ledger.
     pub fn check(&self) -> Result<(), StoreError> {
-        let newest = SCHEMA_VERSIONS[SCHEMA_VERSIONS.len() - 1];
+        self.check_against(&SCHEMA_VERSIONS)
+    }
+
+    fn check_against(&self, known: &[i64]) -> Result<(), StoreError> {
+        let newest = known[known.len() - 1];
         if self.applied.len() > 1
             && self
                 .applied
@@ -70,7 +74,7 @@ impl SchemaState {
             });
         }
         for version in &self.applied {
-            if !SCHEMA_VERSIONS.contains(version) {
+            if !known.contains(version) {
                 return Err(if *version > newest {
                     StoreError::SchemaNewer { version: *version }
                 } else {
@@ -935,6 +939,32 @@ mod tests {
         let message = refusal.to_string();
         assert!(message.contains("pre-1.0 beta schema"), "{message}");
         assert!(message.contains("fresh database"), "{message}");
+    }
+
+    #[test]
+    fn a_post_baseline_migration_above_the_beta_range_is_not_a_beta_schema() {
+        let next = PRE_1_0_BETA_SCHEMA_MAX_VERSION + 1;
+        let known = [1, next];
+        assert!(crate::store::post_baseline_versions_follow_beta(&known));
+        assert!(!crate::store::post_baseline_versions_follow_beta(&[
+            1,
+            PRE_1_0_BETA_SCHEMA_MAX_VERSION
+        ]));
+        let upgraded = SchemaState {
+            applied: known.to_vec(),
+            pending: Vec::new(),
+        };
+        upgraded
+            .check_against(&known)
+            .expect("a ledger holding the baseline and a later migration is accepted");
+        let beta = SchemaState {
+            applied: vec![1, 2, 3],
+            pending: Vec::new(),
+        };
+        assert!(matches!(
+            beta.check_against(&known),
+            Err(StoreError::BetaSchema { versions }) if versions == vec![1, 2, 3]
+        ));
     }
 
     #[test]
