@@ -27,7 +27,42 @@ const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
 pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
+/// The greatest schema version a pre-1.0 beta release applied. A ledger that
+/// holds more than one version, all within `1..=2`, is a beta schema and is
+/// refused. Every migration after the baseline is therefore numbered above
+/// this value, starting at 3, and the assertion below refuses to compile any
+/// other numbering.
 pub(crate) const PRE_1_0_BETA_SCHEMA_MAX_VERSION: i64 = 2;
+const _: () = assert!(
+    post_baseline_versions_follow_beta(&MIGRATIONS),
+    "Messaging migrations after the baseline must be numbered above PRE_1_0_BETA_SCHEMA_MAX_VERSION"
+);
+
+/// Whether `migrations` opens with the baseline and numbers every later
+/// version above the pre-1.0 beta range, so no supported ledger reads as a
+/// beta one.
+const fn post_baseline_versions_follow_beta(migrations: &[(i64, &str)]) -> bool {
+    if migrations.is_empty() || migrations[0].0 != 1 {
+        return false;
+    }
+    let mut index = 1;
+    while index < migrations.len() {
+        if migrations[index].0 <= PRE_1_0_BETA_SCHEMA_MAX_VERSION {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// Whether an applied ledger is one a pre-1.0 beta release left: more than
+/// the baseline, and every version inside the beta range.
+pub(crate) fn is_beta_ledger(applied: &[i64]) -> bool {
+    applied.len() > 1
+        && applied
+            .iter()
+            .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))
+}
 
 /// Shared advisory-lock key for schema migration and package activation. Its
 /// ASCII bytes spell "messagin".
@@ -376,13 +411,10 @@ async fn baseline_marker_exists(
 }
 
 fn beta_schema_refusal(applied: &[i64], baseline_marker_exists: bool) -> Option<StoreError> {
-    ((!baseline_marker_exists && applied == [1])
-        || (applied.len() > 1
-            && applied
-                .iter()
-                .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))))
-    .then(|| StoreError::BetaSchema {
-        versions: applied.to_vec(),
+    ((!baseline_marker_exists && applied == [1]) || is_beta_ledger(applied)).then(|| {
+        StoreError::BetaSchema {
+            versions: applied.to_vec(),
+        }
     })
 }
 
@@ -478,5 +510,20 @@ mod tests {
             Some(StoreError::BetaSchema { versions }) if versions == vec![1]
         ));
         assert!(beta_schema_refusal(&[1], true).is_none());
+    }
+
+    #[test]
+    fn a_post_baseline_migration_above_the_beta_range_is_not_a_beta_schema() {
+        let next = PRE_1_0_BETA_SCHEMA_MAX_VERSION + 1;
+        assert!(post_baseline_versions_follow_beta(&[(1, ""), (next, "")]));
+        assert!(!post_baseline_versions_follow_beta(&[
+            (1, ""),
+            (PRE_1_0_BETA_SCHEMA_MAX_VERSION, "")
+        ]));
+        assert!(beta_schema_refusal(&[1, next], true).is_none());
+        assert!(matches!(
+            beta_schema_refusal(&[1, 2], true),
+            Some(StoreError::BetaSchema { versions }) if versions == vec![1, 2]
+        ));
     }
 }

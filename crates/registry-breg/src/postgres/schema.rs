@@ -646,6 +646,32 @@ fn postgres_version_num_is_supported(version_num: u32) -> bool {
     version_num >= MIN_POSTGRES_VERSION_NUM
 }
 
+fn check_postgres_version_num(version_num: &str) -> Result<()> {
+    if version_num
+        .parse::<u32>()
+        .is_ok_and(postgres_version_num_is_supported)
+    {
+        Ok(())
+    } else {
+        Err(PostgresKernelError::Configuration(
+            "PostgreSQL 17 or newer is required",
+        ))
+    }
+}
+
+/// Refuse a server older than PostgreSQL 17. Role provisioning needs only
+/// this; schema migration and startup also need a UTF8 database and call
+/// [`verify_postgres_17_or_newer`].
+pub(crate) async fn verify_postgres_version(client: &impl GenericClient) -> Result<()> {
+    let version_num: String = client
+        .query_one("SELECT current_setting('server_version_num')", &[])
+        .await?
+        .get(0);
+    check_postgres_version_num(&version_num)
+}
+
+/// Refuse a server older than PostgreSQL 17 or a database whose
+/// `server_encoding` is not UTF8.
 pub(crate) async fn verify_postgres_17_or_newer(client: &impl GenericClient) -> Result<()> {
     let server = client
         .query_one(
@@ -653,15 +679,7 @@ pub(crate) async fn verify_postgres_17_or_newer(client: &impl GenericClient) -> 
             &[],
         )
         .await?;
-    let version_num: String = server.get(0);
-    let version_num = version_num
-        .parse::<u32>()
-        .map_err(|_| PostgresKernelError::Configuration("PostgreSQL 17 or newer is required"))?;
-    if !postgres_version_num_is_supported(version_num) {
-        return Err(PostgresKernelError::Configuration(
-            "PostgreSQL 17 or newer is required",
-        ));
-    }
+    check_postgres_version_num(&server.get::<_, String>(0))?;
     if server.get::<_, String>(1) != "UTF8" {
         return Err(PostgresKernelError::Configuration(
             "the PostgreSQL database server_encoding must be UTF8; create a fresh UTF8 database and apply the package",
@@ -1028,11 +1046,19 @@ fn quote_compiled_identifier(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::postgres_version_num_is_supported;
+    use super::{check_postgres_version_num, postgres_version_num_is_supported};
 
     #[test]
     fn postgres_version_gate_refuses_16_and_accepts_17() {
         assert!(!postgres_version_num_is_supported(160_000));
         assert!(postgres_version_num_is_supported(170_000));
+        assert!(check_postgres_version_num("180000").is_ok());
+        for refused in ["169999", "not-a-version"] {
+            let refusal = check_postgres_version_num(refused).expect_err("an unsupported server");
+            assert_eq!(
+                refusal.to_string(),
+                "invalid PostgreSQL configuration: PostgreSQL 17 or newer is required"
+            );
+        }
     }
 }
