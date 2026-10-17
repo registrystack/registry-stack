@@ -383,7 +383,8 @@ receipt that `package` binds to. It needs three inputs:
 2. A real access token from your issuer for each journey principal, stored as a secret file.
 3. A credentials document of `kind: BRegSchemaTestCredentials` whose `bindings` list gives, for
    each journey step, its `journeyId`, its `stepId`, and a `credential` of `type: bearer` whose
-   `tokenRef` names that token's secret file.
+   `tokenRef` names that token's secret file
+   ([keys](../../reference/breg-configuration/#schema-test-credentials)).
 
 ```sh
 bregctl test facility \

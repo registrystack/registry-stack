@@ -222,7 +222,7 @@ An authored file is never substituted. A check command refuses a `${...}` expres
     reject_environment_expressions_in_authored_yaml();
     crates/registry-platform-config/src/lib.rs, resolve_config_env_expression() and valid_env_key();
     crates/registry-platform-config/src/secrets.rs, SecretReference;
-    crates/registry-breg/src/contract.rs, reject_environment_expressions_in_authored_yaml;
+    crates/registry-breg/src/contract.rs, AuthoredExpressions;
     crates/registry-caseworkctl/src/project.rs, reject_environment_expressions_in_authored_yaml;
     crates/registry-render/src/manifest.rs, reject_environment_expressions_in_authored_yaml. */}
 
@@ -396,19 +396,19 @@ error[config.retired-api-version] runtime.yaml:17:13 /apiVersion
 An empty list never states an open choice. Where a member can be open, you write the word
 `unrestricted` in place of the list, and an empty list is refused with that fix. With
 `requiredScopes: []` in a Base Registry Engine access profile,
-`bregctl check my-registry` reports:
+`bregctl check my-registry` reports the following, naming the file by its full path:
 
 ```text
 bregctl check refused the project.
-error[config.invalid-value] my-registry/registry.yaml:58:21 /accessProfiles/0/requiredScopes
+error[config.invalid-value] /private/tmp/agent-R5-work/my-registry/registry.yaml:72:21 /accessProfiles/0/requiredScopes
   expected unrestricted, or a list of at least one scope
   next: List the scopes a token must carry, or write unrestricted to require none.
-1 error, 0 warnings in 2 files
 ```
 
 {/* Evidence: crates/registry-discovery/src/runtime_config.rs, REMOVED_RUNTIME_KEYS;
     crates/registry-scheduling/src/config.rs, SCHEDULING_RETIRED_RUNTIME_API_VERSIONS;
-    crates/registry-breg/src/contract/sentinel.rs, Scopes. */}
+    crates/registry-breg/src/contract/sentinel.rs, Scopes and RequiredScopes;
+    crates/registry-bregctl/src/lib.rs, canonicalize_project_path. */}
 
 ## Check a file before you deploy it
 
@@ -419,9 +419,8 @@ own; the program that reads it refuses it when it starts.
 
 A check command that takes a project takes the project directory, not a file inside it (`discoveryctl`
 names it with `--project`), and a
-`--runtime-config` argument names the runtime file. Both accept a relative or an absolute path;
-`bregctl check` also refuses a project path with a `..` component, so name the directory from its
-parent or give its absolute path. `bregctl check reg`, `bregctl check "$PWD/reg"`,
+`--runtime-config` argument names the runtime file. Both accept a relative or an absolute path.
+`bregctl check reg`, `bregctl check ../reg`, `bregctl check "$PWD/reg"`,
 `schedulingctl check scheduling`, and `schedulingctl check scheduling --runtime-config
 scheduling/runtime.yaml` all run. A command that goes beyond an offline check, such as `bregctl
 doctor`, may require an absolute runtime file; its reference says so.
@@ -534,6 +533,7 @@ after it were not checked, so run the check again with `--environment`.
     crates/registry-platform-config/src/offline.rs, check_offline() and INCOMPLETE_CODE;
     crates/registry-discoveryctl/src/lib.rs, deny_warnings;
     crates/registry-platform-yaml/src/diagnostic.rs, render_human() and to_json_value();
+    crates/registry-bregctl/src/check.rs, check_project and absolute_lexical;
     crates/registry-bregctl/src/lib.rs, DoctorArgs;
     crates/registry-bregctl/src/doctor.rs, run(). */}
 

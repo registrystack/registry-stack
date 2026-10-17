@@ -83,7 +83,7 @@ Other Proposal operations, such as `submit`, `cancel`, or `apply`, are granted s
 `register-facility` declares `execution: {mode: immediate}`. One request checks the guards,
 writes every effect, and commits the new revisions, the receipt, the audit entry, and any outbox
 events together, or none of them. The answer is an
-[ActionReceipt](../../reference/glossary/#receipt) naming each changed Record and its new revision.
+[ActionReceipt](../../reference/glossary/#action-receipt) naming each changed Record and its new revision.
 
 A Record type can require a Proposal for an operation:
 

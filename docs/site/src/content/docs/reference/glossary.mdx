@@ -92,19 +92,19 @@ Product names are always in English, including on future translated pages.
   <dd>The technical client that invokes a Registry Stack service.</dd>
 
   <dt id="record-type">Record type</dt>
-  <dd>A BReg definition of stored records, fields, route, dataset, and mutation policy, authored under `recordTypes`. It carries no built-in institutional domain.</dd>
+  <dd>The BReg definition of one kind of <a href="#registry-record">Record</a>: its fields, route, dataset, and `mutationPolicy`, authored under `recordTypes`. It carries no built-in institutional domain.</dd>
 
   <dt id="action">Action</dt>
-  <dd>A BReg typed operation with one bounded plan and a fixed execution mode. Immediate execution commits its ordered effects atomically; Proposal execution Starts durable work. Invoke and Start require separate explicit grants.</dd>
+  <dd>A BReg typed operation with one bounded <a href="#planner">Plan</a> and a fixed execution mode, `immediate` or `proposal`. An immediate Action commits its ordered effects atomically and returns an <a href="#action-receipt">ActionReceipt</a>; a proposal-mode Action starts a durable <a href="#proposal">Proposal</a>. The `invoke` and `start` operations require separate explicit grants.</dd>
+
+  <dt id="action-receipt">ActionReceipt</dt>
+  <dd>The response to a successful immediate <a href="#action">Action</a>: the Action's identifier as `action`, an `applicationId`, and under `results` the Record type, `recordId`, and new revision of each effect the caller's grant may see. Its effects commit in one transaction, so a refused invocation leaves no partial change.</dd>
 
   <dt id="proposal">Proposal</dt>
   <dd>BReg durable work created by a proposal-mode Action. Submission freezes inputs, effects, target revisions, Action revision, attachments, and the requested review policy selection. A provider fixes the concrete policy at acceptance; BReg retains that binding separately from the frozen submission. BReg applies that exact plan automatically under restricted system authority by default, or manually when explicitly configured. The Proposal has independent lifecycle, disclosure, retention, and promoted transition links.</dd>
 
   <dt id="function">Function</dt>
-  <dd>A project-local typed implementation asset used by an Action plan. Its runtime, source, entrypoint, ABI, capabilities, and limits are governed configuration. It computes effects within the Action's declared write ceiling and cannot grant authority or invent a review decision.</dd>
-
-  <dt id="change-request">change request</dt>
-  <dd>The retired BReg durable-change model. Current BReg durable work is a <a href="#proposal">Proposal</a> created by a proposal-mode <a href="#action">Action</a>. Historical release entries retain their original terminology.</dd>
+  <dd>A project-local typed implementation asset used by an Action's <a href="#planner">Plan</a>. Its runtime, source, entrypoint, ABI, capabilities, and limits are governed configuration. It computes effects within the Action's declared write ceiling and cannot grant authority or invent a review decision.</dd>
 
   <dt id="claim">claim</dt>
   <dd>In Casework, taking an eligible <a href="#review-task">ReviewTask</a> into the human caller's holdings under its current `If-Match` revision and an idempotency key. The holder may draft privately, decide, release, or delegate under current authority. A Supervisor may move an exact caseload through preview and atomic apply. A JWT claim is a separate meaning: a named value inside a token.</dd>
@@ -268,8 +268,8 @@ Product names are always in English, including on future translated pages.
   <dt>PDP gate</dt>
   <dd>A named policy decision point check, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, and redaction. Registry Manifest still validates the required-gate list a governed evidence pack declares; the gates are metadata that describes an intended enforcement, and no maintained runtime evaluates them.</dd>
 
-  <dt id="planner">planner</dt>
-  <dd>A bounded implementation of an Action plan. Native BReg uses a fixed plan or a named <a href="#function">Function</a>; the Action owns its write ceiling, execution mode, review requirement, and application authority.</dd>
+  <dt id="planner">Plan</dt>
+  <dd>The effects an <a href="#action">Action</a> makes, authored under `plan`. A `type: fixed` Plan lists its effects in order; a `type: function` Plan names a <a href="#function">Function</a> that computes them within the Action's declared `writes`. The Action, not the Plan, owns its execution mode, review requirement, and application authority.</dd>
 
   <dt>policy hash</dt>
   <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Registry Manifest verifies it when an inline evidence pack policy object is present.</dd>
@@ -281,7 +281,7 @@ Product names are always in English, including on future translated pages.
   <dd>The product family including Registry Platform, Registry Manifest, Base Registry Engine, Registry Casework, Evidence Gateway, Registry Discovery, Registry Render, Registry Scheduling, and Registry Messaging.</dd>
 
   <dt id="purpose">purpose</dt>
-  <dd>The authorized reason a caller gives for one Evidence Gateway singular request or request batch. A purpose is a configured code drawn from the requirement's declared `purposes` list and from the caller's grant, never caller-defined prose. It is part of each complete authorization decision, is echoed into each assertion, and does not narrow disclosure. A declared purpose is an authorized selection from the granted set, not an identity-provider attestation.</dd>
+  <dd>The authorized reason a caller gives for one Evidence Gateway singular request or request batch. A purpose is a configured code drawn from the requirement's declared `purposes` list and from the caller's grant, never caller-defined prose. It is part of each complete authorization decision, is echoed into each assertion, and does not narrow disclosure. A declared purpose is an authorized selection from the granted set, not an identity-provider attestation. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts, and the verified token's purpose must match one of them.</dd>
 
   <dt>purpose-bound request</dt>
   <dd>Registry Stack product term for a request evaluated against an explicit purpose limitation or context-aware authorization rule.</dd>
@@ -325,11 +325,11 @@ Product names are always in English, including on future translated pages.
   <dt id="registry-platform">Registry Platform</dt>
   <dd>Shared Rust crates for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures. Their APIs are workspace-internal and not published compatibility contracts.</dd>
 
-  <dt id="registry-record">Registry Record</dt>
-  <dd>The neutral strict record representation used by Base Registry Engine clients and APIs.</dd>
+  <dt id="registry-record">Record (Registry Record)</dt>
+  <dd>One stored row of a BReg <a href="#record-type">Record type</a>, with a stable UUID and a revision counter that each committed change advances. Registry Record v1 is the neutral, strict representation in which Base Registry Engine and its clients return it; the <a href="#registry-record-envelope">Registry Record envelope</a> gives its shape.</dd>
 
   <dt id="registry-record-envelope">Registry Record envelope</dt>
-  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the Record type's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`. Native Proposals and Action receipts have separate response contracts. `meta` carries the registry, dataset, and entity identifiers from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
+  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the Record type's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`. Proposals and ActionReceipts have their own response shapes. `meta` carries `registryIdentifier`, `datasetIdentifier`, and `entityTypeIdentifier` (the Record type) from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
 
   <dt id="registry-project">registry project</dt>
   <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry, `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>, declaring Record types, datasets, access profiles, Functions, Actions, Proposal policies, and events. `bregctl` checks and packages the project; its journeys test the declared behavior against a throwaway database. `bregctl --help` also calls it an <a href="#authoring-project">authoring project</a>. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
@@ -418,6 +418,13 @@ Product names are always in English, including on future translated pages.
   <dd>The historical source-work coordination record removed from Casework. Current human work uses the single <a href="#review-request">ReviewRequest</a> and <a href="#review-task">ReviewTask</a> model; Casework keeps no source-action execution lifecycle.</dd>
 
 </dl>
+
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject, ActionPlanSource, ActionExecutionSource,
+    FunctionSource, BoundaryOperator, required_purposes, and Operation;
+    crates/registry-breg/src/mutation/action.rs, applicationId;
+    crates/registry-breg-client/src/actions.rs, BRegActionReceipt and BRegActionResultReference;
+    crates/registry-record/src/lib.rs, RegistryRecord and RegistryRecordMeta;
+    crates/registry-breg/src/fixtures.rs, SchemaTestReceipt. */}
 
 ## Style notes
 

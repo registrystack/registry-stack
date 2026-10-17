@@ -37,10 +37,10 @@ test('routes include governed access-log, native Proposal attachment, and GIS su
   assert.ok(routes, 'breg-api.yaml has no routes table');
   const rows = new Map(routes.rows.map((row) => [row[0], row]));
   const expected = [
-    ['`GET /v1/records/{route}/{recordId}/access-log`', ['declares `accessLog`', 'current subject']],
-    ['`GET /v1/proposals/{proposalId}/attachments/{slot}`', ['declares the slot', 'caller-authorized download']],
-    ['`PATCH /v1/proposals/{proposalId}/attachments/{slot}`', ['Draft Proposal', 'caller-authorized upload']],
-    ['`DELETE /v1/proposals/{proposalId}/attachments/{slot}`', ['Draft Proposal', 'caller-authorized removal']],
+    ['`GET /v1/records/{route}/{record_id}/access-log`', ['declares `accessLog`', 'current subject']],
+    ['`GET /v1/proposals/{proposal_id}/attachments/{slot_id}`', ['declares the slot', 'caller-authorized download']],
+    ['`PATCH /v1/proposals/{proposal_id}/attachments/{slot_id}`', ['Draft Proposal', 'caller-authorized upload']],
+    ['`DELETE /v1/proposals/{proposal_id}/attachments/{slot_id}`', ['Draft Proposal', 'caller-authorized removal']],
     ['`GET /v1/gis`', ['`listener.publicOrigin` is configured']],
     ['`GET /v1/gis/api`', ['`listener.publicOrigin` is configured', 'visible to the caller']],
     ['`GET /v1/gis/conformance`', ['`listener.publicOrigin` is configured']],
@@ -71,10 +71,9 @@ test('native Action and Proposal route families agree with the canonical generat
   for (const [path, item] of Object.entries(openapi.paths)) {
     if (!path.startsWith('/v1/actions/') && !path.startsWith('/v1/proposals')) continue;
     for (const method of Object.keys(item).filter((key) => ['get', 'post', 'patch', 'delete'].includes(key))) {
-      let display = path.replace(/\{proposal_id\}/g, '{proposalId}');
-      display = display.replace(/\/attachments\/[^/]+$/, '/attachments/{slot}');
+      let display = path.replace(/\/attachments\/[^/]+$/, '/attachments/{slot_id}');
       if (display.startsWith('/v1/actions/')) display = display.replace(/\/actions\/[^/]+/, '/actions/{action}');
-      if (/\/proposals\/\{proposalId\}\/(edit|submit|revise|rebase|retry|cancel|apply)$/.test(display)) {
+      if (/\/proposals\/\{proposal_id\}\/(edit|submit|revise|rebase|retry|cancel|apply)$/.test(display)) {
         display = display.replace(/\/[^/]+$/, '/{transition}');
       }
       assert.ok(documented.has(`\`${method.toUpperCase()} ${display}\``), `${method} ${path} is undocumented`);

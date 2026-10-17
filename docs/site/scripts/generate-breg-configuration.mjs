@@ -24,8 +24,33 @@ export const CONTRACTS = [
 ].map(contract('beta', 'configure/breg.mdx'));
 
 // Files `bregctl` reads beside a project: adopter tooling, published by the
-// `tool-schema` example under products/breg/generated/tools.
+// `tool-schema` example under products/breg/generated/tools. Listed in the
+// order an adopter meets them, which is the order the reference page shows.
 export const TOOL_CONTRACTS = [
+  {
+    id: 'dev-clients',
+    title: 'dev-clients.yaml',
+    file: 'tools/dev-clients.v1alpha1.schema.json',
+    reference: 'tutorials/first-breg.mdx',
+  },
+  {
+    id: 'example-scenarios',
+    title: 'examples/scenarios.json',
+    file: 'tools/example-scenarios.v1alpha1.schema.json',
+    reference: 'tutorials/first-breg.mdx',
+  },
+  {
+    id: 'journeys',
+    title: 'tests/journeys.yaml',
+    file: 'tools/journeys.v1.schema.json',
+    reference: 'configure/breg-journeys.mdx',
+  },
+  {
+    id: 'schema-test-credentials',
+    title: '--credentials <file>',
+    file: 'tools/schema-test-credentials.v1.schema.json',
+    reference: 'operate/breg.mdx',
+  },
   {
     id: 'migration-descriptor',
     title: 'modules/<module-id>/migrations/<migration-id>/descriptor.json',
@@ -39,16 +64,10 @@ export const TOOL_CONTRACTS = [
     reference: 'operate/breg-changes.mdx',
   },
   {
-    id: 'journeys',
-    title: 'tests/journeys.yaml',
-    file: 'tools/journeys.v1.schema.json',
-    reference: 'configure/breg-journeys.mdx',
-  },
-  {
-    id: 'dev-clients',
-    title: 'dev-clients.yaml',
-    file: 'tools/dev-clients.v1alpha1.schema.json',
-    reference: 'tutorials/first-breg.mdx',
+    id: 'model-selection',
+    title: 'model/selection.yaml',
+    file: 'tools/model-selection.v1alpha1.schema.json',
+    reference: 'reference/bregctl-publicschema-wizard.mdx',
   },
 ].map(contract('tooling'));
 

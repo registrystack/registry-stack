@@ -152,7 +152,7 @@ The naming convention is fixed across the bindings:
 - Python uses the Rust method and option names in snake case, takes options as keyword arguments,
   and is synchronous. Each method releases the global interpreter lock while a private Tokio runtime
   performs the exchange, so other Python threads keep running. Nothing here crosses into `asyncio`.
-- Node uses the camel case form, takes options as one object, and returns a promise from every
+- Node uses the camel case form, takes read options as one object, and returns a promise from every
   method that performs an exchange. A method that performs none returns its value directly.
 - Reads return language-native values: dicts, lists, and `bytes` in Python; plain objects, arrays,
   and `Buffer` in Node. No wrapper type is needed to read a result.
@@ -623,13 +623,16 @@ them `status`, `code`, `traceId`, `retryAfterSeconds`, `transportKind`, and `tok
 
 ## Base Registry Engine
 
-The BReg client owns BReg routes, query types, Problems, entity tags, capability bindings, and
-lifecycle actions and strict Registry Record response decoding.
+The Base Registry Engine (BReg) client reads and writes Records, invokes Actions, and works
+Proposals in one registry. Every write goes through an opaque binding selected from the registry's
+caller-filtered metadata. This section covers construction, reads, writes, and errors. The
+[BReg client capabilities](../breg-client-capabilities/) reference lists every operation, with
+Proposals, recovery after a restart, and the full error tables.
 
 ### Construct a BReg client
 
 ```rust
-use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
+use registry_stack_client::breg::{BaseRegistryClient, BaseRegistryClientConfig};
 use url::Url;
 
 let config = BaseRegistryClientConfig::new(
@@ -662,30 +665,31 @@ const client = new breg.BaseRegistryClient({
 });
 ```
 
-`BaseRegistryClientConfig` provides `with_token_provider`, `with_request_timeout`,
-`with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`,
-`with_trusted_root_certificates`, and `with_max_mutation_retries`. Health and readiness never
-acquire or send a bearer. Other operations attach one token when a provider is configured.
+The Rust facade does not re-export `Url`; add the `url` crate beside it. `BaseRegistryClientConfig`
+provides `with_token_provider`, `with_request_timeout`, `with_connect_timeout`,
+`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
+`with_max_mutation_retries`. Node and Python take the same settings as constructor options.
 
-`authorization` is optional; a client without it reaches only the probes, because every other
-route refuses a request without a verified bearer token. Any unsupported shape is refused at construction with kind `configuration`.
+`authorization` is optional. Without it the client reaches only the health and readiness probes,
+which never send a bearer token; every other route refuses a request without one. An unsupported
+shape is refused at construction with kind `configuration`.
 
-Write and lifecycle authority stays opaque. `BRegCreateBinding`, `BRegPatchBinding`, and
-`BRegLifecycleAuthority` are selected from `BRegMetadata`, passed back to the client, and expose
-nothing. A promoted `BRegLifecycleAction` exposes read-only `operation`, `stage`, `href`, `body`, and
-`review`, and only the client can execute it.
+{/* Evidence: crates/registry-stack-client/src/lib.rs, BaseRegistryClient, BaseRegistryClientConfig,
+    crates/registry-breg-client/src/config.rs, with_token_provider, with_max_mutation_retries,
+    crates/registry-breg-client-node/client.d.ts, requestTimeoutMilliseconds,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, request_timeout_seconds */}
 
 ### Verify a webhook delivery
 
-The Node `breg.verifyWebhookDelivery()` helper authenticates one exact Base Registry Engine Version
-1 webhook request with the shared Rust verifier. Pass the received method, request target, headers,
-body bytes, and key without normalizing their values. Header names are matched case-insensitively.
-The result carries the authenticated CloudEvents attributes, delivery metadata, and body. It does
-not decide whether the delivery is fresh, expected by this receiver, or already applied.
+`verifyWebhookDelivery` in Node and `verify_webhook_delivery` in Python authenticate one exact BReg
+Version 1 webhook request with the shared Rust verifier. Pass the received method, request target,
+headers, body bytes, and key without normalizing them. The result carries the authenticated
+CloudEvents attributes, delivery metadata, and body. It does not decide whether the delivery is
+fresh, expected by this receiver, or already applied; the receiver checks those, in this order.
 
-This plain Node receiver core checks those boundaries in order. `eventStore.applyOnce()` is an
-application-owned durable transaction that claims the event identity and commits the effect once;
-`applyRegistryEvent()` validates and applies the receiver's expected payload contract.
+In both examples, `event_store.apply_once()` (`eventStore.applyOnce()` in Node) is an
+application-owned transaction that claims the event identity and commits the effect once, and
+`apply_registry_event()` applies the payload the receiver expects.
 
 ```js
 const { breg } = require('@registrystack/client');
@@ -750,248 +754,189 @@ async function receiveWebhook(request, response, key, eventStore) {
 }
 ```
 
-Keep the key in server-side secret storage and never log the input or a failed delivery. Body and
-key buffers with shared backing stores are refused; accepted buffers are copied before entering the
-native verifier so another worker cannot change the bytes being authenticated. The helper
-throws `BaseRegistryClientError` with kind `webhook-verification` and code `missing-header`,
-`invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`,
-`malformed-signature`, `signature-mismatch`, or `unsupported-version`. Each message names the input
-to check without rendering its value. Generation and attempt are authenticated decimal strings,
-which avoids rounding a signed 64-bit generation at the JavaScript number boundary. A delivery
-outside the receiver's skew bound can still have a valid signature, so reject it before the
-deduplication transaction and effect. `idempotencyKey` identifies one delivery generation and is
-stable across automatic retries. An operator replay creates a new generation and key, so an effect
-that must happen only once is deduplicated on authenticated event identity, `source` plus `id`, or
-on an application business key.
+```python
+import json
+from datetime import datetime, timezone
 
-{/* Evidence: crates/registry-breg-client/src/webhook.rs, verify_webhook_delivery();
-    crates/registry-breg-client-node/src/lib.rs, verify_webhook_delivery();
-    crates/registry-breg-client-node/client.js, verifyWebhookDelivery();
-    crates/registry-platform-crypto/src/delivery_signature.rs, verify_v1(). */}
+from registry_client import breg
 
-### BReg read operations
+MAX_CLOCK_SKEW_SECONDS = 5 * 60
+EXPECTED_SOURCE = "urn:registrystack:registry:example:instance:primary"
+EXPECTED_TYPE = "case-created-v1"
+EXPECTED_DATASCHEMA = (
+    "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa"
+)
 
-The [BReg capability matrix](../breg-client-capabilities/) also covers native bbox and GeoJSON,
-temporal and snapshot collections, retained revisions, proposal history, relationship traversal,
-immediate actions, atomic batches, tombstone, and persisted recovery across all three languages.
 
-| Operation | Rust and Python | Node | Rust returns |
-| --- | --- | --- | --- |
-| Liveness and readiness probes | `health()`, `ready()` | `health()`, `ready()` | `BRegComplete<BRegProbeStatus>` |
-| Caller-filtered documents | `openapi(access_profile)`, `registry_metadata(access_profile)` | `openapi(accessProfile)`, `registryMetadata(accessProfile)` | `BRegComplete<BRegRawDocument>` |
-| Parsed registry metadata | `registry_contract(access_profile)` | `registryContract(accessProfile)` | `BRegComplete<BRegMetadata>` |
-| Entity schema | `entity_schema(entity_identifier, access_profile)` | `entitySchema(entityIdentifier, accessProfile)` | `BRegComplete<BRegRawDocument>` |
-| Record read | `get_record(entity_route, record_identifier, options)` | `getRecord(entityRoute, recordIdentifier, options)` | `BRegComplete<RegistryRecordSingleResponse>` |
-| Record list | `list_records(entity_route, request)` | `listRecords(entityRoute, options)` | `BRegComplete<BRegPage<RegistryRecordCollectionResponse>>` |
-| List continuation | `continue_list(continuation)` | `continueList(continuation)` | `BRegComplete<BRegPage<RegistryRecordCollectionResponse>>` |
-| Lookup | `lookup_record(entity_route, request)` | `lookupRecord(entityRoute, selector, values, options)` | `BRegComplete<RegistryRecordSingleResponse>` |
+def receive_webhook(method, path, headers, body, key, event_store):
+    delivery = breg.verify_webhook_delivery(
+        method=method, path=path, headers=headers, body=body, key=key,
+    )
 
-`BRegResponseMetadata::trace_id()` is always present. A record read carries a `BRegEtag`; probes,
-discovery documents, lists, and lookups do not. A direct patch requires an ETag from a fresh read
-through the same route and access profile.
+    sent = datetime.fromisoformat(delivery["delivery_time"])
+    skew = abs((datetime.now(timezone.utc) - sent).total_seconds())
+    if skew > MAX_CLOCK_SKEW_SECONDS:
+        raise ValueError("webhook delivery is outside the accepted clock skew")
+    if (delivery["source"], delivery["type"], delivery["dataschema"]) != (
+        EXPECTED_SOURCE, EXPECTED_TYPE, EXPECTED_DATASCHEMA,
+    ):
+        raise ValueError("unexpected webhook contract")
 
-`BRegContinuation` binds an opaque skip token to the entity route, representation, and optional
-access profile. Its validated projection contains no `$select`, `$filter`, `$orderby`, `$top`, or
-`$count` setters, so callers cannot combine a continuation with first-page options.
+    event_identity = json.dumps([delivery["source"], delivery["id"]])
+    event_store.apply_once(
+        event_identity, lambda: apply_registry_event(json.loads(delivery["body"])),
+    )
+```
 
-In Python, `get_record`, `list_records`, and `lookup_record` take their options as keyword arguments:
-`select`, `access_profile`, and `format` (`json` or `json-ld`), plus `top`, `filter`, `orderby`, and
-`count` and `bbox` for a direct list. `lookup_record(entity_route, selector, values=None, ...)` names the selector and
-its values directly. Node takes the same options as an object with `select`, `accessProfile`,
-`format`, `top`, `filter`, `orderby`, `count`, and `bbox` for a direct list.
+Python takes `headers` as a dict, which cannot hold a repeated header, so refuse a request that
+repeats one before building the dict, and bound the body size before reading it. Node refuses body
+and key buffers backed by shared memory and copies the rest before verifying.
 
-A Python outcome is a dict and a Node outcome is an object. Both carry `kind` (`complete`), `value`,
-the trace identifier (`trace_id` in Python, `traceId` in Node), and `etag` and `location` when the
-response carried them. A member the response did not carry is `None` in Python and absent in Node. A
-raw document carries `body` (`bytes` or `Buffer`) and `media_type` or `mediaType` in place of
-`value`. A list outcome adds `continuation`, a dict or object holding the route, skip token,
-representation, optional access profile, and the registry, dataset, and entity type identifiers; pass
-it unchanged to `continue_list` or `continueList`.
+Keep the key in server-side secret storage and never log the input or a failed delivery. A failure
+raises `BaseRegistryClientError` with kind `webhook-verification`; its `code` and message name the
+input to check without rendering its value. Generation and attempt are decimal strings, so a 64-bit
+generation never rounds in JavaScript. A delivery outside the skew bound can still carry a valid
+signature, so reject it before deduplication. The idempotency key identifies one delivery generation
+and survives automatic retries, but an operator replay creates a new generation and key. Deduplicate
+an effect that must happen once on `source` plus `id`, or on a business key.
+[Webhooks](../../operate/breg-webhooks/) covers provisioning the key and building a receiver.
 
-`registry_contract` and `registryContract` return `BRegMetadata` itself rather than an outcome. It
-exposes `registry_identifier`, `registry_version`, `registry_revision`, `trace_id`, and `etag` (camel
-case in Node) beside the selection methods below.
+{/* Evidence: crates/registry-breg-client/src/webhook.rs, verify_webhook_delivery;
+    crates/registry-breg-client-node/src/lib.rs, verify_webhook_delivery;
+    crates/registry-breg-client-node/client.js, verifyWebhookDelivery, isSharedArrayBuffer;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, verify_webhook_delivery,
+    VerifiedWebhookDelivery;
+    crates/registry-breg-client-py/tests/python/test_webhook_verification.py;
+    crates/registry-platform-crypto/src/delivery_signature.rs, verify_v1 */}
 
-### Capability bindings
-
-`registry_contract` parses caller-filtered Registry Metadata into `BRegMetadata` and binds the
-metadata to the client's exact origin. `select_direct_write` returns `BRegDirectWrite::Create` or
-`BRegDirectWrite::Patch` only when the operation, route, request contract, capabilities, registry,
-dataset, Record type, profile, revision, and origin match the supported shape.
-`select_action` selects a native Action with a fixed execution mode.
-
-A mismatch returns `BRegMetadataSelectionError`. The error carries a closed reason kind and no
-response-controlled values.
-
-The bindings split the direct write selection by operation.
-`select_create(operation_identifier, expected_profile)` returns a `BRegCreateBinding`,
-`select_patch(operation_identifier, expected_profile)` returns a `BRegPatchBinding`, and
-`select_action(action_identifier, expected_profile)` returns a `BRegActionBinding` (Node:
-`selectCreate`, `selectPatch`, `selectAction`). A mismatch raises the client error with kind
-`metadata-selection` and a code from `not-found`, `unbound-source`, `profile-mismatch`,
-`unsupported-operation`, `required-capability`, and `contract-mismatch`.
-
-### Writes
-
-`BRegCreateRequest::new(data)` and `BRegPatchRequest::builder()` validate API field names,
-I-JSON-safe values, nesting depth, operation count, and encoded body size before HTTP I/O. A patch
-operation serializes under `/data/<field>`.
-
-`BRegIdempotencyKey::parse(value)` accepts 1 to 256 visible ASCII bytes except comma and semicolon.
-The client never creates a key, and resends a mutation only under the
-[same-key retry](#unknown-outcomes-and-the-same-key-retry). A retry after an unknown outcome must
-reuse the same binding, body, precondition, representation, and key. BReg holds a response under the
-key only for a committed success, and only for `retention.receiptRetentionDays` after that commit.
-A resend after a 5xx replays that success within the horizon, runs the operation again when nothing
-committed, and past the horizon answers `410 idempotency.expired` without running it. The key stays
-spent, so that `410` is a known outcome: the write committed.
-
-{/* Evidence: crates/registry-breg/src/idempotency.rs, ERASED_TOMBSTONE_BODY, IdempotencyPolicy, and
-    lock_and_load(); crates/registry-breg-client/src/client.rs, send_keyed;
-    crates/registry-breg-client/src/error.rs, IdempotencyExpired */}
-
-`create_record` sends the selected create operation and requires a `201` response whose `Location`
-matches the created record. `patch_record` sends the selected patch operation with `If-Match` and
-requires a `200` response without `Location`.
-
-The bindings take the same inputs as plain values. Python:
-`create_record(binding, data, idempotency_key, *, format="json")` and
-`patch_record(binding, record_identifier, etag, operations, idempotency_key, *, format="json")`.
-Node: `createRecord(binding, data, idempotencyKey, format)` and
-`patchRecord(binding, recordIdentifier, etag, operations, idempotencyKey, format)`. `data` maps API
-field names to I-JSON values. Each patch operation is `{"op": "add" | "replace" | "test", "field":
-..., "value": ...}` or `{"op": "remove", "field": ...}`. Node checks every input before conversion:
-plain objects and arrays only, at most 128 levels, 100,000 nodes, and 4 MiB of string data. Python
-converts dicts, lists, tuples, and JSON scalars. An input either binding cannot convert, and any
-value the Rust validation refuses, raises kind `invalid-request` before an exchange.
-
-### Actions and Proposals
-
-`select_action` / `selectAction` selects the Action's caller-filtered descriptor.
-Its `mode` is fixed: immediate Invoke or durable Proposal Start. Each input has a
-required compiler-emitted JSON Schema. The client validates that schema contract;
-MCP copies it exactly, with no partial field-type fallback.
-
-Python accepts native dictionaries for inputs and transition bodies. Node's
-Proposal Start and transition preparation accept exact JSON text. The promoted
-Proposal remains opaque and bound to the client source and selected profile.
+### Read records
 
 | Operation | Rust and Python | Node |
 | --- | --- | --- |
-| Action selection | `select_action` | `selectAction` |
-| Immediate invocation | `invoke_action` | `invokeAction` |
-| Start durable work | `start_proposal` | `startProposal` |
-| Proposal collection selection | `select_proposals` | `selectProposals` |
-| Proposal lookup selection | `select_proposal_get` | `selectProposalGet` |
-| List or Get work | `list_proposals`, `get_proposal` | `listProposals`, `getProposal` |
-| Refresh a promoted resource | `read_proposal` | `readProposal` |
-| Prepare a transition | `prepare_proposal` | `prepareProposal` |
-| Execute or recover a prepared transition | `execute_proposal`, `recover_proposal` | `executeProposal`, `recoverProposal` |
+| Probes | `health()`, `ready()` | `health()`, `ready()` |
+| Parsed registry metadata | `registry_contract(access_profile)` | `registryContract(accessProfile)` |
+| One Record | `get_record` | `getRecord(route, recordIdentifier, options)` |
+| First page of a list | `list_records` | `listRecords(route, options)` |
+| Next page | `continue_list(continuation)` | `continueList(continuation)` |
+| Lookup by selector | `lookup_record` | `lookupRecord(route, selector, values, options)` |
 
-Get, List, Start, and every transition have separate authority. Proposal links bind
-method, path, profile, lifecycle condition, and operation. Clients refuse another
-origin or registry base and credential-bearing redirects. Refetch after each
-transition; never substitute a record ETag for a lifecycle condition.
+`route` is the Record type's API route. Python takes read options as keyword arguments: `select`,
+`access_profile`, and `format` (`json` or `json-ld`), plus `top`, `filter`, `orderby`, `count`, and
+`bbox` for a list. Node takes the same options in one object, in camel case.
 
-For a frozen submission, preserve Action revision, submission version, and effect
-digest while observing local application status. Applied work carries retained
-application evidence; blocked work carries safe recovery information. Revise or
-Rebase makes the earlier binding stale. A later Get does not reconcile an uncertain
-Start or Submit. Keep the original prepared command and key for exact recovery.
+An outcome is a dict in Python and an object in Node. It carries `kind` (`complete`), `value`, the
+trace identifier, and `etag` and `location` when the response had them. A record read carries an
+ETag; lists and lookups do not. A list outcome adds `continuation`: pass it unchanged to
+`continue_list` or `continueList`. It cannot be combined with first-page options.
+`registry_contract` returns `BRegMetadata` itself, the source of every binding below.
 
-### Proposal attachments
+{/* Evidence: crates/registry-breg-client/src/client.rs, get_record, list_records, continue_list,
+    lookup_record, registry_contract, crates/registry-breg-client/src/query.rs, BRegContinuation,
+    crates/registry-breg-client-node/client.d.ts, lookupRecord,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, lookup_record */}
 
-Attachments belong to a Proposal's declared slots and promoted links. Download,
-upload, and removal use `download_proposal_attachment`,
-`upload_proposal_attachment`, and `delete_proposal_attachment` (Node camel case).
-They require the bound Proposal and exact slot ID, and honor current disclosure,
-byte/content limits, verification, and lifecycle conditions.
+### Bindings and writes
 
-Submission freezes content digests and verification. Changed bytes cannot inherit
-an earlier approval. Review context contains no raw attachment bytes. Retention
-revokes scoped access independently of asynchronous external deletion; another
-retained authorized reference can keep identical bytes alive.
+Select a binding from `BRegMetadata` before a write: `selectCreate` or `selectPatch` (snake case in
+Python; `select_direct_write` in Rust), then pass it back to the client. A binding exposes nothing and
+grants nothing; it ties the call to the client's origin, profile, route, and request contract. If the
+metadata does not offer the operation, selection fails with kind `metadata-selection`.
 
-{/* Evidence: crates/registry-breg-client/src/metadata.rs;
-    crates/registry-breg-client/src/actions.rs; crates/registry-breg-client/src/proposal.rs;
-    crates/registry-breg-client-node/client.d.ts;
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
+Python: `create_record(binding, data, idempotency_key, *, format="json")` and
+`patch_record(binding, record_identifier, etag, operations, idempotency_key, *, format="json")`.
+Node: `createRecord(binding, data, idempotencyKey, format)` and
+`patchRecord(binding, recordIdentifier, etag, operations, idempotencyKey, format)`. `data` maps API
+field names to JSON values. Each patch operation is `{"op": "add" | "replace" | "test", "field":
+..., "value": ...}` or `{"op": "remove", "field": ...}`. A patch needs the ETag from a fresh read
+through the same route and profile. The client checks field names, value bounds, nesting, and body
+size before sending; an input it refuses raises kind `invalid-request` with no exchange.
+
+An idempotency key is 1 to 256 visible ASCII characters, excluding comma and semicolon. The client
+never creates one, and resends a write only under the
+[same-key retry](#unknown-outcomes-and-the-same-key-retry): same binding, body, precondition,
+representation, and key. BReg keeps the response for a committed write for
+`retention.receiptRetentionDays`. A resend within that horizon replays it; a resend after it answers
+`410 idempotency.expired`. That `410` is a known outcome: the write committed.
+
+{/* Evidence: crates/registry-breg-client/src/metadata.rs, select_direct_write,
+    crates/registry-breg-client/src/mutation.rs, BRegIdempotencyKey,
+    crates/registry-breg/src/idempotency.rs, ERASED_TOMBSTONE_BODY, IdempotencyPolicy, and
+    lock_and_load(); crates/registry-breg-client/src/client.rs, send_keyed;
+    crates/registry-breg-client/src/error.rs, IdempotencyExpired */}
+
+### Actions and Proposals
+
+`selectAction` picks an Action, whose mode is fixed: an immediate Invoke or a durable Proposal
+Start. Invoke with `invokeAction`; start durable work with `startProposal`, then list, read, and move
+the Proposal through its transitions with `prepareProposal` and `executeProposal`. Each Proposal link
+carries its own `ifMatch` condition, never a Record ETag. Python takes dicts throughout. The
+[client capabilities](../breg-client-capabilities/#proposals) reference covers Proposals,
+submissions, review reads, attachments, batch, tombstone, and
+[recovery after a restart](../breg-client-capabilities/#recovery-after-a-restart).
+
+{/* Evidence: crates/registry-breg-client/src/actions.rs, invoke_action, start_proposal,
+    crates/registry-breg-client/src/proposal.rs, prepare_proposal, execute_proposal,
+    crates/registry-breg-client-node/client.d.ts, BRegProposalLink */}
 
 ### Exact JSON in Node
 
-The Node `*Json` record and immediate Action methods retain exact validated JSON
-text in their outcomes. Proposal Start and transition preparation take JSON text
-and return opaque native Proposal objects. Use `documentJson` when you need their
-validated representation. Keep persisted preparation bytes private and recover
-only against the original binding and idempotency key.
+Three Node methods take JSON text rather than plain objects: `startProposal(binding, inputsJson,
+key)`, `listProposals(collection, queryJson)`, and `prepareProposal(proposal, operation, bodyJson,
+key)`. They return opaque Proposal objects; read `documentJson` for the validated representation.
+Many other methods have a `*Json` twin that returns the validated response as exact text in
+`valueJson`, for applications that parse JSON numbers losslessly.
+
+{/* Evidence: crates/registry-breg-client-node/client.d.ts, startProposal, listProposals,
+    prepareProposal, documentJson, JsonOutcome, valueJson,
+    crates/registry-breg-client-node/__test__/exact-json.test.js,
+    crates/registry-breg-client/tests/exact_json.rs */}
 
 ### BReg error contract
 
-`BaseRegistryClientError` exposes only the fixed error kind, status, a registered BReg Problem code
-when known,
-validated trace identifier, bounded
-transport or token category, the validated field path an accepted Problem names, and the bounded
-refusal code a declared immediate-action refusal names. A row-local constraint conflict also
-exposes `constraint()`, a typed `BRegConstraintViolation` containing `recordType`, `constraintId`,
-`constraintKind`, and `left`/`right` for `compare` or `field` for `int-range` and `vocabulary`.
-The identifiers are bounded to 128 characters and contain no control characters.
-The server omits this extension when any referenced field is unreadable; conflicts involving
-other rows remain generic. Node.js and Python expose the same members in `error.constraint`.
-The constraint is omitted from default error rendering, including Node's enumerable properties.
+Python raises `breg.BaseRegistryClientError`, an `Exception`, with `kind`, `code`, `refusal_code`,
+`reason_code`, `field_path`, `constraint`, `status`, `trace_id`, `transport_kind`, `token_kind`, and
+the boolean `outcome_unknown`; an absent member is `None`. Node rejects with
+`breg.BaseRegistryClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`, and the
+optional `code`, `refusalCode`, `reasonCode`, `fieldPath`, `constraint`, `status`, `traceId`,
+`transportKind`, and `tokenKind`.
 
-{/* Evidence: crates/registry-breg-client/src/error.rs, BRegConstraintViolation,
-    crates/registry-breg-client/src/client.rs, parse_constraint_violation,
+| Kind | Meaning |
+| --- | --- |
+| `configuration` | Construction inputs were refused |
+| `invalid-request` | An input was refused before any exchange |
+| `token` | The token provider could not supply a bearer |
+| `transport` | The exchange failed below HTTP |
+| `not-found` | The server answered `resource.not_found` |
+| `problem` | The server answered with any other Problem |
+| `protocol` | The response broke the contract |
+| `metadata-selection` | No binding matched the metadata |
+| `webhook-verification` | A webhook delivery failed authentication |
+| `client` | Any other client-side failure |
+
+`refusalCode` carries the declared reason for `action.refused` or
+`statistical_dataset.release_refused`, and `reasonCode` the reason for
+`statistical_dataset.version_withdrawn`. A row-local constraint conflict sets `constraint`, with
+`recordType`, `constraintId`, `constraintKind`, and `left` and `right` for `compare` or `field` for
+`int-range` and `vocabulary`. The server omits it when any field involved is unreadable to the
+caller, and default error rendering leaves it out.
+
+A Problem code this client does not know arrives as kind `problem` with only `status` and the trace
+identifier. Decide on the status: an unknown `4xx` is a refusal, and an unknown `5xx` may have
+committed, so follow the same-key retry. `idempotency.expired` is a known code. The
+[error tables](../breg-client-capabilities/#errors) list which attributes each kind sets and every
+`code` value.
+
+{/* Evidence: crates/registry-breg-client/src/error.rs, BaseRegistryClientError,
+    BRegConstraintViolation, crates/registry-breg-client/src/client.rs, parse_constraint_violation,
+    crates/registry-breg-client-node/src/lib.rs, client_error, selection_error,
+    webhook_verification_error,
+    crates/registry-breg-client-py/src/lib.rs, sdk_error, MappedError,
+    crates/registry-breg-client-node/client.d.ts, reasonCode, refusalCode,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, reason_code,
     crates/registry-breg-client/tests/write_http_boundary.rs,
     row_local_constraint_conflicts_remain_typed,
-    crates/registry-breg-client-node/__test__/action-refusals.test.js,
-    crates/registry-breg-client-py/tests/python/test_action_refusals.py */}
-
-A known Problem code requires its exact status, title, detail, type URI, and validated extensions.
-Unknown object members are ignored after duplicate rejection.
-An unrecognized code requires the six bounded common members, matching HTTP/body status and
-header/body trace, and the matching BReg type/code URI. Rust returns `UnrecognizedProblem`;
-Node.js and Python report kind `problem`, status and trace, with no code or typed extensions.
-Use HTTP status when no known code is present. An unknown `404` stays `problem`; only known
-`resource.not_found` is `not-found`. Unknown `4xx` outcomes are known refusals; unknown `5xx`
-outcomes may have committed and use the existing bounded same-key retry rules.
-Malformed known codes and malformed envelopes fail closed as `BRegProtocolFailure`.
-`idempotency.expired` is registered, so its `410` arrives as kind `problem` with a known outcome.
-Request, metadata, ETag, idempotency-key, and lifecycle validation errors do not retain
-response-controlled values.
-
-Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
-attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `constraint`, `status`, `trace_id`,
-`transport_kind`, `token_kind`, and the boolean `outcome_unknown`; an absent member is `None`. Node
-rejects with `breg.BaseRegistryClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`,
-and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `constraint`, `status`, `traceId`,
-`transportKind`, and `tokenKind`; an absent member is undefined.
-
-`kind` is one of:
-
-| Kind | Meaning | Members set |
-| --- | --- | --- |
-| `configuration` | The construction inputs were refused | none |
-| `invalid-request` | An input was refused before any exchange | none |
-| `token` | The private-key JWT provider could not supply a bearer | `token_kind`, plus `transport_kind`, `code`, or `status` depending on how the token endpoint failed |
-| `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | The registry answered with an accepted Problem | `status`, `trace_id`; a known code also sets `code` and any applicable validated `field_path`, `plan_refusal`, or `refusal_code` |
-| `protocol` | The response violated the contract | `status`, `code` (`header-bounds`, `trace-context`, `media-type`, `body`, `problem`, `entity-tag`, `profile-link`, `location`, `cache-policy`, `status`, or `protocol`), and `trace_id` when one was validated |
-| `metadata-selection` | A binding could not be selected from the metadata | `code` |
-| `lifecycle-promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |
-| `client` | Any other client-side failure | none |
-
-{/* Evidence: crates/registry-stack-client-node/breg/client.d.ts,
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi,
-    crates/registry-breg-client-py/src/lib.rs, crates/registry-breg-client-node/src/lib.rs,
-    crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/error.rs,
-    crates/registry-breg-client-node/client.d.ts, JsonOutcome, valueJson, bodyJson,
     crates/registry-breg-client/tests/http_boundary.rs,
-    unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values,
-    crates/registry-breg-client-node/README.md,
-    crates/registry-breg-client-node/__test__/exact-json.test.js,
-    crates/registry-breg-client/tests/exact_json.rs, crates/registry-breg-client/src/lib.rs,
-    decode_exact_json, crates/registry-breg-client/src/strict_json.rs, validate_number_tokens,
-    crates/registry-breg-client/src/attachment.rs */}
+    unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values */}
 
 ## Registry Casework
 
