@@ -117,7 +117,7 @@ test('allowances pass on BReg and cross-product pages', async () => {
           'A DHIS2 `trackedEntity` and its `tracked_entity_id` selector.',
           '',
         ].join('\n'),
-        'src/content/docs/tutorials/verify-a-registered-parent-with-opencrvs.mdx': [
+        'src/content/docs/tutorials/connect-an-institution-source.mdx': [
           'OpenCRVS returns the registered entity and its `trackingId`.',
           '  --data-binary @.evidence/requests/opencrvs-parent/request.json \\',
           '',
