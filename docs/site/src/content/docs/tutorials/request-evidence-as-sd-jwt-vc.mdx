@@ -1,6 +1,6 @@
 ---
-title: Explore SD-JWT VC locally
-description: Permit, request, verify, and tamper with an SD-JWT VC response from the normalized project.
+title: Request evidence as an SD-JWT VC
+description: Permit the SD-JWT VC representation, request and verify one adult-status credential, and see a changed disclosure refused.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,36 +15,30 @@ standards_referenced:
   - sd-jwt-vc
 tutorial_test:
   toolset: evidence
-  after: tutorials/first-evidence-assertion
+  after: tutorials/assert-a-role-bound-relationship
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting.
-You will permit SD-JWT VC in both the project ceiling and the target's complete grant, request one
-credential, verify it, and prove that a changed disclosure is refused.
+If your relying parties expect a Selective Disclosure JWT Verifiable Credential (SD-JWT VC),
+permit that representation for `adult-status`, then request and verify one. You continue the
+project from [Assert a role-bound relationship](../assert-a-role-bound-relationship/).
 
 <QuickstartMeta
-  outcome="A verified SD-JWT VC adult-status response and a refused tampered credential."
-  time="About 15 minutes"
+  outcome="A verified SD-JWT VC adult-status response and a refused tampered copy."
+  time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={[
-    'The completed first Evidence assertion tutorial',
-    'Its normalized standalone project',
-    'Python 3 and curl',
-  ]}
+  prerequisites={['The project from Assert a role-bound relationship', 'Docker, Python 3, curl, and jq']}
 />
 
-## Permit the representation twice
-
-Enter the copied project:
+## Permit the representation
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-The definition's representation list is the governed package ceiling. Add `sd-jwt-vc` to
-`adult-status` while keeping signed JWS:
+A definition's `representations` lists the encodings it may emit. Add `sd-jwt-vc` to
+`adult-status`:
 
 ```diff lang="yaml" title="evidence.yaml" test-edit
     subjectBinding: audience-scoped
@@ -54,10 +48,11 @@ The definition's representation list is the governed package ceiling. Add `sd-jw
     observationTimezone: Asia/Bangkok
 ```
 
-The target grant must also permit the representation. Add it to the complete `adult-status` grant
-in `dev-authority.yaml`:
+Add it to the `adult-status` grant too:
 
 ```diff lang="yaml" title="dev-authority.yaml" test-edit
+    - standalone-service
+    grants:
     - definition: adult-status
       purpose: age-check
       audienceFrom: authenticated-requester
@@ -67,22 +62,23 @@ in `dev-authority.yaml`:
       subjectBinding: audience-scoped
 ```
 
-The project ceiling says what this definition may emit. The target grant says what this requester
-profile may receive. Both must include the format; a client cannot widen either list.
-
-Prove the edited project and target, then revoke the previous registration and create a new client
-against the changed profile digest:
+Both lists must name it. Check the project and add a client:
 
 ```sh
 evidencectl check . --target local-target.yaml
-evidencectl test . --target local-target.yaml
-evidencectl access client revoke tutorial-client
-evidencectl access client add sd-jwt-client \
+evidencectl access client add wallet-client \
   --access-profile standalone-service \
   --generate-local-key
 ```
 
-## Start the local boundary
+```text test-excerpt
+Added client wallet-client with access profile standalone-service.
+```
+
+{/* Evidence: products/evidence/examples/standalone/evidence.yaml, representations;
+    products/evidence/examples/standalone/dev-authority.yaml, standalone-service. */}
+
+## Start the source and Evidence Gateway
 
 In another terminal, start the synthetic source:
 
@@ -92,7 +88,7 @@ python3 serve-source.py \
   --token-file .generated/secrets/synthetic-source-token
 ```
 
-Back in the project terminal, start a fresh generation:
+Back in the project terminal, start a generation, which loads the changed grant:
 
 ```sh
 evidencectl dev start . \
@@ -105,22 +101,18 @@ evidencectl dev start . \
 Evidence ready at http://127.0.0.1:18080
 ```
 
-## Request and verify SD-JWT VC
+## Request and verify an SD-JWT VC
 
-Record the required response format before a response exists:
+Name the representation with `--response-format`, send the SD-JWT VC media type, and verify the
+response:
 
 ```sh
 evidencectl request prepare adult-status \
-  --client sd-jwt-client \
+  --client wallet-client \
   --purpose age-check \
   --subject subject:record-id=adult \
   --response-format sd-jwt-vc \
   --name adult-status-vc
-```
-
-Send the request with the SD-JWT VC media type:
-
-```sh
 curl --silent --show-error --fail-with-body \
   --config .evidence/requests/adult-status-vc/authorization.curl \
   --request POST \
@@ -130,44 +122,55 @@ curl --silent --show-error --fail-with-body \
   --data-binary @.evidence/requests/adult-status-vc/request.json \
   --output adult-status.sd-jwt-vc \
   --write-out 'HTTP %{http_code}\n'
-```
-
-```text test-expect
-HTTP 200
-```
-
-Verify before decoding or reading a disclosure:
-
-```sh
 evidencectl verify adult-status.sd-jwt-vc \
   --context .evidence/requests/adult-status-vc/verification.json \
   --output adult-status-vc.verified.json
 ```
 
-```text test-expect
+```text test-excerpt
+HTTP 200
 VERIFIED
 ```
 
-The verified payload contains the same Boolean adult-status output as signed JWS. The response
-format changes serialization, not the source, derivation, authorization, audience, or subject
-binding.
+Print the value as you did for the signed JWS:
 
-## Prove tampering is refused
+```sh
+jq '{supportsRequirement, supportedValues}' adult-status-vc.verified.json
+```
 
-Change one encoded disclosure byte in a copy:
+```json test-expect
+{
+  "supportsRequirement": "urn:example:requirement:adult-status:v1",
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:concept:adult-status:v1",
+      "value": true
+    }
+  ]
+}
+```
+
+The representation changes the encoding, not the answer.
+
+{/* Evidence: crates/registry-evidencectl/src/request.rs, response_format;
+    crates/registry-evidence-verifier/src/verifier.rs, verify_sd_jwt_vc. */}
+
+## Prove a changed disclosure is refused
+
+Each claim travels as a disclosure after a `~`, and the signature covers its digest. Change one
+byte of the first disclosure in a copy:
 
 ```sh
 python3 - <<'PY'
 from pathlib import Path
 
 parts = Path("adult-status.sd-jwt-vc").read_text().strip().split("~")
-assert len(parts) >= 3 and parts[1]
 parts[1] = ("A" if parts[1][0] != "A" else "B") + parts[1][1:]
 Path("adult-status-tampered.sd-jwt-vc").write_text("~".join(parts) + "\n")
 PY
 ```
 
-Verification fails without publishing trusted output:
+Verification refuses the copy:
 
 ```sh test-exit="1"
 evidencectl verify adult-status-tampered.sd-jwt-vc \
@@ -179,21 +182,27 @@ evidencectl verify adult-status-tampered.sd-jwt-vc \
 evidencectl: Evidence response verification failed
 ```
 
-The issuer signature covers the disclosure digest. Changing the disclosure breaks that verified
-relationship.
+{/* Evidence: crates/registry-platform-sdjwt/src/lib.rs, issue_disclosure. */}
 
 ## Clean up
 
+Stop Evidence Gateway, revoke the client (which deletes its private key), and remove the
+generated state:
+
 ```sh
 evidencectl dev stop .
-evidencectl audit show --last-operation
+evidencectl access client revoke wallet-client
 evidencectl dev clean .
 ```
 
-The tutorial runner stops the source. If you started it by hand, press `Ctrl+C` in its terminal.
+```text test-expect
+Local Evidence stopped
+Revoked client wallet-client (removed local private key .evidence/clients/wallet-client).
+Removed stopped local Evidence state
+```
+
+Press `Ctrl+C` in the source's terminal.
 
 ## Next
 
-- [Configure the Evidence OID4VCI adapter](../../configure/evidence-oid4vci/)
-- [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/)
-- [Review the Evidence Gateway security model](../../security/evidence/)
+[Request Evidence from your application](../request-evidence-from-an-application/)

@@ -1,6 +1,6 @@
 ---
-title: Control who can request Evidence Gateway
-description: Assign applications complete target grants and observe an unauthorized request fail closed.
+title: Control who can request evidence
+description: Give two applications their own access profiles, see one receive the residence region and the other refused, and read the refusal in the audit view.
 status: current
 owner: registry-docs
 source_repos:
@@ -18,31 +18,24 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Return a governed value](../return-a-governed-value/) before starting. You will add two
-task-specific profiles, assign one to each application, and prove that a valid token does not
-authorize every definition in the project.
+In about fifteen minutes you will register two applications under access profiles of their own,
+send the same region request as each, and see one answered and the other refused, in the
+response and in the audit view.
 
 <QuickstartMeta
-  outcome="Two applications receive distinct complete grants and a cross-grant request is refused."
+  outcome="Two clients with distinct access profiles, one region request answered and one refused."
   time="About 15 minutes"
   level="Local development with synthetic data"
-  prerequisites={[
-    'The completed governed-value tutorial',
-    'Its normalized standalone project',
-    'Python 3 and curl',
-  ]}
+  prerequisites={['The project from Return a governed value', 'Docker, Python 3, curl, and jq']}
 />
 
-## Define complete access profiles
-
-Enter the copied project:
+## Add two access profiles
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-The existing `standalone-service` profile keeps the earlier tutorials composable. Add two narrow
-profiles for these applications to the end of `dev-authority.yaml`, at the same indentation as
+Add these profiles to the end of `dev-authority.yaml`, at the same indentation as
 `standalone-service`:
 
 ```yaml title="dev-authority.yaml" test-append
@@ -80,29 +73,57 @@ profiles for these applications to the end of `dev-authority.yaml`, at the same 
         valueOrigin: request
 ```
 
-Each grant repeats the complete authorized request shape. The target compiler checks it against the
-project's grant ceiling. A profile cannot widen the definition's allowed authority, actor kind,
-value origin, audience, subject binding, or representation.
-
-Check the edited target, then register each application under one profile:
+`requesterTags` lists the tags a caller's token must carry to act under the profile. Check that
+each grant stays inside its definition's grant ceiling:
 
 ```sh
 evidencectl check . --target local-target.yaml
+```
+
+```text test-excerpt
+0 errors, 0 warnings
+```
+
+{/* Evidence: products/evidence/reference/request-adapter/deployment-projects/CONFIG.md, requesterTags;
+    products/evidence/examples/standalone/local-target.yaml, requesterTagsClaim. */}
+
+## Register a client for each profile
+
+```sh
 evidencectl access client add age-checker \
   --access-profile age-checker-service \
   --generate-local-key
 evidencectl access client add region-router \
   --access-profile region-router-service \
   --generate-local-key
-evidencectl access client list
 ```
 
-Client registration binds an identity to reviewed target authority. It does not copy grant fields
-into a separate policy document.
+```text test-expect
+Added client age-checker with access profile age-checker-service.
+Added client region-router with access profile region-router-service.
+```
 
-## Start the protected service
+A client is one application's identity, bound to access profiles; the local issuer puts its
+profiles' tags in its tokens. List the clients:
 
-In another terminal, start the synthetic source:
+```sh
+evidencectl access client list --format json | jq -c '.entries[]'
+```
+
+```text test-expect
+{"accessProfiles":["age-checker-service"],"id":"age-checker","status":"active"}
+{"accessProfiles":["standalone-service"],"id":"example-caller","status":"active"}
+{"accessProfiles":["region-router-service"],"id":"region-router","status":"active"}
+{"accessProfiles":["standalone-service"],"id":"tutorial-client","status":"active"}
+```
+
+`example-caller` comes with the project, from `access/clients/example-caller.yaml`.
+
+{/* Evidence: crates/registry-evidencectl/src/access.rs, load_active_clients, requester_tags. */}
+
+## Start the source and Evidence Gateway
+
+In another terminal, start the synthetic source from this directory:
 
 ```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
 python3 serve-source.py \
@@ -110,8 +131,8 @@ python3 serve-source.py \
   --token-file .generated/secrets/synthetic-source-token
 ```
 
-Back in the project terminal, start one generation containing the project, target, authority, and
-client registry:
+Back in the first terminal, start Evidence Gateway. It reads profiles and clients only as it
+starts.
 
 ```sh
 evidencectl dev start . \
@@ -124,88 +145,114 @@ evidencectl dev start . \
 Evidence ready at http://127.0.0.1:18080
 ```
 
-## Prove the age checker's grant
+## Ask for a purpose the definition does not declare
 
-Prepare the request that `age-checker-service` grants:
+`adult-status` declares only the purpose `age-check`. Ask under another:
 
-```sh
+```sh test-exit="1"
 evidencectl request prepare adult-status \
   --client age-checker \
-  --purpose age-check \
+  --purpose residence-check \
   --subject subject:record-id=adult \
-  --name age-allowed
-```
-
-Send and verify it:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/age-allowed/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/age-allowed/request.json \
-  --output age-allowed.jws.json \
-  --write-out 'HTTP %{http_code}\n'
-
-evidencectl verify age-allowed.jws.json \
-  --context .evidence/requests/age-allowed/verification.json \
-  --output age-allowed.verified.json
+  --name adult-wrong-purpose
 ```
 
 ```text test-expect
-HTTP 200
-VERIFIED
+evidencectl: purpose does not match the active local tutorial definition
 ```
 
-## Cross the authorization boundary
+Preparation refuses it, so nothing reaches Evidence Gateway.
 
-Prepare a valid region request as `region-router`. Preparation sends nothing to Evidence Gateway:
+## Send the region request as each client
+
+Preparation checks the request against the project, not the grants, so both succeed:
 
 ```sh
 evidencectl request prepare residence-region \
   --client region-router \
   --purpose residence-check \
   --subject subject:record-id=adult \
-  --name region-prepared
+  --name region-by-router
+evidencectl request prepare residence-region \
+  --client age-checker \
+  --purpose residence-check \
+  --subject subject:record-id=adult \
+  --name region-by-checker
 ```
 
-Now send that region body with `age-checker`'s valid authorization. The token is authentic, but its
-profile grants only `adult-status`:
+Send both; Evidence Gateway applies the grants:
 
 ```sh
-curl --silent --show-error \
-  --config .evidence/requests/age-allowed/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/region-prepared/request.json \
-  --output region-denied.json \
-  --write-out 'HTTP %{http_code}\n'
+for name in region-by-router region-by-checker; do
+  curl --silent --show-error \
+    --config ".evidence/requests/$name/authorization.curl" \
+    --request POST \
+    --url http://127.0.0.1:18080/v1/evidence \
+    --header 'Content-Type: application/json' \
+    --header 'Accept: application/jose+json' \
+    --data-binary "@.evidence/requests/$name/request.json" \
+    --output "$name.response" \
+    --write-out "$name HTTP %{http_code}\n"
+done
 ```
 
 ```text test-expect
-HTTP 403
+region-by-router HTTP 200
+region-by-checker HTTP 403
 ```
 
-The public problem is `evidence.denied`. It does not reveal the missing grant, source facts,
-selector, or credentials. Evidence Gateway refuses the request before source access.
+Read the refusal `age-checker` received:
 
-## Clean up
+```sh
+jq . region-by-checker.response
+```
+
+```json test-expect
+{
+  "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
+  "title": "Evidence request is not permitted",
+  "status": 403,
+  "detail": "the Evidence request is not permitted",
+  "code": "evidence.denied",
+  "traceId": "<trace-id>"
+}
+```
+
+`evidence.denied` does not name the missing grant.
+[Evidence problems](../../reference/evidence-problems/) lists every code.
+
+{/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
+    crates/registry-evidence/src/problem.rs, NotAuthorized;
+    products/evidence/reference/request-adapter/deployment-projects/CONFIG.md, requesterTags. */}
+
+## Read the refusal in the audit view
 
 ```sh
 evidencectl dev stop .
 evidencectl audit show --last-operation
+```
+
+```text test-excerpt
+ACCESS REFUSED requester=<pseudonym> reason=not-authorized
+```
+
+The audit view records the requester as a pseudonym and the reason, nothing more. A response
+changed after signing fails at the verifier instead; see
+[Verify Evidence Gateway as a consumer](../verify-an-assertion-as-a-consumer/).
+
+Remove the stopped session's state, then stop the source with `Ctrl+C`. The project and its
+clients stay for the next tutorial:
+
+```sh
 evidencectl dev clean .
 ```
 
-The tutorial runner stops the synthetic source. If you started it by hand, press `Ctrl+C` in its
-terminal.
+```text test-expect
+Removed stopped local Evidence state
+```
+
+{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, render_refusal. */}
 
 ## Next
 
-- [Request Evidence from your application](../request-evidence-from-an-application/)
-- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Configure Evidence Gateway](../../configure/evidence/)
+[Assert a role-bound relationship](../assert-a-role-bound-relationship/)

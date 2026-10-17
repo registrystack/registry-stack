@@ -1,6 +1,6 @@
 ---
 title: Evidence Gateway overview
-description: Understand how Evidence Gateway returns a verified minimum answer and choose the path for your role.
+description: What Evidence Gateway does, the three tutorials every reader starts with, and where an author, an operator, or an application developer goes next.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,107 +11,67 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway answers one [predefined question](../../reference/glossary/#bounded-question) about
-one or more subjects and returns a signed minimum answer. The caller receives the answer needed for an authorized purpose, not the authoritative
-record that settled the answer.
+If another service needs to check something your institution's records settle, such as whether a
+person is an adult, Evidence Gateway lets you answer that one question with a signed assertion
+instead of sharing the record. Three short tutorials take you from a copied example to a
+verified answer, a value richer than yes or no, and a choice of who may ask.
 
-```mermaid
-sequenceDiagram
-    participant C as Caller
-    participant E as Evidence Gateway
-    participant A as Durable audit
-    participant R as Authoritative registry
+## What you work with
 
-    C->>E: Request one predefined answer
-    E->>A: Record authorized access
-    E->>R: Make one fixed source request
-    R-->>E: Return the source record
-    Note over R: The authoritative record stays here
-    E->>E: Derive the minimum answer and sign it
-    E->>A: Record what was disclosed
-    E-->>C: Return the signed answer
-    C->>C: Verify before using the answer
-```
+Evidence answers with an [assertion](../../reference/glossary/#assertion): a signed payload that
+carries the answer and none of the record behind it. Each question has a
+[Requirement URI](../../reference/glossary/#requirement), such as
+`urn:example:requirement:adult-status:v1`, and a caller names that URI to ask it.
 
-The authoritative registry remains the source of truth. Evidence Gateway makes the fixed request the
-provider defined, derives only the reviewed answer, and never returns the source response. The
-caller verifies the signature and its retained expectations before using the answer. The audit
-trail records the authorized access and the released disclosure; it does not repeat the source
-record, prove the source fact true, or provide a citizen-facing history of registry access.
+You declare the questions, and how your own system answers each one, in an Evidence project: YAML
+files and small scripts you keep in version control. `evidencectl` checks, tests, and packages the
+project; `evidence` serves the package and signs each assertion.
 
-## Make your first Evidence Gateway request
+{/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions and
+    semantics.requirement; crates/registry-evidencectl/src/check.rs, render_human();
+    crates/registry-evidence/src/runtime.rs, AuditPhase::DisclosureRelease;
+    products/evidence/OPERATOR-CONTRACT.md, "Supported deployment". */}
 
-[Get your first Evidence Gateway assertion](../../tutorials/first-evidence-assertion/) starts a small
-Python registry that you control. You use its OpenAPI description to author an adult-status
-question, send a real HTTP request with `curl`, and verify a signed boolean answer. The source
-response contains a name and date of birth; the verified assertion contains neither.
+## Start here, whatever your role
 
-The tutorial uses disposable local trust and synthetic data. The local profile keeps
-authentication, bounded source access, signing, verification, and audit active while the Evidence Gateway
-tooling handles development process orchestration.
+1. [Your first assertion](../../tutorials/first-evidence-assertion/): copy the example project,
+   check it, start it beside a synthetic source, prepare and send one request, and verify the
+   signed response offline. The source returns a birth date and a private address; the
+   assertion carries only `true`.
+2. [Return a governed value](../../tutorials/return-a-governed-value/): ask the same project which
+   region the subject lives in, and get back one of the values the project allows.
+3. [Control who can request evidence](../../tutorials/control-who-can-request-evidence/): add a
+   second caller and read the refusal Evidence returns when it asks what it was never granted.
 
-## Choose your role
+All three run locally on synthetic data, with token checks, signing, and audit on.
 
-### Provide Evidence Gateway
+{/* Evidence: products/evidence/examples/standalone/README.md;
+    products/evidence/examples/standalone/serve-source.py;
+    products/evidence/examples/standalone/functions/derive-adult-status.rhai;
+    crates/registry-evidencectl/src/dev.rs. */}
 
-Start with the first assertion, then adapt the same workflow to your institution's OpenAPI source.
-The provider decides the authorized purpose, subject mapping, derivation, and permitted answer.
-OpenAPI describes transport and data shapes but cannot make those governed decisions.
+## Then follow your role
 
-[Return a governed value](../../tutorials/return-a-governed-value/) first extends the same
-local project with a non-boolean answer. The second tutorial demonstrates that minimum disclosure
-depends on the purpose and can return a reviewed value when a boolean is insufficient.
+- **You build an application that asks.**
+  [Request Evidence from your application](../../tutorials/request-evidence-from-an-application/)
+  sends the request and verifies the answer from code.
+- **You run the service.**
+  [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
+  takes the project to a running deployment.
+- **You design the questions.** [How Evidence works](../../explanation/how-evidence-works/) gives
+  the model; then
+  [Connect an institution source from OpenAPI](../../tutorials/connect-an-institution-source/)
+  starts a project from your own system's API description.
 
-[See Evidence Gateway refuse unsafe changes](../../tutorials/refuse-unsafe-evidence-requests/) then tests
-the same boundary with an unauthorized purpose and a modified signed response.
+## Where the product stops
 
-When you are ready to use your own system, [draft an Evidence Gateway source from
-OpenAPI](../../tutorials/connect-an-institution-source/), then add only the
-[project-specific fixtures](../../tutorials/prove-an-evidence-project/) your reviewers need.
-Build a reviewed candidate only after that local work is complete. Configure a compatible OpenID
-Connect issuer before connecting callers.
+Evidence keeps no copy of your records: each answer comes from a fixed read of the system that holds
+them. To hold and change the records themselves, use
+[Base Registry Engine](../breg-quickstart/).
 
-### Consume Evidence Gateway
-
-Retain the request expectations and trusted issuer keys before the response arrives. Verify the
-stored response against that independent context, then expose the verified answer to application
-logic.
-
-[Verify Evidence Gateway as a consumer](../../tutorials/verify-an-assertion-as-a-consumer/) continues the
-local journey with every service stopped. Then
-[manage verifier trust](../../tutorials/manage-evidence-verifier-trust/) through an independent
-onboarding and rotation process. [SD-JWT VC](../../tutorials/request-evidence-as-sd-jwt-vc/) is an
-optional second serialization of the same assertion.
-
-### Operate Evidence Gateway
-
-Bind the provider-approved definition to production identity, source trust, signing keys, and
-durable audit storage. The operator owns readiness, key rotation, audit shipping to append-only
-storage, retention, backup, and recovery.
-
-[Read and ship the Evidence Gateway audit log](../../operate/evidence-audit/) covers the audit
-destination, event phases, privacy-preserving pseudonyms, and the current lack of a supported
-citizen history query.
-
-## Keep the product boundary visible
-
-Evidence Gateway does not decide whether an institution has legal authority to use a source, whether a
-purpose is legitimate, or whether a source record is true. Those decisions and assurances come
-from governance, authorization, and the authoritative institution. A valid signature proves who
-signed the exact assertion bytes and whether the assertion matches the retained verification
-expectations.
-
-Evidence Gateway contacts its own configured sources and keeps its own authorization, derivation,
-signing, verification, and audit boundaries.
-
-{/* Evidence: a fixed source request reaches its source over one of two coequal transports, a fixed
-     HTTP JSON request or one reviewed SQL statement against a read-only SQLite extract,
-     products/evidence/CONCEPT.md; the closed http-json and sqlite-extract source variants under
-     `source` in products/evidence/contracts/bundle.schema.yaml (frozen). */}
+{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Supported deployment";
+    products/evidence/examples/standalone/evidence.yaml, sources. */}
 
 ## Next
 
-- [Get your first Evidence Gateway assertion](../../tutorials/first-evidence-assertion/)
-- [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
-- [What you need to run Evidence Gateway](../../operate/evidence-requirements/)
-- [Review the Evidence Gateway security model](../../security/evidence/)
+- [Your first assertion](../../tutorials/first-evidence-assertion/)

@@ -254,7 +254,7 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
     "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
     "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
-    "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+    "docs/site/src/content/docs/tutorials/prove-an-evidence-project.mdx",
     "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
     "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
     "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
@@ -1233,6 +1233,9 @@ def classify(
             "products/evidence/contracts/*",
             "products/evidence/generated/registry-evidence.openapi.json",
             "crates/registry-evidencectl/schemas/authoring/*",
+            # The same generator publishes the evidence-oid4vci runtime grammar
+            # for the supporting service's configure page.
+            "products/evidence/generated/oid4vci-runtime/*",
             "products/breg/generated/authoring/*",
             "products/breg/generated/runtime/*",
             # The Scheduling configuration reference page is generated from
@@ -1241,6 +1244,13 @@ def classify(
             "products/scheduling/generated/records/*",
             "products/scheduling/generated/fixture/*",
             "products/scheduling/generated/runtime/*",
+            # The Casework configure and operate pages render tables generated
+            # from these schemas.
+            "products/casework/generated/project/*",
+            "products/casework/generated/fixture/*",
+            "products/casework/generated/dev-clients/*",
+            "products/casework/generated/holiday-set/*",
+            "products/casework/generated/runtime/*",
             # The configuration files reference page is generated from the
             # format registry.
             "products/platform/config-formats.yaml",
