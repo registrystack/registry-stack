@@ -13,6 +13,10 @@ use registry_breg::package::{
     prepare_package, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
     PackageSourceFile, PreparedPackage,
 };
+use registry_breg::postgres::{
+    install_compiled_schema, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresKernelError,
+};
 use registry_breg::runtime_config::{parse_runtime_config, RuntimeConfig};
 use registry_breg::startup::{
     prepare_schema_test_database_with_connection_configs_for_test, rehearse_schema_fingerprint,
@@ -24,6 +28,8 @@ const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
 const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
+const PORTABLE_SCHEMA_FINGERPRINT: &str =
+    "sha256:43af848b2d9ccdab8ee37d9410cce9e79202c839d097788b91917178579da77e";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []
@@ -42,6 +48,7 @@ async fn rehearsal_rolls_back_and_matches_committed_schema_test_preparation() {
     )
     .await
     .expect("schema fingerprint rehearsal succeeds on an empty disposable database");
+    assert_eq!(fingerprint, PORTABLE_SCHEMA_FINGERPRINT);
 
     assert!(
         managed_schemas_empty_by_restrict(&database).await,
@@ -66,7 +73,214 @@ async fn rehearsal_rolls_back_and_matches_committed_schema_test_preparation() {
         fingerprint,
         "committed schema-test state carries the rehearsed fingerprint"
     );
+    assert_generated_text_collation(&database).await;
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_verification_refuses_non_portable_text_collation() {
+    let registry = compiled_registry(SOURCE_REVISION);
+    let database = TestDatabase::create(1).await;
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
+    let fingerprint = rehearse_schema_fingerprint_with_connection_config_for_test(
+        &config,
+        &registry,
+        &database.migration_config,
+    )
+    .await
+    .expect("schema fingerprint rehearsal succeeds");
+    let package = prepared_package(&fingerprint);
+    prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .expect("schema-test preparation succeeds");
+    let state = database
+        .admin
+        .query_one(
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint
+               FROM registry_internal.registry_state
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("active registry state is readable");
+    let expected = ExpectedRegistryIdentity {
+        package_id: state.get(0),
+        database_id: state.get(1),
+        package_digest: state.get(2),
+        activation_id: state.get(3),
+        schema_fingerprint: state.get(4),
+    };
+    let entity = &registry.entities()["case"];
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.\"{}\"
+                 ALTER COLUMN active_package_revision TYPE text COLLATE \"C\"",
+            entity.physical_table,
+        ))
+        .await
+        .expect("test can introduce a non-portable collation");
+    let (migration, migration_task) = database.connect_migration().await;
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            &expected,
+            &ExpectedManagedCatalog::compiled(&registry),
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err(),
+        "catalog verification refuses a text column outside pg_catalog.pg_c_utf8"
+    );
+    drop(migration);
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activation_refuses_a_non_utf8_database_with_fresh_install_recovery() {
+    let registry = compiled_registry(SOURCE_REVISION);
+    let database = TestDatabase::create_with_encoding(1, "SQL_ASCII").await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let refusal = install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect_err("a non-UTF8 database is not an activation target");
+    assert!(matches!(
+        refusal,
+        PostgresKernelError::Configuration(message)
+            if message.contains("server_encoding must be UTF8")
+                && message.contains("fresh UTF8 database")
+    ));
+    drop(migration);
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fingerprint_refuses_an_unvalidated_not_null_constraint() {
+    let registry = compiled_registry(SOURCE_REVISION);
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let server_version_num: i32 = migration
+        .query_one("SELECT current_setting('server_version_num')::integer", &[])
+        .await
+        .expect("the PostgreSQL server version is readable")
+        .get(0);
+    if server_version_num < 180_000 {
+        assert!(
+            (170_000..180_000).contains(&server_version_num),
+            "the compatibility lane uses PostgreSQL 17: {server_version_num}"
+        );
+        drop(migration);
+        migration_task.abort();
+        database.cleanup().await;
+        return;
+    }
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("the compiled schema installs before the catalog is tampered");
+    let entity = &registry.entities()["case"];
+    let code = &entity.fields["code"];
+    migration
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.\"{}\"
+                 ADD CONSTRAINT breg_unvalidated_not_null
+                 NOT NULL \"{}\" NOT VALID",
+            entity.physical_table, code.physical_name,
+        ))
+        .await
+        .expect("PostgreSQL 18 accepts an unvalidated NOT NULL constraint");
+    let refusal = managed_schema_fingerprint(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&registry),
+    )
+    .await
+    .expect_err("an unvalidated NOT NULL constraint is never excluded from the fingerprint");
+    assert!(matches!(
+        refusal,
+        PostgresKernelError::CatalogInvariant(message)
+            if message.contains("NOT NULL constraint is not validated")
+                && message.contains("validate it before applying")
+    ));
+    drop(migration);
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+async fn assert_generated_text_collation(database: &TestDatabase) {
+    let database_collation: String = database
+        .admin
+        .query_one(
+            "SELECT datcollate FROM pg_catalog.pg_database WHERE datname = current_database()",
+            &[],
+        )
+        .await
+        .expect("database collation is readable")
+        .get(0);
+    assert!(
+        !matches!(database_collation.as_str(), "C" | "POSIX"),
+        "the proof database uses a locale default: {database_collation}"
+    );
+    let row = database
+        .admin
+        .query_one(
+            "SELECT count(*)::bigint,
+                    count(*) FILTER (
+                        WHERE cn.nspname = 'pg_catalog' AND coll.collname = 'pg_c_utf8'
+                    )::bigint
+               FROM pg_catalog.pg_attribute a
+               JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+               JOIN pg_catalog.pg_collation coll ON coll.oid = a.attcollation
+               JOIN pg_catalog.pg_namespace cn ON cn.oid = coll.collnamespace
+              WHERE n.nspname = 'registry_data'
+                AND c.relkind = 'r'
+                AND a.attnum > 0
+                AND NOT a.attisdropped",
+            &[],
+        )
+        .await
+        .expect("generated text collations are readable");
+    let collatable = row.get::<_, i64>(0);
+    assert!(collatable > 0, "fixture installs collatable columns");
+    assert_eq!(
+        row.get::<_, i64>(1),
+        collatable,
+        "every generated collatable column uses pg_catalog.pg_c_utf8"
+    );
+    let row = database
+        .admin
+        .query_one(
+            "SELECT count(*)::bigint,
+                    count(*) FILTER (
+                        WHERE cn.nspname = 'pg_catalog' AND coll.collname = 'pg_c_utf8'
+                    )::bigint
+               FROM pg_catalog.pg_index i
+               JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+               CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS index_collation(oid)
+               JOIN pg_catalog.pg_collation coll ON coll.oid = index_collation.oid
+               JOIN pg_catalog.pg_namespace cn ON cn.oid = coll.collnamespace
+              WHERE n.nspname = 'registry_data'",
+            &[],
+        )
+        .await
+        .expect("generated index collations are readable");
+    let collatable_indexes = row.get::<_, i64>(0);
+    assert!(collatable_indexes > 0, "fixture installs a text index");
+    assert_eq!(
+        row.get::<_, i64>(1),
+        collatable_indexes,
+        "generated text indexes inherit pg_catalog.pg_c_utf8 under a locale database default"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -396,7 +610,8 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
       "type": "string",
       "maximumLength": 32,
       "classification": "internal"
-    }}]
+    }}],
+    "indexes": [{{"id": "by-code", "fields": ["code"]}}]
   }}],
   "accessProfiles": [{{
     "id": "reader",

@@ -191,9 +191,6 @@ standard output, that fails closed at the request boundary.
 - `schedulingctl records apply` writes to a sibling file for its role,
   never into the runtime's file, and refuses to replace records when that
   file cannot be opened.
-- Schema version 8 refuses an earlier outbox while it holds an unpublished
-  record, and preserves the table even after its records are published.
-
 Entries are no longer chained. Tamper evidence for the audit file is the
 destination's and the operator's collection pipeline's, not the runtime's.
 
@@ -203,8 +200,7 @@ destination's and the operator's collection pipeline's, not the runtime's.
 `a_refused_response_entry_answers_unavailable_with_the_commitment_committed`,
 `refusals_decided_inside_the_capacity_transaction_write_their_audit_rows`,
 `a_permission_refused_before_the_transaction_writes_its_audit_row`,
-`hook_delivery_audit_failure_prevents_egress`, and
-`migration_refuses_unpublished_audit_and_preserves_a_drained_outbox`
+and `hook_delivery_audit_failure_prevents_egress`
 (`crates/registry-scheduling/tests/postgres_commitments.rs`);
 `records_apply_replaces_facts_wholesale_and_audits_each_write` and
 `records_apply_rejects_a_different_deployment_identity_without_writing`
@@ -623,7 +619,7 @@ test shows the same for CREATE),
 `scheduling_schema_migrations`),
 `apply_refuses_the_active_package_and_a_foreign_database_without_writing`,
 `apply_waits_for_the_migration_lock_another_apply_holds`, and
-`apply_takes_the_publication_locks_before_it_migrates`
+`successor_apply_waits_for_publication_locks_before_it_publishes`
 (SCHEDULING-SEC-31), and
 `apply_refuses_to_activate_without_its_audit_destination`,
 `apply_writes_nothing_when_its_request_audit_entry_is_refused`, and

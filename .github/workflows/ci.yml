@@ -1373,6 +1373,117 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/quickstart/run.sh --spatial --smoke
 
+  breg-postgres-18:
+    name: Base Registry Engine PostgreSQL 18 portability
+    needs: changes
+    if: needs.changes.outputs.breg_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Check optional Docker Hub credentials
+        id: dockerhub
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_READ_TOKEN: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOCKERHUB_USERNAME}" && -z "${DOCKERHUB_READ_TOKEN}" ]]; then
+            printf 'configured=false\n' >> "${GITHUB_OUTPUT}"
+          elif [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_READ_TOKEN}" ]]; then
+            echo 'Docker Hub credentials must configure both username and read token.' >&2
+            exit 1
+          else
+            printf 'configured=true\n' >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Log in to Docker Hub for the PostgreSQL 18 image
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && steps.dockerhub.outputs.configured == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
+      - name: Start PostgreSQL 18
+        id: postgres
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='docker.io/library/postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636'
+          container_name="breg-postgres-18-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id="$(
+            docker run --detach \
+              --name "${container_name}" \
+              --label org.registrystack.ci.postgres-service=true \
+              --env POSTGRES_DB=breg \
+              --env POSTGRES_USER=breg \
+              --env POSTGRES_PASSWORD=breg_test \
+              --health-cmd 'pg_isready -U breg -d breg' \
+              --health-interval 10s \
+              --health-timeout 5s \
+              --health-retries 5 \
+              --publish 127.0.0.1::5432 \
+              "${image}"
+          )"
+          printf 'container_id=%s\n' "${container_id}" >> "${GITHUB_OUTPUT}"
+
+          for _ in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")"
+            if [[ "${health}" == healthy ]]; then
+              break
+            fi
+            if [[ "${health}" == unhealthy ]]; then
+              docker logs "${container_id}"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")" != healthy ]]; then
+            docker logs "${container_id}"
+            exit 1
+          fi
+
+          endpoint="$(docker port "${container_id}" 5432/tcp)"
+          port="${endpoint##*:}"
+          [[ "${port}" =~ ^[0-9]+$ ]]
+          printf 'port=%s\n' "${port}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Verify cross-major schema fingerprint and collation
+        env:
+          BREG_TEST_DATABASE_URL: postgresql://breg:breg_test@localhost:${{ steps.postgres.outputs.port }}/breg
+        run: |
+          cargo test --locked -p registry-breg --features postgres-test,tooling \
+            --test schema_fingerprint_rehearsal --no-fail-fast -- --test-threads=1
+
+      - name: Stop PostgreSQL 18
+        if: always() && steps.postgres.outputs.container_id != ''
+        env:
+          CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          label="$(
+            docker inspect \
+              --format '{{ index .Config.Labels "org.registrystack.ci.postgres-service" }}' \
+              "${CONTAINER_ID}"
+          )"
+          [[ "${label}" == true ]]
+          docker rm --force "${CONTAINER_ID}"
+
   breg-wasm:
     # The WASM action-handler executor runs under the `wasm` feature, which
     # registry-breg and registry-bregctl carry by default. This lane runs
@@ -1574,6 +1685,7 @@ jobs:
       - discovery-contracts
       - evidence-contracts
       - breg-contracts
+      - breg-postgres-18
       - breg-wasm
       - identifiers
       - casework-postgres
@@ -2669,6 +2781,7 @@ jobs:
       - evidence-contracts
       - evidence-fuzz
       - breg-contracts
+      - breg-postgres-18
       - breg-wasm
       - identifiers
       - casework-postgres
@@ -2713,6 +2826,7 @@ jobs:
           # classifier selected one of these jobs, a skip is a failure.
           selected_by = {
               "breg-contracts": "breg_contracts",
+              "breg-postgres-18": "breg_contracts",
               "breg-wasm": "breg_integration",
               "casework-postgres": "casework_postgres",
               "scheduling-postgres": "scheduling_postgres",

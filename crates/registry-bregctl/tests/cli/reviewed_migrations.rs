@@ -89,7 +89,7 @@ impl ReviewFixture {
             sql_sha256: vec![],
             assertion_sha256: vec![],
             fixture_inventory: vec![],
-            postgres_major: 16,
+            postgres_major: 17,
             row_assertions: vec![],
             final_schema_fingerprint: FINGERPRINT.into(),
         };

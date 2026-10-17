@@ -791,7 +791,7 @@ fn schema_test_receipt_bytes(prepared: &PreparedPackage, journey_ids: &[&str]) -
         "compilerSourceRevision": manifest.compiler.source_revision,
         "sourceClosureSha256": prefixed_digest(source_closure.finalize().as_slice()),
         "migrationPlanSha256": sha256_prefixed(migration_plan),
-        "postgresMajor": 16,
+        "postgresMajor": 17,
         "targetManagedSchemaFingerprint": manifest.schema_fingerprint,
         "successfulJourneyIds": journey_ids,
         "journeyFileSha256": sha256_prefixed(journeys),

@@ -119,7 +119,7 @@ claim. Unsupported formats, CRS options and filter languages are refused.
 
 ## Database and upgrades
 
-GIS requires PostgreSQL 16 or later and PostGIS 3.5 or later. The quickstart
+GIS requires PostgreSQL 17 or later and PostGIS 3.5 or later. The quickstart
 pins PostgreSQL 17 with PostGIS 3.5.2. An administrator installs PostGIS into
 the admin-owned `registry_spatial_ext` schema and provisions the non-login bbox
 role. Runtime and migration roles cannot install or upgrade the extension.
