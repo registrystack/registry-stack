@@ -80,20 +80,33 @@ evidencectl check ./evidence
 evidencectl test ./evidence --target ./evidence/local-target.yaml
 ```
 
-Read `evidence/evidence.yaml`. Sources, selector profiles, named Functions, and
-AssertionDefinitions live in that one project. The local target and its separate authority file
-grant a disposable local caller. Initialization creates owner-only local keys under
-`.generated/`; keep that directory out of version control and support messages.
+```text test-expect
+Created an editable starter authoring project in ./evidence
+  README: ./evidence/README.md (what each file holds, and what comes next)
+  project: ./evidence/evidence.yaml
+  functions: ./evidence/functions
+  queries: ./evidence/queries
+  target: ./evidence/local-target.yaml
+  authority: ./evidence/dev-authority.yaml
+  fixtures: ./evidence/fixtures
+  keys: ./evidence/.generated/secrets (owner-only, disposable, and unbound)
+Next: run `evidencectl check ./evidence` and `evidencectl test ./evidence` to prove the copied starter before live credentials.
+Starter files were copied from ./teaching-inputs/offline-starter and combined with the normalized project and local target. No production extract or deployment bundle was imported.
+Evidence project check: complete
+Project: ./evidence
+0 errors, 0 warnings
+PASS: check
+PASS: fixtures/extract-record-active.yaml (13 cases)
+2 passed, 0 failed (13 cases evaluated)
+Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
+```
 
-The 13 fixture cases read a recorded SQLite extract. They cover active and retired values,
-missing or ambiguous matches, stale extracts, bounded results, and hostile selectors that stay
-bound parameters. A pass proves recorded-source behavior, not access to a running registry.
+The starter is a SQLite-extract project like the previous tutorial's; its 13 cases prove
+recorded-source behavior, not registry access. Keep `.generated/` out of version control.
 
 {/* Evidence: products/breg/evidence/offline-starter/evidence.yaml;
-    products/breg/evidence/offline-starter/local-target.yaml;
-    products/breg/evidence/offline-starter/dev-authority.yaml;
     products/breg/evidence/offline-starter/fixtures/extract-record-active.yaml;
-    crates/registry-evidencectl/src/normalized.rs. */}
+    crates/registry-evidencectl/src/fixtures.rs, run_fixtures. */}
 
 ## Export and import one lookup
 
@@ -103,27 +116,40 @@ bregctl generate evidence-source ./registry \
   --selector by-code --selector by-registration-number \
   --fields status --source-id registry-status --connection registry \
   --output ./registry-status-export
+```
+
+It reports `Generated 9 artifacts.` and repeats the two warnings. The generated source names the
+profile, both selectors, and the `status` fact, and grants no registry authority. Asking for
+`label` is refused with `breg.evidence-source.refused`, because the profile cannot read it.
+
+Import it into the project:
+
+```sh
 evidencectl source import ./registry-status-export --project ./evidence
 ```
 
-The export reports `Generated 9 artifacts.` and repeats the two warnings. It names the existing
-profile, both selectors, and the `status` fact, and it grants no registry authority. Asking for
-`label` instead is refused with `breg.evidence-source.refused`, because the profile cannot read
-it.
+```json test-excerpt
+{
+  "affectedDefinitions": [],
+  "application": "accepted",
+  "conflicts": [],
+  "sources": ["registry-status"]
+}
+```
 
-Import checks every artifact's checksum before it changes a file. It adds a Source named
-`registry-status`, its selector profiles, and its preparation and extraction Functions. It adds
-no AssertionDefinition and no caller grant. To revise the contract, export to a fresh directory.
+The source import checks every artifact's checksum, then adds the `registry-status` Source, its
+selector profiles, and two Functions. It adds no assertion definition and no caller grant.
+`evidencectl source add` does both steps for a registry with a stopped retained development
+session; "a bregctl binary of this same version must be on PATH".
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs;
     crates/registry-evidencectl/src/source_import/mod.rs, replace_project_sections;
-    crates/registry-evidencectl/src/source_import/export.rs;
-    products/breg/evidence/tests/verify-composition.py, verify. */}
+    crates/registry-evidencectl/src/source_add.rs, check_public_bregctl. */}
 
 ## Add the assertion definitions
 
-Copy the fragment's programs and fixtures into the project, then merge its definitions into
-`evidence/evidence.yaml` with [yq](https://github.com/mikefarah/yq) version 4:
+Copy the fragment's Functions and fixtures, then merge its definitions with
+[yq](https://github.com/mikefarah/yq) version 4:
 
 ```sh
 cp teaching-inputs/starter/functions/*.rhai evidence/functions/
@@ -132,23 +158,22 @@ yq --inplace '
   .functions += load("teaching-inputs/starter/definitions.yaml.fragment").functions
   | .assertionDefinitions += load("teaching-inputs/starter/definitions.yaml.fragment").assertionDefinitions
 ' evidence/evidence.yaml
+yq '.assertionDefinitions | keys' evidence/evidence.yaml
 ```
 
-The command appends the fragment's two Functions and adds its two definitions. It keeps the
-Sources, selector profiles, existing Functions, and `extract-record-active` as they were. The
-fragment is ordinary authoring, not a second import format.
+```text test-expect
+- extract-record-active
+- record-active
+- record-status-pair
+```
 
-`record-active` derives one boolean. `record-status-pair` derives the active and retired pair.
-Both read the imported Source through its exact selectors. Their 22 cases cover identity and
-type mismatches, absent facts, source failures, minimum disclosure, and refusals. An absent or
-null status is unavailable evidence; it never becomes an authoritative `false`.
+`record-active` derives one boolean and `record-status-pair` the active and retired pair, both
+through the imported Source. An absent or null status is unavailable evidence, never an
+authoritative `false`.
 
 {/* Evidence: products/breg/evidence/starter/definitions.yaml.fragment;
     products/breg/evidence/starter/functions/record-active.rhai;
-    products/breg/evidence/starter/functions/record-status-pair.rhai;
-    products/breg/evidence/starter/fixtures/record-active.yaml;
-    products/breg/evidence/starter/fixtures/record-status-pair.yaml;
-    products/breg/evidence/tests/verify-composition.py, verify. */}
+    products/breg/evidence/starter/functions/record-status-pair.rhai. */}
 
 ## Bind a local target and package
 
@@ -156,26 +181,29 @@ null status is unavailable evidence; it never becomes an authoritative `false`.
 evidencectl target new ./configured-target --local --project ./evidence
 ```
 
-Review the generated authority for all three definitions. In `configured-target/target.yaml`,
-replace the empty `connections` map with this synthetic binding:
-
-```yaml
-connections:
-  registry:
-    origin: http://127.0.0.1:8090
-    authentication:
-      type: oauth2-private-key-jwt
-      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
-      clientIdRef: secret:file/registry-client-id
-      clientAssertionKeyRef: secret:file/registry-client-key
-      clientAssertionAudience: http://127.0.0.1:8091
-      scope: registry:evidence:lookup
-      maximumCacheSeconds: 60
+```text test-expect
+Created Evidence target ./configured-target
 ```
 
-Fixtures supply recorded responses, so nothing here contacts a network endpoint or resolves a
-credential. Before live use, bind the real registry origin, issuer, audience, scope, and source
-client secrets. A source credential never authorizes an Evidence caller.
+Bind the `registry` connection:
+
+```diff lang="yaml" title="configured-target/target.yaml" test-edit
+-connections: {}
++connections:
++  registry:
++    origin: http://127.0.0.1:8090
++    authentication:
++      type: oauth2-private-key-jwt
++      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
++      clientIdRef: secret:file/registry-client-id
++      clientAssertionKeyRef: secret:file/registry-client-key
++      clientAssertionAudience: http://127.0.0.1:8091
++      scope: registry:evidence:lookup
++      maximumCacheSeconds: 60
+```
+
+Fixtures supply recorded responses, so nothing contacts these endpoints. Before live use, bind
+the real origin, issuer, audience, scope, and secrets.
 
 ```sh
 evidencectl check ./evidence --target ./configured-target
@@ -183,14 +211,34 @@ evidencectl test ./evidence --target ./configured-target
 evidencectl package ./evidence --target ./configured-target --output ./candidate
 ```
 
-The test run evaluates 35 cases across three definitions. If a case fails, inspect its named
-Source, Function, or grant; do not weaken its expected refusal. Packaging writes
-`candidate/bundle/` and a separate target handoff. Use a fresh candidate directory for each
-build.
+```text test-expect
+Evidence project check: complete
+Project: ./evidence
+Target: ./configured-target/target.yaml
+0 errors, 0 warnings
+PASS: check
+PASS: fixtures/extract-record-active.yaml (13 cases)
+PASS: fixtures/record-active.yaml (11 cases)
+PASS: fixtures/record-status-pair.yaml (11 cases)
+4 passed, 0 failed (35 cases evaluated)
+Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
+Package digest: sha256:<digest>
+Package: ./candidate/bundle
+Runtime: ./candidate/runtime.yaml
+Authority: ./candidate/compiled-authority.yaml
+Provision secret:file/audit-hmac-key
+Provision secret:file/registry-client-id
+Provision secret:file/registry-client-key
+Provision secret:file/subject-binding-hmac-key
+Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config ./candidate/runtime.yaml`.
+```
+
+The package candidate is `bundle/`, `runtime.yaml`, and `compiled-authority.yaml`. If a case
+fails, inspect its Source, Function, or grant; do not weaken its expected refusal.
 
 {/* Evidence: crates/registry-evidencectl/src/target.rs, create_local_target;
-    products/breg/evidence/tests/verify-composition.py, verify;
-    crates/registry-evidencectl/src/lib.rs. */}
+    crates/registry-evidencectl/src/build.rs, run_inner;
+    products/breg/evidence/tests/verify-composition.py, verify. */}
 
 ## Check the source credential on a deployed registry
 
@@ -263,28 +311,15 @@ replace these checks either. Keep the synthetic responses in each party's privat
 
 ## Maintain meaning and authority separately
 
-A change to record values needs no new export. A change to a consumed selector, fact, profile, or
-derived behavior does. Export to a fresh directory, review `evidencectl source diff`, then apply
-the reviewed `evidencectl source update` against the same project and target. Recheck the
-fixtures and package again. A renamed fact must be reconciled with every Function that reads it.
+The registry's authorization and Evidence's access profile are configured independently: the
+source credential lets Evidence read the lookup, and never authorizes an Evidence caller. A
+changed selector, fact, or profile needs a fresh export, a reviewed `evidencectl source diff`
+and `source update`, and a new package. [How Evidence
+works](../../explanation/how-evidence-works/) explains the split.
 
-No update switches the registry, Evidence, and their consumers at once. For a breaking change,
-pause the affected Evidence traffic and [activate](../../operate/breg/#activate-and-serve) the
-new registry package. Repeat the source lookup check, start the new Evidence candidate, and
-resume consumers only after a fresh synthetic assertion verifies.
-
-No service ran in this exercise. Remove the synthetic project, local keys, exports, and candidate
-under your own retention policy, and keep local credentials away from production.
-
-{/* Evidence: products/breg/evidence/tests/verify-composition.py, verify;
-    products/breg/EVIDENCE.md;
+{/* Evidence: products/breg/EVIDENCE.md;
     products/evidence/reference/authoring-projects/SOURCE-EXPORT.md. */}
 
 ## Next
 
-[Review a Proposal in Casework](../review-breg-changes-in-casework/) binds a review authority to
-your registry. To run this composition for real, start with [Deploy and serve](../../operate/breg/)
-for the registry, then [Build and deploy a Registry Evidence
-project](../build-and-deploy-evidence-project/) and [Configure Transit signing for Registry
-Evidence](../move-evidence-to-production-signing/). To make an Action require an assertion before
-it commits, see [Plans and Evidence](../../configure/breg-actions/#plans-and-evidence).
+[Prove an Evidence project](../prove-an-evidence-project/)

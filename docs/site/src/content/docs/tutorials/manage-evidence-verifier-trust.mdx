@@ -1,6 +1,6 @@
 ---
-title: Manage Registry Evidence verifier trust
-description: Pin provider identity and public keys independently, then approve signing-key rotation without trusting the response being verified.
+title: Manage verifier trust
+description: Pin the provider's public keys in your client, keep a revoked key out, and take a signing-key rotation without trusting the response being verified.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,101 +16,108 @@ tutorial_test:
   skip: how-to against the reader's own deployment; no fixed scenario to replay
 ---
 
-A valid signature proves control of a private key. Your consumer still decides which provider,
-issuer, key set, algorithm, audience, requirement, and configuration revision it trusts.
+If your application verifies Evidence responses, its verifier must trust keys your organization
+approved, never keys the service or the response supplies while it is being verified. This page
+pins the provider's public keys, keeps a revoked key out, and takes a signing-key rotation without
+a gap.
 
-Keep that decision outside the Registry Evidence response. Discovery helps you find candidate metadata; it
-does not make the candidate trusted.
+## Pin the provider's keys in the client profile
 
-## Establish trust before the first request
+`evidencectl client profile create` takes the trust mode. Pass `--pinned-jwks <PATH>`, which its
+help describes as a "Reviewed pinned JWKS file, relative to the profile file":
 
-Through your organization's provider-onboarding process, verify and retain:
+```sh
+evidencectl client profile create \
+  --base-url https://evidence.example.com \
+  --client-id age-check-app \
+  --private-key-file app-key/client-assertion-p384-private-jwk \
+  --pinned-jwks trusted-jwks.json \
+  --output age-check-client.json
+```
 
-- the legal issuer and technical provider identifiers;
-- the expected Registry Evidence service and JWKS endpoints;
-- the ES256 P-256 public keys and their RFC 7638 thumbprint `kid` values;
-- the audience that identifies your relying party;
-- the requirements, evidence types, purposes, concepts, and configuration revisions you accept;
-- the maximum assertion lifetime and clock skew your decisions allow.
+```text test-expect
+Created client profile
+```
 
-Fetch `/.well-known/evidence/jwks.json` only as a candidate. Compare it through an authenticated,
-independent channel or approved configuration change, then store the accepted JWKS as a versioned
-file. Verification must not follow key URLs supplied by a response.
+Without that flag the profile uses `https-discovery`, and `--local-loopback-discovery` is its
+loopback form: in both, the client fetches the service's key set itself. A profile client carries
+no revoked-key list in any trust mode, so with a profile you revoke a key by removing it from the
+pinned set.
 
-## Assemble a candidate trust set
+{/* Evidence: crates/registry-evidencectl/src/client.rs, pinned_jwks, local_loopback_discovery;
+    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile, TrustProfile;
+    crates/registry-evidence-client/src/config.rs:307-313, VerificationStance::Progressive. */}
 
-When the provider announces a new public key, build a new file without overwriting the active one:
+## Build the pinned key set
+
+Obtain each public JWK from the provider through your onboarding channel, not from its JWKS
+endpoint alone, then assemble the pinned key set:
 
 ```sh
 evidencectl jwks \
-  --output trusted-issuer-keys.next.json \
-  provider-new-public.jwk.json \
-  provider-retiring-public.jwk.json
+  --output trusted-jwks.next.json \
+  provider-current.public.jwk.json \
+  provider-next.public.jwk.json
 ```
 
-Pass public JWK files only. The command rejects private key members, conflicting keys with the same
-`kid`, and an existing output path.
-
-During the overlap window, the candidate set contains the new key and each retiring key that may
-still have a valid assertion in circulation. The provider must retain retiring public keys for
-at least its maximum assertion validity plus verifier clock skew. Your retention policy may be
-longer when historical re-verification requires it.
-
-## Prove the rotation before accepting it
-
-Use representative stored responses and the policies retained for them:
-
-```sh
-evidence verify \
-  --jws response-signed-with-retiring-key.json \
-  --jwks trusted-issuer-keys.next.json \
-  --policy retained-policy.json \
-  --at "<original-decision-instant>"
+```text test-expect
+wrote trusted-jwks.next.json
 ```
 
-After the provider begins signing with the new key, verify a synthetic response through the same
-procedure. Confirm that an unknown key still fails and that the candidate changes only the key set,
-not issuer, provider, audience, purpose, requirement, concept, or configuration expectations.
-A provider's planned rotation or emergency key revocation leaves every requirement's
-`configurationRevision` unchanged, so a revision that moves during either is a separate change to
-review, not part of the key change.
+The command refuses a private key and an existing output file; pass `--force` to overwrite. Write
+a new file and activate it through your configuration change process, so the previous set stays
+available for rollback.
 
-Approve and atomically activate the candidate through your normal configuration process. Keep the
-previous trust file and approval record for rollback and audit.
+{/* Evidence: crates/registry-evidencectl/src/jwks.rs, force. */}
 
-## Revoke a compromised key immediately
+## Keep a denylist with an explicit client
 
-Treat the current revocation list as a separate governed trust input, not as metadata learned from
-the issuer or from the response. When a provider reports a compromised service key:
+When you need revoked key ids beside the pinned set, construct the client yourself:
 
-1. verify the affected RFC 7638 thumbprint through the emergency onboarding channel;
-2. add it to the application's current `revokedKeyIds` (Node) or `revoked_key_ids` (Rust and
-   Python) configuration;
-3. remove the key from the current pinned JWKS;
-4. reconstruct or restart the client so every instance uses both changes; and
-5. prove that a response signed by the revoked key is refused before resuming decisions.
+```python
+client = EvidenceClient(
+    "https://evidence.example.com",
+    trusted_jwks=json.loads(Path("trusted-jwks.json").read_text()),
+    revoked_key_ids=["<revoked kid>"],
+    token=token_config,
+)
+```
 
-The current denylist takes precedence even when the key remains in a cached JWKS or an older
-prepared request retained it in its verification policy. This lets an application stop accepting a
-compromised key without waiting for caches or prepared work to expire.
+A revoked key id is refused even while the key is still in the pinned set.
 
-Keep current acceptance separate from historical verification. If policy permits historical replay,
-retain the exact trust set, denylist, decision instant, and approval record that governed the
-original decision. Never remove a key from today's denylist merely to replay an older record.
+### Node
 
-## Retire the old key deliberately
+```js
+const client = new evidence.EvidenceClient({
+  baseUrl: 'https://evidence.example.com',
+  trustedJwks: JSON.parse(readFileSync('trusted-jwks.json', 'utf8')),
+  revokedKeyIds: ['<revoked kid>'],
+  token: tokenConfig,
+})
+```
 
-Remove a retiring key from current verification only after:
+{/* Evidence: crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
+    EvidenceClient, revoked_key_ids;
+    crates/registry-evidence-client-node/client.d.ts, EvidenceClientConfig, revokedKeyIds;
+    crates/registry-evidence-client/src/client.rs, a_revoked_identifier_overrides_the_still_pinned_key. */}
 
-1. the provider's maximum assertion lifetime plus accepted clock skew has elapsed since its last
-   possible use;
-2. no current transaction can legitimately return an assertion signed by it;
-3. historical records retain the exact trust set needed to re-verify earlier decisions;
-4. rollback procedures no longer require the old signing generation.
+## Take a rotation
 
-Never make verification fetch a missing key automatically. An unknown `kid` is a trust-change
-signal and must fail closed until your organization approves the change.
+1. When the provider announces a new key, add it to the pinned set and activate the set before the
+   provider signs with it.
+2. Once the provider's maximum assertion lifetime plus clock skew has passed since the old key last
+   signed, remove the old key from the set; with an explicit client, also add its key id to
+   `revoked_key_ids` if it was compromised.
+3. Keep each retired set with the decisions it governed, because a replay needs the keys trusted
+   at the time.
 
-Provider operators use [Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/)
-for the other side of this rotation. Consumers remain independent and do not inherit trust merely
-because the provider published a key.
+A response signed by a key outside the set fails with code `key`. Treat that as a trust change to
+approve, never as a key to fetch. The provider's side is
+[Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/); the threat model is in
+[Evidence Gateway security model](../../security/evidence/).
+
+{/* Evidence: crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report, kind. */}
+
+## Next
+
+[Connect an institution API](../connect-an-institution-source/)

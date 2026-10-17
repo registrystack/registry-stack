@@ -1,6 +1,6 @@
 ---
-title: Verify Registry Evidence as a consumer
-description: Separate a stored response from independently retained trust and request expectations, then re-verify the decision offline.
+title: Verify an assertion as a consumer
+description: Replay an earlier adult-status decision offline from the bytes your application kept, and see a changed response refused.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,187 +13,126 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
-  after: tutorials/first-evidence-assertion
+  after: tutorials/request-evidence-from-an-application
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Registry Evidence assertion](../first-evidence-assertion/) before starting
-this tutorial. You will preserve its response, the trust decisions fixed before that response
-existed, and the recorded start of its successful verification, then replay the decision without a
-service.
+If your team must stand behind an Evidence decision later, replay it offline from what your
+application kept, then see a changed response refused. You continue the project from
+[Request Evidence from your application](../request-evidence-from-an-application/); nothing needs
+to be running.
 
 <QuickstartMeta
-  outcome="A Registry Evidence response accepted and later re-verified at the recorded decision time."
-  time="About 10 minutes"
+  outcome="An adult-status decision replayed at its recorded instant and a tampered copy refused."
+  time="About 5 minutes"
   level="Local verification with synthetic data"
-  prerequisites={[
-    'The completed first Registry Evidence assertion tutorial',
-    'Its retained adult-status response, verified payload, and request artifacts',
-    'Python 3 and the matching evidence binary',
-  ]}
+  prerequisites={['The project and three files from Request Evidence from your application', 'Python 3 with the client package from that tutorial']}
 />
 
-## Preserve four independent inputs
-
-Enter the project left by the first tutorial. Registry Evidence, its issuer, and the source can all
-remain stopped.
+## What the application kept
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-The first tutorial left these files:
+The application wrote three files:
 
-- `adult-status.jws.json`, the exact untrusted response bytes;
-- `adult-status.verified.json`, the payload published by the first successful verification;
-- `.evidence/requests/adult-status/verification.json`, the owner-only context fixed before the
-  response existed;
-- `.evidence/requests/adult-status/verified-at.txt`, the recorded start of that successful
-  verification.
+- `adult-status.retained.json`, the retained verification: the pinned keys and every expectation,
+  fixed before the response existed. It holds no disclosed values.
+- `adult-status.response.jws`, the exact response bytes, still untrusted input.
+- `adult-status.verified-at.txt`, the decision instant in Unix seconds.
 
-Create an owner-only consumer record. Copy the response exactly, and split the local context into
-the two inputs a production relying party governs separately.
+{/* Evidence: crates/registry-evidence-client/src/retained.rs, RetainedEvidenceVerification,
+    from_prepared. */}
 
-```sh
-umask 077
-install -d -m 700 consumer-record
-python3 - <<'PY'
-import json
-import shutil
-from pathlib import Path
+## Replay the decision and refuse a change
 
-request_dir = Path(".evidence/requests/adult-status")
-record_dir = Path("consumer-record")
-context = json.loads((request_dir / "verification.json").read_text())
+`verify_retained` judges a response against the current time. `verify_retained_as_of` asks whether
+the response was acceptable at the recorded instant, so a replay still holds after the assertion
+expires.
 
-shutil.copyfile("adult-status.jws.json", record_dir / "response.jws.json")
-shutil.copyfile(request_dir / "verified-at.txt", record_dir / "verified-at.txt")
-(record_dir / "trusted-jwks.json").write_text(
-    json.dumps(context["trustedJwks"], indent=2) + "\n"
-)
-(record_dir / "verification-policy.json").write_text(
-    json.dumps(context["verificationPolicy"], indent=2) + "\n"
-)
-PY
-```
-
-The tutorial derives the JWKS and policy from a private context that `evidencectl request prepare`
-created before it received a response. A production consumer obtains these from its own reviewed
-trust configuration and transaction state. Do not take keys, expected claims, or a policy from the
-response or from live discovery during verification.
-
-## Replay the accepted response
-
-Check the retained policy, then verify at the instant recorded immediately before the first
-successful verification. The first tutorial published that owner-only time only after verification
-succeeded.
-
-```sh
-evidence check-policy \
-  --verification-policy consumer-record/verification-policy.json
-evidence verify \
-  --jws consumer-record/response.jws.json \
-  --jwks consumer-record/trusted-jwks.json \
-  --policy consumer-record/verification-policy.json \
-  --at "$(cat consumer-record/verified-at.txt)" \
-  > consumer-record/verification.txt
-```
-
-`evidence verify` opens no listener, contacts no issuer, fetches no discovery document, and calls
-no source. It prints the payload only after the pinned key signed the exact bytes, every retained
-expectation matched, and the assertion was current at the named instant. `evidencectl verify`
-internally used its current clock and does not expose that exact instant, so the retained time is
-precisely the recorded start of the successful operation. It is not the assertion's signed
-`issuedAt`. Application code should pass and retain its own explicit decision instant when its
-verifier supports that contract.
-
-Application code can now publish verified data from `consumer-record/verification.txt` to decision
-logic.
-
-## Replay the same decision
-
-Later, re-run the verifier with the retained time. The answer is about that historical decision,
-even if the assertion is no longer current today.
-
-```sh
-evidence verify \
-  --jws consumer-record/response.jws.json \
-  --jwks consumer-record/trusted-jwks.json \
-  --policy consumer-record/verification-policy.json \
-  --at "$(cat consumer-record/verified-at.txt)"
-```
-
-`authentic` and `currently-valid` answer different questions. A stored response can remain
-authentic after its validity window, but it cannot support a new current decision. Replaying the
-retained instant accounts for the earlier decision; verifying at the current time answers whether
-the same response is usable now.
-
-## Prove the response remains untrusted input
-
-Change one encoded payload byte in a copy. The pinned key, policy, and historical instant stay the
-same.
-
-```sh
-python3 - <<'PY'
+```python title="replay_adult_status.py" test-file
 import json
 from pathlib import Path
 
-source = Path("consumer-record/response.jws.json")
-document = json.loads(source.read_text())
+from registry_client.evidence import VerificationError, verify_retained_as_of
+
+context = Path("adult-status.retained.json").read_bytes()
+response = Path("adult-status.response.jws").read_bytes()
+decided_at = int(Path("adult-status.verified-at.txt").read_text())
+
+replayed = verify_retained_as_of(context, response, decided_at)
+value = replayed.evidence["supportedValues"][0]["value"]
+print(f"REPLAYED adult={json.dumps(value)}")
+
+document = json.loads(response)
 payload = document["payload"]
 document["payload"] = ("A" if payload[0] != "A" else "B") + payload[1:]
-Path("consumer-record/tampered.jws.json").write_text(json.dumps(document) + "\n")
-PY
+try:
+    verify_retained_as_of(context, json.dumps(document).encode(), decided_at)
+except VerificationError as error:
+    print(f"REFUSED {error.code}")
 ```
 
-Verification refuses the changed bytes and never prints a verified payload.
+The second call changes one character of the signed payload and keeps the keys, expectations, and
+instant. Run it:
 
-```sh test-exit="1"
-evidence verify \
-  --jws consumer-record/tampered.jws.json \
-  --jwks consumer-record/trusted-jwks.json \
-  --policy consumer-record/verification-policy.json \
-  --at "$(cat consumer-record/verified-at.txt)"
+```sh
+python3 replay_adult_status.py
 ```
 
-## Put the boundary in application code
+```text test-expect
+REPLAYED adult=true
+REFUSED signature
+```
 
-Preserve this order in a consuming application:
+The replay opens no connection. `error.code` names the verifier's reason; branch on it, never on
+the message.
 
-1. Generate and retain the request nonce and every policy expectation before sending the request.
-2. Select the trusted provider identity and pinned key set through reviewed configuration.
-3. Store the returned bytes as untrusted input.
-4. Record a verification instant, verify the exact response format against the retained policy and
-   keys, and publish the instant only after success.
-5. Publish only the verified payload to decision logic.
-6. Retain the instant, result, response digest, and policy and JWKS revisions under your retention
-   rules.
+{/* Evidence: crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
+    verify_retained, verify_retained_as_of, VerificationError;
+    crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report, kind. */}
 
-Use distinct types, files, or process boundaries for unverified bytes and verified values. An
-application object that looks usable before verification makes accidental trust more likely.
+### Node
 
-Retain enough to repeat the decision without asking the provider to recreate it: the signed bytes
-and format, the original application transaction, the expected request and subject bindings, the
-pinned key revision, the verification policy and instant, and the verified result or its governed
-digest. The source record does not belong in this verifier record.
+`verifyRetainedAsOf` takes the instant in milliseconds, so the recorded seconds are scaled:
 
-The opaque subject binding is meaningful only for the audience and purpose that produced it. Keep
-the application's mapping from its person or case to the transaction in its own protected records;
-the assertion does not disclose that local identifier.
+```js title="replay-adult-status.js"
+const { readFileSync } = require('node:fs')
+const { evidence } = require('@registrystack/client')
 
-## If a retained input is missing
+const replayed = evidence.verifyRetainedAsOf(
+  readFileSync('adult-status.retained.json'),
+  readFileSync('adult-status.response.jws'),
+  Number(readFileSync('adult-status.verified-at.txt', 'utf8')) * 1000,
+)
+console.log(`REPLAYED adult=${replayed.evidence.supportedValues[0].value}`)
+```
 
-Missing input is a failed verification record, not a reason to fetch replacement trust. Rerun the
-request and verification steps in [Get your first Registry Evidence assertion](../first-evidence-assertion/)
-when `adult-status.jws.json`, `adult-status.verified.json`,
-`.evidence/requests/adult-status/verification.json`, or
-`.evidence/requests/adult-status/verified-at.txt` is absent. A production retention policy must
-decide whether to reject the operation, recover an authoritative archived revision, or make a new
-request.
+{/* Evidence: crates/registry-evidence-client-node/index.d.ts, verifyRetainedAsOf;
+    crates/registry-stack-client-node/index.d.ts, evidence. */}
+
+## If the replay is refused
+
+A refusal of the unchanged files means the retained trust no longer matches the response, usually
+after a key rotation or a changed trusted key set. That is the verifier's own trust input; see
+[Manage verifier trust](../manage-evidence-verifier-trust/).
+
+## Clean up
+
+Remove the stopped local Evidence state:
+
+```sh
+evidencectl dev clean .
+```
+
+```text test-expect
+Removed stopped local Evidence state
+```
+
+{/* Evidence: crates/registry-evidencectl/src/dev.rs, clean_dev. */}
 
 ## Next
 
-- [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/)
-- [Request SD-JWT VC serialization](../request-evidence-as-sd-jwt-vc/)
-- [Review the Registry Evidence API](../../reference/apis/registry-evidence/)
+[Manage verifier trust](../manage-evidence-verifier-trust/)

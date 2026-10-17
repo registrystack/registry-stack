@@ -18,8 +18,8 @@ profile and does not create authority.
 
 Start from a writable copy in the matching Registry Stack source archive. Use
 matching `evidence` and `evidencectl` binaries, Python 3.9 or later, curl, and
-Docker. The [FHIR credential tutorial](../../../../docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx)
-owns discovery, the local source, request preparation, SD-JWT VC verification,
+Docker. The [Connect an institution API](../../../../docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx)
+owns discovery, the local source, request preparation, verification,
 and cleanup. Run discovery from the copy's parent directory so its owner-only
 selector files stay outside the project. Never commit those files, credentials,
 or returned data.
