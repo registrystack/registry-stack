@@ -385,15 +385,3 @@ test('new unreviewed binaries stay draft while reviewed pages stay current', () 
   assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['unknown'] }, catalog), /unknown binary/u);
   assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['coordinator', 'coordinator'] }, catalog), /duplicates/u);
 });
-
-
-test('uses the current product name in prose while preserving literal CLI values', () => {
-  const catalog = fixtureCatalog();
-  const binary = catalog.binaries.find(({ name }) => name === 'evidence');
-  binary.about = 'An Evidence Gateway service';
-  binary.long_about = 'Evidence Gateway preserves `Evidence Gateway` as a literal';
-  const pages = renderCatalog(catalog, fixtureReviewMetadata());
-  assert.match(pages.get('evidence.mdx'), /A Registry Evidence service/);
-  assert.match(pages.get('evidence.mdx'), /Registry Evidence preserves `Evidence Gateway`/);
-  assert.match(pages.get('index.mdx'), /A Registry Evidence service/);
-});

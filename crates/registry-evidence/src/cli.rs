@@ -15,7 +15,7 @@ pub const REMOVED_RUNTIME_ENVIRONMENT_VARIABLE: &str = "REGISTRY_EVIDENCE_RUNTIM
 #[command(
     name = "evidence",
     version = registry_platform_buildinfo::DISPLAY_VERSION,
-    about = "Evidence Gateway Version 1"
+    about = "Registry Evidence Version 1"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -233,7 +233,7 @@ pub enum Command {
         #[arg(long)]
         config: PathBuf,
     },
-    /// Start the native Evidence Gateway HTTP service.
+    /// Start the native Registry Evidence HTTP service.
     Serve {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]

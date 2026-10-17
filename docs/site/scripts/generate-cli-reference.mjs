@@ -346,10 +346,7 @@ function inlineCode(value) {
 // passes through unchanged: its opening run of backticks closes at the next run
 // of the same length, and a run that never closes is ordinary text.
 function mdxText(value) {
-  const escape = (text) => text
-    .replace(/\bEvidence [Gg]ateway\b/gu, 'Registry Evidence')
-    .replace(/\b([Aa])n(\s+)Registry Evidence/gu, '$1$2Registry Evidence')
-    .replace(/[\\{}<]/gu, (character) => `\\${character}`);
+  const escape = (text) => text.replace(/[\\{}<]/gu, (character) => `\\${character}`);
   let rendered = '';
   let index = 0;
   while (index < value.length) {

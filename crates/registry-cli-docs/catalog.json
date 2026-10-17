@@ -8299,7 +8299,7 @@
     {
       "name": "evidence",
       "invocation": "evidence",
-      "about": "Evidence Gateway Version 1",
+      "about": "Registry Evidence Version 1",
       "long_about": null,
       "usage": "evidence <COMMAND>",
       "arguments": [],
@@ -8718,7 +8718,7 @@
         {
           "name": "serve",
           "invocation": "evidence serve",
-          "about": "Start the native Evidence Gateway HTTP service",
+          "about": "Start the native Registry Evidence HTTP service",
           "long_about": null,
           "usage": "evidence serve --runtime-config <FILE>",
           "arguments": [],
@@ -9763,7 +9763,7 @@
             {
               "name": "client",
               "invocation": "evidencectl access client",
-              "about": "Register and revoke local Evidence Gateway clients",
+              "about": "Register and revoke local Registry Evidence clients",
               "long_about": null,
               "usage": "evidencectl access client [OPTIONS] <COMMAND>",
               "arguments": [],
@@ -10055,7 +10055,7 @@
         {
           "name": "keygen",
           "invocation": "evidencectl keygen",
-          "about": "Generate Evidence Gateway deployment key material as owner-only files",
+          "about": "Generate Registry Evidence deployment key material as owner-only files",
           "long_about": null,
           "usage": "evidencectl keygen [OPTIONS] <COMMAND>",
           "arguments": [],
@@ -10923,14 +10923,14 @@
         {
           "name": "dev",
           "invocation": "evidencectl dev",
-          "about": "Run the private local issuer and Evidence Gateway pair",
+          "about": "Run the private local issuer and Registry Evidence pair",
           "long_about": null,
           "usage": "evidencectl dev [OPTIONS] <COMMAND>",
           "arguments": [],
           "options": [
             {
               "display": "--evidence-port <EVIDENCE_PORT>",
-              "description": "Loopback port for the local Evidence Gateway service",
+              "description": "Loopback port for the local Registry Evidence service",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -11029,7 +11029,7 @@
                 },
                 {
                   "display": "--evidence-port <EVIDENCE_PORT>",
-                  "description": "Loopback port for the local Evidence Gateway service",
+                  "description": "Loopback port for the local Registry Evidence service",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11131,7 +11131,7 @@
                 },
                 {
                   "display": "--evidence-port <EVIDENCE_PORT>",
-                  "description": "Loopback port for the local Evidence Gateway service",
+                  "description": "Loopback port for the local Registry Evidence service",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11205,7 +11205,7 @@
             {
               "name": "stop",
               "invocation": "evidencectl dev stop",
-              "about": "Stop the active local issuer and Evidence Gateway pair",
+              "about": "Stop the active local issuer and Registry Evidence pair",
               "long_about": null,
               "usage": "evidencectl dev stop [OPTIONS] [PROJECT]",
               "arguments": [
@@ -11222,7 +11222,7 @@
               "options": [
                 {
                   "display": "--evidence-port <EVIDENCE_PORT>",
-                  "description": "Loopback port for the local Evidence Gateway service",
+                  "description": "Loopback port for the local Registry Evidence service",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11315,7 +11315,7 @@
               "options": [
                 {
                   "display": "--evidence-port <EVIDENCE_PORT>",
-                  "description": "Loopback port for the local Evidence Gateway service",
+                  "description": "Loopback port for the local Registry Evidence service",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11417,7 +11417,7 @@
               "options": [
                 {
                   "display": "--evidence-port <EVIDENCE_PORT>",
-                  "description": "Loopback port for the local Evidence Gateway service",
+                  "description": "Loopback port for the local Registry Evidence service",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11537,7 +11537,7 @@
                 },
                 {
                   "display": "--evidence-port <EVIDENCE_PORT>",
-                  "description": "Loopback port for the local Evidence Gateway service",
+                  "description": "Loopback port for the local Registry Evidence service",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11780,7 +11780,7 @@
                   "options": [
                     {
                       "display": "--base-url <BASE_URL>",
-                      "description": "Evidence Gateway base URL. HTTPS is required by default",
+                      "description": "Registry Evidence base URL. HTTPS is required by default",
                       "always_required": true,
                       "repeatable": false,
                       "default_values": [],
@@ -13612,13 +13612,13 @@
         {
           "name": "verify",
           "invocation": "evidencectl verify",
-          "about": "Verify one retained Evidence Gateway response offline",
+          "about": "Verify one retained Registry Evidence response offline",
           "long_about": null,
           "usage": "evidencectl verify [OPTIONS] --context <CONTEXT> --output <OUTPUT> <RESPONSE>",
           "arguments": [
             {
               "display": "<RESPONSE>",
-              "description": "Signed JWS or SD-JWT VC response returned by Evidence Gateway",
+              "description": "Signed JWS or SD-JWT VC response returned by Registry Evidence",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -13638,7 +13638,7 @@
             },
             {
               "display": "--output <OUTPUT>",
-              "description": "New owner-only file for the exact verified Evidence Gateway payload",
+              "description": "New owner-only file for the exact verified Registry Evidence payload",
               "always_required": true,
               "repeatable": false,
               "default_values": [],

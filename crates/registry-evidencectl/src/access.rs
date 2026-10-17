@@ -44,7 +44,7 @@ pub enum AccessCommand {
     /// Inspect complete access profiles from the target authority.
     #[command(subcommand)]
     Profile(ProfileCommand),
-    /// Register and revoke local Evidence Gateway clients.
+    /// Register and revoke local Registry Evidence clients.
     #[command(subcommand)]
     Client(Box<ClientCommand>),
 }

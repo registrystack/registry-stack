@@ -67,8 +67,8 @@
   </g>
 
   <g fill="#000091" font-size="10" font-weight="700" letter-spacing="0.04em">
-    <text x="270" y="66">OAUTH ISSUER TO EVIDENCE GATEWAY</text>
-    <text x="270" y="128">CALLER TO EVIDENCE GATEWAY</text>
+    <text x="270" y="66">OAUTH ISSUER TO REGISTRY EVIDENCE</text>
+    <text x="270" y="128">CALLER TO REGISTRY EVIDENCE</text>
     <text x="270" y="209">THE SERVICE EDGE (AUTHENTICATION)</text>
     <text x="270" y="277">EVIDENCE TO ITS FIXED SOURCES</text>
     <text x="270" y="358">PRODUCT BOUNDARIES STAY SEPARATE</text>
