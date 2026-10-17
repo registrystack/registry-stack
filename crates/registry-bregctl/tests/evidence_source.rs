@@ -16,6 +16,10 @@ fn export(output: &Path, fields: &str) -> Output {
         .join("../../products/breg/evidence/registry")
         .canonicalize()
         .unwrap();
+    export_project(&project, output, fields)
+}
+
+fn export_project(project: &Path, output: &Path, fields: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
         .args(["--format", "json", "generate", "evidence-source"])
         .arg(project)
@@ -294,4 +298,68 @@ fn prior_export_comparison_warns_on_removed_fields_and_refuses_wrong_identity() 
             .iter()
             .any(|item| item["code"] == "breg.evidence-source.refused"));
     }
+}
+
+#[test]
+fn prior_export_comparison_warns_on_api_name_rename_and_denies_warnings() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let project = root.join("registry");
+    fs::create_dir(&project).unwrap();
+    let original = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/evidence/registry/registry.yaml"),
+    )
+    .unwrap();
+    let mut source: Value = serde_norway::from_str(&original).unwrap();
+    // Remove unrelated unrestricted-row findings so --deny-warnings proves this change.
+    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+        for permission in profile["permissions"]["records"].as_array_mut().unwrap() {
+            permission["rowBoundaries"] = serde_json::json!([
+                {"field":"code", "claim":"registry_principal", "operator":"equals"}
+            ]);
+        }
+    }
+    fs::write(
+        project.join("registry.yaml"),
+        serde_norway::to_string(&source).unwrap(),
+    )
+    .unwrap();
+    let destination = root.join("export");
+    assert!(export_project(&project, &destination, "status")
+        .status
+        .success());
+    let manifest = destination.join("source-export.json");
+    let unchanged = check_prior_export(&project, &manifest, true);
+    assert!(
+        unchanged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unchanged.stdout)
+    );
+    source["recordTypes"][0]["fields"][1]["apiName"] = "registrationCode".into();
+    fs::write(
+        project.join("registry.yaml"),
+        serde_norway::to_string(&source).unwrap(),
+    )
+    .unwrap();
+    let warning = check_prior_export(&project, &manifest, false);
+    assert!(
+        warning.status.success(),
+        "{}",
+        String::from_utf8_lossy(&warning.stdout)
+    );
+    let report: Value = serde_json::from_slice(&warning.stdout).unwrap();
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["severity"] == "warning"
+                && item["code"] == "breg.evidence-source.field-removed"),
+        "an API-name-only rename must warn: {report}"
+    );
+    assert_eq!(
+        check_prior_export(&project, &manifest, true).status.code(),
+        Some(1)
+    );
 }

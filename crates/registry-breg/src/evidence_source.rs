@@ -63,12 +63,12 @@ struct ExportManifestArtifact<'a> {
     digest: &'a str,
 }
 
-/// Field identifiers consumed by an export, for explicit offline comparison only.
+/// Logical field IDs and their exported API names, for explicit offline comparison only.
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportDependencies {
-    fields: BTreeSet<String>,
-    related_entities: BTreeMap<String, BTreeSet<String>>,
+    fields: BTreeMap<String, String>,
+    related_entities: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -137,9 +137,9 @@ pub fn check_prior_export(
                 "a prior export dependency entity is absent from this registry",
             )]);
         };
-        for id in fields {
-            if field(current, id).is_err() {
-                diagnostics.push(Diagnostic::finding("breg.evidence-source.field-removed", format!("entities.{entity}.fields.{id}"), "a field used by the prior Evidence export was removed or renamed; regenerate and review that export before deployment"));
+        for (id, api_name) in fields {
+            if !field(current, id).is_ok_and(|current| &current.api_name == api_name) {
+                diagnostics.push(Diagnostic::finding("breg.evidence-source.field-removed", format!("entities.{entity}.fields.{id}"), "a field or API name used by the prior Evidence export was removed or renamed; regenerate and review that export before deployment"));
             }
         }
     }
@@ -220,12 +220,21 @@ fn export_dependencies(
             }
         }
     }
-    let fields = entities
+    let mut dependencies = BTreeMap::new();
+    for (entity_id, ids) in entities {
+        let current = &registry.entities()[&entity_id];
+        let mut names = BTreeMap::new();
+        for id in ids {
+            names.insert(id.clone(), field(current, &id)?.api_name.clone());
+        }
+        dependencies.insert(entity_id, names);
+    }
+    let fields = dependencies
         .remove(&entity.id)
         .expect("root entity dependencies exist");
     Ok(ExportDependencies {
         fields,
-        related_entities: entities,
+        related_entities: dependencies,
     })
 }
 

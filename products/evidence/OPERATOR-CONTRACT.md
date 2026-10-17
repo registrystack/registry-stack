@@ -159,9 +159,11 @@ The pending record and authority history commit atomically. Ceiling and target
 refusals record a refused event without replacing the active snapshot. Unreadable
 input, unusable audit setup, or unsafe storage returns failure. If audit delivery
 fails after commit, activation returns failure but the committed history remains
-inspectable. Retry with the same document to deliver the pending record without
-creating another activation or changing its operator reference. Successful retries
-do not redeliver acknowledged events. A crash between sink append and durable
+inspectable. Retry with the same document and unchanged target, package, and
+configuration to deliver the pending record without creating another activation
+or changing its operator reference. A refused retry reuses the latest undelivered
+attempt under the same validation context; a later refusal after delivery is a new
+attempt. Successful retries do not redeliver acknowledged events. A crash between sink append and durable
 delivery acknowledgement can repeat the same activation ID, so consumers must
 accept at-least-once delivery. Failed state durability barriers never acknowledge
 success. Legacy history remains readable; reactivation adds a correlated event if

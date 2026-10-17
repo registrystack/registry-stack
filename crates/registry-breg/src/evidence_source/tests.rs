@@ -656,7 +656,7 @@ fn export_manifest_records_fields_for_explicit_prior_export_comparison() {
     let manifest = yaml(&export, "source-export.json");
     assert_eq!(
         manifest["dependencies"]["fields"],
-        json!(["code", "registration-number", "status", "tenant"])
+        json!({"code":"code", "registration-number":"registrationNumber", "status":"status", "tenant":"tenant"})
     );
 }
 
@@ -668,4 +668,39 @@ fn reference_selectors_and_facts_preserve_the_uuid_format() {
     };
     assert_eq!(selector_schema(&kind).unwrap().0["type"], "uuid");
     assert_eq!(scalar_schema(&kind).unwrap()["format"], "uuid");
+}
+
+#[test]
+fn prior_export_warns_on_related_dependency_api_name_rename() {
+    let original = membership_project();
+    let export = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
+    let mut changed = original.clone();
+    changed["recordTypes"][2]["fields"][2]["apiName"] = json!("memberPrincipal");
+    let diagnostics = check_prior_export(
+        &compiled(&changed, SQL),
+        "source-export.json",
+        file(&export, "source-export.json"),
+    )
+    .unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "breg.evidence-source.field-removed");
+    assert_eq!(
+        diagnostics[0].severity,
+        crate::diagnostics::DiagnosticSeverity::Finding
+    );
+    assert_eq!(diagnostics[0].path, "entities.membership.fields.principal");
+    assert_eq!(
+        yaml(&export, "source-export.json")["dependencies"]["relatedEntities"]["membership"]
+            ["principal"],
+        "principal"
+    );
+    let mut unrelated = original.clone();
+    unrelated["recordTypes"][2]["fields"][3]["apiName"] = json!("unusedPrincipal");
+    assert!(check_prior_export(
+        &compiled(&unrelated, SQL),
+        "source-export.json",
+        file(&export, "source-export.json")
+    )
+    .unwrap()
+    .is_empty());
 }

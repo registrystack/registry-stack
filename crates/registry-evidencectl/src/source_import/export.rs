@@ -75,9 +75,9 @@ pub(super) struct ExportDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportDependencies {
     #[serde(rename = "fields")]
-    _fields: Vec<String>,
+    _fields: BTreeMap<String, String>,
     #[serde(rename = "relatedEntities")]
-    _related_entities: BTreeMap<String, Vec<String>>,
+    _related_entities: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]

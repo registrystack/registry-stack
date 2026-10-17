@@ -3427,6 +3427,7 @@ mod tests {
             schema: "evidence-activation-audit/v1".into(),
             activation_id: ulid::Ulid::generate().to_string(),
             delivered: false,
+            retry_context_digest: None,
             sequence: 1,
             recorded_at: chrono::Utc::now().to_rfc3339(),
             outcome: crate::authority::ActivationOutcome::Applied,

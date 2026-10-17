@@ -140,6 +140,9 @@ pub struct ActivationAudit {
     pub activation_id: String,
     #[serde(default)]
     pub delivered: bool,
+    /// Internal retry binding, never copied into the configured audit sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retry_context_digest: Option<String>,
     pub sequence: u64,
     pub recorded_at: String,
     pub outcome: ActivationOutcome,
@@ -287,6 +290,10 @@ fn read_state(root: &Path) -> Result<AuthorityState, AuthorityError> {
     for (index, event) in state.audit.iter().enumerate() {
         if event.schema != "evidence-activation-audit/v1"
             || event.activation_id.parse::<ulid::Ulid>().is_err()
+            || event
+                .retry_context_digest
+                .as_ref()
+                .is_some_and(|digest| !is_sha256_label(digest))
             || event.sequence != index as u64 + 1
             || !is_sha256_label(&event.package_digest)
             || !is_sha256_label(&event.authority_digest)
@@ -541,6 +548,38 @@ fn activate_recorded_with_sync(
         sync_committed(root, &directory, sync)?;
         return load(root, target, config, package_digest);
     }
+    // Refusal is an attempt, not an active snapshot. Reuse only the latest
+    // undelivered attempt under the same validation inputs; a delivered refusal
+    // or a changed binding/package/configuration remains a new attempt.
+    let retry_context_digest = if validation.is_err() {
+        let context = serde_json::to_value((
+            target,
+            config,
+            state.activations.last().map(|active| {
+                (
+                    &active.package_digest,
+                    &active.authority_revision,
+                    active.sequence,
+                )
+            }),
+        ))
+        .map_err(|_| AuthorityError::InvalidDocument)?;
+        Some(digest_value(&context)?)
+    } else {
+        None
+    };
+    if validation.is_err()
+        && state.audit.last().is_some_and(|event| {
+            !event.delivered
+                && event.outcome == ActivationOutcome::Refused
+                && event.package_digest == package_digest
+                && event.authority_digest == digest
+                && event.retry_context_digest == retry_context_digest
+        })
+    {
+        sync_committed(root, &directory, sync)?;
+        return Err(validation.expect_err("matching retry is refused"));
+    }
     if state.audit.len() >= MAX_ACTIVATIONS
         || (validation.is_ok() && existing.is_none() && state.activations.len() >= MAX_ACTIVATIONS)
     {
@@ -574,6 +613,7 @@ fn activate_recorded_with_sync(
         schema: "evidence-activation-audit/v1".to_owned(),
         activation_id,
         delivered: false,
+        retry_context_digest,
         sequence: state.audit.len() as u64 + 1,
         recorded_at: chrono::Utc::now().to_rfc3339(),
         outcome: if validation.is_ok() {
@@ -925,6 +965,133 @@ mod tests {
             pending[0].authority_revision
         );
         assert!(entry["record"].get("schema").is_none());
+    }
+
+    #[tokio::test]
+    async fn refused_activation_retry_preserves_pending_identity_and_reference() {
+        struct RefusingSink;
+        impl Write for RefusingSink {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("audit sink failure canary"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (config, mut document, package) = fixture();
+        document.project = "other-project".into();
+        let root = tempfile::tempdir().unwrap();
+        let refusing = EvidenceAuditLog::with_writer(
+            registry_platform_audit::AuditWriter::from_line_sink(Box::new(RefusingSink)),
+            b"activation-audit-key-canary-32-bytes".to_vec(),
+            1,
+        )
+        .unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                activate_with_operator(
+                    root.path(),
+                    "local",
+                    &config,
+                    &package,
+                    &document,
+                    Some("operator-reference-canary"),
+                    &refusing
+                )
+                .await,
+                Err(AuthorityError::AuditFailed)
+            ));
+        }
+        let pending = activation_audit(root.path()).unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "an undelivered refused retry must not allocate another event"
+        );
+        let path = root.path().join("audit.jsonl");
+        let recovered = EvidenceAuditLog::initialize(
+            registry_platform_audit::AuditDestination::File(
+                registry_platform_audit::FileDestination::new(&path).unwrap(),
+            ),
+            b"activation-audit-key-canary-32-bytes".to_vec(),
+            1,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            activate_with_operator(
+                root.path(),
+                "local",
+                &config,
+                &package,
+                &document,
+                Some("retry-reference-canary"),
+                &recovered
+            )
+            .await,
+            Err(AuthorityError::BindingMismatch)
+        ));
+        let delivered = activation_audit(root.path()).unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert!(delivered[0].delivered);
+        assert_eq!(delivered[0].activation_id, pending[0].activation_id);
+        assert_eq!(
+            delivered[0].operator_reference_hash,
+            pending[0].operator_reference_hash
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
+        assert!(history(root.path()).unwrap().is_empty());
+        // A later attempt after successful delivery remains a distinct refusal.
+        assert!(matches!(
+            activate_with_operator(
+                root.path(),
+                "local",
+                &config,
+                &package,
+                &document,
+                Some("next-reference-canary"),
+                &recovered
+            )
+            .await,
+            Err(AuthorityError::BindingMismatch)
+        ));
+        let events = activation_audit(root.path()).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_ne!(events[0].activation_id, events[1].activation_id);
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    fn refused_retry_with_changed_validation_inputs_is_a_distinct_attempt() {
+        let (config, mut document, package) = fixture();
+        document.project = "other-project".into();
+        for change in ["target", "configuration", "package", "document"] {
+            let root = tempfile::tempdir().unwrap();
+            assert!(activate(root.path(), "local", &config, &package, &document).is_err());
+            let mut next_config = config.clone();
+            let mut next_document = document.clone();
+            let mut next_package = package.clone();
+            let mut target = "local";
+            match change {
+                "target" => target = "another-target",
+                "configuration" => next_config.project = Some("changed-project".into()),
+                "package" => next_package = sha256_uri(b"changed-package-canary"),
+                "document" => next_document.project = "third-project".into(),
+                _ => unreachable!(),
+            }
+            assert!(activate(
+                root.path(),
+                target,
+                &next_config,
+                &next_package,
+                &next_document
+            )
+            .is_err());
+            let events = activation_audit(root.path()).unwrap();
+            assert_eq!(events.len(), 2, "{change} is not the same pending attempt");
+            assert_ne!(events[0].activation_id, events[1].activation_id);
+            assert!(events.iter().all(|event| !event.delivered));
+        }
     }
 
     #[tokio::test]
