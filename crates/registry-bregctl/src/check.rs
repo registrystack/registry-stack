@@ -362,9 +362,14 @@ pub(super) fn compile_for_inspection(
         )
     })?;
     let mut outcome = Outcome::default();
+    // A production compile can succeed while `check --production` still
+    // refuses the project, as for a deployment identity a package must not
+    // carry, so an error in the report refuses inspection too.
     match compile_project(&selected, profile, &mut outcome) {
-        Some(compiled) => Ok((compiled, outcome.report.into_diagnostics())),
-        None => Err(super::Refusal::Document(super::DocumentRefusal {
+        Some(compiled) if !outcome.report.has_errors() => {
+            Ok((compiled, outcome.report.into_diagnostics()))
+        }
+        _ => Err(super::Refusal::Document(super::DocumentRefusal {
             command: "explain",
             subject: "the project",
             report: outcome.report,
