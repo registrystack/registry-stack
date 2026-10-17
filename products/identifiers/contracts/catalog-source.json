@@ -75,6 +75,11 @@
   ],
   "referenceExclusions": [
     {
+      "glob": "products/breg/generated/minimal/generated/action-contracts.schema.json",
+      "classification": "generated-copy",
+      "reason": "A second emitted copy of the Base Registry Engine Action contract export schema; the catalog reproduces it from the facility project's copy."
+    },
+    {
       "glob": "crates/registry-breg-client-node/__test__/binding.test.js",
       "classification": "fixture",
       "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
