@@ -331,6 +331,10 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/package.json",
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/configure/casework.mdx",
+    "docs/site/src/content/docs/explanation/how-casework-works.mdx",
+    "docs/site/src/content/docs/operate/casework.mdx",
+    "docs/site/src/content/docs/start/casework.mdx",
     "docs/site/src/content/docs/tutorials/first-casework.mdx",
 )
 
