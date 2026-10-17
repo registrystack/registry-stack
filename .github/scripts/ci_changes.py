@@ -249,6 +249,8 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
     "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
+    "docs/site/src/content/docs/configure/enable-sd-jwt-vc.mdx",
+    "docs/site/src/content/docs/configure/evidence-oid4vci.mdx",
     "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
     "docs/site/src/content/docs/tutorials/build-and-deploy-evidence-project.mdx",
     "docs/site/src/content/docs/tutorials/connect-a-sqlite-extract.mdx",

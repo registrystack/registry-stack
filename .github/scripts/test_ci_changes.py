@@ -1301,6 +1301,9 @@ class CiChangesTest(unittest.TestCase):
         # pull request noticing.
         slugs = replayed_tutorial_pages("evidence")
         self.assertIn("tutorials/first-evidence-assertion", slugs)
+        # Gated how-to pages outside tutorials/ are replayed too.
+        self.assertIn("configure/enable-sd-jwt-vc", slugs)
+        self.assertIn("configure/evidence-oid4vci", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
                 page = f"docs/site/src/content/docs/{slug}.mdx"
