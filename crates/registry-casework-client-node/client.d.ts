@@ -107,7 +107,7 @@ export interface AbsenceInput { person: IssuerPrincipal; from: string; until: st
 export interface AbsenceRecord extends AbsenceInput { absenceId: string; revision: SafeInteger }
 export interface AbsencesQuery { cursor?: string; limit?: SafeInteger }
 export interface AbsenceList { directoryRevision: SafeInteger; items: ReadonlyArray<AbsenceRecord>; nextCursor?: string }
-export type StaffingDiagnostic = 'no-cover-available'
+export type StaffingDiagnostic = 'no-cover-available' | 'insufficient-distinct-approvers'
 export interface AssignmentRequest { assignee: IssuerPrincipal; reason?: string }
 export interface DelegateRequest { delegate: IssuerPrincipal; reason?: string }
 export interface ReviewCaseloadMoveRequest { from: IssuerPrincipal; to: IssuerPrincipal; queue?: string; reason: string }
@@ -145,6 +145,7 @@ export type KnownCaseworkProblemCode =
   | 'request.not-found'
   | 'request.unprocessable'
   | 'request.unsupported-media-type'
+  | 'review.distinct-approver-required'
   | 'review.initiator-excluded'
   | 'review.initiator-required'
   | 'review.query-too-broad'
@@ -157,6 +158,8 @@ export type KnownCaseworkProblemCode =
   | 'source-profile.not-applicable'
   | 'source-profile.required'
   | 'source.bad-gateway'
+  | 'source.version-mismatch'
+  | 'source.version-unavailable'
 export type CaseworkProblemCode = KnownCaseworkProblemCode | (string & {})
 export type CaseworkProtocolFailure = 'header-bounds' | 'trace-context' | 'media-type' | 'body' | 'problem' | 'status' | 'protocol'
 

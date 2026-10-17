@@ -1421,7 +1421,10 @@ async fn live_read_budget_requires_narrowing_and_exact_subject_narrows_before_sc
                 &actor("a", CaseworkRole::Staff),
                 Some("source-staff"),
                 "human-source-token",
-                Default::default()
+                ReviewStaffingQuery {
+                    sort: ReviewTaskSort::Reference,
+                    ..Default::default()
+                }
             )
             .await,
         Err(ReviewRuntimeError::QueryTooBroad)
@@ -1667,3 +1670,6 @@ mod clock_progress_regressions;
 
 #[path = "support/authority_closure_regressions.rs"]
 mod authority_closure_regressions;
+
+#[path = "support/inbox_pagination.rs"]
+mod inbox_pagination;

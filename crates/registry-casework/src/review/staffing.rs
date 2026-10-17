@@ -1,6 +1,6 @@
 //! One staffing surface over review tasks. Live projections never become an index.
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 impl CaseworkService {
     pub async fn review_staffing_tasks(
@@ -39,132 +39,212 @@ impl CaseworkService {
                 return Err(ReviewRuntimeError::SourceProfileRequired);
             }
         }
-        let expected_subject = query.subject().map_err(|_| ReviewRuntimeError::Invalid)?;
-        let limit = query
+        let mut limit = query
             .limit
             .unwrap_or(self.project.inbox.default_page_size)
             .min(100);
-        let mut position = None;
-        let mut examined = 0;
-        let mut source_reads = 0;
-        let mut items = Vec::new();
+        let ordinary = query.reference.is_none() && query.sort != ReviewTaskSort::Reference;
         let until = tokio::time::Instant::now()
             + Duration::from_millis(self.project.inbox.page_deadline_milliseconds);
-        loop {
-            if examined >= self.project.inbox.maximum_candidate_scan {
+        let mut context = query.clone();
+        context.cursor = None;
+        let context_digest = review_request_hash(&(source_profile, context))?;
+        let mut after = if ordinary {
+            if let Some(cursor) = query.cursor {
+                let client = self.store.client().await?;
+                let row = client
+                    .query_opt(
+                        "SELECT position_key FROM casework_review_staffing_cursors
+                     WHERE cursor_id=$1 AND issuer=$2 AND subject=$3 AND profile_id=$4
+                     AND context_digest=$5 AND position_key IS NOT NULL AND expires_at>now()",
+                        &[
+                            &cursor,
+                            &actor.principal.issuer,
+                            &actor.principal.subject,
+                            &actor.profile_id,
+                            &context_digest,
+                        ],
+                    )
+                    .await?
+                    .ok_or(ReviewRuntimeError::ResultExpired)?;
+                Some(row.get::<_, Value>(0))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mut observations = super::inbox::InboxObservations::default();
+        if let Some(key) = &after {
+            let anchor: Uuid = serde_json::from_value(
+                key.get("taskId")
+                    .cloned()
+                    .ok_or(ReviewRuntimeError::Corrupt)?,
+            )?;
+            let check = async {
+                let task = self.store.review_task(actor, anchor).await?;
+                if query
+                    .queue
+                    .as_ref()
+                    .is_some_and(|queue| task.queue != *queue)
+                    || !review_task_matches_ownership(&task, actor, query.ownership)
+                    || staffing_position(&task) != *key
+                {
+                    return Err(ReviewRuntimeError::ResultExpired);
+                }
+                let record = self.store.review_request_for_task(anchor).await?;
+                let request_id = record.request_id;
+                let records = BTreeMap::from([(request_id, record)]);
+                observations
+                    .prepare(self, &records, source_profile, token, until, true)
+                    .await?;
+                observations.display(&records[&request_id], source_profile, true, true)?;
+                let current = self.store.review_task(actor, anchor).await?;
+                if staffing_position(&current) != *key
+                    || current.queue != task.queue
+                    || !review_task_matches_ownership(&current, actor, query.ownership)
+                {
+                    return Err(ReviewRuntimeError::ResultExpired);
+                }
+                Ok(())
+            };
+            match tokio::time::timeout_at(until, check).await {
+                Ok(Ok(())) => {}
+                Ok(Err(
+                    ReviewRuntimeError::Forbidden
+                    | ReviewRuntimeError::NotFound
+                    | ReviewRuntimeError::SourceProfileRequired
+                    | ReviewRuntimeError::SourceProfileNotApplicable,
+                )) => {
+                    return Err(ReviewRuntimeError::ResultExpired);
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(_) => return Err(ReviewRuntimeError::SourceUnavailable),
+            }
+        }
+        if observations.source_reads() > 0 {
+            // A continuation reserves its current anchor observation before
+            // admitting candidates. Limit is an upper bound on returned rows.
+            limit = limit.min(
+                self.project
+                    .inbox
+                    .maximum_source_reads
+                    .saturating_sub(observations.source_reads()),
+            );
+            if limit == 0 {
                 return Err(ReviewRuntimeError::QueryTooBroad);
             }
-            let page = self
-                .store
-                .review_tasks_filtered(
-                    actor,
-                    query.queue.as_deref(),
-                    ReviewTaskListView::Reviewer(query.ownership),
-                    position,
-                    100.min(self.project.inbox.maximum_candidate_scan - examined),
-                    expected_subject.as_ref(),
-                )
+        }
+        let expected_subject = query.subject().map_err(|_| ReviewRuntimeError::Invalid)?;
+        let mut position = None;
+        let mut examined = 0;
+        let mut items = Vec::new();
+        loop {
+            if examined >= self.project.inbox.maximum_candidate_scan
+                || tokio::time::Instant::now() >= until
+            {
+                return Err(ReviewRuntimeError::QueryTooBroad);
+            }
+            let remaining = self.project.inbox.maximum_candidate_scan - examined;
+            let batch_limit = if ordinary {
+                (limit - items.len()).min(remaining)
+            } else {
+                100.min(remaining)
+            };
+            let page = if ordinary {
+                self.store
+                    .staffing_candidates(actor, &query, &after, batch_limit)
+                    .await?
+            } else {
+                self.store
+                    .review_tasks_filtered(
+                        actor,
+                        query.queue.as_deref(),
+                        ReviewTaskListView::Reviewer(query.ownership),
+                        position,
+                        batch_limit,
+                        expected_subject.as_ref(),
+                    )
+                    .await?
+            };
+            let records = self.store.inbox_records(&page.items).await?;
+            observations
+                .prepare(self, &records, source_profile, token, until, false)
                 .await?;
-            for mut task in page.items {
+            let ids = page
+                .items
+                .iter()
+                .map(|task| task.task_id)
+                .collect::<Vec<_>>();
+            let mut current = self
+                .store
+                .inbox_current_tasks(actor, &ids, true, false)
+                .await?;
+            if tokio::time::Instant::now() >= until {
+                return Err(ReviewRuntimeError::SourceUnavailable);
+            }
+            for task in &page.items {
                 examined += 1;
-                // Exact opaque binding is a bounded candidate restriction. Disclosure still
-                // precedes reference matching, sort keys, totals and released metadata.
-                if expected_subject
-                    .as_ref()
-                    .is_some_and(|s| s != &task.subject)
+                let record = records
+                    .get(&task.request_id)
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                let display_reference =
+                    match observations.display(record, source_profile, true, false) {
+                        Ok(reference) => reference,
+                        Err(
+                            ReviewRuntimeError::Forbidden
+                            | ReviewRuntimeError::NotFound
+                            | ReviewRuntimeError::SourceProfileRequired,
+                        ) => continue,
+                        Err(error) => return Err(error),
+                    };
+                let Some(mut row) = current.remove(&task.task_id) else {
+                    continue;
+                };
+                if row.revision != task.revision
+                    || row.queue != task.queue
+                    || !review_task_matches_ownership(&row, actor, query.ownership)
                 {
                     continue;
                 }
-                let record = self.store.review_request_for_task(task.task_id).await?;
-                let display_reference = match &record.policy.context {
-                    ReviewContextPolicy::Submitted => Some(record.requester_reference.clone()),
-                    ReviewContextPolicy::CurrentSource { provider, contract } => {
-                        let Some(profile) = source_profile else {
-                            continue;
-                        };
-                        if source_reads >= self.project.inbox.maximum_source_reads {
-                            return Err(ReviewRuntimeError::QueryTooBroad);
-                        }
-                        source_reads += 1;
-                        let identity = ReviewContextIdentity {
-                            subject: record.subject.clone(),
-                            contract: contract.clone(),
-                        };
-                        let provider = self
-                            .providers
-                            .get(provider)
-                            .ok_or(ReviewRuntimeError::SourceUnavailable)?;
-                        let observation = tokio::time::timeout_at(
-                            until,
-                            provider.human_display(HumanDisplayRequest {
-                                identity: &identity,
-                                source_profile_id: profile,
-                                credential: EphemeralCredential::new(token),
-                            }),
-                        )
-                        .await
-                        .map_err(|_| ReviewRuntimeError::SourceUnavailable)?;
-                        let view = match observation {
-                            Ok(view) => view,
-                            Err(
-                                ReviewContextError::Concealed
-                                | ReviewContextError::Denied
-                                | ReviewContextError::BindingMoved
-                                | ReviewContextError::ContractChanged,
-                            ) => continue,
-                            Err(error) => return Err(map_review_source_error(error)),
-                        };
-                        if view.identity != identity || !view.reviewable {
-                            continue;
-                        }
-                        record
-                            .policy
-                            .validate_display(&serde_json::to_value(&view.fields)?)
-                            .map_err(|error| invalid_provider_display(&record.policy, error))?;
-                        if view
-                            .display_reference
-                            .as_ref()
-                            .is_some_and(|s| s.len() > 256 || s.chars().any(char::is_control))
-                        {
-                            return Err(ReviewRuntimeError::SourceInvalid);
-                        }
-                        view.display_reference
-                    }
-                };
-                let current = self.store.review_task(actor, task.task_id).await;
-                match current {
-                    Ok(current)
-                        if current.revision == task.revision
-                            && review_task_matches_ownership(&current, actor, query.ownership) =>
-                    {
-                        task = current
-                    }
-                    Ok(_)
-                    | Err(
-                        ReviewRuntimeError::Forbidden
-                        | ReviewRuntimeError::NotFound
-                        | ReviewRuntimeError::ResultExpired,
-                    ) => continue,
-                    Err(error) => return Err(error),
-                }
-                task.display_reference = display_reference;
+                row.display_reference = display_reference;
                 if query
                     .reference
                     .as_ref()
-                    .is_some_and(|r| task.display_reference.as_ref() != Some(r))
+                    .is_some_and(|reference| row.display_reference.as_ref() != Some(reference))
                 {
                     continue;
                 }
-                items.push(task);
+                items.push(row);
+            }
+            if ordinary && items.len() == limit && page.next_cursor.is_some() {
+                let key = staffing_position(&items[limit - 1]);
+                let cursor = Uuid::new_v4();
+                let client = self.store.client().await?;
+                client.execute("INSERT INTO casework_review_staffing_cursors
+                    (cursor_id,issuer,subject,profile_id,context_digest,snapshot_digest,position,position_key,expires_at)
+                    VALUES($1,$2,$3,$4,$5,'',0,$6,now()+interval '15 minutes')",
+                    &[&cursor,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&context_digest,&key]).await?;
+                items.truncate(limit);
+                return Ok(ReviewTaskPage {
+                    items,
+                    next_cursor: Some(cursor),
+                    status: PageStatus::Complete,
+                });
             }
             let Some(next) = page.next_cursor else { break };
             if position == Some(next) {
                 return Err(ReviewRuntimeError::Corrupt);
             }
             position = Some(next);
-            if tokio::time::Instant::now() >= until {
-                return Err(ReviewRuntimeError::QueryTooBroad);
-            }
+            after = page.items.last().map(staffing_position);
+        }
+        if ordinary {
+            return Ok(ReviewTaskPage {
+                items,
+                next_cursor: None,
+                status: PageStatus::Complete,
+            });
         }
         items.sort_by(|left, right| {
             let tie = || {
@@ -734,7 +814,9 @@ impl CaseworkService {
             "casework_review_staffing_cursors",
             "casework_review_cursors",
         ] {
-            let sql=format!("DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} WHERE expires_at<=now() LIMIT 1000 FOR UPDATE SKIP LOCKED)");
+            let sql = format!(
+                "DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} WHERE expires_at<=now() LIMIT 1000 FOR UPDATE SKIP LOCKED)"
+            );
             erased += transaction.execute(&sql, &[]).await?;
         }
         if erased > 0 {
@@ -746,4 +828,10 @@ impl CaseworkService {
         audit.commit(transaction).await?;
         Ok(erased)
     }
+}
+
+fn staffing_position(task: &ReviewTask) -> Value {
+    json!({"revision": task.revision, "deadlineAt": task.deadline_at, "createdAt": task.created_at, "taskId": task.task_id,
+        "source": task.subject.source, "type": task.subject.subject_type, "id": task.subject.id,
+        "version": task.subject.version, "digest": task.subject.digest.as_str()})
 }

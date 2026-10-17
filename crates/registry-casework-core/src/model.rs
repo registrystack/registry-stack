@@ -115,6 +115,7 @@ impl fmt::Debug for EphemeralCredential<'_> {
 #[serde(rename_all = "kebab-case")]
 pub enum StaffingDiagnostic {
     NoCoverAvailable,
+    InsufficientDistinctApprovers,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
