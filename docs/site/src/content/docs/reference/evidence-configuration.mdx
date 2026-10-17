@@ -107,7 +107,12 @@ loopback pattern listed under *where a rule elsewhere applies*.
     crates/registry-evidencectl/schemas/authoring/*.schema.json.
     Run npm run generate from docs/site. */}
 
-<ConfigurationReference contracts={reference.contracts} prefix="evidence" />
+{/* The evidence-oid4vci runtime grammar is generated into the same data and
+    belongs to the supporting service's own page, configure/evidence-oid4vci. */}
+<ConfigurationReference
+  contracts={reference.contracts.filter((contract) => contract.id !== 'oid4vci-runtime')}
+  prefix="evidence"
+/>
 
 ## What this page does not carry
 
