@@ -60,17 +60,10 @@ is_breg_page() {
   esac
   case "${1#src/content/docs/}" in
     explanation/configuration-defined-registry.* | \
-      explanation/governed-registry-actions.* | \
       explanation/registry-modeling-patterns.* | \
-      explanation/native-field-patterns.* | \
-      explanation/membership-read-boundaries.* | \
-      explanation/deriving-a-registry-from-a-model.* | \
-      explanation/openfn-adaptors.* | \
       tutorials/extend-a-registry-with-a-module.* | \
       tutorials/derive-a-registry-from-publicschema.* | \
-      tutorials/review-registry-changes.* | \
-      tutorials/send-registry-events-to-a-webhook.* | \
-      tutorials/first-citizen-mcp.*)
+      tutorials/send-registry-events-to-a-webhook.*)
       return 0
       ;;
   esac

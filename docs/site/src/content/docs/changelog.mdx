@@ -588,7 +588,7 @@ relevant product pages on this site rather than duplicating release notes.
   `/v1/statistics/` serve JSON or CSV, `bregctl statistics publish` and `withdraw` drive the
   lifecycle over HTTP, and the Rust, Node.js, and Python clients carry the operations.
   [Publish a statistical series](../configure/breg-statistics/) gives the steps, and the
-  [statistical dataset explanation](../explanation/breg-statistical-datasets/) states the
+  [publish statistics](../configure/breg-statistics/) states the
   inference risks the disclosure method accepts.
 
 {/* Evidence: products/breg/STATISTICS.md;
@@ -801,7 +801,7 @@ relevant product pages on this site rather than duplicating release notes.
   This release publishes `breg-mcp` and `breg-review` as binaries for Linux amd64, Linux arm64,
   and macOS arm64, and as the `ghcr.io/registrystack/breg-mcp` and
   `ghcr.io/registrystack/breg-review` images; the BReg installer does not
-  install them. See [operate the citizen chat assistant](../operate/breg-mcp/).
+  install them. See [citizen chat assistant](../configure/breg-mcp/).
 
 {/* Evidence: release/scripts/release_roster.py, BREG_SERVICES_FIRST_RELEASE;
     crates/registry-breg-mcp/src/cli.rs, Command;
@@ -1856,7 +1856,7 @@ relevant product pages on this site rather than duplicating release notes.
   rows. Access preview scenarios accept `actorKind` and `requesterClient` and
   report the derived `recipients`. See
   [require consent for a read](../configure/breg-access/#require-the-subjects-consent)
-  and [membership and consent read boundaries](../explanation/membership-read-boundaries/).
+  and [control access and reads](../configure/breg-access/).
 
 {/* Evidence: crates/registry-breg/src/consent.rs;
     crates/registry-bregctl/src/consent_module.rs, plan();
@@ -2305,9 +2305,9 @@ relevant product pages on this site rather than duplicating release notes.
   boundaries. Test new patterns against PostgreSQL before packaging; adding a
   pattern validates existing rows under a table lock, and changing or removing
   one requires a reviewed migration. See
-  [governed registry actions](../explanation/governed-registry-actions/),
-  [native field patterns](../explanation/native-field-patterns/), and
-  [membership read boundaries](../explanation/membership-read-boundaries/).
+  [Actions and Proposals](../configure/breg-actions/),
+  [modeling patterns](../explanation/registry-modeling-patterns/), and
+  [control access and reads](../configure/breg-access/).
 - The trial action-handler ABI version 2 resolves declared, verified Evidence
   Gateway assertions with operator-bound providers. Accepted assertion material
   has a separate 24-hour retention period. Use

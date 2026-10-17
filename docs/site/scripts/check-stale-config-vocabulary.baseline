@@ -13,15 +13,5 @@
 
 # PR 2: tutorials and entry pages
 
-# PR 6: pages the Author tier absorbed, deleted in package 6
-src/content/docs/tutorials/build-a-breg-production-candidate.mdx # PR 6
-src/content/docs/explanation/breg-statistical-datasets.mdx # PR 6
-src/content/docs/explanation/deriving-a-registry-from-a-model.mdx # PR 6
-src/content/docs/explanation/native-field-patterns.mdx # PR 6
-
 # PR 5: Reference and src/data
 src/content/docs/reference/bregctl-publicschema-wizard.mdx # quotes the wizard's own prompts, which still say entity (crates/registry-bregctl/src/init_from_model/wizard.rs); cleared when the product renames them
-
-# PR 6: Compose and citizen
-src/content/docs/configure/breg-mcp.mdx # PR 6
-src/content/docs/explanation/openfn-adaptors.mdx # PR 6

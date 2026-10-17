@@ -35,9 +35,7 @@ credentials through secret references.
 
 Use the maintained site guides:
 
-- [Prepare a citizen chat deployment](../../docs/site/src/content/docs/tutorials/first-citizen-mcp.mdx)
-- [Configure the citizen chat assistant](../../docs/site/src/content/docs/configure/breg-mcp.mdx)
-- [Operate the citizen chat assistant](../../docs/site/src/content/docs/operate/breg-mcp.mdx)
+- [Citizen chat assistant](../../docs/site/src/content/docs/configure/breg-mcp.mdx)
 
 The native source is `crates/registry-breg-mcp/` and
 `crates/registry-breg-review/`. Their public config checks validate documents

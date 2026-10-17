@@ -114,11 +114,13 @@ between the caller's allowed values, which `bregctl check` points out. Write
 `rowBoundaries: unrestricted` only for deliberately registry-wide authority.
 
 An agent is held to a narrower rule. A token from an agent, or one acting for another principal,
-cannot create, patch, or delete Records directly unless it carries a task grant; it reaches them
+cannot create, patch, or delete Records directly, with or without a task grant; it reaches them
 through [Actions and Proposals](../breg-actions/) instead.
 
 {/* Evidence: crates/registry-breg/src/access.rs, breg.access.profile-row-boundary-not-writable and
-    breg.access.profile-writable-row-boundary; crates/registry-breg/src/api/mod.rs, authorize_direct_route(). */}
+    breg.access.profile-writable-row-boundary; crates/registry-breg/src/api/mod.rs, authorize_direct_route();
+    crates/registry-breg/src/compiler.rs, breg.access-profile.standing-agent-direct-mutation-forbidden and
+    breg.access-profile.task-grant-direct-mutation-forbidden. */}
 
 ## Disclose related Records
 

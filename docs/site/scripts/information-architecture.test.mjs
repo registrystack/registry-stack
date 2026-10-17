@@ -578,7 +578,6 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
     'configure/request-an-access-token',
     'tutorials/verify-an-assertion-as-a-consumer',
     'tutorials/manage-evidence-verifier-trust',
-    'explanation/openfn-adaptors',
   ]);
   assert.deepEqual(wallet.items.map((item) => item.slug), [
     'configure/enable-sd-jwt-vc',
@@ -697,8 +696,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'tutorials/change-a-registry-with-an-action',
     'tutorials/extend-a-registry-with-a-module',
     'tutorials/derive-a-registry-from-publicschema',
-    'tutorials/review-registry-changes',
-    'tutorials/send-registry-events-to-a-webhook',
+    'tutorials/query-breg-client',
     'configure/breg',
     'explanation/registry-modeling-patterns',
     'configure/breg-access',
@@ -706,30 +704,22 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'configure/breg-field-encryption',
     'configure/breg-statistics',
     'configure/breg-journeys',
-    'explanation/governed-registry-actions',
-    'explanation/native-field-patterns',
-    'explanation/breg-statistical-datasets',
-    'explanation/membership-read-boundaries',
-    'explanation/deriving-a-registry-from-a-model',
     'operate/breg',
     'operate/breg-changes',
     'operate/breg-monitor',
     'operate/breg-retention',
     'operate/breg-data',
     'operate/breg-webhooks',
-    'operate/breg-requirements',
-    'tutorials/build-a-breg-production-candidate',
-    'tutorials/query-breg-client',
-    'reference/client-api',
     'reference/breg-client-capabilities',
-    'explanation/esignet-authentication-over-breg',
-    'explanation/openfn-adaptors',
-    'tutorials/first-citizen-mcp',
-    'configure/breg-mcp',
-    'operate/breg-mcp',
-    'reference/breg-configuration',
+    'reference/client-api',
     'reference/breg-api',
     'reference/bregctl-publicschema-wizard',
+    'explanation/esignet-authentication-over-breg',
+    'tutorials/send-registry-events-to-a-webhook',
+    'tutorials/evidence-from-breg',
+    'tutorials/review-breg-changes-in-casework',
+    'configure/breg-mcp',
+    'reference/breg-configuration',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
@@ -742,19 +732,20 @@ test('keeps the BReg guide and references in one adoption path', () => {
       "label: 'Author a registry'",
       "label: 'Deploy and operate'",
       "label: 'Use from applications'",
+      "label: 'Compose'",
       "slug: 'reference/breg-configuration'",
     ],
     'Base Registry Engine',
   );
 
   // The homepage names the doors into the path, not every room: the overview,
-  // the first tutorial, the bridge to a deployable package, and the tutorial
+  // the first tutorial, the deployment page, and the tutorial
   // an application developer arrives for. Requiring every BReg slug there
   // produced an eleven-link wall that read as a feature list, not a way in.
   for (const slug of [
     'start/breg-quickstart',
     'tutorials/first-breg',
-    'tutorials/build-a-breg-production-candidate',
+    'operate/breg',
     'tutorials/query-breg-client',
   ]) {
     const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -793,23 +784,23 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     'Evidence Gateway Deploy group',
   );
   // Base Registry Engine states its requirements at the top of Deploy and
-  // serve, so that page opens its Deploy and operate group; the retired
-  // requirements page stays published until its redirect lands.
+  // serve, so that page opens its Deploy and operate group; the separate
+  // requirements page it absorbed redirects there.
   const breg = topLevelSection(sidebarSource, 'Base Registry Engine');
   assertOrdered(
     breg,
     [
       "label: 'Deploy and operate'",
       "slug: 'operate/breg'",
-      "slug: 'operate/breg-requirements'",
+      "slug: 'operate/breg-changes'",
     ],
     'Base Registry Engine Deploy and operate group',
   );
-  for (const slug of ['operate/evidence-requirements', 'operate/breg-requirements']) {
+  for (const slug of ['operate/evidence-requirements', 'operate/breg']) {
     assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);
   }
 
-  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg']) {
+  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg', 'operate/breg-requirements']) {
     assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
     assert.doesNotMatch(sidebarSource, new RegExp(retired));
   }
@@ -819,7 +810,11 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
   );
   assert.match(
     configSource,
-    /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg-requirements\/'\)/,
+    /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/operate\/breg-requirements\/': internalRedirect\('\/operate\/breg\/'\)/,
   );
 });
 
