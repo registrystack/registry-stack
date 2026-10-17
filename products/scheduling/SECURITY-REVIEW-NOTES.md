@@ -424,7 +424,8 @@ refusal that reports it offline.
 Package activation moved from `scheduling migrate` and a startup that
 adopted the database and published the policy to `schedulingctl plan`,
 `schedulingctl apply`, and `schedulingctl status` over a database
-activation ledger, `scheduling_activations` (schema version 9). It changes
+activation ledger, `scheduling_activations`, part of the schema version 1
+baseline. It changes
 what authorizes the runtime to serve a package, the split between the two
 database credentials, deployment defaults, and audit, so it is
 security-sensitive in the sense AGENTS.md names. Matrix rows
@@ -434,9 +435,9 @@ SCHEDULING-DEC-09 and SCHEDULING-DEC-10 carry it.
 `registry-platform-activation` now owns the product-neutral ledger reads and
 appends, `databaseId` and active-package comparisons, role observation,
 runtime grants, indirect-authority and default-privilege checks, and lost
-acknowledgement read-back. Scheduling retains its migrations, lock order,
-unpublished-audit guard, policy-publication hooks, audit wording, and refusal
-mapping inside the same activation transaction. This moves implementation
+acknowledgement read-back. Scheduling retains its schema baseline, lock
+order, policy-publication hooks, audit wording, and refusal mapping inside
+the same activation transaction. This moves implementation
 ownership; the Scheduling invariants and executable tests below remain the
 product contract.
 
@@ -460,11 +461,7 @@ USAGE on the schema, which would hide the ledger and read the database as
 empty, or without SELECT on `scheduling_activations` or
 `scheduling_schema_migrations`, as a rotated runtime role before apply grants
 it. The refusal names `schedulingctl apply --runtime-config FILE`, then `plan`
-again. A database with no ledger is not refused. When schema migration 8 is
-pending, `plan` counts unpublished rows in an earlier audit outbox without
-a lock, passing over an outbox the runtime role cannot read, and reports
-`schedulingctl.activation.unpublished-audit`; apply counts them again under an
-exclusive lock inside its transaction. Neither path drops the outbox. Plan also resolves the
+again. A database with no ledger is not refused. Plan also resolves the
 candidate's hook destinations and signing material as apply does before it
 writes anything, and reports `schedulingctl.activation.hook-destinations` when
 one cannot run. It resolves a key only to learn that it exists at a usable
@@ -751,11 +748,10 @@ built for.
 **Tests.** `release/scripts/test_check_debian13_images.py`:
 `test_operator_tools_cannot_be_optional`.
 
-**Accepted residual.** The unpublished-audit guard in
-`crates/registry-scheduling/src/store/activation.rs` (SCHEDULING-SEC-14)
-and the removed-key refusals remain. Installation neither creates nor drops
-an audit outbox, and refuses an existing outbox with unpublished records.
-v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+**Accepted residual.** The removed-key refusals remain. Installation neither
+creates nor drops an audit outbox. A database an earlier release migrated is
+refused as a pre-1.0 beta schema, with an instruction to apply to a new
+database; no release upgrades that state in place.
 
 ## Fresh task-grant status stays outside the capacity transaction
 
@@ -894,8 +890,8 @@ keep their capacity. An orchestrator recovering an unknown outcome reads an
 empty page as no booking and books again, and the per-caller hold ceiling
 stops counting the holds the caller already has.
 
-**Enforcement.** Migration 12 adds `owner_issuer` and `owner_subject` to
-`scheduling_claims`, and `scheduling_claims_owner_check` holds both present
+**Enforcement.** The schema baseline gives `scheduling_claims`
+`owner_issuer` and `owner_subject`, and `scheduling_claims_owner_check` holds both present
 and non-empty or both absent. Every claim the runtime writes stores the
 verified pair from the commitment. `ClaimRow::is_owned_by` in
 `crates/registry-scheduling/src/store.rs` decides hold confirm and release
@@ -938,7 +934,8 @@ The window starts at an appointment's end or cancellation, or a hold's expiry,
 release, or consumption, whichever applicable instant comes first. Claim,
 history, reminder outbox, and audit records are not deleted by this pass.
 
-**Enforcement.** Migration 13 adds an inert owner reference and erasure time.
+**Enforcement.** The schema baseline gives each claim an inert owner
+reference and an erasure time.
 `PostgresStore::erase_expired_claim_owners` atomically clears both raw columns
 and writes a SHA-256 digest of a domain marker, claim UUID, and length-prefixed
 issuer and subject. Its single UPDATE rechecks the eligible row after any
@@ -1034,7 +1031,7 @@ covers that entry point; unit tests pin the 16/17 version boundary.
 
 ## Fresh attempt keys and claim ownership
 
-Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The live attempt-reference and owner constraints remain; the attempt digest backfill and erased-receipt caller rewrite are removed. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one. Its unpublished-record refusal remains. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
+Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The baseline carries the live attempt-reference and owner constraints and no attempt digest backfill or erased-receipt caller rewrite. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one; a database holding an earlier release's schema is refused as a pre-1.0 beta schema and nothing is committed. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
 
 Verification: `registry-scheduling/tests/postgres_commitments.rs::rotating_the_audit_key_keeps_existing_claims_with_their_owner` and `registry-schedulingctl/tests/activation_postgres.rs::fresh_claim_storage_refuses_a_partial_owner`. Schema-only dumps of separate fresh
 installations are compared before and after, with no ledger data.
@@ -1084,8 +1081,8 @@ transaction, the activation ledger, and audit are unchanged.
   (`StoreError::EarlierRelease`): the refusal that named a retained policy
   document whose identity sits under `scheduling` with no `project` block.
 - In `plan_activation`, the allowance that ran the read-only publication
-  check while schema version 9, the activation ledger, was the only one
-  pending. `plan` now runs that check exactly when no schema version is
+  check while the activation ledger's schema version was the only one
+  pending. `plan` runs that check exactly when no schema version is
   pending.
 
 **Threat.** Dropping a refusal by name turns the input it named into accepted
@@ -1114,12 +1111,9 @@ recognizing it.
   `StoreError::Corrupt`. That is not an activation refusal: `schedulingctl`
   reports `schedulingctl.store-unavailable` with its operational-failure
   exit, publishes nothing, and repeats nothing the document holds.
-- A database v0.40.0 activated has no pending schema version. With any
-  version pending, `plan` leaves the publication absent and `apply` runs the
-  check inside its transaction after migrating, as before. The two
-  conditions differ only for a ledger missing version 9 alone, which ordered
-  application never produces, and there `plan` skips a read-only check that
-  `apply` still makes.
+- An activated database has no pending schema version. With the baseline
+  pending, `plan` leaves the publication absent and `apply` runs the check
+  inside its transaction after migrating.
 
 **Tests.** `every_listener_mode_verifies_the_package_without_a_pin`
 (`crates/registry-scheduling/src/config.rs`) refuses an unlisted
@@ -1141,8 +1135,7 @@ refusal. The usage error does not name `schedulingctl plan` and `apply`, and
 the corrupt-database refusal does not say to start from a new database; its
 suggested action is the one for a damaged database. The release notes of
 the release that made each break, v0.36.0 and v0.40.0, carry the
-instruction. The unpublished-audit guard (SCHEDULING-SEC-14) and the
-removed-key refusals remain.
+instruction. The removed-key refusals remain.
 
 ## Original receipt observation
 

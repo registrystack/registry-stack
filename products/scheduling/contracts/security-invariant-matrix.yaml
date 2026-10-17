@@ -636,9 +636,10 @@ invariants:
       Refuse an apply or records apply under another identity.databaseId,
       naming only the key and leaving the ledger, schema, and policy
       unchanged; a second apply waits for the lock and then runs against the
-      state the first committed. A successor apply takes every supply anchor
-      and the meta row before recording its activation, so it never publishes
-      a package over a concurrent capacity transaction.
+      state the first committed. An apply takes every supply anchor and the
+      meta row before it migrates or records its activation, so no migration
+      lock is held while it waits on a capacity transaction and it never
+      publishes a package over one.
     negativeTest:
       path: crates/registry-schedulingctl/tests/activation_postgres.rs
       name: apply_refuses_the_active_package_and_a_foreign_database_without_writing
@@ -717,7 +718,7 @@ invariants:
       Keep the booker's listing, cursor, read, reschedule, cancel, release,
       and hold ceiling across a rotation; answer another principal with an
       empty page, cursor.invalid, and operation.not-authorized; own no claim
-      written before migration 12; refuse a partial or empty owner or raw
+      without a stored owner pair; refuse a partial or empty owner or raw
       restoration on a tombstone; and refuse reads, listings, receipt observation,
       and mutations after owner erasure while preserving history and live holds.
     negativeTest:
