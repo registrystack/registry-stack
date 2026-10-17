@@ -1745,6 +1745,34 @@ async fn assert_catalog_drift_is_rejected(
         "{named_drift:?}"
     );
 
+    // A deleted table is named once, not once more for each required
+    // column it held, so its columns do not crowd the bounded inventory.
+    database
+        .admin
+        .batch_execute(&format!(
+            "BEGIN;
+             DROP TABLE registry_data.{table} CASCADE"
+        ))
+        .await
+        .expect("test administrator deletes a managed table");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the deleted table");
+    let entry = &registry.entities()["entry"];
+    let deleted_table = format!("registry_data.{}", entry.physical_table);
+    assert!(named_drift.contains(&deleted_table), "{named_drift:?}");
+    for field in entry.fields.values().filter(|field| field.required) {
+        assert!(
+            !named_drift.contains(&format!("{deleted_table}.{}", field.physical_name)),
+            "{named_drift:?}"
+        );
+    }
+
     let unique: tokio_postgres::Row = database
         .admin
         .query_one(
