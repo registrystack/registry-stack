@@ -149,7 +149,6 @@ def normal_dependency_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     ]
     return {**metadata, "packages": packages}
 
-
 def dev_only_dependency_metadata(
     metadata: dict[str, Any], *, consumer: str, dependency: str
 ) -> dict[str, Any]:
@@ -182,6 +181,33 @@ def dev_only_dependency_metadata(
             f"{consumer} has no normal dependency on {dependency} to demote"
         )
     return {**metadata, "packages": packages}
+
+
+def replayed_tutorial_pages(toolset: str) -> list[str]:
+    """Slugs of the pages whose frontmatter the named gate replays.
+
+    The sections are the ones the gate walks, read from gate.mjs so an added
+    opt-in section is covered here too. A page under an opt-in section is
+    replayed only when it declares tutorial_test, which is the condition
+    applied to every section here.
+    """
+    root = Path(__file__).resolve().parents[2]
+    docs = root / "docs/site/src/content/docs"
+    gate = (root / "docs/site/scripts/tutorial-runner/gate.mjs").read_text()
+    sections = []
+    for name in ("SECTIONS", "OPT_IN_SECTIONS"):
+        declared = re.search(rf"^const {name} = \[([^\]]*)\];$", gate, re.M)
+        assert declared is not None, name
+        sections.extend(re.findall(r"'([^']+)'", declared.group(1)))
+    assert "configure" in sections, sections
+    slugs = []
+    for section in sections:
+        for page in sorted((docs / section).rglob("*.mdx")):
+            frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
+            declaration = frontmatter.get("tutorial_test") or {}
+            if declaration.get("toolset") == toolset and "skip" not in declaration:
+                slugs.append(page.relative_to(docs).with_suffix("").as_posix())
+    return slugs
 
 
 class CiRetirementTest(unittest.TestCase):
@@ -1005,14 +1031,7 @@ class CiChangesTest(unittest.TestCase):
                 )
 
     def test_discovery_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
-        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
-        slugs = []
-        for section in ("start", "tutorials"):
-            for page in sorted((docs / section).glob("*.mdx")):
-                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
-                declaration = frontmatter.get("tutorial_test") or {}
-                if declaration.get("toolset") == "discovery" and "skip" not in declaration:
-                    slugs.append(f"{section}/{page.stem}")
+        slugs = replayed_tutorial_pages("discovery")
         self.assertIn("tutorials/publish-and-consume-discovery-index", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
@@ -1276,14 +1295,7 @@ class CiChangesTest(unittest.TestCase):
         # which tutorials the gate replays. A replayed page missing here would
         # not trigger the job that replays it, so it could break without any
         # pull request noticing.
-        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
-        slugs = []
-        for section in ("start", "tutorials"):
-            for page in sorted((docs / section).glob("*.mdx")):
-                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
-                declaration = frontmatter.get("tutorial_test") or {}
-                if declaration.get("toolset") == "evidence" and "skip" not in declaration:
-                    slugs.append(f"{section}/{page.stem}")
+        slugs = replayed_tutorial_pages("evidence")
         self.assertIn("tutorials/first-evidence-assertion", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
@@ -1576,24 +1588,8 @@ class CiChangesTest(unittest.TestCase):
         # Each page's tutorial_test frontmatter is the source of truth for
         # which tutorials the gate replays. A replayed page missing here would
         # not trigger the job that replays it, so it could break without any
-        # pull request noticing. The sections are the ones the gate walks,
-        # read from gate.mjs so an added opt-in section is covered here too.
-        root = Path(__file__).resolve().parents[2]
-        docs = root / "docs/site/src/content/docs"
-        gate = (root / "docs/site/scripts/tutorial-runner/gate.mjs").read_text()
-        sections = []
-        for name in ("SECTIONS", "OPT_IN_SECTIONS"):
-            declared = re.search(rf"^const {name} = \[([^\]]*)\];$", gate, re.M)
-            self.assertIsNotNone(declared, name)
-            sections.extend(re.findall(r"'([^']+)'", declared.group(1)))
-        self.assertIn("configure", sections)
-        slugs = []
-        for section in sections:
-            for page in sorted((docs / section).rglob("*.mdx")):
-                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
-                declaration = frontmatter.get("tutorial_test") or {}
-                if declaration.get("toolset") == "breg" and "skip" not in declaration:
-                    slugs.append(page.relative_to(docs).with_suffix("").as_posix())
+        # pull request noticing.
+        slugs = replayed_tutorial_pages("breg")
         self.assertIn("tutorials/first-breg", slugs)
         self.assertIn("configure/breg-access", slugs)
         for slug in slugs:
@@ -1692,14 +1688,7 @@ class CiChangesTest(unittest.TestCase):
         # which tutorials the gate replays. A replayed page missing here would
         # not trigger the job that replays it, so it could break without any
         # pull request noticing.
-        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
-        slugs = []
-        for section in ("start", "tutorials"):
-            for page in sorted((docs / section).glob("*.mdx")):
-                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
-                declaration = frontmatter.get("tutorial_test") or {}
-                if declaration.get("toolset") == "casework" and "skip" not in declaration:
-                    slugs.append(f"{section}/{page.stem}")
+        slugs = replayed_tutorial_pages("casework")
         self.assertIn("tutorials/first-casework", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
