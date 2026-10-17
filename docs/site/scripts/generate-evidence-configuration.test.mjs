@@ -628,6 +628,21 @@ test('every published schema declares whether it is frozen or adopter tooling', 
   assert.equal(byId.get('authoring-project').status, 'tooling');
   assert.equal(byId.get('authoring-target').status, 'tooling');
   assert.equal(byId.get('authoring-target-authority').status, 'tooling');
+  assert.equal(byId.get('oid4vci-runtime').status, 'beta');
+});
+
+test('the OID4VCI runtime schema is published from the generated product schema', async () => {
+  // The supporting service has no CONFIG.md; its reference is the site page
+  // that explains it, and its key paths come from the schema its crate
+  // generates, so the page can mount them instead of typing them.
+  const document = await buildEvidenceConfiguration(repoRoot);
+  const contract = document.contracts.find((entry) => entry.id === 'oid4vci-runtime');
+  assert.equal(contract.marker, undefined);
+  assert.equal(contract.reference, 'docs/site/src/content/docs/configure/evidence-oid4vci.mdx');
+  const paths = pathsOf(contract.fields);
+  for (const top of ['credentialIssuer', 'evidence', 'listener', 'offers', 'store', 'tokenClient']) {
+    assert.ok(paths.some((path) => path === top || path.startsWith(`${top}.`)), `${top} is missing`);
+  }
 });
 
 test('the reference covers exactly every shipped authoring schema', async () => {
@@ -728,7 +743,9 @@ test('the rendered key paths match the ones each CONFIG.md documents', async () 
     new Set(document.contracts.map((contract) => contract.reference)).size > 1,
     'more than one reference must be exercised, or the per-entry addressing is untested',
   );
-  for (const contract of document.contracts) {
+  const checked = document.contracts.filter((contract) => contract.marker !== undefined);
+  assert.ok(checked.length < document.contracts.length, 'an entry without a CONFIG.md block must be skipped here');
+  for (const contract of checked) {
     const expected = await documented(contract);
     assert.deepEqual(pathsOf(contract.fields), expected, `${contract.id} key paths drifted`);
   }
