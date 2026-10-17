@@ -67,7 +67,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
       - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks}
-      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer}
+      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_uses_the_shared_declared_issuer_rule}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: fixture_coverage_follows_bundle_assurance_profile}
       - {file: crates/registry-evidence/src/fixture.rs, name: focused_coverage_is_local_only}

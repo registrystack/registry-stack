@@ -358,7 +358,12 @@ pub mod url {
 pub struct FetchUrlPolicy {
     pub allowed_schemes: Vec<String>,
     pub allow_localhost: bool,
+    /// Permit plain HTTP only when every resolved address is private.
     pub allow_http_private_network: bool,
+    /// Permit plain HTTP beyond loopback. Callers expose this only through an
+    /// explicit operator opt-in because neither public nor private transports
+    /// protect credentials or key material from an on-path observer.
+    pub allow_http_non_loopback: bool,
     pub deny_private_ranges: bool,
     pub deny_cloud_metadata: bool,
 }
@@ -372,6 +377,7 @@ impl FetchUrlPolicy {
             allowed_schemes: vec!["https".to_string()],
             allow_localhost: false,
             allow_http_private_network: false,
+            allow_http_non_loopback: false,
             deny_private_ranges: true,
             deny_cloud_metadata: true,
         }
@@ -386,6 +392,7 @@ impl FetchUrlPolicy {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: true,
             allow_http_private_network: false,
+            allow_http_non_loopback: false,
             deny_private_ranges: true,
             deny_cloud_metadata: true,
         }
@@ -464,7 +471,8 @@ impl FetchUrlPolicy {
                 && resolved
                     .iter()
                     .all(|ip| is_http_private_network_ip(*ip, !self.deny_cloud_metadata));
-            if !(localhost_allowed || http_private_network_allowed) {
+            if !(localhost_allowed || http_private_network_allowed || self.allow_http_non_loopback)
+            {
                 return Err(FetchUrlError::HttpRequiresLoopback);
             }
         }
@@ -853,7 +861,8 @@ mod tests {
     /// A TLS listener on loopback whose certificate a private certificate
     /// authority signed, answering every request with `private-ca`. Returns
     /// its address and the authority's certificate.
-    async fn serve_under_private_ca() -> (SocketAddr, reqwest::Certificate) {
+    async fn serve_under_private_ca() -> (SocketAddr, reqwest::Certificate, String) {
+        use base64::Engine as _;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
@@ -908,14 +917,25 @@ mod tests {
                 });
             }
         });
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(authority_certificate.der().as_ref());
+        let authority_pem = format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            encoded
+                .as_bytes()
+                .chunks(64)
+                .map(|line| std::str::from_utf8(line).expect("base64 is UTF-8"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
         let authority = reqwest::Certificate::from_der(authority_certificate.der())
             .expect("the private CA certificate parses");
-        (addr, authority)
+        (addr, authority, authority_pem)
     }
 
     #[tokio::test]
     async fn a_pinned_get_trusts_a_private_ca_only_when_it_is_named() {
-        let (addr, authority) = serve_under_private_ca().await;
+        let (addr, authority, _) = serve_under_private_ca().await;
         let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
         let validated = FetchUrlPolicy::dev()
             .validate_dns_pinned_for_immediate_fetch(&url)
@@ -936,6 +956,48 @@ mod tests {
             .expect("a certificate the named private CA signed is accepted");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.text().await.expect("response body"), "private-ca");
+    }
+
+    #[test]
+    fn ssl_cert_file_is_loaded_by_the_native_root_client_in_an_isolated_process() {
+        if std::env::var_os("REGISTRY_NATIVE_CA_CHILD").is_some() {
+            return;
+        }
+        let status = Command::new(std::env::current_exe().expect("test executable"))
+            .arg("--exact")
+            .arg("tests::ssl_cert_file_is_loaded_by_the_native_root_client_child")
+            .arg("--nocapture")
+            .env("REGISTRY_NATIVE_CA_CHILD", "1")
+            .status()
+            .expect("spawn isolated native-root test");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn ssl_cert_file_is_loaded_by_the_native_root_client_child() {
+        if std::env::var_os("REGISTRY_NATIVE_CA_CHILD").is_none() {
+            return;
+        }
+        let (addr, _, authority_pem) = serve_under_private_ca().await;
+        let bundle = std::env::temp_dir().join(format!(
+            "registry-native-ca-{}-canary.pem",
+            std::process::id()
+        ));
+        std::fs::write(&bundle, authority_pem).expect("write mounted CA bundle");
+        std::env::set_var("SSL_CERT_FILE", &bundle);
+
+        let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
+        let response = FetchUrlPolicy::dev()
+            .validate_dns_pinned_for_immediate_fetch(&url)
+            .expect("loopback HTTPS target")
+            .immediate_get_with_timeout(Duration::from_secs(5))
+            .expect("pinned native-root request")
+            .send()
+            .await
+            .expect("SSL_CERT_FILE private CA is accepted");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.expect("response body"), "private-ca");
+        std::fs::remove_file(bundle).expect("remove temporary CA bundle");
     }
 
     #[tokio::test]
@@ -1288,6 +1350,7 @@ mod tests {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: false,
             allow_http_private_network: true,
+            allow_http_non_loopback: false,
             deny_private_ranges: false,
             deny_cloud_metadata: true,
         };
@@ -1309,6 +1372,7 @@ mod tests {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: false,
             allow_http_private_network: true,
+            allow_http_non_loopback: false,
             deny_private_ranges: false,
             deny_cloud_metadata: true,
         };
@@ -1325,6 +1389,7 @@ mod tests {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: false,
             allow_http_private_network: true,
+            allow_http_non_loopback: false,
             deny_private_ranges: false,
             deny_cloud_metadata: true,
         };
@@ -1353,6 +1418,7 @@ mod tests {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: false,
             allow_http_private_network: true,
+            allow_http_non_loopback: false,
             deny_private_ranges: false,
             deny_cloud_metadata: false,
         };
@@ -1376,6 +1442,7 @@ mod tests {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: false,
             allow_http_private_network: true,
+            allow_http_non_loopback: false,
             deny_private_ranges: false,
             deny_cloud_metadata: false,
         };

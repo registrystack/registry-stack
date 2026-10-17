@@ -3816,7 +3816,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "d676449577a937668bd56038a7e7d80ad2b17bb262593dcf5775635f82c67b89",
+        "sha256": "e2812e5bb2a295deb3b0efcea5458e6f36afed3643624a62310b748a2ddde29a",
         "mediaType": "application/schema+json"
       }
     },
@@ -3960,7 +3960,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "b1034d6529887c685450a2ed13c90355c4725da6c452194abd61c1905b49897e",
+        "sha256": "32968a00582e3296857cab5485e29fc61755b1c38935e5a0a2cb344c65e71bbd",
         "mediaType": "application/schema+json"
       }
     },
@@ -3996,7 +3996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "986a4a0838726aa79b234dbaa170be7ebb0b67f01a8fd7925f14f78f1d5e6395",
+        "sha256": "e594f510fb6ca04a8305e3c39de93effa022804568679e2abd2f111479ce0ae5",
         "mediaType": "application/schema+json"
       }
     },
@@ -4118,11 +4118,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "63ab486420e268d89d13259718008773052c9ffadce27def0319a58b619deea5"
+        "sha256": "d77768b4a84d061a9e7a9d7f4f1005d026e6a4b03f7ed1fd2fb8608ace699d3d"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "d3edc783a9380b2bea17b731a4548c6bf1ab7e04c922be3682f208d7f456c741",
+        "sha256": "18303cf819b6bece51418832e61ce4c1ca89e6ccb7d67dde4397f6dd00c790b7",
         "mediaType": "application/schema+json"
       }
     },
@@ -4158,7 +4158,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "32f9b2b297dbd2e9c8ac367d22e72a23c21a0719736188b30f86a2d30c2ad535",
+        "sha256": "8cbc4b1f0552a03272081eb2db47c5fbf3170b4d44f30b8e3e80383ddc742a88",
         "mediaType": "application/schema+json"
       }
     },
@@ -4410,7 +4410,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "b12dc4d6979d728fe30df5d3a254490d404819a9730fdcd2c4d0376e4571248c",
+        "sha256": "6584ca30beef27848f9fb71fd683a2cbd9a4c1fd5d5562439d5fc5b78e2b71c6",
         "mediaType": "application/schema+json"
       }
     },
@@ -4626,7 +4626,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "8f0e1f2ec7ccf046f9a80f541aafca071f792f11dc05451ad9b1441889c777f8",
+        "sha256": "9260ed8961cc7bb7e1dce50564be28b137e59c0bc7d6a4693869c1f8303ccfb2",
         "mediaType": "application/schema+json"
       }
     },
@@ -4806,7 +4806,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "7ecb960a2e3b2e9675bbda21ff13f403dd5b097d8decc132dcf18e4ea96c619e",
+        "sha256": "486321349e4d7e710a3b9f9f9b7fb9dd0187fc96775eed9d178a5e3ddf4f7148",
         "mediaType": "application/schema+json"
       }
     },

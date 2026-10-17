@@ -538,6 +538,7 @@ fn authenticator() -> SchedulingAuthenticator {
             issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
             audience: AUDIENCE.to_owned(),
             jwks_source: JwksSource::Discovery {},
+            allow_insecure_http: false,
         },
         clients: OidcClientsConfig {
             allowed_clients: vec![CLIENT.to_owned()],

@@ -9,27 +9,33 @@ use axum::{
     Router,
 };
 pub(super) use postgres_harness::TestDatabase;
-use registry_breg::api::{
-    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+use registry_breg::package::{
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageSourceFile, FIXTURE_JOURNEYS_PATH,
 };
-use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
-use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
-use registry_breg::task_grant::TaskGrantStatusChecker;
+use registry_breg::startup::{prepare_with_connection_config_for_test, PreparedServer};
 use registry_breg::CompiledRegistry;
-use registry_platform_audit::AuditProfile;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
 use tower::ServiceExt;
-use zeroize::Zeroizing;
-const PACKAGE: &str = "task-authority-http";
 const AUDIENCE: &str = "urn:breg:task-test";
-const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SOURCE_REVISION: &str = "native-task-grant-source";
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: empty-site-list
+    steps:
+      - id: list-sites
+        entity: asset-site
+        accessProfile: steward
+        claims: {sub: fixture-steward, tenant_claim: fixture}
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}
+"#;
 pub(super) const PROJECT: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
@@ -112,11 +118,17 @@ pub(super) const PROJECT: &str = r#"{
     },
     {
       "id":"submitter",
-      "default":true,
+      "default":false,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "permissions":{
         "records":[
+          {
+            "recordType":"asset-site",
+            "operations":["get"],
+            "readableFields":["tenant","name"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          },
           {
             "recordType":"correction-request",
             "operations":["get"],
@@ -158,129 +170,206 @@ pub(super) const PROJECT: &str = r#"{
   ]
 }"#;
 
-struct Ready;
-impl ReadinessProbe for Ready {
-    fn is_ready(&self) -> ServiceFuture<'_, bool> {
-        Box::pin(async { true })
-    }
+pub(super) struct Deployment {
+    pub(super) app: Router,
+    pub(super) registry: Arc<CompiledRegistry>,
+    _prepared: PreparedServer,
 }
-pub(super) async fn install(
+
+fn write_private(path: &Path, bytes: &[u8]) {
+    fs::write(path, bytes).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// Build the authored Registry package, activate its exact package identity,
+/// and construct the authenticated router through BReg's production startup.
+/// The native journey therefore exercises the configured issuer, discovery,
+/// admitted clients, authority claims, and task-status connection together.
+pub(super) async fn start_from_runtime(
     db: &TestDatabase,
-    registry: &CompiledRegistry,
-) -> ExpectedRegistryIdentity {
+    root: &Path,
+    issuer: &str,
+    status_key: &registry_platform_crypto::PrivateJwk,
+    casework_port: u16,
+) -> Deployment {
+    let mut authored: Value = serde_json::from_str(PROJECT).unwrap();
+    authored["package"] = json!({"sourceRevision": SOURCE_REVISION});
+    let project_bytes = serde_json::to_vec(&authored).unwrap();
+    let project = registry_breg::parse_project_json(&project_bytes).unwrap();
+    let registry = Arc::new(
+        registry_breg::compile_project(&project, &[], registry_breg::CompileProfile::Production)
+            .unwrap(),
+    );
     let (migration, task) = db.connect_migration().await;
-    install_compiled_schema(&migration, registry, &db.runtime_role)
+    install_compiled_schema(&migration, &registry, &db.runtime_role)
         .await
         .unwrap();
-    let identity = initialize_compiled_registry_state_for_test(
+    let expected_catalog = ExpectedManagedCatalog::compiled(&registry);
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &db.runtime_role, &expected_catalog)
+            .await
+            .unwrap();
+    let prepared_package = prepare_package(PackageBuildRequest {
+        from_package_digest: None,
+        compiler_source_revision: SOURCE_REVISION.into(),
+        schema_fingerprint,
+        project: PackageSourceFile {
+            path: "registry.json".into(),
+            bytes: project_bytes,
+        },
+        modules: Vec::new(),
+        fixture_journeys: PackageSourceFile {
+            path: FIXTURE_JOURNEYS_PATH.into(),
+            bytes: FIXTURE_JOURNEYS.to_vec(),
+        },
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+    })
+    .unwrap();
+    let package_root = root.join("breg-package");
+    prepared_package
+        .publish_to_directory(&package_root)
+        .unwrap();
+    let package = load_package(
+        &package_root,
+        &PackageLoadContext {
+            database_initialization_environment: "test",
+        },
+    )
+    .unwrap();
+    assert_eq!(package.registry(), registry.as_ref());
+    initialize_compiled_registry_state_for_test(
         &migration,
         &db.runtime_role,
-        registry,
+        &registry,
         RegistryStateTestIdentity {
-            package_id: PACKAGE,
+            package_id: &package.manifest().package_id,
             database_id: "task-database",
-            label: REVISION,
+            label: package.package_digest(),
         },
     )
     .await
     .unwrap();
     drop(migration);
     task.abort();
-    identity
-}
-pub(super) fn app(
-    db: &TestDatabase,
-    registry: Arc<CompiledRegistry>,
-    identity: ExpectedRegistryIdentity,
-    issuer: &str,
-    jwks: serde_json::Value,
-    status: Arc<dyn TaskGrantStatusChecker>,
-) -> Router {
-    app_with_clients(
-        db,
-        registry,
-        identity,
-        issuer,
-        jwks,
-        status,
-        vec!["task-agent".into(), "seed-client".into()],
-    )
-}
-/// The local-session proof admits its explicitly rendered service and human clients.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn app_with_clients(
-    db: &TestDatabase,
-    registry: Arc<CompiledRegistry>,
-    identity: ExpectedRegistryIdentity,
-    issuer: &str,
-    jwks: Value,
-    status: Arc<dyn TaskGrantStatusChecker>,
-    clients: Vec<String>,
-) -> Router {
-    let pool = db.runtime_config.build_pool().unwrap();
-    let lock = RegistryLockKey::derive(PACKAGE).unwrap();
-    let (audit, _) = registry_breg::audit::test_support::capturing(
-        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+
+    let secrets = root.join("breg-runtime-secrets");
+    fs::create_dir_all(&secrets).unwrap();
+    fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700)).unwrap();
+    write_private(
+        &secrets.join("runtime-database-url"),
+        b"unused-by-test-startup",
     );
-    let cursors = Arc::new(
-        CursorCodec::new(Zeroizing::new(vec![0x49; 32]), Duration::from_secs(300)).unwrap(),
+    write_private(
+        &secrets.join("migration-database-url"),
+        b"unused-by-test-startup",
     );
-    let reads = Arc::new(PostgresRecordReadService::new(
-        pool.clone(),
-        registry.clone(),
-        identity.clone(),
-        lock,
-        Duration::from_secs(2),
-        audit.clone(),
-        cursors.clone(),
-    ));
-    let writes = Arc::new(
-        PostgresRecordMutationService::new(
-            pool,
-            registry.clone(),
-            identity.clone(),
-            "task-instance",
-            lock,
-            Duration::from_secs(2),
-            audit,
-        )
-        .with_task_status(status),
+    write_private(&secrets.join("audit-key"), &[0x9a; 32]);
+    write_private(&secrets.join("cursor-key"), &[0x49; 32]);
+    let status_private = json!({
+        "kty": status_key.kty,
+        "alg": status_key.alg,
+        "kid": status_key.kid,
+        "n": status_key.n,
+        "e": status_key.e,
+        "d": status_key.d,
+        "p": status_key.p,
+        "q": status_key.q,
+        "dp": status_key.dp,
+        "dq": status_key.dq,
+        "qi": status_key.qi,
+    });
+    write_private(
+        &secrets.join("status-client-key"),
+        serde_json::to_string(&status_private).unwrap().as_bytes(),
     );
-    let keys = Arc::new(JwksFetcher::new_static(
-        serde_json::from_value(jwks).unwrap(),
-        JwksFetcherConfig::defaults(),
-    ));
-    let verifier = registry_platform_oidc::TokenVerifierConfig::access_token_profile(
-        issuer,
-        vec![AUDIENCE.into()],
-        vec![jsonwebtoken::Algorithm::RS256],
-        vec!["at+jwt".into()],
-    )
-    .with_scope_claim("scope")
-    .with_allowed_clients(clients);
-    let auth = RegistryAuthenticator::new(
-        &registry,
-        verifier,
-        keys,
-        AuthorityClaimConfig::new("sub", Some("registry_purpose".into())),
+    let audit_dir = root.join("breg-audit");
+    fs::create_dir_all(&audit_dir).unwrap();
+    let runtime_path = root.join("breg-runtime.yaml");
+    fs::write(
+        &runtime_path,
+        format!(
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
+kind: BRegRuntimeConfig
+listener: {{bind: 127.0.0.1:0}}
+identity:
+  environment: test
+  instanceId: native-task-grant
+  databaseId: task-database
+  databaseInitializationEnvironment: test
+secretProviders:
+  file: {{root: {secrets}}}
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maximumConnections: 8
+    waitTimeoutMilliseconds: 2000
+    createTimeoutMilliseconds: 2000
+    recycleTimeoutMilliseconds: 2000
+  roles:
+    migration: {migration_role}
+    runtime: {runtime_role}
+package: {{root: {package_root}}}
+authentication:
+  oidc:
+    issuer: {issuer}
+    audience: {AUDIENCE}
+    allowedAlgorithm: RS256
+    accessTokenType: at+jwt
+    scopeClaim: scope
+    scopeSeparator: " "
+    allowedClients: [task-agent, other-agent, seed-client, other-seed-client]
+    maximumTokenLifetimeSeconds: 3600
+    leewayMilliseconds: 60000
+    jwksSource: {{type: discovery}}
+    jwksCache:
+      cacheTtlSeconds: 60
+      negativeCacheTtlSeconds: 1
+      refreshCooldownSeconds: 1
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
+      outageToleranceSeconds: 0
+  authorityClaims: {{principal: sub, purpose: registry_purpose}}
+taskGrantStatus:
+  - sourceIssuer: https://casework.example
+    baseUrl: http://127.0.0.1:{casework_port}
+    tokenEndpoint: {issuer}/oauth2/token
+    clientAssertionAudience: {issuer}
+    clientId: breg-status
+    privateKeyRef: secret:file/status-client-key
+    statusResource: urn:casework:native-task
+audit:
+  hashKeyRef: secret:file/audit-key
+  path: {audit_path}
+cursor:
+  secretRef: secret:file/cursor-key
+  maximumAgeSeconds: 300
+operationalTimeouts:
+  httpRequestMilliseconds: 5000
+  shutdownGraceMilliseconds: 1000
+  recordLockMilliseconds: 2000
+  migrationLockMilliseconds: 2000
+  migrationStatementMilliseconds: 5000
+"#,
+            secrets = secrets.display(),
+            migration_role = db.migration_role.as_str(),
+            runtime_role = db.runtime_role.as_str(),
+            package_root = package_root.display(),
+            audit_path = audit_dir.join("audit.jsonl").display(),
+        ),
     )
     .unwrap();
-    authenticated_router(
-        Arc::new(
-            HttpService::new(
-                registry,
-                ReadRuntimeIdentity {
-                    package_revision: identity.activation_id,
-                    schema_fingerprint: identity.schema_fingerprint,
-                },
-                reads,
-                Arc::new(Ready),
-                cursors,
-            )
-            .with_postgres_mutations(writes),
-        ),
-        Arc::new(auth),
-    )
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let prepared =
+        prepare_with_connection_config_for_test(&runtime_path, db.runtime_config.clone())
+            .await
+            .unwrap();
+    let app = prepared.app();
+    Deployment {
+        app,
+        registry,
+        _prepared: prepared,
+    }
 }
 pub(super) struct Response {
     pub(super) status: StatusCode,
