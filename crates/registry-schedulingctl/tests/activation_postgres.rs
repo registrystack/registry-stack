@@ -381,7 +381,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert!(report["activePackage"].is_null(), "{report}");
     assert_eq!(report["databaseIdCheck"], "initial");
     assert_eq!(report["schemaVersion"], 0);
-    assert_eq!(report["pendingSchemaVersions"], serde_json::json!([1]));
+    assert_eq!(report["pendingSchemaVersions"], serde_json::json!([100]));
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
     assert_eq!(report["retainedHookBindings"], "none-retained");
@@ -473,7 +473,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .as_str()
         .unwrap()
         .starts_with("single-role mode"));
-    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([1]));
+    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([100]));
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
     assert_eq!(initial["effects"]["policyRevisionAdvanced"], true);
@@ -569,7 +569,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["schemaVersion"], 100);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
     deployment.drop().await;
@@ -1067,6 +1067,56 @@ async fn successor_apply_waits_for_publication_locks_before_it_publishes() {
             > original_revision,
         "the successor policy was not published"
     );
+    deployment.drop().await;
+}
+
+/// A ledger a pre-1.0 release left is refused by name, with the fresh-install
+/// remedy, at plan, at apply, and at startup, and nothing is written.
+#[tokio::test]
+async fn a_pre_1_0_schema_is_refused_by_name_at_plan_apply_and_startup() {
+    let deployment = Deployment::single("activation_pre_1_0").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE {schema}.scheduling_schema_migrations (
+                 version bigint PRIMARY KEY CHECK (version > 0),
+                 applied_at timestamptz NOT NULL
+             );
+             INSERT INTO {schema}.scheduling_schema_migrations(version, applied_at)
+                 VALUES (1, now());",
+            schema = deployment.schema
+        ))
+        .await
+        .expect("seed the ledger a pre-1.0 release left");
+    let expected = "the Scheduling database uses a pre-1.0 schema (versions 1); this release supports fresh installs only. Create a fresh database and apply the package";
+
+    let planned = {
+        let config = config.clone();
+        refusal(ctl(move || activation::plan(&config)))
+    };
+    assert!(planned.contains(expected), "{planned}");
+    let applied = refusal(apply(&config));
+    assert!(applied.contains(expected), "{applied}");
+    let started = startup_refusal(&config).await;
+    assert!(started.contains(expected), "{started}");
+
+    let versions: Vec<i64> = deployment
+        .admin
+        .query(
+            &format!(
+                "SELECT version FROM {}.scheduling_schema_migrations ORDER BY version",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the unchanged schema history")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(versions, [1], "a pre-1.0 schema was migrated");
     deployment.drop().await;
 }
 

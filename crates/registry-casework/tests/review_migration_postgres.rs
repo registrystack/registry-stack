@@ -368,7 +368,7 @@ async fn initial_apply_records_the_package_and_a_previous_package_reapplies_as_a
         .expect("initial apply");
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
     assert_eq!(applied.activation.role_mode, RoleMode::Single);
-    assert_eq!(applied.schema_versions_applied, vec![1]);
+    assert_eq!(applied.schema_versions_applied, vec![100]);
     fixture
         .apply(&candidate(&project, &second, &[]))
         .await
@@ -1841,5 +1841,64 @@ async fn readiness_refuses_a_retired_schema_before_its_ledger_version() {
     assert!(
         matches!(refused, Err(StoreError::RetiredSchema)),
         "a retired schema names the fresh-database fix, not its ledger version: {refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_pre_1_0_schema_is_refused_by_name_at_plan_apply_and_startup() {
+    let fixture = Fixture::single("pre_1_0").await;
+    fixture
+        .client
+        .batch_execute(
+            "CREATE TABLE casework_schema_migrations(version bigint PRIMARY KEY, applied_at timestamptz NOT NULL);
+             INSERT INTO casework_schema_migrations VALUES(19, now());",
+        )
+        .await
+        .unwrap();
+    let message = "the Casework database uses a pre-1.0 schema (versions 19); this release supports fresh installs only. Create a fresh database and apply the package";
+    match fixture.migration.migrate().await {
+        Err(refusal @ StoreError::Pre1_0Schema { .. }) => {
+            assert_eq!(refusal.to_string(), message)
+        }
+        other => panic!("migrate must name the pre-1.0 schema: {other:?}"),
+    }
+    let first = digest('a');
+    let project = project();
+    let plan = fixture
+        .migration
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .unwrap();
+    assert!(
+        plan.refusals
+            .iter()
+            .any(|refusal| refusal.code == "casework.activation.beta-schema"
+                && refusal.message == message),
+        "plan must name the pre-1.0 schema: {:?}",
+        plan.refusals
+    );
+    assert!(
+        fixture
+            .apply(&candidate(&project, &first, &[]))
+            .await
+            .is_err(),
+        "apply must refuse a pre-1.0 schema"
+    );
+    match fixture.migration.ready().await {
+        Err(refusal @ StoreError::Pre1_0Schema { .. }) => {
+            assert_eq!(refusal.to_string(), message)
+        }
+        other => panic!("readiness must name the pre-1.0 schema: {other:?}"),
+    }
+    assert_eq!(
+        fixture
+            .client
+            .query("SELECT version FROM casework_schema_migrations", &[])
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get::<_, i64>(0))
+            .collect::<Vec<_>>(),
+        vec![19]
     );
 }

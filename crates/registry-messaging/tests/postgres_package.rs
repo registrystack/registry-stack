@@ -440,7 +440,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         .admin
         .execute(
             &format!(
-                "INSERT INTO {}.messaging_schema_migrations(version,applied_at) VALUES(99,now())",
+                "INSERT INTO {}.messaging_schema_migrations(version,applied_at) VALUES(199,now())",
                 isolated.schema
             ),
             &[],
@@ -456,7 +456,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         preview.refusals[0].code,
         "messagingctl.activation.schema-newer"
     );
-    assert!(preview.refusals[0].message.contains("version 99"));
+    assert!(preview.refusals[0].message.contains("version 199"));
 
     let config = deployment.config();
     let refused = apply_activation(&config, &ApplyRequest::default())
@@ -485,7 +485,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         .iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, [1, 99]);
+    assert_eq!(versions, [100, 199]);
 
     let operator_audit = match config
         .audit
@@ -509,6 +509,61 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
     assert_eq!(
         entries[1]["record"]["refusals"],
         json!(["messagingctl.activation.schema-newer"])
+    );
+}
+
+#[tokio::test]
+async fn a_pre_1_0_schema_is_refused_by_name_at_plan_apply_and_startup() {
+    let isolated = isolated_schema().await;
+    let deployment = Deployment::new(&isolated);
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE {schema}.messaging_schema_migrations (
+                 version bigint PRIMARY KEY CHECK (version > 0),
+                 applied_at timestamptz NOT NULL
+             );
+             INSERT INTO {schema}.messaging_schema_migrations(version, applied_at)
+                 VALUES (1, now()), (2, now());",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("seed the ledger a pre-1.0 release left");
+    let config = deployment.config();
+
+    let preview = activation_plan(&config)
+        .await
+        .expect("a pre-1.0 schema has an actionable plan refusal");
+    assert_eq!(preview.refusals.len(), 1);
+    assert_eq!(
+        preview.refusals[0].code,
+        "messagingctl.activation.schema-invalid"
+    );
+    assert!(
+        preview.refusals[0]
+            .message
+            .contains("pre-1.0 schema (versions 1, 2)"),
+        "{}",
+        preview.refusals[0].message
+    );
+    assert!(preview.refusals[0].message.contains("fresh database"));
+
+    let refused = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect_err("apply refuses a pre-1.0 schema");
+    match refused {
+        RuntimeError::Activation(ActivationError::Refused(refusals)) => {
+            assert_eq!(refusals.len(), 1);
+            assert_eq!(refusals[0].code, "messagingctl.activation.schema-invalid");
+            assert!(refusals[0].message.contains("pre-1.0 schema"));
+        }
+        other => panic!("expected a named pre-1.0 refusal, got {other}"),
+    }
+
+    let refused = deployment.serve_error().await.to_string();
+    assert!(
+        refused.contains("pre-1.0 schema (versions 1, 2)") && refused.contains("fresh database"),
+        "{refused}"
     );
 }
 
@@ -757,7 +812,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
     )
     .await
     .expect("one transactional split-role activation");
-    assert_eq!(applied.schema_versions_applied, [1]);
+    assert_eq!(applied.schema_versions_applied, [100]);
     assert!(applied.recorded);
     assert_eq!(applied.activation.database_id, "messaging-test");
     assert_eq!(applied.activation.role_mode.as_str(), "split");

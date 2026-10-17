@@ -12,9 +12,34 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio_postgres::Config as PgConfig;
 use uuid::Uuid;
+/// Every schema version, in the order it is applied. The 1.0 baseline is
+/// version [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
+/// applied; each later migration takes the next number.
 pub(crate) const MIGRATIONS: [(i64, &str); 1] =
-    [(1, include_str!("../migrations/0001_reviews.sql"))];
-pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = 1;
+    [(100, include_str!("../migrations/0100_reviews.sql"))];
+/// The 1.0 baseline schema version. A ledger holding any version below it
+/// was left by a pre-1.0 release, which this release refuses by name.
+pub(crate) const BASELINE_SCHEMA_VERSION: i64 = 100;
+/// The newest schema version this release applies.
+pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+const _: () = assert!(
+    versions_start_at_baseline_and_increase(&MIGRATIONS),
+    "Casework migrations must start at BASELINE_SCHEMA_VERSION and strictly increase"
+);
+
+const fn versions_start_at_baseline_and_increase(migrations: &[(i64, &str)]) -> bool {
+    if migrations.is_empty() || migrations[0].0 != BASELINE_SCHEMA_VERSION {
+        return false;
+    }
+    let mut index = 1;
+    while index < migrations.len() {
+        if migrations[index].0 <= migrations[index - 1].0 {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 pub const MIGRATION_LOCK_KEY: i64 = 0x6361_7365_776f_726b;
 pub(crate) const MAXIMUM_BOUNDED_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 #[derive(Clone)]
@@ -33,14 +58,33 @@ impl std::fmt::Debug for PostgresStore {
         f.debug_struct("PostgresStore").finish_non_exhaustive()
     }
 }
-pub(crate) fn refuse_newer_schema(newest_applied: Option<i64>) -> Result<(), StoreError> {
-    match newest_applied {
+/// Refuse a ledger this release cannot serve. A ledger holding any version
+/// below the 1.0 baseline was left by a pre-1.0 release and is named first,
+/// before the newer check: a fresh database is its only remedy.
+pub(crate) fn refuse_unsupported_schema(applied: &[i64]) -> Result<(), StoreError> {
+    if applied
+        .iter()
+        .any(|version| *version < BASELINE_SCHEMA_VERSION)
+    {
+        return Err(StoreError::Pre1_0Schema {
+            versions: applied.to_vec(),
+        });
+    }
+    match applied.iter().copied().max() {
         Some(found) if found > SUPPORTED_SCHEMA_VERSION => Err(StoreError::SchemaNewer {
             found,
             supported: SUPPORTED_SCHEMA_VERSION,
         }),
         _ => Ok(()),
     }
+}
+
+fn schema_versions(versions: &[i64]) -> String {
+    versions
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn applied_schema(applied: Option<i64>) -> String {
@@ -85,11 +129,16 @@ pub(crate) async fn migrate_in(
              applied_at timestamptz NOT NULL);",
         )
         .await?;
-    let newest_applied: Option<i64> = transaction
-        .query_one("SELECT max(version) FROM casework_schema_migrations", &[])
+    let applied: Vec<i64> = transaction
+        .query(
+            "SELECT version FROM casework_schema_migrations ORDER BY version",
+            &[],
+        )
         .await?
-        .get(0);
-    refuse_newer_schema(newest_applied)?;
+        .iter()
+        .map(|row| row.try_get(0))
+        .collect::<Result<_, _>>()?;
+    refuse_unsupported_schema(&applied)?;
     let mut versions = Vec::new();
     for (version, migration) in MIGRATIONS {
         let applied: bool = transaction
@@ -314,11 +363,11 @@ impl PostgresStore {
                 &[],
             )
             .await?;
-        refuse_newer_schema(
-            applied
-                .last()
+        refuse_unsupported_schema(
+            &applied
+                .iter()
                 .map(|row| row.try_get::<_, i64>(0))
-                .transpose()?,
+                .collect::<Result<Vec<_>, _>>()?,
         )?;
         let schema_is_current = applied.len() == MIGRATIONS.len()
             && applied
@@ -720,6 +769,11 @@ pub enum StoreError {
     )]
     SchemaNewer { found: i64, supported: i64 },
     #[error(
+        "the Casework database uses a pre-1.0 schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
+        schema_versions(versions)
+    )]
+    Pre1_0Schema { versions: Vec<i64> },
+    #[error(
         "the Casework runtime role cannot read the activation ledger in schema {schema}; run `caseworkctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `caseworkctl plan --runtime-config FILE`"
     )]
     LedgerUnreadable { schema: String },
@@ -775,4 +829,54 @@ fn hash_bytes(value: &[u8]) -> String {
     registry_platform_config::sha256_uri(value)
         .trim_start_matches("sha256:")
         .to_owned()
+}
+
+#[cfg(test)]
+mod schema_version_tests {
+    use super::*;
+
+    #[test]
+    fn the_baseline_is_version_100_and_later_versions_increase() {
+        assert_eq!(BASELINE_SCHEMA_VERSION, 100);
+        assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));
+        assert!(versions_start_at_baseline_and_increase(&[
+            (100, ""),
+            (101, "")
+        ]));
+        assert!(!versions_start_at_baseline_and_increase(&[]));
+        assert!(!versions_start_at_baseline_and_increase(&[(1, "")]));
+        assert!(!versions_start_at_baseline_and_increase(&[
+            (100, ""),
+            (100, "")
+        ]));
+    }
+
+    #[test]
+    fn every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal() {
+        let beta_ledgers: [Vec<i64>; 4] = [vec![1], vec![1, 2], (1..=13).collect(), vec![19]];
+        for applied in beta_ledgers {
+            match refuse_unsupported_schema(&applied) {
+                Err(refusal @ StoreError::Pre1_0Schema { .. }) => {
+                    let message = refusal.to_string();
+                    assert!(
+                        message.starts_with("the Casework database uses a pre-1.0 schema (versions ")
+                            && message.ends_with(
+                                "this release supports fresh installs only. Create a fresh database and apply the package"
+                            ),
+                        "{message}"
+                    );
+                }
+                other => panic!("{applied:?} must be a pre-1.0 refusal: {other:?}"),
+            }
+        }
+        assert!(refuse_unsupported_schema(&[]).is_ok());
+        assert!(refuse_unsupported_schema(&[100]).is_ok());
+        assert!(matches!(
+            refuse_unsupported_schema(&[100, 101]),
+            Err(StoreError::SchemaNewer {
+                found: 101,
+                supported: 100
+            })
+        ));
+    }
 }

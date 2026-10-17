@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Apply this release to a fresh database. Casework installs its complete
+  schema as one baseline numbered version 100, above every version a pre-1.0
+  release applied, and later migrations take 101, 102, and onward. A database
+  whose ledger holds any version below 100 is refused by name as a pre-1.0
+  schema: `caseworkctl plan` and `apply` report
+  `casework.activation.beta-schema`, and readiness and startup refuse with the
+  same message. A pre-1.0 binary pointed at a database this release installed
+  sees version 100 and refuses it as newer than that release knows.
 - A task template with `subjects` bound to a BReg-backed review policy is
   refused by name. BReg does not serve task-grant context yet
   ([#2062](https://github.com/registrystack/registry-stack/issues/2062)).

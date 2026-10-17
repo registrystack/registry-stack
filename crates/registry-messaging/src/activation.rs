@@ -12,8 +12,7 @@ use uuid::Uuid;
 
 use crate::audit::MessagingAudit;
 use crate::store::{
-    is_beta_ledger, migrate_in, PostgresStore, StoreError, MIGRATIONS, MIGRATION_LOCK_KEY,
-    PRE_1_0_BETA_SCHEMA_MAX_VERSION,
+    migrate_in, pre_1_0_schema_refusal, PostgresStore, StoreError, MIGRATIONS, MIGRATION_LOCK_KEY,
 };
 
 const MAX_BACKUPS: usize = 16;
@@ -42,19 +41,11 @@ fn known_schema_versions() -> Vec<i64> {
 }
 
 fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRefusal> {
-    if is_beta_ledger(&schema.applied) {
+    if let Some(refusal) = pre_1_0_schema_refusal(&schema.applied) {
         return Some(ActivationRefusal::new(
             "messagingctl.activation.schema-invalid",
             "database",
-            format!(
-                "the database uses a pre-1.0 beta schema (versions {}); create a fresh database and apply the package",
-                schema
-                    .applied
-                    .iter()
-                    .map(i64::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            refusal.to_string(),
         ));
     }
     let known = known_schema_versions();
@@ -63,9 +54,7 @@ fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRe
         .iter()
         .enumerate()
         .find_map(|(index, version)| (known.get(index) != Some(version)).then_some(*version))?;
-    if unexpected > PRE_1_0_BETA_SCHEMA_MAX_VERSION
-        && known.last().is_some_and(|latest| unexpected > *latest)
-    {
+    if known.last().is_some_and(|latest| unexpected > *latest) {
         Some(ActivationRefusal::new(
             "messagingctl.activation.schema-newer",
             "database",
@@ -571,27 +560,41 @@ mod tests {
 
     #[test]
     fn schema_history_accepts_every_known_prefix() {
-        for applied in [&[][..], &[1][..]] {
+        for applied in [&[][..], &[100][..]] {
             assert!(schema_history_refusal(&schema(applied)).is_none());
         }
     }
 
     #[test]
-    fn schema_history_names_beta_fresh_install_recovery() {
-        let beta = schema_history_refusal(&schema(&[1, 2])).expect("a beta schema refuses");
-        assert_eq!(beta.code, "messagingctl.activation.schema-invalid");
-        assert!(beta.message.contains("pre-1.0 beta schema"));
-        assert!(beta.message.contains("fresh database"));
+    fn schema_history_names_pre_1_0_fresh_install_recovery() {
+        let beta_range: Vec<i64> = (1..=13).collect();
+        for applied in [
+            &[1][..],
+            &[1, 2][..],
+            &beta_range[..],
+            &[19][..],
+            &[19, 200][..],
+        ] {
+            let refusal =
+                schema_history_refusal(&schema(applied)).expect("a pre-1.0 schema refuses");
+            assert_eq!(refusal.code, "messagingctl.activation.schema-invalid");
+            assert!(
+                refusal.message.contains("pre-1.0 schema"),
+                "{}",
+                refusal.message
+            );
+            assert!(
+                refusal.message.contains("fresh database"),
+                "{}",
+                refusal.message
+            );
+        }
     }
 
     #[test]
-    fn schema_history_distinguishes_newer_and_invalid_versions() {
-        let newer = schema_history_refusal(&schema(&[1, 99])).expect("a newer version");
+    fn schema_history_names_a_newer_version() {
+        let newer = schema_history_refusal(&schema(&[100, 199])).expect("a newer version");
         assert_eq!(newer.code, "messagingctl.activation.schema-newer");
-        assert!(newer.message.contains("version 99"));
-
-        let invalid = schema_history_refusal(&schema(&[2])).expect("an invalid history");
-        assert_eq!(invalid.code, "messagingctl.activation.schema-invalid");
-        assert!(invalid.message.contains("version 2"));
+        assert!(newer.message.contains("version 199"));
     }
 }

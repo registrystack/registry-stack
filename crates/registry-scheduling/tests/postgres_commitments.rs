@@ -8433,7 +8433,7 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
 }
 
 #[tokio::test]
-async fn a_pre_1_0_beta_schema_is_refused_with_fresh_install_recovery() {
+async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -8451,17 +8451,10 @@ async fn a_pre_1_0_beta_schema_is_refused_with_fresh_install_recovery() {
                  applied_at timestamptz NOT NULL
              );
              INSERT INTO {schema}.scheduling_schema_migrations(version, applied_at)
-                 VALUES (1, now());
-             CREATE TABLE {schema}.scheduling_meta (
-                 singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-                 scheduling_id text NOT NULL,
-                 policy_revision bigint NOT NULL CHECK (policy_revision > 0),
-                 policy_digest text NOT NULL,
-                 updated_at timestamptz NOT NULL DEFAULT now()
-             );"
+                 VALUES (1, now());"
         ))
         .await
-        .expect("install the identifying shape of the pre-1.0 0001 baseline");
+        .expect("seed the ledger a pre-1.0 release left");
     let secret_name = format!("SCHEDULING_SCHEMA_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(&secret_name, &scoped);
     let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
@@ -8477,12 +8470,16 @@ async fn a_pre_1_0_beta_schema_is_refused_with_fresh_install_recovery() {
     let refusal = store
         .migrate()
         .await
-        .expect_err("the beta schema is never upgraded in place");
+        .expect_err("a pre-1.0 schema is never upgraded in place");
     assert!(matches!(
         &refusal,
-        StoreError::BetaSchema { versions } if versions == &vec![1]
+        StoreError::Pre1_0Schema { versions } if versions == &vec![1]
     ));
     assert!(refusal.to_string().contains("fresh database"), "{refusal}");
+    assert!(matches!(
+        store.ready().await,
+        Err(StoreError::Pre1_0Schema { versions }) if versions == vec![1]
+    ));
 }
 
 /// The single `response` entry that answers the commitment's `request`

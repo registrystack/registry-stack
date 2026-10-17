@@ -26,8 +26,8 @@ use uuid::Uuid;
 use crate::audit::AuditOutcome;
 use crate::pinned_work::{compare_pinned_work, PinnedWorkVerdict, StrandedWork};
 use crate::store::{
-    migrate_in, pending_migration_refusals, pinned_work_inventory_in, MIGRATIONS,
-    MIGRATION_LOCK_KEY, SUPPORTED_SCHEMA_VERSION,
+    migrate_in, pending_migration_refusals, pinned_work_inventory_in, refuse_unsupported_schema,
+    BASELINE_SCHEMA_VERSION, MIGRATIONS, MIGRATION_LOCK_KEY, SUPPORTED_SCHEMA_VERSION,
 };
 use crate::{PostgresStore, StoreError};
 
@@ -84,7 +84,7 @@ const MAX_TASK_TEMPLATE_BYTES: usize = 65536;
 /// task templates a plan can read before migrating. A plan against an older
 /// schema reports its effects as not evaluated; apply evaluates them after
 /// migrating.
-const EFFECTS_SCHEMA_VERSION: i64 = 1;
+const EFFECTS_SCHEMA_VERSION: i64 = BASELINE_SCHEMA_VERSION;
 
 /// The audit profile an operator's activation is recorded under.
 const OPERATOR_PROFILE: &str = "system:operator";
@@ -740,6 +740,8 @@ fn plan_kind(active: Option<&Activation>) -> PlanKind {
 fn migration_refusal_code(error: &StoreError) -> Option<&'static str> {
     match error {
         StoreError::RetiredSchema => Some("retired-schema"),
+        StoreError::Pre1_0Schema { .. } => Some("beta-schema"),
+        StoreError::SchemaNewer { .. } => Some("schema-newer"),
         _ => None,
     }
 }
@@ -759,15 +761,11 @@ async fn analyze(
     let applied = applied_versions(transaction).await?;
     let schema_version = applied.last().copied();
     let mut refusals = Vec::new();
-    if let Some(found) = schema_version.filter(|found| *found > SUPPORTED_SCHEMA_VERSION) {
+    if let Err(refusal) = refuse_unsupported_schema(&applied) {
         refusals.push(ActivationRefusal::new(
-            "schema-newer",
+            migration_refusal_code(&refusal).expect("an unsupported-schema refusal"),
             "database",
-            StoreError::SchemaNewer {
-                found,
-                supported: SUPPORTED_SCHEMA_VERSION,
-            }
-            .to_string(),
+            refusal.to_string(),
         ));
         return Ok(Analysis {
             active: latest_activation(transaction).await?,
