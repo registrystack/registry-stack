@@ -1717,6 +1717,34 @@ async fn assert_catalog_drift_is_rejected(
         .await
         .expect("test administrator restores requiredness");
 
+    // A deleted required column is drift by the same name as a nullable one.
+    // The source view depends on the column, so the drop cascades to it. The
+    // drop runs in a transaction rolled back afterwards, so the catalog
+    // returns exactly as installed.
+    database
+        .admin
+        .batch_execute(&format!(
+            "BEGIN;
+             ALTER TABLE registry_data.{table} DROP COLUMN {required_column} CASCADE"
+        ))
+        .await
+        .expect("test administrator deletes a required column");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the deleted column");
+    assert!(
+        named_drift.contains(&format!(
+            "registry_data.{}.{required_column}",
+            registry.entities()["entry"].physical_table
+        )),
+        "{named_drift:?}"
+    );
+
     let unique: tokio_postgres::Row = database
         .admin
         .query_one(

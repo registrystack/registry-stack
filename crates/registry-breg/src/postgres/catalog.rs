@@ -247,7 +247,11 @@ pub async fn catalog_drift_objects(
     for entity in registry.entities().values() {
         let table = format!("registry_data.{}", entity.physical_table);
         for field in entity.fields.values().filter(|field| field.required) {
-            if actual_columns.get(&(table.clone(), field.physical_name.clone())) == Some(&false) {
+            // A deleted column is drift by the same name as a nullable one.
+            if !matches!(
+                actual_columns.get(&(table.clone(), field.physical_name.clone())),
+                Some(true)
+            ) {
                 differences.insert(format!("{table}.{}", field.physical_name));
             }
         }
