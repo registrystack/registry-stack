@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-28"
+last_reviewed: "2026-10-17"
 doc_type: how-to
 persona:
   - operator
@@ -1248,6 +1248,14 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | `doctor` reports `startup.database.uninitialized` | No package was ever activated in this database. Run `plan`, then `apply --initial`, as [Activate and serve](#activate-and-serve) shows. |
 | `doctor` reports `startup.database.unrecognized` | The database holds registry state this release does not recognise, such as state an earlier release wrote. v0.40.0 does not upgrade v0.39.0 state in place: build the package with this release and apply it to a new database. Where a release does read the state of its predecessor, it reads only that state: upgrade one release at a time, as [Upgrade and retire](../advanced/upgrade-and-retire/) describes. |
 | `doctor` reports `startup.database.identity-mismatch` | The database records another database id than `identity.databaseId`. Point the database URLs at the database the file names, or correct `identity.databaseId`. |
+| `doctor` reports `startup.database.unreachable` | Verify the database address, network path, and server availability. |
+| `doctor` reports `startup.database.tls-refused` | Verify the server certificate and name. For a private authority, configure the trust root used by the command. |
+| `doctor` reports `startup.database.authentication-refused` | Verify the runtime role and the credential referenced by `database.runtimeUrlRef`. |
+| `doctor` reports `startup.database.missing` | Create the configured database or correct the database name in the referenced connection configuration. |
+| `doctor` reports `startup.database.timeout` | Verify database availability and the pool timeout settings. |
+| `doctor` reports `startup.database.configuration-refused` | Correct the runtime file's `database` settings. |
+| `doctor` reports `startup.database.secret-refused` | Verify `database.runtimeUrlRef` and enable the secret provider that owns the reference. |
+| `doctor` reports `startup.database.catalog-drift` | The diagnostic names missing or extra managed tables, functions, and indexes, plus removed unique constraints and required-column markers. Restore those objects from the active package migration or reapply the active package, then rerun `doctor`. Other shape changes remain the generic `startup.database.unready` refusal. |
 | `doctor` reports `startup.package.not-active` | The ledger names another package as active than the one at `package.root`. Run `bregctl status` to see the active digest, then set `package.root` to that package, or `plan` and `apply` the package you meant to serve. |
 | `doctor` reports `startup.runtime-role.can-write` | In split role mode the runtime role can write the activation ledger or the registry state, for example through a grant, an ownership, a membership, or a trigger no compiled migration creates. Run `bregctl plan --package DIR`: its refusal names the object and the statement that removes it, such as `DROP TRIGGER`. |
 | `doctor` reports `startup.runtime-role.grants-missing` | The runtime role lacks a grant the active package gives it, as after `REASSIGN OWNED`. Run `bregctl apply --package DIR` with the active package to reissue the grants. |
@@ -1260,7 +1268,7 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | The runtime file is refused with `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
-| A command refuses a path that exists | Follow the named path diagnostic. Deployment files require real absolute paths; authoring accepts aliases of the selected project and output parent, but refuses symbolic links inside the project and existing output destinations. Check the file type and permissions too. |
+| A command refuses a path that exists | Follow the named path diagnostic. A refused symbolic link names the linked component and its resolved target. Use the resolved path, then check the file type and permissions. |
 
 {/* Evidence: crates/registry-breg/src/package.rs, rederive(), inspect_package_integrity(), and load_predecessor_package();
     crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package() and

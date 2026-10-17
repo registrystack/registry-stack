@@ -34,10 +34,10 @@ use crate::package::{
     load_package_with_verified_envelope, PackageError, PackageLoadContext, VerifiedPackage,
 };
 use crate::postgres::{
-    inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity, BaselineAdvisory,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
-    PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
-    RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
+    catalog_drift_objects, inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity,
+    BaselineAdvisory, DatabaseConnectionCause, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
+    PostgresSnapshotReadService, RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorker};
@@ -56,9 +56,13 @@ pub enum StartupError {
     #[error("{0}")]
     PackageEnvelopeRefused(String),
     #[error("the Registry database connection was refused")]
-    DatabaseConnection,
+    DatabaseConnection(DatabaseConnectionCause),
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// Managed database object names only. No catalog values, role names, or
+    /// connection details are included.
+    #[error("the Registry database catalog differs from the runtime package")]
+    DatabaseCatalogDrift { objects: Vec<String> },
     /// The database holds no registry state: no package was ever applied.
     #[error(
         "the Registry database records no activated package; run `bregctl apply --package DIR \
@@ -394,7 +398,7 @@ impl OperationalEvent {
                 target: "registry_breg::startup",
                 message: "Base Registry Engine stopped",
                 error: Some(error.operational_message()),
-                code: None,
+                code: error.operational_code(),
             },
             Self::RoleMode(RoleMode::Single) => OperationalLogRecord {
                 level: OperationalLogLevel::Info,
@@ -530,6 +534,15 @@ impl OperationalEvent {
                     message = record.message
                 );
             }
+            Self::StoppedWithError(StartupError::DatabaseConnection(_)) => {
+                let error = record
+                    .error
+                    .expect("stopped-with-error records have a closed error");
+                let code = record
+                    .code
+                    .expect("database connection records have a closed cause code");
+                tracing::error!(target: "registry_breg::startup", code, error, message = record.message);
+            }
             Self::StoppedWithError(_) => {
                 let error = record
                     .error
@@ -577,6 +590,13 @@ impl OperationalEvent {
 }
 
 impl StartupError {
+    const fn operational_code(&self) -> Option<&'static str> {
+        match self {
+            Self::DatabaseConnection(cause) => Some(cause.code()),
+            _ => None,
+        }
+    }
+
     const fn operational_message(&self) -> &'static str {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
@@ -585,8 +605,11 @@ impl StartupError {
             }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
-            Self::DatabaseConnection => "the Registry database connection was refused",
+            Self::DatabaseConnection(cause) => cause.message(),
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::DatabaseCatalogDrift { .. } => {
+                "the Registry database catalog differs from the runtime package; run `bregctl doctor` to name the objects"
+            }
             Self::DatabaseUninitialized => {
                 "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
             }
@@ -1257,13 +1280,13 @@ async fn prepare_database_startup(
         .clone()
         .with_jit_disabled()
         .with_idle_in_transaction_session_timeout(SERVER_IDLE_IN_TRANSACTION_TIMEOUT)
-        .map_err(|_| StartupError::DatabaseConnection)?
+        .map_err(|_| StartupError::DatabaseConnection(DatabaseConnectionCause::Configuration))?
         .build_pool()
-        .map_err(|_| StartupError::DatabaseConnection)?;
+        .map_err(|_| StartupError::DatabaseConnection(DatabaseConnectionCause::Configuration))?;
     let mut client = pool
-        .get()
+        .get_for_startup()
         .await
-        .map_err(|_| StartupError::DatabaseConnection)?;
+        .map_err(StartupError::DatabaseConnection)?;
     let startup = verify_opened_startup(
         package,
         database_id,
@@ -1717,8 +1740,11 @@ async fn verify_attachment_storage(
 /// the operational log.
 pub fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
     match error {
-        RuntimeConfigError::InvalidDatabase | RuntimeConfigError::Secret => {
-            StartupError::DatabaseConnection
+        RuntimeConfigError::InvalidDatabase => {
+            StartupError::DatabaseConnection(DatabaseConnectionCause::Configuration)
+        }
+        RuntimeConfigError::Secret => {
+            StartupError::DatabaseConnection(DatabaseConnectionCause::Secret)
         }
         RuntimeConfigError::InvalidMetricsListener => StartupError::Listener,
         RuntimeConfigError::InvalidAudit => StartupError::Audit,
@@ -2243,7 +2269,7 @@ async fn verify_opened_startup(
     }
     let expected = recorded_startup_identity(&transaction, &package, database_id).await?;
     verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
-    verify_catalog_identity_for_catalog(
+    if verify_catalog_identity_for_catalog(
         &transaction,
         &expected,
         &expected_catalog,
@@ -2251,7 +2277,16 @@ async fn verify_opened_startup(
         runtime_role,
     )
     .await
-    .map_err(|_| StartupError::DatabaseUnready)?;
+    .is_err()
+    {
+        let objects = catalog_drift_objects(&transaction, package.registry(), &expected_catalog)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?;
+        if objects.is_empty() {
+            return Err(StartupError::DatabaseUnready);
+        }
+        return Err(StartupError::DatabaseCatalogDrift { objects });
+    }
     transaction
         .commit()
         .await

@@ -341,6 +341,7 @@ tower = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
+url.workspace = true
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]

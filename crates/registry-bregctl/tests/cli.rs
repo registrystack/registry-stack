@@ -2426,9 +2426,14 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     assert!(!registry.contains("generic-registry"));
     let initialized_project =
         parse_project_yaml(registry.as_bytes()).expect("derived project parses");
-    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
-        compile_project(&initialized_project, &[], profile).expect("derived project compiles");
-    }
+    compile_project(&initialized_project, &[], CompileProfile::Authoring)
+        .expect("derived project compiles for authoring");
+    let production = compile_project(&initialized_project, &[], CompileProfile::Production)
+        .expect_err("the generated .invalid IRI must be replaced before production");
+    assert!(production.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.registry.canonical-base-iri-reserved"
+            && diagnostic.path == "project.project.canonicalBaseIri"
+    }));
 
     let check = bregctl(&["--format", "json", "check", path(&destination)]);
     assert!(check.status.success(), "{check:?}");
@@ -2531,9 +2536,13 @@ recordTypes:
         );
     }
     let project = parse_project_yaml(registry.as_bytes()).unwrap();
-    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
-        compile_project(&project, &[], profile).expect("the native project compiles");
-    }
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("the native project compiles for authoring");
+    assert!(compile_project(&project, &[], CompileProfile::Production)
+        .expect_err("the generated .invalid IRI must be replaced before production")
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.registry.canonical-base-iri-reserved"));
     let checked = bregctl(&["check", path(&first)]);
     assert!(checked.status.success(), "{checked:?}");
     let readme = fs::read_to_string(first.join("README.md")).unwrap();
@@ -3016,6 +3025,26 @@ fn init_writes_a_bare_relative_destination_into_the_working_directory() {
         );
     }
     assert_eq!(json_stdout(&output)["command"], "init");
+}
+
+#[cfg(unix)]
+#[test]
+fn init_names_a_symlinked_destination_and_its_resolved_target() {
+    use std::os::unix::fs::symlink;
+
+    let project = TestProject::asset_fixture();
+    let real = project.path().join("real-destination");
+    let linked = project.path().join("linked-destination");
+    fs::create_dir(&real).unwrap();
+    symlink(&real, &linked).unwrap();
+    let output = bregctl(&["--format", "json", "init", path(&linked)]);
+    assert_eq!(output.status.code(), Some(1));
+    let message = json_stdout(&output)["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.contains(linked.to_str().unwrap()), "{message}");
+    assert!(message.contains(real.to_str().unwrap()), "{message}");
 }
 
 #[test]
@@ -5405,6 +5434,12 @@ fn test_output_symlink_parent_is_refused_before_candidate_or_database_work() {
         json_stdout(&result)["diagnostics"][0]["code"],
         "test.output.refused"
     );
+    let report = json_stdout(&result);
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("diagnostic message");
+    assert!(message.contains(&linked.display().to_string()), "{message}");
+    assert!(message.contains(&real.display().to_string()), "{message}");
     assert!(!real.join("receipt.json").exists());
 }
 

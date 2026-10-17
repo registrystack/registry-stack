@@ -133,6 +133,8 @@ pub enum AuthenticationError {
     MalformedCredential,
     #[error("the bearer credential was refused")]
     VerificationRefused,
+    #[error("the verified credential is missing the configured actor-kind claim")]
+    MissingActorKind,
     #[error("the verified credential has invalid authority claims")]
     InvalidClaims,
 }
@@ -271,6 +273,9 @@ impl RegistryAuthenticator {
         let actor_kind = Some(if actor_subject.is_some() {
             registry_platform_oidc::ActorKind::Agent
         } else {
+            if !claims.contains_key(&self.contextual_claims.actor_kind) {
+                return Err(AuthenticationError::MissingActorKind);
+            }
             actor_kind(&verified.claims, &self.contextual_claims)
                 .map_err(|_| AuthenticationError::InvalidClaims)?
         });
@@ -396,6 +401,13 @@ pub(crate) async fn authenticate_request(
     };
     let claims = match authenticator.authenticate(token).await {
         Ok(claims) => claims,
+        Err(AuthenticationError::MissingActorKind) => {
+            tracing::warn!(
+                target: "registry_breg::auth",
+                message = "verified credential is missing the configured actor-kind claim"
+            );
+            return authentication_refused();
+        }
         Err(_) => return authentication_refused(),
     };
     request.extensions_mut().insert(claims);

@@ -71,7 +71,7 @@ const PROJECT_TEMPLATE: &str = r#"apiVersion: id.registrystack.org/formats/breg/
 kind: BRegProject
 project:
   id: field-encryption-fixture
-  canonicalBaseIri: https://field-encryption.invalid
+  canonicalBaseIri: https://field-encryption.example.test
   version: 1.0.0
   defaultLanguage: en
 package:

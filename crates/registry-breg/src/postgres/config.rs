@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fmt, str::FromStr, sync::OnceLock, time::Duration};
+use std::{error::Error as _, fmt, str::FromStr, sync::OnceLock, time::Duration};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 #[cfg(feature = "postgres-test")]
@@ -418,9 +418,149 @@ pub struct RuntimePool {
     transport: Transport,
 }
 
+/// Value-free causes that operator tooling may report for a refused database
+/// connection. The originating error and connection values never cross this
+/// boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseConnectionCause {
+    Unreachable,
+    Tls,
+    Authentication,
+    DatabaseMissing,
+    Timeout,
+    Configuration,
+    Secret,
+}
+
+impl DatabaseConnectionCause {
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Unreachable => "startup.database.unreachable",
+            Self::Tls => "startup.database.tls-refused",
+            Self::Authentication => "startup.database.authentication-refused",
+            Self::DatabaseMissing => "startup.database.missing",
+            Self::Timeout => "startup.database.timeout",
+            Self::Configuration => "startup.database.configuration-refused",
+            Self::Secret => "startup.database.secret-refused",
+        }
+    }
+
+    #[must_use]
+    pub const fn diagnostic_path(self) -> &'static str {
+        match self {
+            Self::Unreachable | Self::Authentication | Self::DatabaseMissing | Self::Secret => {
+                "database.runtimeUrlRef"
+            }
+            Self::Tls | Self::Timeout | Self::Configuration => "database",
+        }
+    }
+
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::Unreachable => {
+                "the database could not be reached; verify its address, network path, and availability"
+            }
+            Self::Tls => {
+                "the database TLS connection was refused; verify the server certificate, name, and configured trust roots"
+            }
+            Self::Authentication => {
+                "the database rejected authentication; verify the runtime role and its referenced credential"
+            }
+            Self::DatabaseMissing => {
+                "the configured database does not exist; create it or correct the referenced connection configuration"
+            }
+            Self::Timeout => {
+                "the database connection timed out; verify availability and the configured pool timeouts"
+            }
+            Self::Configuration => {
+                "the database connection configuration was refused; correct the runtime database settings"
+            }
+            Self::Secret => {
+                "the database connection secret could not be resolved; verify the reference and enabled secret provider"
+            }
+        }
+    }
+}
+
+fn connection_cause(
+    error: &deadpool_postgres::PoolError,
+    transport: &Transport,
+) -> DatabaseConnectionCause {
+    use deadpool_postgres::PoolError;
+
+    match error {
+        PoolError::Timeout(_) => DatabaseConnectionCause::Timeout,
+        PoolError::Backend(error) => {
+            if let Some(database) = error.as_db_error() {
+                return database_error_cause(database.code());
+            }
+            let mut source = error.source();
+            let mut io_kinds = Vec::new();
+            while let Some(cause) = source {
+                if cause.downcast_ref::<rustls::Error>().is_some() {
+                    return DatabaseConnectionCause::Tls;
+                }
+                if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+                    io_kinds.push(error.kind());
+                }
+                source = cause.source();
+            }
+            if matches!(transport, Transport::Tls { .. })
+                && io_kinds.contains(&std::io::ErrorKind::InvalidData)
+            {
+                // rustls certificate and server-name refusals are surfaced by
+                // tokio-rustls as InvalidData I/O errors.
+                DatabaseConnectionCause::Tls
+            } else if !io_kinds.is_empty() {
+                DatabaseConnectionCause::Unreachable
+            } else if matches!(transport, Transport::Tls { .. }) {
+                // tokio-postgres represents protocol-level TLS refusals, such
+                // as a plaintext server rejecting the TLS request, with a
+                // private TLS error kind and an opaque source. Once database
+                // and I/O failures are excluded, the required transport is the
+                // remaining value-free classification boundary.
+                DatabaseConnectionCause::Tls
+            } else {
+                DatabaseConnectionCause::Unreachable
+            }
+        }
+        PoolError::Closed | PoolError::NoRuntimeSpecified | PoolError::PostCreateHook(_) => {
+            DatabaseConnectionCause::Configuration
+        }
+    }
+}
+
+fn database_error_cause(code: &tokio_postgres::error::SqlState) -> DatabaseConnectionCause {
+    use tokio_postgres::error::SqlState;
+
+    if code == &SqlState::INVALID_PASSWORD || code == &SqlState::INVALID_AUTHORIZATION_SPECIFICATION
+    {
+        DatabaseConnectionCause::Authentication
+    } else if code == &SqlState::INVALID_CATALOG_NAME {
+        DatabaseConnectionCause::DatabaseMissing
+    } else {
+        // A server SQLSTATE proves that PostgreSQL was reached and completed
+        // the transport handshake. Keep other server availability refusals in
+        // the operational availability class rather than inferring TLS from
+        // the configured transport.
+        DatabaseConnectionCause::Unreachable
+    }
+}
+
 impl RuntimePool {
     pub(crate) async fn get(&self) -> Result<deadpool_postgres::Client> {
         self.pool.get().await.map_err(|_| PostgresKernelError::Pool)
+    }
+
+    pub(crate) async fn get_for_startup(
+        &self,
+    ) -> std::result::Result<deadpool_postgres::Client, DatabaseConnectionCause> {
+        self.pool
+            .get()
+            .await
+            .map_err(|error| connection_cause(&error, &self.transport))
     }
 
     pub fn status(&self) -> deadpool_postgres::Status {
@@ -450,6 +590,16 @@ impl RuntimePool {
     #[doc(hidden)]
     pub async fn get_for_test(&self) -> Result<deadpool_postgres::Client> {
         self.get().await
+    }
+
+    /// Exercise the production startup acquisition and its value-free error
+    /// classification from real PostgreSQL integration tests.
+    #[cfg(any(feature = "postgres-test", feature = "postgres-tls-test"))]
+    #[doc(hidden)]
+    pub async fn startup_connection_cause_for_test(
+        &self,
+    ) -> std::result::Result<(), DatabaseConnectionCause> {
+        self.get_for_startup().await.map(drop)
     }
 }
 
@@ -497,6 +647,14 @@ mod tests {
             Duration::from_secs(1)
         )
         .is_err());
+    }
+
+    #[test]
+    fn explicit_server_availability_refusal_is_not_mislabeled_as_tls() {
+        assert_eq!(
+            database_error_cause(&tokio_postgres::error::SqlState::TOO_MANY_CONNECTIONS),
+            DatabaseConnectionCause::Unreachable
+        );
     }
 
     #[cfg(feature = "postgres-test")]

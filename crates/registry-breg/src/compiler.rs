@@ -478,6 +478,15 @@ fn validate_project_header(
         "breg.registry.canonical-base-iri-required",
         errors,
     );
+    if profile == CompileProfile::Production
+        && reserved_production_iri(&project.project.canonical_base_iri)
+    {
+        errors.push(Diagnostic::error(
+            "breg.registry.canonical-base-iri-reserved",
+            "project.project.canonicalBaseIri",
+            "production canonicalBaseIri must not use the reserved .invalid namespace",
+        ));
+    }
 
     match (&project.package, profile) {
         (None, CompileProfile::Authoring) => findings.push(Diagnostic::finding(
@@ -659,6 +668,17 @@ fn validate_project_header(
             _ => {}
         }
     }
+}
+
+fn reserved_production_iri(value: &str) -> bool {
+    let Ok(iri) = url::Url::parse(value) else {
+        return false;
+    };
+    let Some(host) = iri.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.');
+    host == "invalid" || host.ends_with(".invalid")
 }
 
 fn validate_manifest_projection(
@@ -2549,8 +2569,8 @@ fn validate_entity_fields(
             {
                 errors.push(Diagnostic::error(
                     "breg.field.decimal-bounds-invalid",
-                    "recordTypes[].fields[]",
-                    "decimal precision, scale, or canonical bounds are invalid",
+                    format!("recordTypes[id={}].fields[id={}]", entity.id, field.id),
+                    "decimal precision, scale, or canonical bounds are invalid; minimum and maximum must carry exactly scale fractional digits",
                 ));
             }
             FieldTypeSource::Reference { target, .. } if !entities.contains_key(target) => {
@@ -3610,11 +3630,17 @@ fn validate_profiles(
         }
         // Query processing over ciphertext cannot filter or order: an
         // encrypted field leaves the filterable and sortable sets.
-        if access
+        if let Some((member, field)) = access
             .filterable_fields
             .iter()
-            .chain(&access.sortable_fields)
-            .any(|field| {
+            .map(|field| ("filterableFields", field))
+            .chain(
+                access
+                    .sortable_fields
+                    .iter()
+                    .map(|field| ("sortableFields", field)),
+            )
+            .find(|(_, field)| {
                 fields
                     .get(field.as_str())
                     .is_some_and(|field| field.encrypted)
@@ -3622,7 +3648,7 @@ fn validate_profiles(
         {
             errors.push(Diagnostic::error(
                 "breg.access-profile.processing-encrypted",
-                "recordTypes[].accessProfiles[]",
+                format!("{profile_path}.{member}[field={field}]"),
                 "an encrypted field cannot be a filterable or sortable field",
             ));
         }

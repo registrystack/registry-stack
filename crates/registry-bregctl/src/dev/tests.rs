@@ -3496,6 +3496,28 @@ fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_change
     private::check(&export_args(&state).assertion_key_file, false).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn export_client_names_a_symlinked_output_parent_and_target() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let real = state.project.join("real-export-parent");
+    let linked = state.project.join("linked-export-parent");
+    fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &linked).unwrap();
+    let mut args = export_args(&state);
+    args.client_id_file = linked.join("client-id");
+    args.assertion_key_file = linked.join("assertion-key.jwk");
+
+    let error = export_client::run(args).expect_err("a symlinked parent is refused");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains(&linked.display().to_string()),
+        "{rendered}"
+    );
+    assert!(rendered.contains(&real.display().to_string()), "{rendered}");
+}
+
 #[test]
 fn export_client_reports_the_registered_external_resource() {
     let (_temp, state, mut clients, files) = fixture();

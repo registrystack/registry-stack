@@ -1626,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn the_starter_project_compiles_in_both_profiles_and_its_journeys_validate() {
+    fn the_starter_project_compiles_for_authoring_and_marks_its_production_iri_placeholder() {
         let (plan, selection) = starter_plan("household");
         let files = render(&plan, &selection);
         assert_eq!(
@@ -1644,9 +1644,12 @@ mod tests {
         let authoring = compile(&path, ProfileArg::Authoring, "init").unwrap_or_else(|failure| {
             panic!("{}", serde_json::to_string_pretty(&failure).unwrap())
         });
-        compile(&path, ProfileArg::Production, "init").unwrap_or_else(|failure| {
-            panic!("{}", serde_json::to_string_pretty(&failure).unwrap())
-        });
+        let production = compile(&path, ProfileArg::Production, "init")
+            .expect_err("the generated .invalid IRI must be replaced before production");
+        assert!(production.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "breg.registry.canonical-base-iri-reserved"
+                && diagnostic.path == "project.project.canonicalBaseIri"
+        }));
         let findings: Vec<String> = authoring
             .findings()
             .iter()
