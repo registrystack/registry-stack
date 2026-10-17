@@ -2392,22 +2392,25 @@ fn authority_activation_uses_configured_audit_without_source_or_signer_initializ
         assert!(String::from_utf8_lossy(&first.stdout).starts_with("ACTIVATED "));
         assert!(!deployment.path("audit.jsonl").exists());
         let entries = activation_audit_entries(&deployment, &first, stdout);
-        assert_eq!(entries.len(), 1);
-        let entry = &entries[0];
-        assert_eq!(entry["schema"], "evidence-activation-audit/v1");
-        assert_eq!(entry["phase"], "response");
-        assert_eq!(entry["record"]["outcome"], "applied");
-        assert_eq!(entry["correlation"], entry["record"]["activationId"]);
-        assert!(!serde_json::to_string(entry)
+        assert_eq!(entries.len(), 2);
+        let (request, response) = (&entries[0], &entries[1]);
+        assert_eq!(request["schema"], "evidence-activation-audit/v1");
+        assert_eq!(request["phase"], "request");
+        assert_eq!(response["phase"], "response");
+        assert_eq!(response["record"]["outcome"], "applied");
+        assert_eq!(response["record"]["activationSequence"], 1);
+        assert_eq!(request["correlation"], request["record"]["activationId"]);
+        assert_eq!(request["correlation"], response["correlation"]);
+        assert!(!serde_json::to_string(&entries)
             .unwrap()
             .contains("operator-reference-canary"));
+        // An exact repeat is refused as already active and audited as such.
         let repeated = activate_authority(&deployment, &document);
-        assert!(repeated.status.success());
-        let delivered = if stdout { 0 } else { 1 };
-        assert_eq!(
-            activation_audit_entries(&deployment, &repeated, stdout).len(),
-            delivered
-        );
+        assert!(!repeated.status.success());
+        assert!(String::from_utf8_lossy(&repeated.stderr).contains("already active"));
+        let entries = activation_audit_entries(&deployment, &repeated, stdout);
+        assert_eq!(entries.len(), if stdout { 2 } else { 4 });
+        assert_eq!(entries.last().unwrap()["record"]["outcome"], "refused");
         authority["project"] = json!("other-project");
         write_private_json(&document, &authority);
         let refused = activate_authority(&deployment, &document);
@@ -2415,10 +2418,19 @@ fn authority_activation_uses_configured_audit_without_source_or_signer_initializ
         let entries = activation_audit_entries(&deployment, &refused, stdout);
         let refusal = entries.last().unwrap();
         assert_eq!(refusal["record"]["outcome"], "refused");
+        let refusal_request = &entries[entries.len() - 2];
+        assert_eq!(refusal_request["phase"], "request");
         assert_ne!(
-            entry["record"]["operatorReferenceHash"],
-            refusal["record"]["operatorReferenceHash"]
+            request["record"]["operatorReferenceHash"],
+            refusal_request["record"]["operatorReferenceHash"]
         );
+        let history = Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .args(["authority", "history", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .output()
+            .unwrap();
+        assert!(history.status.success());
+        assert_eq!(String::from_utf8_lossy(&history.stdout).lines().count(), 1);
     }
 }
 
@@ -2449,8 +2461,8 @@ async fn authority_activation_succeeds_while_the_service_holds_the_audit_lock() 
         String::from_utf8_lossy(&output.stderr)
     );
     let entries = activation_audit_entries(&deployment, &output, false);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["record"]["outcome"], "applied");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1]["record"]["outcome"], "applied");
     assert!(
         service.ready().await,
         "activation disturbed the service writer"

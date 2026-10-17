@@ -288,7 +288,9 @@ ordered history and active compiled snapshot. Activation derives
 `authorityRevision` with a dedicated digest domain and `authorityDigest` from
 canonical document bytes, binds the exact package digest, and commits the state
 under a single-writer lock with file and directory synchronization. Repeating
-an exact activation is idempotent. Invalid documents and prepared temporary
+an exact activation is refused as already active. Each activation writes an
+audit request entry before it takes that lock and a response entry after it
+commits or refuses; refusals never touch the store. Invalid documents and prepared temporary
 files cannot replace the committed state. If the command cannot confirm a
 commit, inspect the committed history before retrying.
 

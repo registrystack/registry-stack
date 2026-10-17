@@ -76,12 +76,6 @@ pub enum AuthorityCommand {
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
     },
-    /// Inspect minimal activation audit events without authority grants or raw operator references.
-    Audit {
-        /// Runtime configuration file.
-        #[arg(long = "runtime-config", value_name = "FILE")]
-        runtime_config: PathBuf,
-    },
 }
 
 #[derive(Debug, Subcommand)]

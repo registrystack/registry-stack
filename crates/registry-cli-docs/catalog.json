@@ -463,15 +463,6 @@
           ],
           "options": [
             {
-              "display": "--prior-evidence-export <FILE>",
-              "description": "Compare a prior Evidence source-export.json with this project's field inventory. A symbolic link at any component of this path is refused.",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--package <DIRECTORY>",
               "description": "Closed package to verify against its sums, reporting the registry revision it rederives. A symbolic link at any component of this path is refused.",
               "always_required": false,
@@ -561,13 +552,6 @@
             },
             {
               "kind": "requires-all",
-              "when": "--prior-evidence-export <FILE>",
-              "arguments": [
-                "<PROJECT>"
-              ]
-            },
-            {
-              "kind": "requires-all",
               "when": "--environment",
               "arguments": [
                 "--runtime-config <FILE>"
@@ -586,14 +570,6 @@
               "when": null,
               "arguments": [
                 "--file <FILE>",
-                "--prior-evidence-export <FILE>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--file <FILE>",
                 "--production"
               ]
             },
@@ -603,14 +579,6 @@
               "arguments": [
                 "--file <FILE>",
                 "--runtime-config <FILE>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--package <DIRECTORY>",
-                "--prior-evidence-export <FILE>"
               ]
             },
             {
@@ -8399,36 +8367,6 @@
               "about": "Inspect revisions and digests from committed activation history, without identity values",
               "long_about": null,
               "usage": "evidence authority history --runtime-config <FILE>",
-              "arguments": [],
-              "options": [
-                {
-                  "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "audit",
-              "invocation": "evidence authority audit",
-              "about": "Inspect minimal activation audit events without authority grants or raw operator references",
-              "long_about": null,
-              "usage": "evidence authority audit --runtime-config <FILE>",
               "arguments": [],
               "options": [
                 {

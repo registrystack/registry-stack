@@ -146,34 +146,35 @@ evidencectl test '<editable-project>' --target '<deployment-target>'
 evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
-Activation writes an `evidence-activation-audit/v1` response entry to the
-`activation` companion of the runtime's configured audit destination: beside a
-file destination `audit.jsonl` it writes `audit.activation.jsonl` under its own
+Activation writes `evidence-activation-audit/v1` entries to the `activation`
+companion of the runtime's configured audit destination: beside a file
+destination `audit.jsonl` it writes `audit.activation.jsonl` under its own
 single-writer lock, so it runs while `evidence serve` holds the service file, and a
 `stdout` destination becomes stderr. Ship the companion file with the service
-audit. It resolves only the audit key and sink,
-without initializing sources or the signer. The record carries an activation ID,
-package and authority digests, authority revision, outcome, and successful history
-sequence. The optional operator reference is retained only as a keyed hash scoped
-to that activation. It must be 1 through 256 bytes without control characters;
-use a non-secret change reference. Inspect durable records and delivery status with
-`evidence authority audit --runtime-config '<candidate>/runtime.yaml'`.
+audit. It resolves only the audit key and sink, without initializing sources or
+the signer.
 
-The pending record and authority history commit atomically. Ceiling and target
-refusals record a refused event without replacing the active snapshot. Unreadable
-input, unusable audit setup, or unsafe storage returns failure. If audit delivery
-fails after commit, activation returns failure but the committed history remains
-inspectable. Retry with the same document and unchanged target, package, and
-configuration to deliver the pending record without creating another activation
-or changing its operator reference. A refused retry reuses the latest undelivered
-attempt under the same validation context; a later refusal after delivery is a new
-attempt. Successful retries do not redeliver acknowledged events. A crash between sink append and durable
-delivery acknowledgement can repeat the same activation ID, so consumers must
-accept at-least-once delivery. Failed state durability barriers never acknowledge
-success. Legacy history remains readable; reactivation adds a correlated event if
-one is absent. History and pending records share the bounded store and access controls.
-Local request-audit inspection validates activation records and skips them when
-selecting the last Evidence operation.
+Each activation writes a `request` entry before it takes the authority lock,
+then a `response` entry under the same correlation. The request carries an
+activation ID, the package digest, the authority revision and digest, and the
+optional operator reference as a keyed hash scoped to that activation. The
+reference must be 1 through 256 bytes without control characters; use a
+non-secret change reference. The response carries the outcome: `applied` with the
+history sequence, `refused` for a validation refusal, or `failed` for a commit
+failure. If the destination refuses the request entry, activation fails and
+changes nothing. Ceiling, target, and binding refusals never touch the authority
+store, so they cannot consume the history bound. A package and authority revision
+that are already active are refused as already active; nothing needs activating,
+so continue with the remaining steps of the handoff.
+
+If the destination refuses the response entry after the commit, activation exits
+with failure and names the active revision, digest, and sequence. The activation
+took effect; restore the audit destination and confirm it with
+`evidence authority history --runtime-config '<candidate>/runtime.yaml'`. A crash
+between the commit and the response leaves a request with no response, and
+authority history says what happened. Failed state durability barriers never
+acknowledge success. The audit trail lives only in the audit destination; the
+authority store holds the history alone.
 
 `doctor` delegates the runtime-owned startup dependency preflight without
 opening the public listener, sending an Evidence request, or appending an

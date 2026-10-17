@@ -2,12 +2,15 @@ contract: registry.evidence.security-test-traceability/v1
 entries:
   - id: sec-target-authority-atomic-activation
     tests:
-      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_idempotent_and_keeps_durable_history}
-      - {file: crates/registry-evidence/src/authority.rs, name: refusal_is_audited_without_activation_and_operator_reference_is_hashed}
-      - {file: crates/registry-evidence/src/authority.rs, name: audit_commit_failure_never_acknowledges_an_activation}
-      - {file: crates/registry-evidence/src/authority.rs, name: configured_audit_failure_preserves_pending_record_for_retry}
-      - {file: crates/registry-evidence/src/audit.rs, name: local_inspection_accepts_activation_records_beside_evidence_operations}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_refuses_a_repeat_and_keeps_durable_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: applied_activation_writes_a_correlated_request_and_response}
+      - {file: crates/registry-evidence/src/authority.rs, name: refused_request_entry_leaves_authority_state_untouched}
+      - {file: crates/registry-evidence/src/authority.rs, name: validation_refusals_are_audited_and_never_fill_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: response_refused_after_commit_reports_applied_unaudited}
+      - {file: crates/registry-evidence/src/authority.rs, name: audited_activations_stay_serialized_by_the_authority_lock}
       - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_uses_configured_audit_without_source_or_signer_initialization}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_succeeds_while_the_service_holds_the_audit_lock}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_reports_why_the_companion_audit_is_unavailable}
       - {file: crates/registry-evidence/src/authority.rs, name: activation_retry_requires_durable_state_and_parent_entries}
       - {file: crates/registry-evidence/src/authority.rs, name: invalid_or_out_of_ceiling_authority_never_replaces_active_snapshot}
       - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_serializes_concurrent_writers}

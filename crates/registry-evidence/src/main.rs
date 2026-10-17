@@ -87,6 +87,8 @@ const ANTI_RECONSTRUCTION_FIXTURE: &[u8] =
 /// `stdout` destination becomes `stderr`.
 const ACTIVATION_AUDIT_PROCESS: &str = "activation";
 const ACTIVATION_AUDIT_FAILED: &str = "activation audit initialization failed";
+const ACTIVATION_AUDIT_REFUSED: &str =
+    "activation audit refused the request entry, so nothing was activated";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CliError(&'static str);
@@ -209,14 +211,13 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Authority { command } => {
             use registry_evidence::{authority, cli::AuthorityCommand};
-            let (runtime_path, document, operator_reference, audit_only) = match command {
+            let (runtime_path, document, operator_reference) = match command {
                 AuthorityCommand::Activate {
                     runtime_config,
                     document,
                     operator_reference,
-                } => (runtime_config, Some(document), operator_reference, false),
-                AuthorityCommand::History { runtime_config } => (runtime_config, None, None, false),
-                AuthorityCommand::Audit { runtime_config } => (runtime_config, None, None, true),
+                } => (runtime_config, Some(document), operator_reference),
+                AuthorityCommand::History { runtime_config } => (runtime_config, None, None),
             };
             // Operator inspection and authority activation need the closed
             // configuration, not source extracts, credentials or a signer.
@@ -300,7 +301,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                                 AuditInitializationFault::from(&error),
                             )
                         })?;
-                        authority::activate_with_operator(
+                        match authority::activate_with_operator(
                             &binding.root,
                             &binding.target,
                             &bundle.config,
@@ -310,26 +311,31 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                             &audit,
                         )
                         .await
-                        .map(|snapshot| {
-                            println!(
-                                "ACTIVATED {} {} sequence={}",
-                                snapshot.revision(),
-                                snapshot.digest(),
-                                snapshot.sequence()
-                            )
-                        })
+                        {
+                            Ok(snapshot) => {
+                                println!(
+                                    "ACTIVATED {} {} sequence={}",
+                                    snapshot.revision(),
+                                    snapshot.digest(),
+                                    snapshot.sequence()
+                                );
+                                Ok(())
+                            }
+                            Err(authority::ActivationError::RequestUnaudited(error)) => {
+                                return Err(CommandError::Audit(
+                                    ACTIVATION_AUDIT_REFUSED,
+                                    AuditInitializationFault::from(&error),
+                                ));
+                            }
+                            Err(authority::ActivationError::Authority(error)) => Err(error),
+                            Err(error) => {
+                                eprintln!("evidence: {error}");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        }
                     }
                     Err(error) => Err(error),
                 }
-            } else if audit_only {
-                authority::activation_audit(&binding.root).map(|entries| {
-                    for entry in entries {
-                        println!(
-                            "{}",
-                            serde_json::to_string(&entry).expect("activation audit serializes")
-                        );
-                    }
-                })
             } else {
                 authority::history(&binding.root).map(|entries| {
                     for entry in entries {
