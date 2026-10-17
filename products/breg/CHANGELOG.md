@@ -279,6 +279,16 @@
   `headers`, `body` and `key`. Refusal raises `BaseRegistryClientError` with
   kind `webhook-verification`. The durable receiver example verifies with it
   instead of its own HMAC code.
+- BREAKING: `bregctl doctor` names why a database connection was refused:
+  `startup.database.unreachable`, `startup.database.tls-refused`,
+  `startup.database.authentication-refused`, `startup.database.missing`,
+  `startup.database.timeout`, `startup.database.configuration-refused`, or
+  `startup.database.secret-refused`, replacing `startup.database.connection-refused`.
+  Missing or extra managed tables, views, sequences, functions, and indexes, and a
+  removed unique constraint or required-column marker, report
+  `startup.database.catalog-drift` and name each object instead of
+  `startup.database.unready`. Automation that matches the earlier codes must
+  match these.
 
 ## 0.41.0 - 2026-10-13
 
