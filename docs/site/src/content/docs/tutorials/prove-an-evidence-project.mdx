@@ -14,7 +14,7 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
-  skip: continues the normalized project created by Get your first Evidence Gateway assertion
+  after: tutorials/first-evidence-assertion
 ---
 
 Use fixtures after the Source, AssertionDefinition, Functions, Outputs, and complete target grants
@@ -45,6 +45,12 @@ those decisions inside the fixture.
 target: one grant supplies the definition, purpose, audience rule, representation, subject binding,
 and all subject selector value origins. A client assigned an access profile gains no authority that
 the matching complete grant and definition ceiling do not already permit.
+
+Enter the copied project:
+
+```sh test-cwd="first-evidence-assertion"
+cd adult-status
+```
 
 Run the project check before changing fixtures:
 
@@ -114,7 +120,7 @@ matching `evidence` first on `PATH`.
 Use machine output in CI and keep the report with the build evidence rather than in the authored
 project:
 
-```sh
+```sh test-skip="writes the report to the reader's own build-evidence directory"
 evidencectl --format json test . \
   --target local-target.yaml \
   --deny-warnings \
