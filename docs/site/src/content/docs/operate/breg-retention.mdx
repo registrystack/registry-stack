@@ -23,7 +23,7 @@ snapshot coverage afterwards, drop expired Evidence and idempotency material, an
 journal.
 
 Every command here reads the runtime file and connects to PostgreSQL directly with the migration
-credential, so run it from the operator host. The erasures and the rebaseline take the registry's
+credential, so run it from the operator host. The erasures and the [rebaseline](../../reference/glossary/#rebaseline) take the registry's
 migration lock: run them while no activation is in progress. A database whose certificate a
 private authority issued is trusted through `database.trustedRootCertificateRef` in the same runtime
 file. Every path you pass must be absolute. Reports carry counts, never record values.

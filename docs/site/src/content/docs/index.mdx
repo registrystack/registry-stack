@@ -14,7 +14,7 @@ standards_referenced: []
 Registry Stack provides focused components for institutions that manage authoritative data and the
 services around it.
 
-## Answer a bounded question with Registry Evidence
+## Answer a question with Evidence Gateway
 
 Use Registry Evidence when a caller needs a signed, minimum-disclosure answer rather than a record.
 Start with the [Registry Evidence overview](start/evidence-quickstart/) and
@@ -32,7 +32,7 @@ PostgreSQL. Start with the [BReg overview](start/breg-quickstart/) and
 
 Use Registry Casework when authorized people must review a bounded request before its producer
 continues under independent business authority. Start with the [Casework overview](start/casework/) and
-[decide your first review request](tutorials/first-casework/).
+[decide your first ReviewRequest](tutorials/first-casework/).
 
 <DocsetProduct product="registry-messaging">
 
@@ -67,8 +67,8 @@ alternatives.
 
 ## Keep the product boundaries clear
 
-BReg owns its PostgreSQL records and API. Registry Evidence owns bounded question answering, signing,
-and minimum disclosure against its configured sources. Manifest publishes static metadata. These
+BReg owns its PostgreSQL records and API. Evidence Gateway owns evaluation, signing, and minimum
+disclosure against its configured sources. Manifest publishes static metadata. These
 components do not configure or deploy one another.
 
 Registry Stack does not decide legal authority, data ownership, eligibility, or institutional

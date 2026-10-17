@@ -19,7 +19,7 @@ import ConfigurationReference from '../../../components/ConfigurationReference.a
 import reference from '../../../data/generated/breg-configuration.json';
 
 If you are verifying a Base Registry Engine (BReg) project, compile it offline, inspect what the
-compiler derived, and run its journeys against an isolated database before packaging it. Start
+compiler derived, and run its [journeys](../../reference/glossary/#journey) against an isolated database before packaging it. Start
 from the facility template in [Author a registry project](../breg/):
 
 ```sh
@@ -122,7 +122,7 @@ bregctl test facility --runtime-config /path/to/runtime-test.yaml \
   --credentials /path/to/credentials.yaml --output /path/to/test-receipt.json
 ```
 
-A passing run writes a receipt for that exact candidate; packaging accepts it and refuses changed
+A passing run writes a [receipt](../../reference/glossary/#receipt) for that exact candidate; packaging accepts it and refuses changed
 inputs. A refused step names the failure; repair it and rerun into a fresh receipt path.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs; crates/registry-bregctl/src/check.rs;

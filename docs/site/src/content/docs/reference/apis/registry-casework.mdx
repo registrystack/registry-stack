@@ -33,7 +33,7 @@ profile selects authority the token already holds and adds no scope. A refused t
 `authentication.refused` (401); a profile that does not cover the route is
 `profile.not-authorized` (403).
 
-Task, history, clock, and note routes also accept `Registry-Source-Profile`, which work whose context
+Task, history, clock, and note routes also accept [`Registry-Source-Profile`](../../glossary/#registry-source-profile), which work whose context
 comes from a context provider requires (`source-profile.required`). Producer, policy, and
 accountability routes refuse it with `source-profile.not-applicable`.
 

@@ -95,7 +95,7 @@ Definition adult-status: urn:example:requirement:adult-status:v1
   Outputs: {"adult":{"concept":"urn:example:concept:adult-status:v1","type":"boolean"}}; grant ceiling: {"actorKinds":["service"],"audiences":["urn:example:audience:standalone-app"],"authorities":["organizational"],"valueOrigins":["request"]}
 ```
 
-`adult-status` is an assertion definition: one fixed question, named by its
+`adult-status` is an [assertion definition](../../reference/glossary/#assertion-definition): one fixed question, named by its
 [Requirement URI](../../reference/glossary/#requirement). It reads the source `person-record`
 and may return one output, the Boolean `adult`. The report goes on to three other definitions.
 

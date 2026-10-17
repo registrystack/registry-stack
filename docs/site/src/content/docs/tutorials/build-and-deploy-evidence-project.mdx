@@ -173,7 +173,7 @@ Provision secret:file/synthetic-source-token
 Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config candidate/runtime.yaml`.
 ```
 
-`candidate` is the deployment candidate. The package digest identifies its immutable `bundle/`:
+`candidate` is the [deployment candidate](../../reference/glossary/#deployment-candidate). The package digest identifies its immutable `bundle/`:
 the same project and target produce the same digest, so record it. Before writing, `package`
 checks the bundle and runs every fixture through the `evidence` binary it finds through
 `EVIDENCE_BIN` or on `PATH`, so you need no separate `evidencectl test`. It runs offline,
