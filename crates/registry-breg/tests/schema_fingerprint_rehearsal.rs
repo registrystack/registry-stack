@@ -157,6 +157,7 @@ async fn activation_refuses_a_non_utf8_database_with_fresh_install_recovery() {
         PostgresKernelError::Configuration(message)
             if message.contains("server_encoding must be UTF8")
                 && message.contains("fresh UTF8 database")
+                && message.contains("CREATE DATABASE <name> ENCODING 'UTF8' TEMPLATE template0")
     ));
     drop(migration);
     migration_task.abort();
