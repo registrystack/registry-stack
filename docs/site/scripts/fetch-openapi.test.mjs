@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import { test } from 'node:test';
 import YAML from 'yaml';
 
+import { docsetPublishesBregOpenApi } from './fetch-openapi.mjs';
+
 const run = promisify(execFile);
 const fetchOpenapi = resolve(import.meta.dirname, 'fetch-openapi.mjs');
 const caseworkPath = 'products/casework/generated/registry-casework.openapi.json';
@@ -230,5 +232,18 @@ test('BReg OpenAPI is published by the current docset and by release docsets fro
     await assert.rejects(readFile(renderedOutput, 'utf8'), { code: 'ENOENT' });
   } finally {
     await rm(source, { recursive: true, force: true });
+  }
+});
+
+test('BReg OpenAPI is absent from the beta archives that predate release version ids', async () => {
+  for (const id of ['beta-5', 'beta-3', 'beta-2026-06-12']) {
+    assert.equal(docsetPublishesBregOpenApi({ id }, 'latest'), false, id);
+  }
+  assert.throws(() => docsetPublishesBregOpenApi({ id: 'v0.42' }, 'latest'), /is not a release version/);
+
+  // Every docset the site declares resolves, so any archive can be rebuilt.
+  const declared = YAML.parse(await readFile(resolve(import.meta.dirname, '../src/data/docsets.yaml'), 'utf8'));
+  for (const docset of declared.docsets) {
+    assert.equal(typeof docsetPublishesBregOpenApi(docset, declared.current), 'boolean', docset.id);
   }
 });

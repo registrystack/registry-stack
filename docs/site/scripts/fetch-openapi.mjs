@@ -75,6 +75,8 @@ const bregOpenApiFloor = [0, 42, 0];
  */
 export function docsetPublishesBregOpenApi(docset, currentId) {
   if (docset.id === currentId) return true;
+  // The beta archives predate release version ids and the floor.
+  if (/^beta-/.test(docset.id)) return false;
   const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(docset.id);
   if (!match) throw new Error(`registry-breg: docset id ${docset.id} is not a release version`);
   const version = match.slice(1).map(Number);
