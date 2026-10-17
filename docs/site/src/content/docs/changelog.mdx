@@ -747,12 +747,12 @@ relevant product pages on this site rather than duplicating release notes.
   carry a required `externalReferences` array of opaque `{product, recordType, identifier}`
   links, a hold or direct booking may send it, and a reschedule must omit it.
   `GET /v1/appointments` lists the caller's own appointments carrying one exact reference.
-  Migration 10 stores the references, so run `schedulingctl plan` and `apply` before restarting,
-  and upgrade the runtime before any client sends the field.
+  The fresh-install baseline stores the references, so configure and apply a fresh database before
+  restarting, and upgrade the runtime before any client sends the field.
 
 {/* Evidence: crates/registry-scheduling-core/src/wire.rs, ExternalReference;
     crates/registry-scheduling/src/http.rs, list_appointments and bounded_external_reference;
-    crates/registry-scheduling/migrations/0010_external_references.sql. */}
+    crates/registry-scheduling/migrations/0001_scheduling.sql. */}
 
 - BREAKING: an Evidence requirement's `subjectRoles[].role` is limited to 64 bytes instead of 128,
   in the bundle schema and at startup. Shorten a longer role and every input that names it before
