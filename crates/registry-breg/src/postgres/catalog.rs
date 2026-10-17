@@ -145,7 +145,11 @@ pub async fn catalog_drift_objects(
     let mut differences = BTreeSet::new();
     let rows = client
         .query(
-            "SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' ELSE 'sequence' END,
+            "SELECT 'schema', n.nspname::text
+         FROM pg_catalog.pg_namespace n
+         WHERE n.nspname = ANY($1::text[])
+         UNION ALL
+         SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' ELSE 'sequence' END,
                 n.nspname || '.' || c.relname
          FROM pg_catalog.pg_class c
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -166,7 +170,6 @@ pub async fn catalog_drift_objects(
     let expected_objects: BTreeSet<(String, String)> = expected_catalog
         .objects
         .iter()
-        .filter(|object| object.kind != ManagedObjectKind::Schema)
         .map(|object| (object.kind.as_str().to_owned(), object.name.clone()))
         .collect();
     for (_, name) in actual_objects.symmetric_difference(&expected_objects) {
@@ -261,6 +264,19 @@ pub async fn catalog_drift_objects(
             }
         }
     }
+
+    // A deleted schema is named once; the objects it held are not named
+    // again, so they do not crowd the bounded inventory.
+    let deleted_schemas: Vec<String> = MANAGED_SCHEMAS
+        .iter()
+        .filter(|schema| !actual_objects.contains(&("schema".to_owned(), (**schema).to_owned())))
+        .map(|schema| format!("{schema}."))
+        .collect();
+    differences.retain(|name| {
+        !deleted_schemas
+            .iter()
+            .any(|prefix| name.starts_with(prefix.as_str()))
+    });
 
     Ok(differences
         .into_iter()

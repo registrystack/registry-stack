@@ -1773,6 +1773,33 @@ async fn assert_catalog_drift_is_rejected(
         );
     }
 
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP SCHEMA registry_data CASCADE",
+        )
+        .await
+        .expect("test administrator deletes a managed schema");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the deleted schema");
+    assert!(
+        named_drift.contains(&"registry_data".to_owned()),
+        "{named_drift:?}"
+    );
+    assert!(
+        !named_drift
+            .iter()
+            .any(|name| name.starts_with("registry_data.")),
+        "{named_drift:?}"
+    );
+
     let unique: tokio_postgres::Row = database
         .admin
         .query_one(

@@ -284,7 +284,7 @@
   `startup.database.authentication-refused`, `startup.database.missing`,
   `startup.database.timeout`, `startup.database.configuration-refused`, or
   `startup.database.secret-refused`, replacing `startup.database.connection-refused`.
-  Missing or extra managed tables, views, sequences, functions, and indexes, and a
+  Missing or extra managed schemas, tables, views, sequences, functions, and indexes, and a
   removed unique constraint, required column, or required column's `NOT NULL`
   marker, report `startup.database.catalog-drift` and name up to 64 affected
   identifiers instead of `startup.database.unready`. After each repair, rerun `doctor` to find any
