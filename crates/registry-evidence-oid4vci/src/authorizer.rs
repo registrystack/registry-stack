@@ -173,7 +173,7 @@ fn fetch_url_policy(config: &OfferAuthorizationConfig, mode: ValidationMode) -> 
     }
     let allow_insecure_http = config.allow_insecure_http || supervised_local_http;
     IssuerNetworkPolicy::new(&config.issuer, allow_insecure_http)
-        .and_then(|network| network.jwks_fetch_policy(&config.jwks_uri))
+        .map(|network| network.declared_jwks_fetch_policy())
         .unwrap_or_else(|_| FetchUrlPolicy::strict())
 }
 
@@ -312,7 +312,19 @@ mod tests {
         );
         let supervised =
             fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment);
-        assert_eq!(supervised.allowed_schemes, ["http"]);
+        assert!(supervised
+            .allowed_schemes
+            .iter()
+            .any(|scheme| scheme == "http"));
         assert!(!supervised.deny_private_ranges);
+
+        // The key set is declared configuration, so a supervised local group
+        // may serve it from another loopback port than the issuer.
+        config.offers.jwks_uri = "http://127.0.0.1:8082/.well-known/jwks.json".to_owned();
+        fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment)
+            .validate_dns_pinned_for_immediate_fetch(
+                &reqwest::Url::parse(&config.offers.jwks_uri).unwrap(),
+            )
+            .expect("a declared key set on another loopback port is accepted");
     }
 }

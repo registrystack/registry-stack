@@ -1030,9 +1030,7 @@ impl RuntimeConfig {
                 .map_err(|_| RuntimeConfigError::Oidc)?;
         let fetcher = match &provider.jwks_source {
             JwksSource::Uri { uri } => {
-                let policy = network
-                    .jwks_fetch_policy(uri.as_str())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let policy = network.declared_jwks_fetch_policy();
                 JwksFetcher::new_with_fetch_url_policy(
                     uri.to_string(),
                     JwksFetcherConfig::defaults(),

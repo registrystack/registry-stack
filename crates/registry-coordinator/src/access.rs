@@ -319,7 +319,7 @@ impl AccessConfig {
                             .await;
                     }
                 };
-                let policy = network.jwks_fetch_policy(&uri).map_err(|_| refused())?;
+                let policy = network.declared_jwks_fetch_policy();
                 Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     uri,
                     JwksFetcherConfig::defaults(),

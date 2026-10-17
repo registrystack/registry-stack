@@ -63,12 +63,18 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
 
 ## Security Notes
 
-- `fetch_discovery_for_issuer` admits private addresses for the configured issuer and a
-  same-origin `jwks_uri`. It always denies cloud metadata and denies private addresses for a
-  cross-origin `jwks_uri`.
+- Endpoints the operator declares inherit the declared-issuer allowance: the configured issuer
+  and a configured JWKS URI (`IssuerNetworkPolicy::declared_jwks_fetch_policy`) may resolve to
+  private or loopback addresses on any origin. Endpoints returned by discovery
+  (`IssuerNetworkPolicy::discovered_endpoint_fetch_policy`) inherit it only on the issuer's own
+  origin; a discovered cross-origin endpoint stays strict and may not resolve to a private or
+  loopback address. Cloud metadata and link-local addresses are denied in every case.
+- `fetch_discovery_for_issuer` applies those rules to the issuer, a configured JWKS URI, and a
+  discovered `jwks_uri`, and names the remedy when a policy refuses one, without repeating the
+  address.
 - Plain HTTP is accepted on IPv4 and IPv6 loopback. Elsewhere it requires the product's explicit
-  `allowInsecureHttp: true` operator setting. The returned JWKS policy carries that decision
-  without weakening the cross-origin private-address rule.
+  `allowInsecureHttp: true` operator setting, which covers the issuer's origin and a configured
+  JWKS URI. A discovered cross-origin endpoint must use HTTPS whatever that setting says.
 - `fetch_discovery` and `JwksFetcher::new` retain their strict defaults for callers that do not
   have an operator-declared issuer policy.
 - Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the

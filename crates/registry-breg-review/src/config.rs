@@ -710,12 +710,17 @@ fn loopback_host(url: &url::Url) -> bool {
 /// opt-in, with no user information or fragment.
 pub(crate) fn allowed_discovered_endpoint(
     url: &url::Url,
+    issuer: &url::Url,
     development: bool,
     allow_insecure_http: bool,
 ) -> bool {
+    // The plain HTTP opt-in covers only the issuer's own origin.
     let secure = match url.scheme() {
         "https" => true,
-        "http" => allow_insecure_http || (development && loopback_host(url)),
+        "http" => {
+            (allow_insecure_http && url.origin() == issuer.origin())
+                || (development && loopback_host(url))
+        }
         _ => false,
     };
     secure
@@ -1489,43 +1494,52 @@ audit:
     #[test]
     fn a_discovered_endpoint_follows_the_mode() {
         let parse = |text: &str| url::Url::parse(text).expect("url");
+        let issuer = parse("http://id.example");
         assert!(allowed_discovered_endpoint(
             &parse("https://id.example/token"),
+            &issuer,
             false,
             false,
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("http://127.0.0.1:9000/token"),
+            &issuer,
             false,
             false,
         ));
         assert!(allowed_discovered_endpoint(
             &parse("http://127.0.0.1:9000/token"),
+            &issuer,
             true,
             false,
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("http://id.example/token"),
+            &issuer,
             true,
             false,
         ));
         assert!(allowed_discovered_endpoint(
             &parse("http://id.example/token"),
+            &issuer,
             false,
             true,
         ));
-        assert!(allowed_discovered_endpoint(
+        assert!(!allowed_discovered_endpoint(
             &parse("http://keys.example/token"),
+            &issuer,
             false,
             true,
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("https://user@id.example/token"),
+            &issuer,
             false,
             false,
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("https://id.example/token#a"),
+            &issuer,
             false,
             false,
         ));

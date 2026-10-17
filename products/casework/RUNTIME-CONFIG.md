@@ -118,13 +118,17 @@ answering fails within seconds. The TCP user timeout applies on Linux only.
 `authentication.oidc` requires `issuer` and `audience`. The issuer is an exact
 `https` URL without credentials, query, or fragment. Its declared origin may resolve to a
 private address, and a discovery document may name a same-origin private `jwks_uri`.
-Cloud metadata addresses and a cross-origin private `jwks_uri` are always refused.
+A cross-origin private `jwks_uri` named by discovery is refused, and cloud metadata and
+link-local addresses are always refused.
 Plain `http` is accepted on IPv4 and IPv6 loopback when `listener.tlsTermination` is
 `development-loopback`. Set `allowInsecureHttp: true` beside `issuer` to permit it
-elsewhere; startup logs a warning while that setting is active.
+elsewhere; startup logs a warning while that setting is active. It covers the issuer's
+origin and a `type: uri` key set, never a cross-origin `jwks_uri` named by discovery, which
+must use `https`.
 The audience is at most 512 characters. `jwksSource` defaults to `type: discovery`.
-`type: uri` with `uri` fetches the key set from a fixed address under the same network
-policy instead of the one discovery names. `type: static` with `documentRef` reads a
+`type: uri` with `uri` fetches the key set from a fixed address instead of the one
+discovery names; as an endpoint you declare, it inherits the declared issuer's allowance and
+may resolve to a private or loopback address on any origin. `type: static` with `documentRef` reads a
 pinned key set, which does no rotation of its own. The removed `jwksUri` key is refused
 with a diagnostic
 naming `jwksSource` `type: uri` as its replacement. `allowedClients` lists the

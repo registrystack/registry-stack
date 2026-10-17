@@ -1861,9 +1861,7 @@ impl OidcVerifierConfig {
                 )))
             }
             OidcJwksSource::Uri { uri } => {
-                let policy = network
-                    .jwks_fetch_policy(uri)
-                    .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+                let policy = network.declared_jwks_fetch_policy();
                 Ok(Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     uri.clone(),
                     self.jwks_fetcher_config(),

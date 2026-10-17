@@ -492,6 +492,7 @@ fn limiter(rate: RateLimitConfig) -> Result<TokenBucketLimiter, RuntimeError> {
 fn discovered_endpoint(
     document: &registry_platform_oidc::DiscoveryDocument,
     member: &str,
+    issuer: &Url,
     development: bool,
     allow_insecure_http: bool,
 ) -> Result<Url, RuntimeError> {
@@ -500,7 +501,7 @@ fn discovered_endpoint(
         .get(member)
         .and_then(serde_json::Value::as_str)
         .and_then(|value| Url::parse(value).ok())
-        .filter(|url| allowed_discovered_endpoint(url, development, allow_insecure_http))
+        .filter(|url| allowed_discovered_endpoint(url, issuer, development, allow_insecure_http))
         .ok_or_else(|| {
             RuntimeError::Discovery(format!(
                 "{member} is missing or is not an endpoint this runtime may call"
@@ -640,6 +641,8 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     }
     let network = IssuerNetworkPolicy::new(&issuer, config.sign_in.allow_insecure_http)
         .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
+    let issuer_url =
+        Url::parse(&issuer).map_err(|error| RuntimeError::Discovery(error.to_string()))?;
     let (discovery, jwks_policy) = fetch_discovery_for_issuer(
         &OidcDiscoveryConfig {
             issuer: issuer.clone(),
@@ -654,12 +657,14 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     let authorization_endpoint = discovered_endpoint(
         &discovery,
         "authorization_endpoint",
+        &issuer_url,
         development,
         config.sign_in.allow_insecure_http,
     )?;
     let token_endpoint = discovered_endpoint(
         &discovery,
         "token_endpoint",
+        &issuer_url,
         development,
         config.sign_in.allow_insecure_http,
     )?;
@@ -688,7 +693,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         jwks,
     );
     let token_policy = network
-        .jwks_fetch_policy(token_endpoint.as_str())
+        .discovered_endpoint_fetch_policy(token_endpoint.as_str())
         .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
     let sign_in_client = sign_in_client(&config, token_endpoint, client_key, token_policy)?;
 
@@ -900,8 +905,8 @@ mod tests {
         };
 
         for member in ["authorization_endpoint", "token_endpoint"] {
-            assert!(discovered_endpoint(&document, member, false, false).is_err());
-            discovered_endpoint(&document, member, false, true)
+            assert!(discovered_endpoint(&document, member, &issuer, false, false).is_err());
+            discovered_endpoint(&document, member, &issuer, false, true)
                 .expect("the production opt-in carries into the same-origin endpoint");
         }
 
@@ -909,22 +914,28 @@ mod tests {
             "token_endpoint".to_owned(),
             serde_json::json!("http://93.184.216.34/token"),
         );
-        let cross_origin = discovered_endpoint(&document, "token_endpoint", false, true)
-            .expect("the shared policy may admit a public cross-origin HTTP endpoint");
-        let policy = IssuerNetworkPolicy::new(issuer.as_str(), true)
+        assert!(
+            discovered_endpoint(&document, "token_endpoint", &issuer, false, true).is_err(),
+            "the opt-in does not extend plain HTTP to another origin"
+        );
+        let cross_origin = Url::parse("http://93.184.216.34/token").unwrap();
+        let error = IssuerNetworkPolicy::new(issuer.as_str(), true)
             .unwrap()
-            .jwks_fetch_policy(cross_origin.as_str())
-            .unwrap();
-        policy
+            .discovered_endpoint_fetch_policy(cross_origin.as_str())
+            .unwrap()
             .validate_dns_pinned_for_immediate_fetch(&cross_origin)
-            .expect("the explicit opt-in admits a public cross-origin HTTP endpoint");
+            .expect_err("a cross-origin endpoint must use https");
+        assert!(matches!(
+            error,
+            registry_platform_httputil::FetchUrlError::SchemeDenied { .. }
+        ));
         for refused in [
-            Url::parse("http://10.20.30.40/token").unwrap(),
-            Url::parse("http://169.254.169.254/token").unwrap(),
+            Url::parse("https://10.20.30.40/token").unwrap(),
+            Url::parse("https://169.254.169.254/token").unwrap(),
         ] {
             let error = IssuerNetworkPolicy::new(issuer.as_str(), true)
                 .unwrap()
-                .jwks_fetch_policy(refused.as_str())
+                .discovered_endpoint_fetch_policy(refused.as_str())
                 .unwrap()
                 .validate_dns_pinned_for_immediate_fetch(&refused)
                 .expect_err("cross-origin private and metadata endpoints remain denied");
