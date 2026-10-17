@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{
     AccessProfileSource, ActionEffectSource, ActionSource, ActionValueSource, FieldTypeSource,
-    Operation, ProjectAccessProfileSource, RowBoundarySource,
+    Operation, ProjectAccessProfileSource, RowBoundarySource, DECIMAL_BOUNDS_REQUIREMENTS,
 };
 use crate::diagnostics::Diagnostic;
 use crate::logical_names::{default_api_name, reserved_logical_name, valid_api_name};
@@ -2242,7 +2242,7 @@ fn validate_field_type_bounds(
             errors.push(Diagnostic::error(
                 "breg.action.input-decimal-bounds-invalid",
                 path,
-                "decimal precision, scale, or canonical bounds are invalid",
+                DECIMAL_BOUNDS_REQUIREMENTS,
             ));
         }
         FieldTypeSource::Reference { target, .. } if target.is_empty() => {

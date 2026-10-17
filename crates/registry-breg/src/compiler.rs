@@ -19,11 +19,11 @@ use crate::contract::{
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
-    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
-    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
-    MAX_STRUCTURED_VALUE_BYTES,
+    WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS,
+    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -2579,7 +2579,7 @@ fn validate_entity_fields(
                 errors.push(Diagnostic::error(
                     "breg.field.decimal-bounds-invalid",
                     format!("recordTypes[id={}].fields[id={}]", entity.id, field.id),
-                    "decimal precision, scale, or canonical bounds are invalid; precision must be 1 to 38, scale must not exceed precision, minimum and maximum must carry exactly scale fractional digits within precision, and minimum must not exceed maximum",
+                    DECIMAL_BOUNDS_REQUIREMENTS,
                 ));
             }
             FieldTypeSource::Reference { target, .. } if !entities.contains_key(target) => {
@@ -2823,7 +2823,7 @@ fn validate_field_type_bounds(
             errors.push(Diagnostic::error(
                 "breg.field.decimal-bounds-invalid",
                 path,
-                "decimal precision, scale, or canonical bounds are invalid",
+                DECIMAL_BOUNDS_REQUIREMENTS,
             ));
         }
         FieldTypeSource::Crs84Point { precision, bbox }

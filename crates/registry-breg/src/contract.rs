@@ -3193,6 +3193,8 @@ pub(crate) fn decimal_scaled_value(value: &str, precision: u8, scale: u8) -> Opt
     }
 }
 
+pub(crate) const DECIMAL_BOUNDS_REQUIREMENTS: &str = "decimal precision, scale, or canonical bounds are invalid; precision must be between 1 and 38, scale must not exceed precision, each bound must be canonical, carry exactly scale fractional digits, and have integer digits that fit precision minus scale, and minimum must not exceed maximum";
+
 pub(crate) fn valid_decimal_bounds(
     precision: u8,
     scale: u8,
