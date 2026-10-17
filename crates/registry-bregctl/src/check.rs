@@ -56,6 +56,7 @@ const REBUILD_PACKAGE: &str = "Rebuild the package with bregctl package PROJECT 
 
 /// What `bregctl check` was asked to check.
 pub(super) struct Request<'a> {
+    pub(super) prior_evidence_export: Option<&'a Path>,
     pub(super) project: Option<&'a Path>,
     pub(super) package: Option<&'a Path>,
     pub(super) production: bool,
@@ -110,6 +111,35 @@ pub(super) fn run(
     let subject = match (request.project, request.package) {
         (Some(project), None) => {
             let compiled = check_project(project, profile, &mut outcome);
+            if let (Some(registry), Some(path)) = (compiled.as_ref(), request.prior_evidence_export)
+            {
+                match read_file(
+                    path,
+                    &path.display().to_string(),
+                    "breg.evidence-source.unavailable",
+                ) {
+                    Ok(bytes) => {
+                        outcome.files += 1;
+                        match registry_breg::evidence_source::check_prior_export(
+                            registry,
+                            &path.display().to_string(),
+                            &bytes,
+                        ) {
+                            Ok(diagnostics) => {
+                                for diagnostic in diagnostics {
+                                    outcome.report.push(compiler_diagnostic(diagnostic));
+                                }
+                            }
+                            Err(report) => outcome.report.extend(*report),
+                        }
+                    }
+                    Err(problem) => {
+                        outcome.unavailable |= problem.unavailable;
+                        outcome.report.push(compiler_diagnostic(problem.diagnostic));
+                    }
+                }
+            }
+
             if let Some(runtime) = request.runtime_config {
                 check_runtime_file(
                     runtime,

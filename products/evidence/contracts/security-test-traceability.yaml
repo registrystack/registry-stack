@@ -3,6 +3,11 @@ entries:
   - id: sec-target-authority-atomic-activation
     tests:
       - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_idempotent_and_keeps_durable_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: refusal_is_audited_without_activation_and_operator_reference_is_hashed}
+      - {file: crates/registry-evidence/src/authority.rs, name: audit_commit_failure_never_acknowledges_an_activation}
+      - {file: crates/registry-evidence/src/authority.rs, name: configured_audit_failure_preserves_pending_record_for_retry}
+      - {file: crates/registry-evidence/src/audit.rs, name: local_inspection_accepts_activation_records_beside_evidence_operations}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_uses_configured_audit_without_source_or_signer_initialization}
       - {file: crates/registry-evidence/src/authority.rs, name: activation_retry_requires_durable_state_and_parent_entries}
       - {file: crates/registry-evidence/src/authority.rs, name: invalid_or_out_of_ceiling_authority_never_replaces_active_snapshot}
       - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_serializes_concurrent_writers}
@@ -437,6 +442,7 @@ entries:
       - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
   - id: sec-search-then-fetch-bounded
     tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: optional_fetch_policy_preserves_failure_classes_in_single_and_batch_requests}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}

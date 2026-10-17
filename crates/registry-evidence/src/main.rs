@@ -203,12 +203,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Authority { command } => {
             use registry_evidence::{authority, cli::AuthorityCommand};
-            let (runtime_path, document) = match command {
+            let (runtime_path, document, operator_reference, audit_only) = match command {
                 AuthorityCommand::Activate {
                     runtime_config,
                     document,
-                } => (runtime_config, Some(document)),
-                AuthorityCommand::History { runtime_config } => (runtime_config, None),
+                    operator_reference,
+                } => (runtime_config, Some(document), operator_reference, false),
+                AuthorityCommand::History { runtime_config } => (runtime_config, None, None, false),
+                AuthorityCommand::Audit { runtime_config } => (runtime_config, None, None, true),
             };
             // Operator inspection and authority activation need the closed
             // configuration, not source extracts, credentials or a signer.
@@ -253,15 +255,38 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     Ok(document) => {
                         let bundle =
                             Bundle::load_pinned(&runtime.package).map_err(deployment_load_error)?;
-                        authority::activate(
+                        let secrets = runtime.secret_providers.resolver().map_err(|_| {
+                            CommandError::Cli(CliError("activation audit secrets are unavailable"))
+                        })?;
+                        let secret = secrets
+                            .resolve(bundle.config.audit.key.hash_key_ref.as_str())
+                            .map_err(|_| {
+                                CommandError::Cli(CliError("activation audit key is unavailable"))
+                            })?;
+                        let destination = runtime.audit.destination().map_err(|_| {
+                            CommandError::Cli(CliError("activation audit destination is invalid"))
+                        })?;
+                        let audit = registry_evidence::audit::EvidenceAuditLog::initialize(
+                            destination,
+                            secret.expose_secret().to_vec(),
+                            bundle.config.audit.hash_key_version.get(),
+                        )
+                        .await
+                        .map_err(|_| {
+                            CommandError::Cli(CliError("activation audit is unavailable"))
+                        })?;
+                        authority::activate_with_operator(
                             &binding.root,
                             &binding.target,
                             &bundle.config,
                             bundle.package_digest(),
                             &document,
+                            operator_reference.as_deref(),
+                            &audit,
                         )
+                        .await
                         .map(|snapshot| {
-                            println!(
+                            eprintln!(
                                 "ACTIVATED {} {} sequence={}",
                                 snapshot.revision(),
                                 snapshot.digest(),
@@ -271,6 +296,15 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     }
                     Err(error) => Err(error),
                 }
+            } else if audit_only {
+                authority::activation_audit(&binding.root).map(|entries| {
+                    for entry in entries {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&entry).expect("activation audit serializes")
+                        );
+                    }
+                })
             } else {
                 authority::history(&binding.root).map(|entries| {
                     for entry in entries {
@@ -2188,7 +2222,11 @@ fn evaluate_fixture_acquisition(
                 requirement,
             ))
         }
-        AcquisitionConfig::SearchThenFetch { search, fetch } => {
+        AcquisitionConfig::SearchThenFetch {
+            search,
+            fetch,
+            on_fetch_no_match,
+        } => {
             if case.contains_key("source") {
                 return Err(CliError("search-then-fetch fixture must use sources"));
             }
@@ -2283,6 +2321,7 @@ fn evaluate_fixture_acquisition(
                 ),
                 &fetch_response,
                 "fetch",
+                *on_fetch_no_match == registry_evidence::config::FetchNoMatchPolicy::Unavailable,
             ) {
                 Ok(facts) => facts,
                 Err(outcome) => return Ok(outcome),
@@ -2389,7 +2428,7 @@ fn evaluate_fixture_acquisition(
                         Err(outcome) => return Ok(outcome),
                     },
                     StageRole::Member => {
-                        match record_dependent_lookup(trace, lookup, &response, role) {
+                        match record_dependent_lookup(trace, lookup, &response, role, false) {
                             Ok(facts) => facts,
                             Err(outcome) => return Ok(outcome),
                         }
@@ -2522,8 +2561,12 @@ fn record_dependent_lookup(
     lookup: Result<LookupResult, KernelError>,
     response: &Value,
     role: &str,
+    optional: bool,
 ) -> Result<BTreeMap<String, Value>, Result<KernelOutcome, KernelError>> {
     match lookup {
+        Ok(LookupResult::NoMatch) if optional => {
+            record_lookup(trace, Ok(LookupResult::NoMatch), response)
+        }
         Ok(LookupResult::Match(facts)) => {
             trace.record(
                 Stage::Extract,
@@ -3260,7 +3303,11 @@ async fn evaluate_reference_fixture(
                     1,
                 )
             }
-            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+            AcquisitionConfig::SearchThenFetch {
+                search,
+                fetch,
+                on_fetch_no_match,
+            } => {
                 let responses = case
                     .get("responses")
                     .and_then(Value::as_object)
@@ -3383,6 +3430,12 @@ async fn evaluate_reference_fixture(
                     &fetch_preparation_selectors,
                     &prior_facts,
                 ) {
+                    Ok(LookupResult::NoMatch)
+                        if *on_fetch_no_match
+                            == registry_evidence::config::FetchNoMatchPolicy::Unavailable =>
+                    {
+                        LookupResult::NoMatch
+                    }
                     Ok(LookupResult::NoMatch | LookupResult::Ambiguous) => {
                         trace.record_with(
                             Stage::Extract,
@@ -5622,6 +5675,34 @@ mod tests {
     use registry_evidence::verifier::{ExpectedListItemForm, ExpectedValueForm};
     use std::fs;
 
+    #[test]
+    fn optional_fetch_fixture_matches_runtime_no_match_policy() {
+        for optional in [false, true] {
+            let result = record_dependent_lookup(
+                &mut FixtureTrace::default(),
+                Ok(LookupResult::NoMatch),
+                &serde_json::json!({}),
+                "fetch",
+                optional,
+            );
+            if optional {
+                assert!(matches!(result, Err(Ok(KernelOutcome::NoMatch))));
+            } else {
+                assert!(matches!(result, Err(Err(KernelError::SourceProtocol))));
+            }
+            assert!(matches!(
+                record_dependent_lookup(
+                    &mut FixtureTrace::default(),
+                    Ok(LookupResult::Ambiguous),
+                    &serde_json::json!({}),
+                    "fetch",
+                    optional
+                ),
+                Err(Err(KernelError::SourceProtocol))
+            ));
+        }
+    }
+
     fn file_secret_providers() -> SecretProvidersConfig {
         SecretProvidersConfig {
             file: Some(registry_platform_config::FileSecretProviderConfig {
@@ -6733,6 +6814,7 @@ mod tests {
             refuse_replayed_statement_stages(
                 &chained,
                 &AcquisitionConfig::SearchThenFetch {
+                    on_fetch_no_match: Default::default(),
                     search: STATEMENT_SOURCE.to_owned(),
                     fetch: format!("{STATEMENT_SOURCE}-fetch"),
                 },
@@ -6752,6 +6834,7 @@ mod tests {
             refuse_replayed_statement_stages(
                 &recorded,
                 &AcquisitionConfig::SearchThenFetch {
+                    on_fetch_no_match: Default::default(),
                     search: "registered-birth-date".to_owned(),
                     fetch: "registered-birth-parents".to_owned(),
                 },

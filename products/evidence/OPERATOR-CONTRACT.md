@@ -140,11 +140,34 @@ bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
 evidence authority activate --runtime-config '<candidate>/runtime.yaml' \
-  --document '<candidate>/compiled-authority.yaml'
+  --document '<candidate>/compiled-authority.yaml' --operator-reference '<change-reference>'
 evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<editable-project>' --target '<deployment-target>'
 evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
+
+Activation writes an `evidence-activation-audit/v1` response entry through the
+runtime's configured audit destination. It resolves only the audit key and sink,
+without initializing sources or the signer. The record carries an activation ID,
+package and authority digests, authority revision, outcome, and successful history
+sequence. The optional operator reference is retained only as a keyed hash scoped
+to that activation. It must be 1 through 256 bytes without control characters;
+use a non-secret change reference. Inspect durable records and delivery status with
+`evidence authority audit --runtime-config '<candidate>/runtime.yaml'`.
+
+The pending record and authority history commit atomically. Ceiling and target
+refusals record a refused event without replacing the active snapshot. Unreadable
+input, unusable audit setup, or unsafe storage returns failure. If audit delivery
+fails after commit, activation returns failure but the committed history remains
+inspectable. Retry with the same document to deliver the pending record without
+creating another activation or changing its operator reference. Successful retries
+do not redeliver acknowledged events. A crash between sink append and durable
+delivery acknowledgement can repeat the same activation ID, so consumers must
+accept at-least-once delivery. Failed state durability barriers never acknowledge
+success. Legacy history remains readable; reactivation adds a correlated event if
+one is absent. History and pending records share the bounded store and access controls.
+Local request-audit inspection validates activation records and skips them when
+selecting the last Evidence operation.
 
 `doctor` delegates the runtime-owned startup dependency preflight without
 opening the public listener, sending an Evidence request, or appending an
@@ -993,11 +1016,25 @@ a same-pod or same-host collector is the shape that keeps the operator
 boundary the operator intended; any wider binding must be closed by a network
 policy, and the operator owns that control.
 `evidence_http_requests_total` and `evidence_http_request_duration_seconds`
-describe the HTTP boundary only. Apart from the source shape-drift counter
-below, Version 1 publishes no source-call, signing, or credential-acquisition
-series. A slow or failing upstream source is visible as evidence-request
-duration and as the problem code the boundary returned; signing, audit-writer,
-and source-credential health are reported by `/ready` rather than by telemetry.
+describe the HTTP boundary only. Fixed source execution and assertion signing
+also publish bounded attempt counts and latency histograms:
+
+| Series | Labels | Meaning |
+|---|---|---|
+| `evidence_source_requests_total` | `source`, `outcome` | Fixed HTTP or statement attempts, including failures and cancellations |
+| `evidence_source_request_duration_seconds` | `source`, `outcome` | Attempt latency, with histogram bucket, sum and count series |
+| `evidence_signer_requests_total` | `signer="active"`, `outcome` | JWS or SD-JWT issuance attempts, excluding readiness probes |
+| `evidence_signer_request_duration_seconds` | `signer="active"`, `outcome` | Issuance latency, with histogram bucket, sum and count series |
+| `evidence_build_info` | `version`, `bundle`, `authority` | Gauge fixed at 1 for the captured package and authority revision; `package` denotes package authority |
+
+Source IDs come only from the governed bundle. Outcomes are closed categories:
+`success`, `cancelled`, `credential`, `concurrency`, `timeout`, `transport`,
+`unauthorized`, `forbidden`, `rate-limited`, `server-error`, `protocol`,
+`verification`, `statement`, `signing`, and `serialization`. Only observed
+categories emit series. No selector, subject, request ID, raw error, URL,
+credential, or signing key becomes a label. Source observations cover transport,
+projection, and response verification; assertion derivation remains visible at
+the request boundary. Upstream reachability does not decide `/ready`.
 
 One unlabeled gauge is published on the same listener. It carries none of the
 four request-boundary labels, since it reports a process-wide fact rather than
@@ -1311,7 +1348,9 @@ tuple. Only the closed exact response becomes public evidence unavailable at a
 singular or search stage; its neutral audit decision is `unresolved`, not
 `no-match`, because the upstream result may be hidden or ambiguous. The problem
 body, type, code, detail, and trace are never recorded. A mismatch and an
-unresolved fetch after unique search are dependency failures.
+unresolved fetch after unique search are dependency failures by default. A
+`search-then-fetch` acquisition may explicitly set `onFetchNoMatch: unavailable`
+for an absent optional record; ambiguity and transport failures remain 503.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 

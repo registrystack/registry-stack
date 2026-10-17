@@ -20,7 +20,7 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Connect Evidence Gateway to the public SMART Health IT FHIR R4 server through a bounded local
+Connect Registry Evidence to the public SMART Health IT FHIR R4 server through a bounded local
 read-through adapter, then verify two minimum-disclosure answers as Selective Disclosure JSON Web
 Token Verifiable Credential (SD-JWT VC) responses. You will return a coverage-record result for a
 patient and a healthcare-provider result for an organization without disclosing either FHIR resource.
@@ -39,7 +39,7 @@ patient and a healthcare-provider result for an organization without disclosing 
 
 ## Before you start
 
-Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) if you have not
+Complete [Get your first Registry Evidence assertion](../first-evidence-assertion/) if you have not
 used `evidencectl` before.
 
 The previous version of this tutorial was run against the [SMART Health IT R4 open
@@ -154,7 +154,7 @@ system and code together; unrelated coding entries cannot be combined into a pro
 
 {/* Evidence: products/evidence/examples/fhir/functions/derive-coverage-status.rhai, products/evidence/examples/fhir/functions/extract-organization.rhai, products/evidence/examples/fhir/fixtures/coverage-status.yaml, products/evidence/examples/fhir/fixtures/healthcare-establishment.yaml */}
 
-## Start Evidence Gateway
+## Start Registry Evidence
 
 Use the target explicitly and select the tutorial ports:
 
@@ -170,7 +170,7 @@ Evidence ready at http://127.0.0.1:18080
 Issuer ready at http://127.0.0.1:8082
 ```
 
-Evidence Gateway now reads the selected resources through the adapter at request time. Source
+Registry Evidence now reads the selected resources through the adapter at request time. Source
 projection removes unselected fields before extraction and derivation. Rust retains destination,
 credentials, transport, response bounds, authorization, signing, and audit ownership.
 
@@ -288,14 +288,14 @@ rm -f fhir-coverage-subjects.json fhir-organization-subjects.json
 | --- | --- |
 | Discovery finds no coherent records | The public demo may have changed. Remove partial selector files and rerun later without weakening the relationship or coding rule. |
 | The adapter cannot bind port `8000` | Check which process owns the port. Stop only an adapter you started, or use another environment with the documented ports available. |
-| Evidence Gateway refuses a source result | The record may have changed identity or shape, exceeded a bound, redirected, timed out, or disappeared. Review the current source profile before changing the project. |
+| Registry Evidence refuses a source result | The record may have changed identity or shape, exceeded a bound, redirected, timed out, or disappeared. Review the current source profile before changing the project. |
 | A production FHIR server refuses access | Use a reviewed authenticated HTTPS adapter applying the institution's FHIR trust and authorization, commonly SMART Backend Services. The anonymous public-demo configuration is local only. |
 
 ## Next
 
 - [Connect an institution source from OpenAPI](../connect-an-institution-source/) for a server
   requiring reviewed profiles and credentials.
-- [Configure Evidence Gateway](../../configure/evidence/) for production source trust and signing.
+- [Configure Registry Evidence](../../configure/evidence/) for production source trust and signing.
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/) for an application's
   independent trust decision.
 

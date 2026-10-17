@@ -242,6 +242,9 @@ pub enum SelectorField {
     Date {
         name: String,
     },
+    Uuid {
+        name: String,
+    },
     Integer {
         name: String,
         minimum: i64,
@@ -265,6 +268,7 @@ impl SelectorField {
         match self {
             Self::String { name, .. }
             | Self::Date { name }
+            | Self::Uuid { name }
             | Self::Integer { name, .. }
             | Self::Boolean { name }
             | Self::ControlledCode { name, .. } => name,
@@ -284,6 +288,7 @@ impl SelectorField {
                 SelectorValue::String(value),
             ) => (*minimum_bytes..=*maximum_bytes).contains(&(value.len() as u64)),
             (Self::Date { .. }, SelectorValue::String(value)) => canonical_date(value),
+            (Self::Uuid { .. }, SelectorValue::String(value)) => canonical_uuid(value),
             (
                 Self::Integer {
                     minimum, maximum, ..
@@ -323,6 +328,18 @@ impl DefinitionSelector {
                     .is_some_and(|value| field.accepts(value))
             })
     }
+}
+
+// UUID selectors retain the exact hyphenated hexadecimal spelling, including case.
+fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 /// Whether `value` is a calendar date spelled exactly `YYYY-MM-DD`: the
@@ -443,7 +460,9 @@ fn valid_selector_fields(fields: &[SelectorField]) -> bool {
                     && (1..=8192).contains(maximum_bytes)
                     && minimum_bytes <= maximum_bytes
             }
-            SelectorField::Date { .. } | SelectorField::Boolean { .. } => true,
+            SelectorField::Date { .. }
+            | SelectorField::Uuid { .. }
+            | SelectorField::Boolean { .. } => true,
             SelectorField::Integer {
                 minimum, maximum, ..
             } => {
@@ -1356,5 +1375,29 @@ mod tests {
         ] {
             assert!(refusal.contains(&format!("`{form}`")), "{form}: {refusal}");
         }
+    }
+}
+
+#[cfg(test)]
+mod uuid_selector_tests {
+    use super::*;
+    #[test]
+    fn uuid_metadata_enforces_exact_lexical_values() {
+        let field: SelectorField =
+            serde_json::from_value(serde_json::json!({"type":"uuid","name":"reference"})).unwrap();
+        for value in [
+            "12345678-1234-1234-1234-123456789abc",
+            "12345678-1234-1234-1234-123456789ABC",
+        ] {
+            assert!(field.accepts(&SelectorValue::String(value.to_owned())));
+        }
+        for value in [
+            "zzzzzzzz-1234-1234-1234-123456789abc",
+            "12345678_1234-1234-1234-123456789abc",
+            "12345678123412341234123456789abc",
+        ] {
+            assert!(!field.accepts(&SelectorValue::String(value.to_owned())));
+        }
+        assert!(!field.accepts(&SelectorValue::Integer(36)));
     }
 }

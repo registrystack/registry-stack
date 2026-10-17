@@ -603,7 +603,7 @@ Disabling an account or changing a group at the issuer does not update claims in
 For a compromised signing key, list its identifier under `authentication.oidc.deniedKids` and restart every serving instance with that configuration. A runtime file that denies no key has no `deniedKids` member: add the member with the identifier, and delete it again, never leave it as `[]`, when the last denied key has left the JWKS.
 That rejects all tokens signed with the denied key, including otherwise legitimate tokens.
 Static JWKS documents also require a configuration change and restart to rotate.
-[Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/) covers the Evidence Gateway rotation boundary.
+[Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/) covers the Registry Evidence rotation boundary.
 
 ### Change the issuer without losing request context
 

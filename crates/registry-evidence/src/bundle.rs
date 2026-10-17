@@ -1587,7 +1587,7 @@ fn validate_prior_fact_bindings(
         // safe answer until it does.
         match &requirement.acquisition {
             crate::config::AcquisitionConfig::Single { .. } => {}
-            crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } => {
+            crate::config::AcquisitionConfig::SearchThenFetch { search, fetch, .. } => {
                 let search_source = config
                     .sources
                     .get(search)
@@ -1785,6 +1785,7 @@ fn load_fact_schema(
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
+        .with_format("uuid", crate::selector::canonical_uuid)
         .compile(&schema)
         .map_err(|_| invalid_artifact("fact schema is not valid JSON Schema"))?;
     Ok(schema)
@@ -1809,6 +1810,7 @@ fn validate_adapter_parameters(
     let compiled = JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
+        .with_format("uuid", crate::selector::canonical_uuid)
         .compile(schema)
         .map_err(|_| invalid_artifact("adapter-parameter schema is not valid JSON Schema"))?;
     let parameters = serde_json::to_value(source.adapter_parameters())
@@ -2054,7 +2056,7 @@ fn validate_schema_node_with_empty_root(
             if object
                 .get("format")
                 .and_then(JsonValue::as_str)
-                .is_some_and(|format| !matches!(format, "date" | "date-time"))
+                .is_some_and(|format| !matches!(format, "date" | "date-time" | "uuid"))
             {
                 return Err(invalid_artifact(
                     "schema string format is outside the closed Version 1 subset",
@@ -2066,7 +2068,7 @@ fn validate_schema_node_with_empty_root(
                 .is_some_and(|maximum| maximum > 0 && maximum <= 65_536);
             let formatted = matches!(
                 object.get("format").and_then(JsonValue::as_str),
-                Some("date" | "date-time")
+                Some("date" | "date-time" | "uuid")
             );
             let enumerated = object
                 .get("enum")
@@ -5791,6 +5793,33 @@ outboundTls:
                 EXTRACT_ARTIFACT,
                 "the runtime configuration binds a source extract profile no bundle source names"
             )
+        );
+    }
+}
+
+#[cfg(test)]
+mod uuid_format_regressions {
+    use super::*;
+
+    #[test]
+    fn uuid_facts_accept_canonical_values_and_refuse_same_length_malformed_values() {
+        let schema = serde_json::json!({
+            "type": "object", "additionalProperties": false, "required": ["id"],
+            "properties": {"id": {"type": "string", "format": "uuid", "maxLength": 36}}
+        });
+        validate_closed_schema(&schema, SchemaRole::Facts)
+            .expect("UUID belongs to the fact vocabulary");
+        let validator = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .with_format("uuid", crate::selector::canonical_uuid)
+            .compile(&schema)
+            .unwrap();
+        assert!(
+            validator.is_valid(&serde_json::json!({"id": "12345678-1234-1234-1234-123456789abc"}))
+        );
+        assert!(
+            !validator.is_valid(&serde_json::json!({"id": "zzzzzzzz-1234-1234-1234-123456789abc"}))
         );
     }
 }

@@ -93,7 +93,10 @@ An acquisition is explicitly tagged with `type`:
 
 - `single` names one `source`.
 - `search-then-fetch` names `search` and `fetch`. Search facts are visible to
-  fetch preparation; only fetched facts reach assertion derivation.
+  fetch preparation; only fetched facts reach assertion derivation. Optional
+  `onFetchNoMatch: unavailable` permits an absent optional fetch record to return
+  `evidence.unavailable`; omission or `dependency-failure` retains 503.
+  Ambiguity and transport failures remain dependency failures.
 - `search-then-fetch-set` names `search`, two through four distinct fetch
   members, each member's `factInputs`, and
   `maximumAcquisitionMilliseconds`. The package and target must opt into this
@@ -344,6 +347,7 @@ assertionDefinitions.*.acquisition.fetch[].factInputs
 assertionDefinitions.*.acquisition.fetch[].factInputs[]
 assertionDefinitions.*.acquisition.fetch[].source
 assertionDefinitions.*.acquisition.maximumAcquisitionMilliseconds
+assertionDefinitions.*.acquisition.onFetchNoMatch
 assertionDefinitions.*.acquisition.search
 assertionDefinitions.*.acquisition.source
 assertionDefinitions.*.acquisition.type
@@ -780,3 +784,8 @@ project
 target
 ```
 <!-- evidence-authoring-target-authority-key-paths:end -->
+
+Selector fields support `type: uuid` for the exact 36-character hyphenated
+hexadecimal representation. No case folding or normalization occurs. Facts may
+use `type: uuid`, compiled to JSON Schema `type: string, format: uuid`, or declare
+that JSON Schema form directly. Malformed values fail before derivation.

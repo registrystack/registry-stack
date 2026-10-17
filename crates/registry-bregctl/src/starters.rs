@@ -270,6 +270,7 @@ mod tests {
             }
 
             let request = crate::check::Request {
+                prior_evidence_export: None,
                 project: Some(&destination),
                 package: None,
                 production: false,

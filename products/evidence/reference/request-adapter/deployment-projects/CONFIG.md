@@ -256,6 +256,7 @@ authority.
 |---|---|
 | `string` | `minimumBytes`, `maximumBytes` |
 | `date` | Canonical `YYYY-MM-DD` |
+| `uuid` | Exactly 36 ASCII characters: hexadecimal groups of 8-4-4-4-12 separated by hyphens, without normalization |
 | `integer` | Inclusive `minimum`, `maximum` within the safe integer bound |
 | `boolean` | No additional keys |
 | `controlled-code` | `codelist`, `codelistVersion`, `maximumBytes` |
@@ -393,8 +394,15 @@ Each requirement declares these fields:
 | `type` | Other keys | Call ceiling |
 |---|---|---|
 | `single` | `source` | One. |
-| `search-then-fetch` | `search`, `fetch` (one source id) | Two. |
+| `search-then-fetch` | `search`, `fetch` (one source id), optional `onFetchNoMatch` | Two. |
 | `search-then-fetch-set` | `search`, `fetch` (2 through 4 members), `maximumAcquisitionMilliseconds` | One plus the declared member count. |
+
+For `search-then-fetch`, `onFetchNoMatch` defaults to `dependency-failure`.
+Set it to `unavailable` only when the fetch may legitimately find no record.
+A declared unresolved 404 or extracted no-match then returns 422
+`evidence.unavailable` and an `Unresolved` audit decision. Sequential request
+batches return an unavailable item. Ambiguous fetches and transport failures
+remain 503, and no absent record reaches derivation or assertion signing.
 
 `search-then-fetch-set` is a gated kind. It serves only where this bundle names
 it under `acquisitionCapabilities` and the operator separately names it under
@@ -1843,6 +1851,7 @@ requirements[].acquisition.fetch[].factInputs
 requirements[].acquisition.fetch[].factInputs[]
 requirements[].acquisition.fetch[].source
 requirements[].acquisition.maximumAcquisitionMilliseconds
+requirements[].acquisition.onFetchNoMatch
 requirements[].acquisition.search
 requirements[].acquisition.source
 requirements[].acquisition.type

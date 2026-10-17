@@ -14,7 +14,7 @@ standards_referenced:
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
-Discovery, `evidence` for Evidence Gateway, `breg` for Base Registry
+Discovery, `evidence` for Registry Evidence, `breg` for Base Registry
 Engine (BReg), `casework` for Registry
 Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
 Registry Scheduling. Each namespace keeps its own routes,
@@ -350,7 +350,7 @@ that matched it.
 | Selection | Rust | Python and Node |
 | --- | --- | --- |
 | One record by identifier and capability | `response.select_exact(request)` | `select_exact` and `selectExact` |
-| One Evidence Gateway service | `response.select_evidence(request)` | `select_evidence_service` and `selectEvidenceService` |
+| One Registry Evidence service | `response.select_evidence(request)` | `select_evidence_service` and `selectEvidenceService` |
 | One Evidence Type mapping alternative | `response.select_alternative(id)` | `select_evidence_alternative` and `selectEvidenceAlternative` |
 
 Rust supplies the selections as extension traits on the response, `ServiceSearchSelectionExt` and
@@ -390,7 +390,7 @@ For kind `problem`, `problem` is one of `invalid-request`, `not-found`, `result-
     crates/registry-discovery-client/src/selection.rs,
     crates/registry-discovery-client/src/error.rs */}
 
-## Evidence Gateway
+## Registry Evidence
 
 The Evidence client requests minimum-disclosure assertions over the public Evidence HTTP contract
 and verifies every response. Verification is the point of the client: a client built directly with

@@ -626,3 +626,46 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
         "the complete composite selector exceeds Evidence's 8192-byte bound"
     );
 }
+
+#[test]
+fn uuid_selectors_and_facts_preserve_the_uuid_format() {
+    let (selector, maximum) = selector_schema(&FieldTypeSource::Uuid).unwrap();
+    assert_eq!(selector["type"], "uuid");
+    assert_eq!(maximum, 36);
+    assert_eq!(
+        scalar_schema(&FieldTypeSource::Uuid).unwrap()["format"],
+        "uuid"
+    );
+}
+
+#[test]
+fn vocabulary_selector_requires_a_codelist_instead_of_length_only_validation() {
+    let kind = FieldTypeSource::VocabularyCode {
+        vocabulary: "status".into(),
+        values: vec!["active".into(), "retired".into()],
+    };
+    assert!(
+        selector_schema(&kind).is_err(),
+        "a vocabulary selector needs its codelist artifact or a refusal"
+    );
+}
+
+#[test]
+fn export_manifest_records_fields_for_explicit_prior_export_comparison() {
+    let export = export_evidence_source(&compiled(&project(), SQL), &options()).unwrap();
+    let manifest = yaml(&export, "source-export.json");
+    assert_eq!(
+        manifest["dependencies"]["fields"],
+        json!(["code", "registration-number", "status", "tenant"])
+    );
+}
+
+#[test]
+fn reference_selectors_and_facts_preserve_the_uuid_format() {
+    let kind = FieldTypeSource::Reference {
+        target: "record".into(),
+        on_delete: Default::default(),
+    };
+    assert_eq!(selector_schema(&kind).unwrap().0["type"], "uuid");
+    assert_eq!(scalar_schema(&kind).unwrap()["format"], "uuid");
+}

@@ -81,7 +81,7 @@ flowchart TD
     manifest["metadata.yaml<br/>schema_version: registry-manifest/v1"]
     catalog["Catalog<br/>id · base_url · title · publisher"]
     describe["Description<br/>datasets · entities · fields · requirements<br/>evidence types · services · forms · policies · codelists"]
-    offerings["Evidence Gateway offerings<br/>access.kind · endpoint · discovery · ruleset"]
+    offerings["Registry Evidence offerings<br/>access.kind · endpoint · discovery · ruleset"]
     render["Validate, then render<br/>(pure · deterministic · no data sources)"]
     bundle["Discovery bundle<br/>DCAT · BRegDCAT-AP · CPSV-AP · SHACL<br/>JSON Schema · OGC Records · ODRL · CCCEV<br/>embedded SKOS-shaped codelists"]
     index["index.json<br/>source_manifest_digest · package_digest · per-artifact sha256"]
@@ -132,7 +132,7 @@ REQ-DM-MANIFEST-008: A governed evidence pack MUST bind its policy reference to 
 
 REQ-DM-MANIFEST-009: A governed evidence pack MUST declare `odrl_enforcement.profile: registry-evidence-gateway-pdp/v1`, and its `constraint_terms` MUST contain at least one unique term from the profile vocabulary: `odrl:purpose` and `odrl:spatial`. A term outside that vocabulary, a repeated term, and a different profile identifier MUST each be rejected. The wider manifest policy renderer MAY publish broader Open Digital Rights Language (ODRL) metadata, but a governed evidence pack MUST NOT name an enforcement term outside this profile vocabulary.
 
-The profile identifier is a retained legacy name. It named the policy-decision-point profile of the retired Relay gateway, it has no connection to the Evidence Gateway product, and no maintained runtime evaluates it. Registry Manifest validates the name and the terms as published metadata, and a reader MUST NOT infer from either that a process enforces them.
+The profile identifier is a retained legacy name. It named the policy-decision-point profile of the retired Relay gateway, it has no connection to the Registry Evidence product, and no maintained runtime evaluates it. Registry Manifest validates the name and the terms as published metadata, and a reader MUST NOT infer from either that a process enforces them.
 
 ## 7. Evidence-offering access discovery metadata
 

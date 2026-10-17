@@ -181,3 +181,117 @@ fn committed_example_is_the_manifest_bregctl_writes() {
          rewrite it with the command in this test's comment"
     );
 }
+
+fn check_prior_export(project: &Path, manifest: &Path, deny_warnings: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+    command
+        .args(["--format", "json", "check"])
+        .arg(project)
+        .arg("--prior-evidence-export")
+        .arg(manifest);
+    if deny_warnings {
+        command.arg("--deny-warnings");
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn prior_export_comparison_warns_on_renames_and_supports_deny_warnings() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let destination = root.join("export");
+    assert!(export(&destination, "status").status.success());
+    let manifest = destination.join("source-export.json");
+    let project = root.join("registry");
+    fs::create_dir(&project).unwrap();
+    let original = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/evidence/registry/registry.yaml"),
+    )
+    .unwrap();
+    fs::write(project.join("registry.yaml"), &original).unwrap();
+    let unchanged = check_prior_export(&project, &manifest, false);
+    assert!(
+        unchanged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unchanged.stderr)
+    );
+    let unchanged: Value = serde_json::from_slice(&unchanged.stdout).unwrap();
+    let baseline_diagnostics = unchanged["diagnostics"].clone();
+
+    fs::write(
+        project.join("registry.yaml"),
+        original.replace("Synthetic record registry", "Unrelated title"),
+    )
+    .unwrap();
+    let unrelated = check_prior_export(&project, &manifest, false);
+    assert!(unrelated.status.success());
+    let unrelated: Value = serde_json::from_slice(&unrelated.stdout).unwrap();
+    assert_eq!(unrelated["diagnostics"], baseline_diagnostics);
+
+    let renamed = original
+        .replace("id: status\n", "id: state\n")
+        .replace("- status\n", "- state\n");
+    fs::write(project.join("registry.yaml"), renamed).unwrap();
+    let warning = check_prior_export(&project, &manifest, false);
+    assert!(
+        warning.status.success(),
+        "a removed exported field warns without denying by default"
+    );
+    let warning: Value = serde_json::from_slice(&warning.stdout).unwrap();
+    assert!(warning["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["severity"] == "warning"
+            && item["code"] == "breg.evidence-source.field-removed"));
+    assert_eq!(
+        check_prior_export(&project, &manifest, true).status.code(),
+        Some(1)
+    );
+}
+
+#[test]
+fn prior_export_comparison_warns_on_removed_fields_and_refuses_wrong_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let destination = root.join("export");
+    assert!(export(&destination, "status").status.success());
+    let manifest = destination.join("source-export.json");
+    let project = root.join("registry");
+    fs::create_dir(&project).unwrap();
+    let original = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/evidence/registry/registry.yaml"),
+    )
+    .unwrap();
+    let removed = original.replace("  - id: status\n    type: vocabulary-code\n    vocabulary: record-status\n    classification: internal\n", "").replace("      - status\n", "");
+    fs::write(project.join("registry.yaml"), removed).unwrap();
+    let result = check_prior_export(&project, &manifest, false);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["code"] == "breg.evidence-source.field-removed"));
+    fs::write(project.join("registry.yaml"), original).unwrap();
+    let original: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    for member in ["registryId", "entity"] {
+        let mut wrong = original.clone();
+        wrong["provenance"][member] = "other".into();
+        fs::write(&manifest, serde_json::to_vec(&wrong).unwrap()).unwrap();
+        let result = check_prior_export(&project, &manifest, false);
+        assert_eq!(result.status.code(), Some(1));
+        let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "breg.evidence-source.refused"));
+    }
+}

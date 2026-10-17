@@ -12,6 +12,7 @@ profile:
     allowed_types:
       string: {requires: [minimum_bytes, maximum_bytes]}
       date: {lexical_form: YYYY-MM-DD}
+      uuid: {lexical_form: "8-4-4-4-12 ASCII hexadecimal digits separated by hyphens"}
       integer: {requires: [minimum, maximum]}
       boolean: {}
       controlled-code: {requires: [codelist, codelist_version, maximum_bytes]}
@@ -71,6 +72,7 @@ canonical_encoding:
   scalar_rules:
     string: exact validated UTF-8 bytes without normalization
     date: validated ASCII YYYY-MM-DD
+    uuid: exact validated ASCII bytes, using the string scalar tag without case folding
     integer: minimal signed decimal ASCII, no leading plus or leading zero except zero
     boolean: single byte 0x00 or 0x01
     controlled-code: exact validated UTF-8 codelist code

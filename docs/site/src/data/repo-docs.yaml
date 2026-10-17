@@ -323,7 +323,7 @@ repos:
             standards_referenced: [ dcat, bregdcat-ap, shacl, skos, json-schema, json-ld ]
             last_reviewed: unreviewed
   registry-evidence:
-    label: Evidence Gateway
+    label: Evidence
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
     version: main source (unreleased)
@@ -332,7 +332,7 @@ repos:
     docs:
       - src: products/evidence/README.md
         dest: products/registry-evidence/index
-        label: Evidence Gateway
+        label: Registry Evidence
         nav_order: 0
         doc_type: explanation
         last_reviewed: unreviewed
@@ -381,7 +381,7 @@ repos:
           - docsets: [ v0.41.0 ]
             standards_referenced: [ openapi, json-schema, sd-jwt-vc ]
             last_reviewed: unreviewed
-        description: Operator and integrator documentation for Evidence Gateway, the minimum-disclosure assertion service.
+        description: Operator and integrator documentation for Registry Evidence, the minimum-disclosure assertion service.
       - src: products/evidence/CONCEPT.md
         dest: products/registry-evidence/concept
         label: Product concept
@@ -641,7 +641,7 @@ repos:
           - docsets: [ v0.41.0 ]
             standards_referenced: []
             last_reviewed: unreviewed
-        description: Deterministic local curl checkpoint against the Evidence Gateway server with a mock source and an in-memory test JWKS.
+        description: Deterministic local curl checkpoint against the Registry Evidence server with a mock source and an in-memory test JWKS.
       - src: products/evidence/SOURCE-TESTING.md
         dest: products/registry-evidence/source-testing
         label: Source testing

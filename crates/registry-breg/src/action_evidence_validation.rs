@@ -156,6 +156,11 @@ pub(crate) fn validate_selector_field(
         {
             Some(SelectorValue::String(value.clone()))
         }
+        (SelectorField::Uuid { .. }, Value::String(value))
+            if value.len() == 36 && uuid::Uuid::parse_str(value).is_ok() =>
+        {
+            Some(SelectorValue::String(value.clone()))
+        }
         (SelectorField::Date { .. }, Value::String(value))
             if value.len() == 10 && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() =>
         {

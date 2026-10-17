@@ -1318,6 +1318,9 @@ fn validate_value(
         ) if bounded(value.len(), minimum_bytes.get(), maximum_bytes.get()) => {
             Ok(ResolvedSelectorValue::String(value.clone()))
         }
+        (ConfiguredField::Uuid {}, SelectorValue::String(value)) if canonical_uuid(value) => {
+            Ok(ResolvedSelectorValue::String(value.clone()))
+        }
         (ConfiguredField::Date {}, SelectorValue::String(value))
             if canonical_date(value).is_some() =>
         {
@@ -1359,6 +1362,18 @@ fn codelist_contains_selector_value(codelist: &Codelist, value: &str) -> bool {
         Codelist::Codes { codes, .. } => codes.iter().any(|code| code == value),
         Codelist::Mapping { entries, .. } => entries.contains_key(value),
     }
+}
+
+// UUID selectors retain the exact hyphenated hexadecimal spelling, including case.
+pub(crate) fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 fn canonical_date(value: &str) -> Option<NaiveDate> {

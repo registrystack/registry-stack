@@ -174,12 +174,15 @@ fact produces no match and cannot become an authoritative negative answer.
 A genuine BReg unresolved lookup is recognized only by its exact declared
 Problem Details status, type and code. Other HTTP failures remain failures.
 
-Selectors support bounded nonempty strings, dates, booleans, UUID/reference
-strings and vocabulary-code strings. Composite profiles must fit Evidence's
-aggregate selector bound. String maxima allow four UTF-8 bytes per BReg
-character; the provider retains its character and vocabulary validation.
-Identity values are never normalized by the adapter. UUID/reference inputs
-must use the representation returned by the provider.
+Selectors support bounded nonempty strings, dates, booleans, and UUID/reference
+fields using Evidence's `uuid` type. UUID facts carry JSON Schema `format: uuid`.
+Both require exactly 36 ASCII characters in the hyphenated 8-4-4-4-12 hexadecimal
+form. Same-length malformed values are refused before source access or signing.
+Composite profiles must fit Evidence's aggregate selector bound. String maxima
+allow four UTF-8 bytes per BReg character. Identity values are never normalized
+by the adapter, including UUID letter case. Use the spelling returned by the
+provider. Vocabulary facts retain their enum; vocabulary selectors require a
+reviewed codelist artifact, so this exporter refuses them with adapter guidance.
 
 BReg's unrestricted `int64` selector range exceeds Evidence's exact
 safe-integer selector range, so the exporter refuses it instead of silently
@@ -228,3 +231,19 @@ mocks. Imported client contracts define the signed processing ceiling; operator
 configuration supplies fixed endpoints, credentials and trust. This is distinct
 from the lookup export described above, and does not grant BReg authority over
 Evidence source access or signing.
+
+### Compare a prior export
+
+Retain `source-export.json` from the deployed export, then run:
+
+```sh
+bregctl check ./registry --prior-evidence-export ./previous-export/source-export.json
+```
+
+The manifest records selected fact and identity fields, and fields consumed by
+reached SQL source relations and read boundaries. The comparison warns with
+`breg.evidence-source.field-removed` when a consumed field is absent or renamed;
+`--deny-warnings` makes that check exit 1. Unrelated changes are silent. A manifest
+for another registry or an absent entity is refused. Regenerate older exports
+that lack the dependency inventory before using this comparison. The inventory
+is advisory authoring evidence and supplies no runtime authority.

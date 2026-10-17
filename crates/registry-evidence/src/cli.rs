@@ -66,9 +66,18 @@ pub enum AuthorityCommand {
         /// Target authority document to validate and activate.
         #[arg(long, value_name = "FILE")]
         document: PathBuf,
+        /// Operator or change reference; only its hash is retained in activation audit.
+        #[arg(long, value_name = "REFERENCE")]
+        operator_reference: Option<String>,
     },
     /// Inspect revisions and digests from committed activation history, without identity values.
     History {
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+    },
+    /// Inspect minimal activation audit events without authority grants or raw operator references.
+    Audit {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,

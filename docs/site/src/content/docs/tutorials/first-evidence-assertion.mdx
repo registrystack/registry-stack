@@ -1,5 +1,5 @@
 ---
-title: Get your first Evidence Gateway assertion
+title: Get your first Registry Evidence assertion
 description: Run a normalized Evidence project, request one minimum-disclosure assertion, and verify it offline.
 status: current
 owner: registry-docs
@@ -24,7 +24,7 @@ assertion, verify it offline, and inspect the privacy-safe audit view.
 
 <QuickstartMeta
   outcome="A signed adult-status assertion verified before its Boolean value is read."
-  time="About 15 minutes after the Evidence Gateway toolset is installed"
+  time="About 15 minutes after the Registry Evidence toolset is installed"
   level="Local development with synthetic data"
   prerequisites={[
     'Matching evidence and evidencectl binaries on PATH',
@@ -95,10 +95,10 @@ python3 serve-source.py \
 ```
 
 Leave this terminal running. Its public health route exposes no record data. Every record route
-requires the bearer token referenced by the target. The source authenticates Evidence Gateway but
+requires the bearer token referenced by the target. The source authenticates Registry Evidence but
 does not decide who may request an assertion.
 
-## Start Evidence Gateway
+## Start Registry Evidence
 
 Use port `18080` because another local service may already own the default Evidence port. The
 issuer remains on the example's configured port `8082`.
@@ -188,4 +188,4 @@ terminal.
 - [Return a governed value](../return-a-governed-value/)
 - [Request Evidence from your application](../request-evidence-from-an-application/)
 - [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
-- [See Evidence Gateway refuse an unauthorized request](../refuse-unsafe-evidence-requests/)
+- [See Registry Evidence refuse an unauthorized request](../refuse-unsafe-evidence-requests/)

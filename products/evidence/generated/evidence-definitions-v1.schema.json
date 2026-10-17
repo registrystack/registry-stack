@@ -327,6 +327,23 @@
         {
           "additionalProperties": false,
           "properties": {
+            "name": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "type": {
+              "const": "uuid"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "maximum": {
               "maximum": 9007199254740991,
               "minimum": -9007199254740991,

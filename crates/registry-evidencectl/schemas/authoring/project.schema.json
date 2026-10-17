@@ -25,6 +25,9 @@
             "fetch": {
               "$ref": "#/$defs/LocalId"
             },
+            "onFetchNoMatch": {
+              "$ref": "#/$defs/FetchNoMatchPolicy"
+            },
             "search": {
               "$ref": "#/$defs/LocalId"
             },
@@ -264,6 +267,13 @@
       ],
       "type": "object"
     },
+    "FetchNoMatchPolicy": {
+      "enum": [
+        "dependency-failure",
+        "unavailable"
+      ],
+      "type": "string"
+    },
     "Field": {
       "oneOf": [
         {
@@ -322,6 +332,31 @@
             },
             "type": {
               "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "uuid",
               "type": "string"
             }
           },

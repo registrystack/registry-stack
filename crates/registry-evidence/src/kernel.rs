@@ -1292,6 +1292,7 @@ fn compile_schema(artifact: &str, schema: &Value) -> Result<JSONSchema, KernelEr
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
+        .with_format("uuid", crate::selector::canonical_uuid)
         .compile(schema)
         .map_err(|_| refuse_artifact(artifact, "schema is not a valid JSON Schema"))
 }

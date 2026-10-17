@@ -35,20 +35,20 @@ Two consequences follow from that boundary:
 
 | Store | What it contains | Operator control |
 | --- | --- | --- |
-| Evidence Gateway audit file | Value-free access, release, denial, and failure events | Configure rotation and retention, and ship sealed files before local expiry. |
-| Registry Render audit file | Value-free render events and artifact identities | Apply the same shared-writer handling as Evidence Gateway. |
+| Registry Evidence audit file | Value-free access, release, denial, and failure events | Configure rotation and retention, and ship sealed files before local expiry. |
+| Registry Render audit file | Value-free render events and artifact identities | Apply the same shared-writer handling as Registry Evidence. |
 | Base Registry Engine PostgreSQL database | Current records, retained revisions, requests, access logs, and webhook delivery state | Back up the database and use the owned erasure and retention commands. |
 | Operator-owned files | Runtime configuration, packages, sources, checkpoints, exports, and secret references | Protect, back up, and expire these files through platform controls. |
 
 ## Process-local caches and client-held state
 
-Evidence Gateway can keep OIDC signing keys and negative lookup entries in process. Restarting the
+Registry Evidence can keep OIDC signing keys and negative lookup entries in process. Restarting the
 service clears that cache. It stores no source records or assertions in the cache. Client-held
 continuity receipts and verification material remain the relying application's responsibility.
 
 ## Audit retention
 
-Evidence Gateway, Registry Render, Base Registry Engine, Casework, and Scheduling write through the
+Registry Evidence, Registry Render, Base Registry Engine, Casework, and Scheduling write through the
 shared per-process audit writer. The active file rotates at the configured size and sealed files
 expire by age. A `stdout` destination delegates both controls to the log collector.
 
@@ -98,14 +98,14 @@ refused unchanged; archive that file and restart with a fresh `audit.path`. Do n
 file to repair it; editing it while a writer holds it is the same external-change fault described
 above.
 
-## Evidence Gateway retention
+## Registry Evidence retention
 
-Evidence Gateway has no application database and persists no selector, source, evidence, or response
+Registry Evidence has no application database and persists no selector, source, evidence, or response
 data. Its durable state is its governed signer configuration and public keys plus the audit file
 described in
 [Durable state and externally retained records](#durable-state-and-externally-retained-records).
 The external Transit service retains the production private key.
-An external durable audit service may own its own storage, but Evidence Gateway itself does not maintain
+An external durable audit service may own its own storage, but Registry Evidence itself does not maintain
 one.
 
 The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name, with an eight-digit
@@ -117,10 +117,10 @@ and retried at the next rotation or start; it never stops the writer. Each strea
 `path` whose file name ends in one of those suffixes is refused at startup, so no stream can be
 pointed at another's file. The `.seq` file records the next sequence at every start and
 before every rotation, so a restart after retention or a shipper removed every sealed file
-continues the numbering instead of reusing a name. [Read and ship the Evidence Gateway audit log](../evidence-audit/) describes
+continues the numbering instead of reusing a name. [Read and ship the Registry Evidence audit log](../evidence-audit/) describes
 the entry format and the `stdout` destination.
 
-### Ship Evidence Gateway audit records off host
+### Ship Registry Evidence audit records off host
 
 The local audit file is not tamper-evident, and retention deletes it by age, so the append-only
 store you ship to is the audit record of the deployment. A shipper reads the same directory the
@@ -158,7 +158,7 @@ The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name and n
 active file. Retention deletes only sealed files whose last modification is older than
 the audit retention period, so the local directory holds a rolling window, not the whole history. Ship
 sealed files the way
-[Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host)
+[Ship Registry Evidence audit records off host](#ship-registry-evidence-audit-records-off-host)
 describes; the mechanics are identical.
 
 A release before 2026-09-25 kept its own keyed hash chain and exposed `registry-render audit-verify`

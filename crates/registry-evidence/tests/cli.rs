@@ -2293,6 +2293,107 @@ fn stage_reference_secrets(secret_root: &Path) {
     write("evidence-signing", VERIFY_PRIVATE_JWK);
 }
 
+/// Activation resolves the audit boundary alone. Missing source and signer
+/// secrets do not prevent an operator from activating target authority.
+#[test]
+fn authority_activation_uses_configured_audit_without_source_or_signer_initialization() {
+    for stdout in [false, true] {
+        let deployment = Deployment::stage("adult-status");
+        let mut bundle: Value = serde_norway::from_str(
+            &fs::read_to_string(deployment.path("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        bundle["project"] = json!("standalone-evidence");
+        for requirement in bundle["requirements"].as_array_mut().unwrap() {
+            requirement["question"] = json!("Is the subject an adult?");
+            requirement["representations"] = json!(["signed-jws"]);
+            requirement["grantCeiling"] = json!({
+                "authorities": ["statutory"], "actorKinds": ["service"],
+                "valueOrigins": ["request", "authenticated-context"],
+                "audiences": ["urn:example:audience:relying-party"]
+            });
+        }
+        let mut profiles = bundle["authorityProfiles"].take();
+        for profile in profiles.as_object_mut().unwrap().values_mut() {
+            profile["actorKind"] = json!("service");
+        }
+        bundle["authorityProfiles"] = json!({});
+        deployment.write(
+            "bundle/evidence.yaml",
+            &serde_norway::to_string(&bundle).unwrap(),
+        );
+        let mut authority = json!({
+            "apiVersion": registry_evidence::authority::AUTHORITY_API_VERSION,
+            "kind": registry_evidence::authority::AUTHORITY_KIND,
+            "target": "local", "project": "standalone-evidence", "accessProfiles": profiles
+        });
+        let document = deployment.path("compiled-authority.yaml");
+        write_private_json(&document, &authority);
+        deployment.append(
+            "runtime.yaml",
+            &format!(
+                "authority:\n  target: local\n  root: {}\n",
+                deployment.path("authority").display()
+            ),
+        );
+        deployment.write_secret("audit-hash-key", "activation-audit-key-canary-32-bytes");
+        if stdout {
+            deployment.write_audit_to_stdout();
+        }
+        deployment.seal();
+        let activate = || {
+            Command::new(env!("CARGO_BIN_EXE_evidence"))
+                .args(["authority", "activate", "--runtime-config"])
+                .arg(deployment.path("runtime.yaml"))
+                .arg("--document")
+                .arg(&document)
+                .args(["--operator-reference", "operator-reference-canary"])
+                .output()
+                .unwrap()
+        };
+        let first = activate();
+        assert!(
+            first.status.success(),
+            "{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let bytes = if stdout {
+            first.stdout
+        } else {
+            fs::read(deployment.path("audit.jsonl")).unwrap()
+        };
+        let entry: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(entry["schema"], "evidence-activation-audit/v1");
+        assert_eq!(entry["phase"], "response");
+        assert_eq!(entry["record"]["outcome"], "applied");
+        assert_eq!(entry["correlation"], entry["record"]["activationId"]);
+        assert!(!String::from_utf8_lossy(&bytes).contains("operator-reference-canary"));
+        let repeated = activate();
+        assert!(repeated.status.success());
+        assert!(repeated.stdout.is_empty());
+        authority["project"] = json!("other-project");
+        write_private_json(&document, &authority);
+        let refused = activate();
+        assert!(!refused.status.success());
+        let bytes = if stdout {
+            refused.stdout
+        } else {
+            fs::read(deployment.path("audit.jsonl")).unwrap()
+        };
+        let entries: Vec<Value> = String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let refusal = entries.last().unwrap();
+        assert_eq!(refusal["record"]["outcome"], "refused");
+        assert_ne!(
+            entry["record"]["operatorReferenceHash"],
+            refusal["record"]["operatorReferenceHash"]
+        );
+    }
+}
+
 /// Target grants are validated even when the project declares no fixtures.
 /// No runtime file, secret, signer, source or authority store is needed.
 #[test]

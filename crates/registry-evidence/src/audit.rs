@@ -30,6 +30,47 @@ pub const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-ba
 /// Envelope schema of an authenticated authorization refusal.
 pub const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str =
     "registry.evidence.audit.authorization-refusal/v2";
+pub const ACTIVATION_AUDIT_SCHEMA: &str = "evidence-activation-audit/v1";
+const ACTIVATION_EVENT: &str = "evidence.authority-activated";
+
+/// Operator records share the platform envelope but are not Evidence requests.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EvidenceActivationAuditEvent {
+    event: String,
+    activation_id: String,
+    package_digest: String,
+    authority_revision: String,
+    authority_digest: String,
+    activation_sequence: Option<u64>,
+    operator_reference_hash: Option<String>,
+    outcome: crate::authority::ActivationOutcome,
+}
+
+impl EvidenceActivationAuditEvent {
+    fn validate(&self) -> Result<(), EvidenceAuditError> {
+        use crate::authority::ActivationOutcome;
+        if self.event != ACTIVATION_EVENT
+            || self.activation_id.parse::<ulid::Ulid>().is_err()
+            || !registry_platform_config::is_sha256_label(&self.package_digest)
+            || !registry_platform_config::is_sha256_label(&self.authority_revision)
+            || !registry_platform_config::is_sha256_label(&self.authority_digest)
+            || self.operator_reference_hash.as_ref().is_some_and(|hash| {
+                hash.strip_prefix("hmac-sha256:").is_none_or(|digest| {
+                    digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            })
+            || !matches!(
+                (self.outcome, self.activation_sequence),
+                (ActivationOutcome::Applied, Some(1..)) | (ActivationOutcome::Refused, None)
+            )
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        Ok(())
+    }
+}
+
 const AUTHORIZATION_REFUSAL_ERROR_CATEGORY: &str = "not-authorized";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1012,6 +1053,46 @@ impl EvidenceAuditLog {
         Ok(format!("hmac-sha256:v{}:{digest}", self.key_version))
     }
 
+    /// Key the reference to one activation, using the shared operator contract.
+    pub(crate) fn activation_operator_reference(
+        &self,
+        activation_id: &str,
+        reference: &str,
+    ) -> Result<String, EvidenceAuditError> {
+        self.key_hasher
+            .audit_reference_hash(
+                "evidence-activation-operator-reference-v1",
+                activation_id,
+                reference,
+            )
+            .map_err(|_| EvidenceAuditError::InvalidEvent)
+    }
+
+    /// Activation uses the same platform response envelope as other products.
+    pub(crate) async fn append_activation(
+        &self,
+        event: &crate::authority::ActivationAudit,
+    ) -> Result<(), EvidenceAuditError> {
+        let record = EvidenceActivationAuditEvent {
+            event: ACTIVATION_EVENT.to_owned(),
+            activation_id: event.activation_id.clone(),
+            package_digest: event.package_digest.clone(),
+            authority_revision: event.authority_revision.clone(),
+            authority_digest: event.authority_digest.clone(),
+            activation_sequence: event.activation_sequence,
+            operator_reference_hash: event.operator_reference_hash.clone(),
+            outcome: event.outcome,
+        };
+        record.validate()?;
+        self.write(
+            ACTIVATION_AUDIT_SCHEMA,
+            EntryPhase::Response,
+            &event.activation_id,
+            &record,
+        )
+        .await
+    }
+
     /// Append an authorized-material event. An access attempt is a `request`
     /// entry; every terminal phase is a `response` entry.
     pub async fn append(&self, event: EvidenceAuditEvent) -> Result<(), EvidenceAuditError> {
@@ -1241,6 +1322,7 @@ fn bind_request_batch_items(
 struct LocalAuditCollector {
     bounds: Option<LocalAuditInspectionBounds>,
     records: usize,
+    activations: BTreeMap<String, EvidenceActivationAuditEvent>,
     /// Each open operation's access entries, one per source stage, in order.
     pending: BTreeMap<String, Vec<PendingLocalOperation>>,
     completed: BTreeSet<String>,
@@ -1277,7 +1359,33 @@ impl LocalAuditCollector {
         if entry.event_id.is_empty() || entry.time.is_empty() {
             return Err(invalid_audit_data());
         }
+        if entry.schema != ACTIVATION_AUDIT_SCHEMA
+            && self.activations.contains_key(&entry.correlation)
+        {
+            return Err(invalid_audit_data());
+        }
         match entry.schema.as_str() {
+            ACTIVATION_AUDIT_SCHEMA => {
+                let event: EvidenceActivationAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                event.validate().map_err(|_| invalid_audit_data())?;
+                if entry.phase != EntryPhase::Response
+                    || entry.correlation != event.activation_id
+                    || self.pending.contains_key(&entry.correlation)
+                    || self.completed.contains(&entry.correlation)
+                    || self.request_batches.contains(&entry.correlation)
+                    || self
+                        .activations
+                        .get(&entry.correlation)
+                        .is_some_and(|prior| prior != &event)
+                {
+                    return Err(invalid_audit_data());
+                }
+                // Delivery may repeat one identical activation after a crash.
+                // It never becomes the request operation this view inspects.
+                self.activations.insert(entry.correlation, event);
+                Ok(())
+            }
             AUDIT_SCHEMA => {
                 let event: EvidenceAuditEvent =
                     serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
@@ -3308,6 +3416,64 @@ mod tests {
             evidence_id: None,
         }]);
         (access, release)
+    }
+
+    #[tokio::test]
+    async fn local_inspection_accepts_activation_records_beside_evidence_operations() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        let activation = crate::authority::ActivationAudit {
+            schema: "evidence-activation-audit/v1".into(),
+            activation_id: ulid::Ulid::generate().to_string(),
+            delivered: false,
+            sequence: 1,
+            recorded_at: chrono::Utc::now().to_rfc3339(),
+            outcome: crate::authority::ActivationOutcome::Applied,
+            package_digest: format!("sha256:{}", "a".repeat(64)),
+            authority_revision: format!("sha256:{}", "b".repeat(64)),
+            authority_digest: format!("sha256:{}", "c".repeat(64)),
+            activation_sequence: Some(1),
+            operator_reference_hash: None,
+        };
+        log.append_activation(&activation).await.unwrap();
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        // At-least-once activation delivery does not create a second Evidence operation.
+        log.append_activation(&activation).await.unwrap();
+        drop(log);
+        let view = last_local_audit_operation(&path)
+            .expect("valid operator events must not invalidate Evidence inspection");
+        assert_eq!(view.operation, "local-operation-0000000000000001");
+        assert_eq!(view.events.len(), 2);
+        let lines: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        for (field, value) in [
+            (
+                "operatorReference",
+                serde_json::json!("operator-reference-canary"),
+            ),
+            (
+                "operatorReferenceHash",
+                serde_json::json!("not-a-keyed-hash"),
+            ),
+            ("authorityDigest", serde_json::json!("invalid")),
+            ("activationSequence", serde_json::Value::Null),
+        ] {
+            let mut invalid = lines.clone();
+            invalid[0]["record"][field] = value;
+            let bytes = invalid
+                .iter()
+                .map(|line| format!("{}\n", line))
+                .collect::<String>();
+            std::fs::write(&path, bytes).unwrap();
+            assert!(
+                last_local_audit_operation(&path).is_err(),
+                "accepted invalid {field}"
+            );
+        }
     }
 
     #[tokio::test]

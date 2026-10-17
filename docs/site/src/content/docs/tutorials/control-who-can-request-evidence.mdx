@@ -1,5 +1,5 @@
 ---
-title: Control who can request Evidence Gateway
+title: Control who can request Registry Evidence
 description: Assign applications complete target grants and observe an unauthorized request fail closed.
 status: current
 owner: registry-docs
@@ -161,7 +161,7 @@ VERIFIED
 
 ## Cross the authorization boundary
 
-Prepare a valid region request as `region-router`. Preparation sends nothing to Evidence Gateway:
+Prepare a valid region request as `region-router`. Preparation sends nothing to Registry Evidence:
 
 ```sh
 evidencectl request prepare residence-region \
@@ -191,7 +191,7 @@ HTTP 403
 ```
 
 The public problem is `evidence.denied`. It does not reveal the missing grant, source facts,
-selector, or credentials. Evidence Gateway refuses the request before source access.
+selector, or credentials. Registry Evidence refuses the request before source access.
 
 ## Clean up
 
@@ -207,5 +207,5 @@ terminal.
 ## Next
 
 - [Request Evidence from your application](../request-evidence-from-an-application/)
-- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Configure Evidence Gateway](../../configure/evidence/)
+- [See Registry Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Configure Registry Evidence](../../configure/evidence/)

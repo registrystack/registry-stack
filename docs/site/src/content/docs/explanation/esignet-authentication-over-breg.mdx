@@ -179,7 +179,7 @@ rules shape it:
   Signing, JWE encryption for relying parties that request it, and key rotation are eSignet's.
 
 An eSignet ID Token or UserInfo JWT authenticates a citizen to a relying party. It is not a registry
-credential. BReg and Evidence Gateway verify access tokens against their configured issuer and
+credential. BReg and Registry Evidence verify access tokens against their configured issuer and
 required token type, so forwarding a citizen's ID Token to either one is rejected. The only
 credential that reaches the registry is the provider's own access token.
 
@@ -262,7 +262,7 @@ through the provider's Go interface, and the host refuses to start with no verif
 Version 0.3.0 draws its lines deliberately:
 
 - **BReg only.** The provider reads from a Base Registry Engine registry. Other registry sources
-  are deferred, and Evidence Gateway is not involved: an eSignet login is an authentication,
+  are deferred, and Registry Evidence is not involved: an eSignet login is an authentication,
   not a signed minimum-disclosure assertion.
 - **No production challenge delivery.** Sending one-time codes over SMS or email, enrollment,
   wallet-based login, and identity assurance levels are out of scope. Deployments bring their own

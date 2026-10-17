@@ -632,6 +632,14 @@ fn definitions_schema() -> Value {
                     },
                     {
                         "type": "object", "additionalProperties": false,
+                        "required": ["type", "name"],
+                        "properties": {
+                            "type": {"const": "uuid"},
+                            "name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"}
+                        }
+                    },
+                    {
+                        "type": "object", "additionalProperties": false,
                         "required": ["type", "name", "minimum", "maximum"],
                         "properties": {
                             "type": {"const": "integer"},

@@ -66,7 +66,7 @@ const groups = [
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
-  { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
+  { title: 'Registry Evidence', binaries: ['evidence', 'evidencectl'] },
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
   { title: 'Registry Render', binaries: ['registry-render'] },
 ];
@@ -346,7 +346,10 @@ function inlineCode(value) {
 // passes through unchanged: its opening run of backticks closes at the next run
 // of the same length, and a run that never closes is ordinary text.
 function mdxText(value) {
-  const escape = (text) => text.replace(/[\\{}<]/gu, (character) => `\\${character}`);
+  const escape = (text) => text
+    .replace(/\bEvidence [Gg]ateway\b/gu, 'Registry Evidence')
+    .replace(/\b([Aa])n(\s+)Registry Evidence/gu, '$1$2Registry Evidence')
+    .replace(/[\\{}<]/gu, (character) => `\\${character}`);
   let rendered = '';
   let index = 0;
   while (index < value.length) {

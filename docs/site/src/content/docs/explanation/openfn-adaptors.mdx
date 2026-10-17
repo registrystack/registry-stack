@@ -25,7 +25,7 @@ CHANGELOG.md at that repository's v0.1.0 tag. Re-verify them when that repositor
 ## Versioned adaptors, one client underneath
 
 OpenFn adaptors are Node packages whose exported operations become the vocabulary of a job
-expression. These Registry Stack packages cover Evidence Gateway and Base Registry
+expression. These Registry Stack packages cover Registry Evidence and Base Registry
 Engine (BReg).
 
 The Evidence and BReg adaptors pin `@registrystack/client` at version 0.27.0 and delegate every
@@ -53,7 +53,7 @@ event data or job source. The shape differs per adaptor.
 - **Explicit mode** names the service base URL, the reviewed signing keys in `trustedJwks`, any
   `revokedKeyIds`, and exactly one token source: a `static` bearer token or a `privateKeyJwt` block
   with the token endpoint, client ID, and a private JWK. The JWKS and revocation list are
-  relying-party trust configuration. Verification never fetches keys from Evidence Gateway and
+  relying-party trust configuration. Verification never fetches keys from Registry Evidence and
   never follows a key URL from a response.
 - **Profile mode** points `profilePath` at a reviewed `EvidenceClientProfile` JSON
   file mounted into the worker, optionally with `privateKeyJwk` from the credential. The profile
@@ -121,7 +121,7 @@ branch before consuming a value or starting a dependent mutation.
 The Evidence adaptor distinguishes `invalid_request`, `authentication_failed`, `not_authorized`,
 `response_format_not_acceptable`, `evidence_not_available`, `retryable_infrastructure`, and
 `failed`. An unresolved subject is `evidence_not_available`, and the adaptor never coerces that into
-a Boolean `false`. The Evidence Gateway service reports the same condition as an
+a Boolean `false`. The Registry Evidence service reports the same condition as an
 `evidence.unavailable` problem.
 
 The BReg adaptor distinguishes `invalid_request`, `auth_failed`, `denied`, `not_found`, `conflict`,
@@ -162,7 +162,7 @@ Authority is split across principals on purpose:
   proposal version, effect digest, and lifecycle ETag, and a stale snapshot is refused.
 - `evidence-source` performs one exact Farm lookup that returns only the local identifier. It
   cannot read names, list records, or write.
-- `holding-registered` is the single Boolean concept Evidence Gateway signs. It means a unique
+- `holding-registered` is the single Boolean concept Registry Evidence signs. It means a unique
   holding currently resolves in this synthetic register and claims nothing about eligibility, land
   rights, activity, ownership, or a person's identity.
 

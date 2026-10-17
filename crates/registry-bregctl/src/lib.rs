@@ -398,6 +398,10 @@ struct InitArgs {
         .args(["project", "package", "file"])
 ))]
 struct CheckArgs {
+    /// Compare a prior Evidence source-export.json with this project's field inventory.
+    #[arg(long, value_name = "FILE", requires = "project", conflicts_with_all = ["package", "file"])]
+    prior_evidence_export: Option<PathBuf>,
+
     /// Base Registry Engine project directory.
     #[arg(value_name = "PROJECT")]
     project: Option<PathBuf>,
@@ -2418,6 +2422,7 @@ where
         Command::Check(args) => {
             let request = check::Request {
                 project: args.project.as_deref(),
+                prior_evidence_export: args.prior_evidence_export.as_deref(),
                 package: args.package.as_deref(),
                 production: args.production,
                 deny_warnings: args.deny_warnings,

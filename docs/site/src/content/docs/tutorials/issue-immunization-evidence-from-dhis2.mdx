@@ -21,7 +21,7 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
 You will apply that pattern to the public DHIS2 Tracker demo, combine two immunization events into
-one governed answer, and verify the signed assertion returned across the Evidence Gateway HTTP
+one governed answer, and verify the signed assertion returned across the Registry Evidence HTTP
 boundary.
 
 <QuickstartMeta
@@ -30,7 +30,7 @@ boundary.
   level="Institution source with synthetic data"
   prerequisites={[
     'The completed governed-value tutorial',
-    'The Evidence Gateway toolset',
+    'The Registry Evidence toolset',
     'Access to the public DHIS2 demo',
     'curl, python3, and an editor',
   ]}
@@ -80,7 +80,7 @@ The source adapter also applies two conservative readings:
 - An absent source value does not become `false` or `0`.
 - Two different values for the same concept make the source record inconsistent.
 
-In either case, Evidence Gateway returns no assertion.
+In either case, Registry Evidence returns no assertion.
 
 ## Choose a synthetic child
 
@@ -207,12 +207,12 @@ export DHIS2_TRACKED_ENTITY_ID="$(cat .local/dhis2-subject.txt)"
 ```
 
 The identifier selects the source record.
-It is used for the DHIS2 read and the Evidence Gateway request, and it does not appear in the
+It is used for the DHIS2 read and the Registry Evidence request, and it does not appear in the
 signed assertion.
 
 ## See the DHIS2 boundary
 
-Read the same bounded fields that Evidence Gateway will use:
+Read the same bounded fields that Registry Evidence will use:
 
 ```sh
 curl --silent --show-error --fail \
@@ -227,7 +227,7 @@ curl --silent --show-error --fail \
 The response contains the tracked entity, its programme enrollment, the two events, and their
 data values.
 Some event data values are unrelated to the five concepts.
-Evidence Gateway will receive the bounded response, discard unrelated values during extraction,
+Registry Evidence will receive the bounded response, discard unrelated values during extraction,
 and release only the five declared concepts.
 
 This distinction is deliberate.
@@ -254,7 +254,7 @@ cd dhis2-immunization
 
 `evidencectl init` retains the OpenAPI document and creates empty `selectors/`, `sources/`,
 `adapters/`, `schemas/`, `questions/`, `derivations/`, and `fixtures/` directories.
-It generates only disposable local Evidence Gateway signing, audit, and subject-binding material.
+It generates only disposable local Registry Evidence signing, audit, and subject-binding material.
 It does not invent the source policy or the answer.
 
 ## Draft the DHIS2 source
@@ -422,7 +422,7 @@ It cannot read the source credential, the caller identity, the purpose, or the s
 
 ## Close the response bounds
 
-Evidence Gateway validates the projected response before extraction runs, and every array in a
+Registry Evidence validates the projected response before extraction runs, and every array in a
 schema must state its bound.
 Replace `schemas/child-tracker-response.schema.yaml` with:
 
@@ -560,7 +560,7 @@ It accepts `ACTIVE` and `COMPLETED` Birth and Baby Postnatal events, converts DH
 typed facts, and refuses conflicting readings.
 Reading both statuses widens what `merge_reading` compares: a concept recorded once on an
 `ACTIVE` event and again on a `COMPLETED` event must carry the same value, or the source record
-is inconsistent and Evidence Gateway returns no assertion.
+is inconsistent and Registry Evidence returns no assertion.
 Unrelated data elements are never added to `facts`.
 
 Replace `schemas/child-tracker-facts.schema.yaml` with the closed extraction result:
@@ -585,7 +585,7 @@ properties:
 ```
 
 A missing immunization reading now fails the fact contract.
-Evidence Gateway does not convert absence into a negative answer.
+Registry Evidence does not convert absence into a negative answer.
 
 ## Author the multi-concept question
 
@@ -655,7 +655,7 @@ fn answer(facts, selectors, context) {
 
 The first comparison prevents a response for another tracked entity from being evaluated.
 The returned map must contain exactly the aliases declared under `answers`.
-Evidence Gateway validates every value against its declared form before signing.
+Registry Evidence validates every value against its declared form before signing.
 
 ## Start the project
 
@@ -714,7 +714,7 @@ Use this only with the public synthetic record.
 carries no identifier on its command line. It reads the file only when the file is a regular file
 you own with exactly one link and mode 0600.
 
-Send that request across the Evidence Gateway HTTP boundary:
+Send that request across the Registry Evidence HTTP boundary:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -727,8 +727,8 @@ curl --silent --show-error --fail-with-body \
   --output immunization-summary.jws.json
 ```
 
-The caller contacts Evidence Gateway.
-Evidence Gateway authenticates and authorizes the caller, performs one bounded authenticated
+The caller contacts Registry Evidence.
+Registry Evidence authenticates and authorizes the caller, performs one bounded authenticated
 DHIS2 read, derives the five concepts, audits the disclosure, and returns a signed flattened JSON
 Web Signature (JWS).
 
@@ -840,12 +840,12 @@ service account, review the source acquisition posture, and build a reviewed pro
 | `curl` fails with 401 | The shared demo account was rotated or disabled. | Take the credential the demo publishes now and update `.local/dhis2.curl`, `secrets/dhis2-username`, and `secrets/dhis2-password`. Do not put a real DHIS2 account in these files. |
 | `choose-dhis2-subject.py` reports that no record on the page carries all five readings | The demo data was reset, or this page of records holds no complete Child Programme case. | Request a later page with `page=2`, or raise `pageSize`. Do not drop a concept from the question so a partial record qualifies. |
 | Writing the subject file fails with `FileExistsError` | `os.open` refuses `O_EXCL` when the file is already there, so a second run cannot overwrite it. | Remove `../.local/dhis2-subjects.json` and run the step again. |
-| Evidence Gateway returns no assertion for a subject that worked earlier | The record changed: a reading was removed, or an `ACTIVE` and a `COMPLETED` event now disagree. | Run the discovery step again and pick a current subject. Leave `merge_reading` refusing conflicts. A disagreement between two events is a fact about the record. |
-| Evidence Gateway reports a source dependency failure | The shared demo was slow or unreachable, or the response exceeded `attemptTimeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| Registry Evidence returns no assertion for a subject that worked earlier | The record changed: a reading was removed, or an `ACTIVE` and a `COMPLETED` event now disagree. | Run the discovery step again and pick a current subject. Leave `merge_reading` refusing conflicts. A disagreement between two events is a fact about the record. |
+| Registry Evidence reports a source dependency failure | The shared demo was slow or unreachable, or the response exceeded `attemptTimeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
 | `curl` fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo host from interception. Do not reach for `--insecure`: the source denies redirects and reaches the demo over HTTPS only. |
 
 ## Next
 
-- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [See Registry Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

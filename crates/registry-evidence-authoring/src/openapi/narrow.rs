@@ -43,7 +43,6 @@ const MAX_PROPERTIES: usize = 64;
 /// The largest enumeration the closed subset admits.
 const MAX_ENUM_MEMBERS: usize = 256;
 /// The byte length of a canonical hyphenated UUID.
-const UUID_LENGTH: u64 = 36;
 /// The smallest string bound derived from a sample. Below this a bound says
 /// more about the one response that was read than about the source.
 const SAMPLE_STRING_FLOOR: u64 = 16;
@@ -83,7 +82,7 @@ pub enum AdvisoryKind {
     /// response-role pair `[T, "null"]`.
     NullOutsideSpec,
     /// A string `format` outside the closed subset was dropped. The subset
-    /// admits `date` and `date-time` only; every other format survives, if at
+    /// admits `date`, `date-time`, and `uuid`; every other format survives, if at
     /// all, as a length bound.
     DroppedFormat(String),
 }
@@ -100,7 +99,7 @@ impl Advisory {
             ),
             AdvisoryKind::DroppedFormat(format) => format!(
                 "`{}` declares format `{format}`, which the closed subset does not admit; \
-                 the subset admits `date` and `date-time` only",
+                 the subset admits `date`, `date-time`, and `uuid`",
                 display_pointer(&self.pointer)
             ),
         }
@@ -119,9 +118,8 @@ impl Advisory {
 ///   fail here first.
 /// - A bound the specification states inside the subset raises no need at all.
 /// - Each need carries the best derivable suggestion, by precedence
-///   `Spec` > `Format` > `Sample`. `Spec` appears when a stated bound is
-///   outside the subset and can be clamped into it; `Format` only for `uuid`,
-///   which is a fixed 36-byte string; `Sample` is widened by the policy
+///   `Spec` > `Sample`. `Spec` appears when a stated bound is
+///   outside the subset and can be clamped into it; `Sample` is widened by the policy
 ///   documented on [`widen_integer_range`], [`widen_string_length`] and
 ///   [`widen_array_items`]. A need with no derivable value carries none: this
 ///   module never invents a bound.
@@ -161,7 +159,7 @@ pub fn plan_advisories(
 ///   members that were kept. A record reached through `*` therefore requires
 ///   nothing unless the specification guarantees that member of every record.
 /// - Enumerations, constants, `uniqueItems`, in-subset bounds and the `date`
-///   and `date-time` formats are carried through. Every other format is
+///   and `date-time` formats, plus `uuid`, are carried through. Every other format is
 ///   dropped, because the subset admits no other. A `[T, "null"]` type pair is
 ///   preserved.
 /// - A bound in `resolutions` is written into the schema after being checked
@@ -773,7 +771,7 @@ impl Narrowing<'_> {
         narrowed: &mut JsonMap<String, Value>,
     ) -> Result<()> {
         let format = node.get("format").and_then(Value::as_str);
-        let dated = matches!(format, Some("date" | "date-time"));
+        let dated = matches!(format, Some("date" | "date-time" | "uuid"));
         if let Some(dropped) = format.filter(|_| !dated) {
             self.advise(pointer, AdvisoryKind::DroppedFormat(dropped.to_owned()));
         }
@@ -808,7 +806,7 @@ impl Narrowing<'_> {
             }
             return Ok(());
         }
-        let suggestion = self.string_suggestion(pointer, format, spec_minimum, spec_maximum);
+        let suggestion = self.string_suggestion(pointer, spec_minimum, spec_maximum);
         let Some(values) = self.demand(pointer, BoundKind::StringLength, suggestion) else {
             return Ok(());
         };
@@ -821,14 +819,12 @@ impl Narrowing<'_> {
     }
 
     /// The best string length the inputs support: a stated bound clamped into
-    /// the subset, else the fixed length a `uuid` format implies, else a
-    /// widened sample observation, else nothing. A stated bound above the
+    /// the subset, else a widened sample observation, else nothing. A stated bound above the
     /// ceiling is attributed to the ceiling, for the reason
     /// [`Self::array_suggestion`] gives.
     fn string_suggestion(
         &self,
         pointer: &str,
-        format: Option<&str>,
         spec_minimum: Option<u64>,
         spec_maximum: Option<u64>,
     ) -> Option<SuggestedBound> {
@@ -840,15 +836,6 @@ impl Narrowing<'_> {
                     max_length: MAX_LENGTH_CEILING,
                 },
                 provenance: Provenance::SubsetCeiling,
-            });
-        }
-        if format == Some("uuid") {
-            return Some(SuggestedBound {
-                values: BoundValues::StringLength {
-                    min_length: UUID_LENGTH,
-                    max_length: UUID_LENGTH,
-                },
-                provenance: Provenance::Format,
             });
         }
         let observed = self.observed(pointer)?.max_string_bytes?;
