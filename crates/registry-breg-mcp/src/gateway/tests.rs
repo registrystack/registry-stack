@@ -571,8 +571,8 @@ async fn registry_problems_map_to_stable_codes_with_a_trace() {
     fixture
         .registry
         .fail_next(http::Method::POST, BRegProblemCode::PreconditionFailed);
-    let stale = update().await;
-    assert_eq!(error_code(&stale), "stale-application");
+    let refused = update().await;
+    assert_eq!(error_code(&refused), "change-refused");
 }
 
 #[tokio::test]
@@ -1011,10 +1011,10 @@ async fn a_definite_refusal_of_the_update_patch_is_refused() {
                 "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
         .await;
-    assert_eq!(error_code(&value), "stale-application");
+    assert_eq!(error_code(&value), "change-refused");
     let record = response_record(&capture);
     assert_eq!(record["outcome"], "refused");
-    assert_eq!(record["reason"], "stale-application");
+    assert_eq!(record["reason"], "change-refused");
 }
 
 #[tokio::test]

@@ -1,5 +1,13 @@
 # Base Registry Engine review page
 
+`breg-review` and the paired `breg-mcp` gateway are experimental supporting
+services, outside Registry Stack's 1.0 compatibility and deployment promise.
+The [gateway deployment boundary](../registry-breg-mcp/README.md#tools) requires
+an external task authority for the assistant's current, exact per-Proposal
+grants. Neither service provisions that authority; maintained provisioning is
+deferred until after 1.0. The review page's human sign-in and submit authority
+remain separate from the assistant's delegated grants.
+
 `breg-review` is a small server-rendered page where a signed-in person reads
 their own Base Registry Engine Proposal draft beside the record it would
 change, and submits it. It is the place a person confirms a change another

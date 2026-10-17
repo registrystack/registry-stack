@@ -638,3 +638,229 @@ fn subject_of(authorization: &str) -> String {
     .expect("claims");
     claims["sub"].as_str().expect("subject").to_owned()
 }
+
+const RECOVERY_CANARY: &str = "canary-recovery-private-detail";
+
+fn assert_private_recovery(
+    harness: &Harness,
+    token: &str,
+    results: &[rmcp::model::CallToolResult],
+) {
+    let output = serde_json::to_string(results).expect("results serialize");
+    let audit = harness.audit_text();
+    let logs = logs();
+    // main.rs emits only gateway events, without inherited spans. This
+    // process also captures the test MCP client's debug request bodies.
+    let operational_logs = logs
+        .lines()
+        .filter_map(|line| {
+            let event: Value = serde_json::from_str(line).expect("structured log");
+            event["target"]
+                .as_str()
+                .is_some_and(|target| target.starts_with("registry_breg_mcp"))
+                .then(|| event["fields"].to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for text in [&output, &audit, &operational_logs] {
+        assert!(
+            !text.contains(RECOVERY_CANARY),
+            "recovery payload was disclosed"
+        );
+    }
+    let mut secrets = vec![
+        token.to_owned(),
+        harness.gateway_key_secret(),
+        AUDIT_KEY.to_owned(),
+    ];
+    secrets.extend(
+        harness
+            .registry
+            .seen()
+            .into_iter()
+            .filter_map(|seen| seen.authorization)
+            .map(|value| value.trim_start_matches("Bearer ").to_owned()),
+    );
+    for secret in secrets {
+        assert!(
+            !output.contains(&secret),
+            "tool result disclosed a credential"
+        );
+        assert!(!audit.contains(&secret), "audit disclosed a credential");
+        assert!(!logs.contains(&secret), "log disclosed a credential");
+    }
+    for subject in [CITIZEN_A, CITIZEN_B] {
+        assert!(!audit.contains(subject), "audit disclosed a subject");
+    }
+}
+
+#[tokio::test]
+async fn exchange_refusals_and_unavailability_have_distinct_bounded_recovery() {
+    for (status, provider_code, expected) in [
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "authorization-refused",
+        ),
+        (
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "authorization-refused",
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            RECOVERY_CANARY,
+            "authorization-refused",
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "registry-unavailable",
+        ),
+    ] {
+        let harness = Harness::start(Limits::default()).await;
+        let token = harness.token(CITIZEN_A);
+        let client = connect(&harness.resource, &token).await;
+        harness.answer_exchange(
+            status,
+            json!({
+                "error": provider_code, "error_description": RECOVERY_CANARY,
+                "access_token": RECOVERY_CANARY,
+            }),
+        );
+        let result = call(&client, "get_my_details", json!({})).await;
+        assert_eq!(error_code(&result), expected);
+        let value = structured(&result);
+        assert_eq!(value["error"].as_object().unwrap().len(), 2);
+        assert!(!value.to_string().contains(provider_code));
+        assert!(!value.to_string().contains("Sign in again"));
+        assert_eq!(
+            harness.exchanges(),
+            2,
+            "actor grant then delegated exchange"
+        );
+        assert!(harness.registry.seen().is_empty());
+        let audit = harness.audit_text();
+        let response: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+        assert_eq!(response["record"]["outcome"], "refused");
+        assert_eq!(response["record"]["reason"], expected);
+        assert_private_recovery(&harness, &token, &[result]);
+        client.cancel().await.expect("client closes");
+    }
+}
+
+#[tokio::test]
+async fn runtime_condition_refusal_is_distinct_from_a_locally_stale_revision() {
+    let harness = Harness::start(Limits::default()).await;
+    let draft = harness.registry.add_application(
+        json!({"address": ADDRESS_A, "owner": CITIZEN_A, "newLocality": RECOVERY_CANARY}),
+        mock_registry::draft_request(),
+    );
+    let token = harness.token(CITIZEN_A);
+    let client = connect(&harness.resource, &token).await;
+    let update = |revision: &str| {
+        json!({"applicationId": draft, "expectedRevision": revision,
+        "patch": [{"op": "replace", "path": "/newLocality", "value": RECOVERY_CANARY}]})
+    };
+    let stale = call(&client, "update_application", update("7")).await;
+    assert_eq!(error_code(&stale), "stale-application");
+    assert!(!harness
+        .registry
+        .seen()
+        .iter()
+        .any(|seen| seen.method == http::Method::POST));
+
+    harness.registry.fail_next(
+        http::Method::POST,
+        registry_breg_client::BRegProblemCode::PreconditionFailed,
+    );
+    let refused = call(&client, "update_application", update("1")).await;
+    assert_eq!(error_code(&refused), "change-refused");
+    let error = structured(&refused);
+    assert_eq!(error["error"].as_object().unwrap().len(), 3);
+    assert!(error["error"]["traceId"].is_string());
+    assert_eq!(harness.registry.applications()[&draft].revision, 1);
+    assert_eq!(
+        harness
+            .registry
+            .seen()
+            .iter()
+            .filter(|seen| seen.method == http::Method::POST)
+            .count(),
+        1
+    );
+    let audit = harness.audit_text();
+    let response: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+    assert_eq!(response["record"]["outcome"], "refused");
+    assert_eq!(response["record"]["reason"], "change-refused");
+    assert_private_recovery(&harness, &token, &[stale, refused]);
+    client.cancel().await.expect("client closes");
+}
+
+#[tokio::test]
+async fn recovery_keeps_concealed_and_absent_applications_indistinguishable() {
+    let harness = Harness::start(Limits::default()).await;
+    let mut ids = vec![uuid::Uuid::new_v4()];
+    for (owner, target) in [(CITIZEN_B, ADDRESS_B), (CITIZEN_A, ADDRESS_B)] {
+        ids.push(harness.registry.add_application(
+            json!({"address": target, "owner": owner, "newLocality": RECOVERY_CANARY}),
+            mock_registry::draft_request(),
+        ));
+    }
+    let token = harness.token(CITIZEN_A);
+    let client = connect(&harness.resource, &token).await;
+    let mut results = Vec::new();
+    for id in ids {
+        for tool in [
+            "get_application_status",
+            "prepare_review",
+            "update_application",
+        ] {
+            let mut args = json!({"applicationId": id});
+            if tool == "update_application" {
+                args["expectedRevision"] = json!("1");
+                args["patch"] =
+                    json!([{"op":"replace","path":"/newLocality","value":RECOVERY_CANARY}]);
+            }
+            let result = call(&client, tool, args).await;
+            assert_eq!(error_code(&result), "not-found");
+            let error = structured(&result);
+            assert_eq!(
+                error["error"]["message"],
+                "No application with that identifier is available to you."
+            );
+            assert!(error.get("application").is_none());
+            assert!(error.get("reviewUrl").is_none());
+            results.push(result);
+        }
+    }
+    assert!(!harness
+        .registry
+        .seen()
+        .iter()
+        .any(|seen| seen.method == http::Method::POST));
+    assert_private_recovery(&harness, &token, &results);
+    client.cancel().await.expect("client closes");
+}
+
+#[tokio::test]
+async fn missing_and_invalid_credentials_challenge_before_any_recovery_exchange() {
+    const INVALID_CREDENTIAL_CANARY: &str = "canary-invalid-inbound-credential";
+    let harness = Harness::start(Limits::default()).await;
+    for (token, expected) in [
+        (None, "unauthorized"),
+        (Some(INVALID_CREDENTIAL_CANARY), "invalid-token"),
+    ] {
+        let response = post_mcp(&harness, token).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let challenge = challenge(&response);
+        assert!(challenge.contains("resource_metadata="));
+        assert!(!challenge.contains(INVALID_CREDENTIAL_CANARY));
+        let body: Value = response.json().await.expect("bounded HTTP problem");
+        assert_eq!(body["code"], expected);
+        assert!(!body.to_string().contains(INVALID_CREDENTIAL_CANARY));
+    }
+    assert_eq!(harness.exchanges(), 0);
+    assert!(harness.registry.seen().is_empty());
+    assert_private_recovery(&harness, INVALID_CREDENTIAL_CANARY, &[]);
+}

@@ -88,6 +88,7 @@ pub struct Harness {
     pub directory: TempDir,
     pub gateway_key: PrivateJwk,
     exchanges: Arc<AtomicUsize>,
+    exchange_response: Arc<Mutex<Option<(StatusCode, Value)>>>,
     config_path: PathBuf,
 }
 
@@ -132,8 +133,13 @@ impl Harness {
             registry.grant_issuer(),
         )
         .await;
-        let token_endpoint =
-            counting_token_endpoint(granted_endpoint, Arc::clone(&exchanges)).await;
+        let exchange_response = Arc::new(Mutex::new(None));
+        let token_endpoint = counting_token_endpoint(
+            granted_endpoint,
+            Arc::clone(&exchanges),
+            Arc::clone(&exchange_response),
+        )
+        .await;
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let root = directory
@@ -164,6 +170,7 @@ impl Harness {
             directory,
             gateway_key,
             exchanges,
+            exchange_response,
             config_path,
         }
     }
@@ -191,6 +198,11 @@ impl Harness {
     /// How many requests reached the gateway's token endpoint.
     pub fn exchanges(&self) -> usize {
         self.exchanges.load(Ordering::SeqCst)
+    }
+
+    /// Override delegated exchanges while allowing the gateway's actor grant.
+    pub fn answer_exchange(&self, status: StatusCode, body: Value) {
+        *self.exchange_response.lock().expect("exchange response") = Some((status, body));
     }
 
     pub fn audit_text(&self) -> String {
@@ -386,16 +398,22 @@ rateLimits:
 struct Forward {
     target: String,
     count: Arc<AtomicUsize>,
+    response: Arc<Mutex<Option<(StatusCode, Value)>>>,
     client: reqwest::Client,
 }
 
 /// A token endpoint that counts each request and forwards it unchanged.
-async fn counting_token_endpoint(target: String, count: Arc<AtomicUsize>) -> String {
+async fn counting_token_endpoint(
+    target: String,
+    count: Arc<AtomicUsize>,
+    response: Arc<Mutex<Option<(StatusCode, Value)>>>,
+) -> String {
     let app = Router::new()
         .route("/token", post(forward))
         .with_state(Forward {
             target,
             count,
+            response,
             client: reqwest::Client::new(),
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -415,6 +433,13 @@ async fn counting_token_endpoint(target: String, count: Arc<AtomicUsize>) -> Str
 
 async fn forward(State(forward): State<Forward>, headers: HeaderMap, body: Bytes) -> Response {
     forward.count.fetch_add(1, Ordering::SeqCst);
+    if url::form_urlencoded::parse(&body).any(|(key, value)| {
+        key == "grant_type" && value == "urn:ietf:params:oauth:grant-type:token-exchange"
+    }) {
+        if let Some((status, value)) = forward.response.lock().expect("exchange response").clone() {
+            return (status, axum::Json(value)).into_response();
+        }
+    }
     let mut request = forward.client.post(&forward.target).body(body);
     if let Some(content_type) = headers.get(axum::http::header::CONTENT_TYPE) {
         request = request.header(axum::http::header::CONTENT_TYPE, content_type.clone());
