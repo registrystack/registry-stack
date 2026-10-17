@@ -1576,16 +1576,26 @@ class CiChangesTest(unittest.TestCase):
         # Each page's tutorial_test frontmatter is the source of truth for
         # which tutorials the gate replays. A replayed page missing here would
         # not trigger the job that replays it, so it could break without any
-        # pull request noticing.
-        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
+        # pull request noticing. The sections are the ones the gate walks,
+        # read from gate.mjs so an added opt-in section is covered here too.
+        root = Path(__file__).resolve().parents[2]
+        docs = root / "docs/site/src/content/docs"
+        gate = (root / "docs/site/scripts/tutorial-runner/gate.mjs").read_text()
+        sections = []
+        for name in ("SECTIONS", "OPT_IN_SECTIONS"):
+            declared = re.search(rf"^const {name} = \[([^\]]*)\];$", gate, re.M)
+            self.assertIsNotNone(declared, name)
+            sections.extend(re.findall(r"'([^']+)'", declared.group(1)))
+        self.assertIn("configure", sections)
         slugs = []
-        for section in ("start", "tutorials"):
-            for page in sorted((docs / section).glob("*.mdx")):
+        for section in sections:
+            for page in sorted((docs / section).rglob("*.mdx")):
                 frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
                 declaration = frontmatter.get("tutorial_test") or {}
                 if declaration.get("toolset") == "breg" and "skip" not in declaration:
-                    slugs.append(f"{section}/{page.stem}")
+                    slugs.append(page.relative_to(docs).with_suffix("").as_posix())
         self.assertIn("tutorials/first-breg", slugs)
+        self.assertIn("configure/breg-access", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
                 page = f"docs/site/src/content/docs/{slug}.mdx"
@@ -1595,6 +1605,13 @@ class CiChangesTest(unittest.TestCase):
                         for pattern in BREG_TUTORIAL_INPUTS
                     )
                 )
+        # The pages are listed exactly, so a listed page the gate no longer
+        # replays is a stale trigger.
+        replayed = {f"docs/site/src/content/docs/{slug}.mdx" for slug in slugs}
+        for pattern in BREG_TUTORIAL_INPUTS:
+            if pattern.startswith("docs/site/src/content/docs/"):
+                with self.subTest(listed=pattern):
+                    self.assertIn(pattern, replayed)
 
     def test_breg_tutorial_routing(self) -> None:
         infrastructure = (
@@ -1651,9 +1668,24 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-evidencectl/src/source_cli.rs",
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
             "docs/site/scripts/generate-breg-evidence-starter.mjs",
+            # An opt-in page the gate does not replay.
+            "docs/site/src/content/docs/configure/breg-mcp.mdx",
         ):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["breg_tutorial"])
+        # The opt-in pages the gate replays, and what the client tutorial
+        # imports: every product's native binding and the scripts and pinned
+        # tool that assemble them into the unified packages.
+        for path in (
+            "docs/site/src/content/docs/configure/breg-access.mdx",
+            "docs/site/src/content/docs/explanation/registry-modeling-patterns.mdx",
+            "crates/registry-breg-client-node/src/lib.rs",
+            "crates/registry-casework-client-py/src/lib.rs",
+            "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/assemble-registry-client-packages.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
 
     def test_casework_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
         # Each page's tutorial_test frontmatter is the source of truth for
