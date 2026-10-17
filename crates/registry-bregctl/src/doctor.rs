@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::runtime_config::load_runtime_config;
 use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
@@ -29,12 +30,19 @@ pub(crate) struct DoctorRefusal {
     pub(crate) runtime_configuration: bool,
 }
 
+/// A passing doctor decision plus the non-fatal operator warning derived from
+/// the same runtime configuration startup checked.
+pub(crate) struct DoctorSuccess {
+    pub(crate) checked: CheckedStartup,
+    pub(crate) insecure_http_warning: Option<&'static str>,
+}
+
 /// Run the startup dependency check without binding a listener, keeping only
 /// the PostgreSQL baseline advisories and the role mode it decided. It verifies the dependencies
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal> {
+pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal> {
     if !runtime_config.is_absolute() {
         return Err(DoctorRefusal {
             diagnostics: vec![diagnostic(
@@ -46,6 +54,14 @@ pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal
         });
     }
 
+    let config = load_runtime_config(runtime_config).map_err(|cause| DoctorRefusal {
+        diagnostics: crate::runtime_config_diagnostics(&cause),
+        runtime_configuration: true,
+    })?;
+    let insecure_http_warning = config
+        .authentication()
+        .oidc()
+        .insecure_http_startup_diagnostic();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -57,9 +73,13 @@ pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal
             )],
             runtime_configuration: false,
         })?;
-    runtime
+    let checked = runtime
         .block_on(check(runtime_config))
-        .map_err(startup_refusal)
+        .map_err(startup_refusal)?;
+    Ok(DoctorSuccess {
+        checked,
+        insecure_http_warning,
+    })
 }
 
 /// A refused runtime file reports every reader diagnostic, or the one rule

@@ -342,6 +342,11 @@
       "additionalProperties": false,
       "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, the scope claim, and the claim that marks a human actor.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP for a declared issuer beyond loopback. TLS remains\nrequired unless the operator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "allowedClients": {
           "$ref": "#/$defs/OidcAllowedClients",
           "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production."
@@ -373,6 +378,16 @@
           "minLength": 1,
           "type": "string"
         },
+        "deniedKids": {
+          "description": "Signing-key identifiers refused even while the issuer still publishes\nthem. Omitted, no key is denied; written, the list is non-empty.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "humanIdentity": {
           "$ref": "#/$defs/HumanIdentityConfig"
         },
@@ -386,6 +401,13 @@
             "type": "discovery"
           },
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        },
+        "maximumTokenLifetimeSeconds": {
+          "description": "Optional deployment bound on the lifetime declared by an incoming\naccess token, independently of the issuer's own policy.",
+          "format": "uint64",
+          "maximum": 7200,
+          "minimum": 1,
+          "type": "integer"
         },
         "scopeClaim": {
           "default": "registry_scopes",

@@ -33,7 +33,11 @@ invariants:
       Before constructing authentication, the runtime loader reads issuer
       and explicit JWKS URI through the shared checked URL type, refusing
       backslashes and rewritten host text with value-free diagnostics. Issuer
-      comparison stays textual and existing HTTPS and loopback policy applies.
+      comparison stays textual. The declared issuer may use a private address,
+      while discovered private JWKS addresses are accepted only on the same
+      origin. Cloud metadata and redirects remain denied. Non-loopback HTTP
+      requires the explicit `allowInsecureHttp: true` runtime exception and a
+      fixed startup warning; loopback HTTP remains available for development.
       For a development session borrowing a ready BReg issuer, `messagingctl`
       obtains each requester client's credential only through public
       `bregctl dev export-client`, then uses the explicit Messaging resource,

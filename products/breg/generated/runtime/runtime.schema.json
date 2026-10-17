@@ -914,6 +914,11 @@
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
           "type": "string"
         },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP for a declared issuer beyond loopback. TLS remains\nrequired unless the operator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "allowedAlgorithm": {
           "$ref": "#/$defs/OidcAlgorithm"
         },

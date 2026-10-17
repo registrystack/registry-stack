@@ -327,6 +327,11 @@
       "additionalProperties": false,
       "description": "The OpenID Provider the page signs people in with, and the confidential\nclient it authenticates as.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP to the declared issuer beyond loopback.",
+          "type": "boolean"
+        },
         "clientId": {
           "$ref": "#/$defs/ExternalId",
           "description": "The page's client identifier at the provider."

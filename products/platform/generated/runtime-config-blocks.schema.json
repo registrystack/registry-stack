@@ -214,6 +214,11 @@
       "additionalProperties": false,
       "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP for a declared issuer beyond loopback. TLS remains\nrequired unless the operator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "audience": {
           "description": "The audience every accepted access token must carry in `aud`.",
           "maxLength": 512,

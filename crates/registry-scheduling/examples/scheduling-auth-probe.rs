@@ -8,14 +8,15 @@
 //! verifier detail is logged.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Read;
-use std::sync::Arc;
+use std::os::unix::fs::PermissionsExt;
 
-use jsonwebtoken::{jwk::JwkSet, Algorithm};
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_config::write_package;
 use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig};
+use registry_scheduling::config::{package_limits, RuntimeConfig, PACKAGE_COMMAND};
 use serde::Deserialize;
+use serde_json::json;
 
 const MAXIMUM_INPUT_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_VALUE_BYTES: usize = 512;
@@ -82,37 +83,62 @@ fn validate_input(input: &ProbeInput) -> bool {
 }
 
 async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
-    let keys: JwkSet = serde_json::from_value(input.jwks).map_err(|_| ())?;
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().map_err(|_| ())?)
+        .map_err(|_| ())?;
+    let package = root.path().join("package");
+    write_package(
+        &package,
+        &BTreeMap::from([(
+            registry_scheduling_core::AUTHORED_POLICY_FILE.to_owned(),
+            include_bytes!(
+                "../../../products/scheduling/examples/standalone-exact-time/scheduling.yaml"
+            )
+            .to_vec(),
+        )]),
+        None,
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )
+    .map_err(|_| ())?;
+    let secrets = root.path().join("secrets");
+    fs::create_dir(&secrets).map_err(|_| ())?;
+    fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700)).map_err(|_| ())?;
+    let jwks_path = secrets.join("issuer-jwks");
+    fs::write(&jwks_path, serde_json::to_vec(&input.jwks).map_err(|_| ())?).map_err(|_| ())?;
+    fs::set_permissions(&jwks_path, fs::Permissions::from_mode(0o600)).map_err(|_| ())?;
     let assertion_issuers =
         BTreeMap::from([(input.client.clone(), vec![input.assertion_issuer.clone()])]);
-    let oidc = OidcConfig {
-        provider: OidcIssuerConfig {
-            issuer: registry_platform_yaml::Url::new(input.issuer.clone()).map_err(|_| ())?,
-            audience: input.audience.clone(),
-            jwks_source: JwksSource::Discovery {},
-        },
-        clients: OidcClientsConfig {
-            allowed_clients: vec![input.client.clone()],
-            assertion_issuers: assertion_issuers.clone(),
-        },
-        scope_claim: "scope".to_owned(),
-        reads_scope: "scheduling:read".to_owned(),
-        explain_scope: "scheduling:explain".to_owned(),
-    };
-    let verifier = TokenVerifierConfig::access_token_profile(
-        input.issuer,
-        vec![input.audience],
-        vec![Algorithm::RS256],
-        vec!["at+jwt".to_owned()],
+    let runtime_path = root.path().join("runtime.json");
+    fs::write(
+        &runtime_path,
+        serde_json::to_vec(&json!({
+            "apiVersion": registry_scheduling_core::SCHEDULING_RUNTIME_API_VERSION,
+            "kind": registry_scheduling_core::SCHEDULING_RUNTIME_KIND,
+            "identity": {"databaseId": "native-task-grant"},
+            "package": {"root": package},
+            "listener": {"bind": "127.0.0.1:0", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
+            "secretProviders": {"file": {"root": secrets}, "environment": {}},
+            "database": {"runtimeUrlRef": "secret:env/SCHEDULING_RUNTIME_URL", "migrationUrlRef": "secret:env/SCHEDULING_MIGRATION_URL"},
+            "authentication": {"oidc": {
+                "issuer": input.issuer.clone(),
+                "audience": input.audience.clone(),
+                "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
+                "allowedClients": [input.client.clone()],
+                "assertionIssuers": assertion_issuers,
+                "scopeClaim": "scope"
+            }},
+            "taskGrantStatus": "unchecked-final-fifteen-minutes",
+            "audit": {"path": root.path().join("audit.jsonl"), "hashKeyRef": "secret:file/audit-key"},
+            "destinations": {},
+            "retention": {"receiptRetentionDays": 7}
+        }))
+        .map_err(|_| ())?,
     )
-    .with_scope_claim("scope")
-    .with_allowed_clients(vec![input.client])
-    .with_assertion_issuers(assertion_issuers);
-    let authenticator = SchedulingAuthenticator::new(
-        &oidc,
-        verifier,
-        Arc::new(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())),
-    );
+    .map_err(|_| ())?;
+    let runtime = RuntimeConfig::load(&runtime_path).map_err(|_| ())?;
+    let secrets = registry_scheduling::runtime::secret_resolver(&runtime).map_err(|_| ())?;
+    let (verifier, keys) = runtime.oidc_verifier(&secrets).await.map_err(|_| ())?;
+    let authenticator = SchedulingAuthenticator::new(&runtime.authentication.oidc, verifier, keys);
     let caller = authenticator
         .authenticate_mutate(&input.token)
         .await

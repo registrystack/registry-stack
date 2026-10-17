@@ -96,6 +96,7 @@ fn configured_endpoint_policy(endpoint: &Url) -> FetchUrlPolicy {
             allowed_schemes: vec!["https".into()],
             allow_localhost: true,
             allow_http_private_network: false,
+            allow_http_non_loopback: false,
             deny_private_ranges: false,
             deny_cloud_metadata: true,
         }

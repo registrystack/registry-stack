@@ -22,6 +22,10 @@ required-features = ["runtime"]
 name = "wasm-footprint-probe"
 required-features = ["wasm"]
 
+[[example]]
+name = "oidc-runtime-config-probe"
+required-features = ["runtime"]
+
 [[test]]
 name = "postgres_kernel"
 path = "tests/postgres_kernel.rs"

@@ -20,8 +20,8 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    grant_claims, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
-    TokenVerifierConfig,
+    grant_claims, ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig,
 };
 
 use crate::config::{AccessTokenAlgorithm, OfferAuthorizationConfig, ValidationMode};
@@ -83,6 +83,9 @@ impl MintResourceServer {
     /// and auditable, without reference to who this service is elsewhere.
     #[must_use]
     pub fn from_config(config: &OfferAuthorizationConfig, mode: ValidationMode) -> Self {
+        if let Some(diagnostic) = config.insecure_http_startup_diagnostic() {
+            tracing::warn!("{diagnostic}");
+        }
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
@@ -161,25 +164,17 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
 /// is itself on loopback. Every other deployment fetches its key set over
 /// https, exactly as Evidence does.
 fn fetch_url_policy(config: &OfferAuthorizationConfig, mode: ValidationMode) -> FetchUrlPolicy {
-    let local = mode == ValidationMode::SupervisedLocalDevelopment
+    let supervised_local_http = mode == ValidationMode::SupervisedLocalDevelopment
         && config.issuer.starts_with("http://127.0.0.1:")
         && config.jwks_uri.starts_with("http://127.0.0.1:");
-    if local {
-        return FetchUrlPolicy {
-            allowed_schemes: vec!["http".to_owned()],
-            allow_localhost: true,
-            allow_http_private_network: false,
-            deny_private_ranges: true,
-            deny_cloud_metadata: true,
-        };
+    if config.issuer.starts_with("http://") && !config.allow_insecure_http && !supervised_local_http
+    {
+        return FetchUrlPolicy::strict();
     }
-    FetchUrlPolicy {
-        allowed_schemes: vec!["https".to_owned()],
-        allow_localhost: true,
-        allow_http_private_network: false,
-        deny_private_ranges: false,
-        deny_cloud_metadata: true,
-    }
+    let allow_insecure_http = config.allow_insecure_http || supervised_local_http;
+    IssuerNetworkPolicy::new(&config.issuer, allow_insecure_http)
+        .and_then(|network| network.jwks_fetch_policy(&config.jwks_uri))
+        .unwrap_or_else(|_| FetchUrlPolicy::strict())
 }
 
 #[async_trait]
@@ -318,6 +313,6 @@ mod tests {
         let supervised =
             fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment);
         assert_eq!(supervised.allowed_schemes, ["http"]);
-        assert!(supervised.deny_private_ranges);
+        assert!(!supervised.deny_private_ranges);
     }
 }
