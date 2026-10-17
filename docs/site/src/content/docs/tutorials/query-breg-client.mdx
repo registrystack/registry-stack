@@ -14,7 +14,8 @@ standards_referenced:
   - openapi
 tutorial_test:
   toolset: breg
-  skip: BReg client journey; depends on the released unified packages
+  after: tutorials/first-breg
+  skip: its program blocks name no file for the runner to write; it needs the first-breg registry running and seeded, but that page ends with dev stop --remove; and workspace binaries report 0.42.0-dev while the assembled packages are 0.42.0, so the version the page reads from breg --version cannot be installed
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';

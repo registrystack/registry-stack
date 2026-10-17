@@ -130,6 +130,65 @@ test('the breg toolset refuses a relative binary path', async () => {
   });
 });
 
+async function fakeBregBinaries(dir) {
+  for (const name of ['breg', 'bregctl']) {
+    await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*"\n`);
+    await chmod(join(dir, name), 0o755);
+  }
+  return { BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl') };
+}
+
+// A directory holding a packed npm package and a stand-in wheel, as
+// release/scripts/assemble-registry-client-packages.py leaves its output.
+async function fakeClientPackages(dir) {
+  const packages = join(dir, 'packages');
+  const source = join(dir, 'client-source');
+  await mkdir(packages);
+  await mkdir(source);
+  await writeFile(join(source, 'package.json'), JSON.stringify({ name: '@registrystack/client', version: '0.0.0-tutorial', main: 'index.js' }));
+  await writeFile(join(source, 'index.js'), "module.exports = 'assembled';\n");
+  await execFileAsync('npm', ['pack', '--ignore-scripts', '--pack-destination', packages], { cwd: source });
+  await writeFile(join(packages, 'registry_stack_client-0.0.0-py3-none-any.whl'), '');
+  return packages;
+}
+
+test('the breg toolset serves the client packages to a journey that installs them, by their published names', async () => {
+  const body =
+    '## Install\n\n' +
+    fence(
+      'sh',
+      'npm init -y >/dev/null\nnpm install "@registrystack/client@0.0.0-tutorial" >/dev/null\n' +
+        "node -p \"require('@registrystack/client')\"\n" +
+        'printf \'%s %s\\n\' "$PIP_NO_INDEX" "$(basename "$PIP_FIND_LINKS")"',
+    ) +
+    fence('text test-expect', 'assembled\n1 packages');
+  await withPage(body, async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      ...(await fakeBregBinaries(dir)),
+      REGISTRY_CLIENT_PACKAGES_DIR: await fakeClientPackages(dir),
+    });
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+  });
+});
+
+test('the breg toolset neither needs nor serves the client packages to a journey that does not install them', async () => {
+  const body = '## Work\n\n' + fence('sh', 'printf \'[%s]\\n\' "${PIP_FIND_LINKS:-}"') + fence('text test-expect', '[]');
+  await withPage(body, async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'breg', page], { ...(await fakeBregBinaries(dir)), REGISTRY_CLIENT_PACKAGES_DIR: 'relative' });
+    assert.equal(code, 0, output);
+  });
+});
+
+test('the breg toolset refuses client packages named by a relative path', async () => {
+  const body = '## Install\n\n' + fence('sh', 'python -m pip install "registry-stack-client==${version}"');
+  await withPage(body, async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'breg', page], { ...(await fakeBregBinaries(dir)), REGISTRY_CLIENT_PACKAGES_DIR: 'packages' });
+    assert.equal(code, 2, output);
+    assert.match(output, /REGISTRY_CLIENT_PACKAGES_DIR must be an absolute path: packages/u);
+  });
+});
+
 test('the harness sets no shell variable a page could use or clobber', async () => {
   const body =
     '## Work\n\n' +
