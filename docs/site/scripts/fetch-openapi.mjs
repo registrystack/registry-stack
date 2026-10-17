@@ -47,7 +47,21 @@ const SPEC_SOURCES = {
   'registry-messaging': 'products/messaging/generated/registry-messaging.openapi.json',
   'registry-coordinator': 'products/coordinator/generated/openapi/coordinator.openapi.json',
   'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
+  // A registry's OpenAPI document is compiled from its project, so the site
+  // renders the facility template's compiled document as an example of what a
+  // registry serves.
+  'registry-breg': 'products/breg/generated/facility/generated/openapi.json',
 };
+
+// The Base Registry Engine pages are hand-authored, so repo-docs.yaml carries
+// no registry-breg entry. Its document is sourced from the monorepo at the
+// docset's registry-stack ref unless repo-docs.yaml declares an entry, and is
+// published by the current docset only: sealed archives predate it.
+function bregRepo(docset) {
+  const ref = docset.products['registry-stack']?.ref;
+  if (!ref) fail(`registry-breg: docset ${docset.id} pins no registry-stack ref for the OpenAPI spec`);
+  return { remote: 'https://github.com/registrystack/registry-stack', ref, local: '../..' };
+}
 
 function fail(message) {
   console.error(`error: ${message}`);
@@ -128,7 +142,11 @@ async function main() {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
-    const repo = manifest.repos[repoId];
+    if (repoId === 'registry-breg' && docset.id !== docsets.current) {
+      console.log(`Skipped ${repoId} OpenAPI spec: only the current docset publishes it, not ${docset.id}.`);
+      continue;
+    }
+    const repo = manifest.repos[repoId] ?? (repoId === 'registry-breg' ? bregRepo(docset) : undefined);
     if (!repo) {
       fail(`${repoId}: no entry in repo-docs.yaml to source the OpenAPI spec ref from`);
     }

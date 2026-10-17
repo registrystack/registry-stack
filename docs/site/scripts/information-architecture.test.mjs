@@ -97,7 +97,20 @@ const coordinatorOpenApiSchema = {
   schema: './openapi/registry-coordinator.openapi.json',
   sidebar: { label: 'API operations', collapsed: true },
 };
+// BReg's operations fill their own createOpenAPISidebarGroup() placeholder,
+// which the plugin replaces with the generated group.
+const bregOpenApiSidebarGroup = {
+  label: 'API operations (facility template)',
+  collapsed: true,
+  items: [{ label: 'Generated tag', items: [] }],
+};
+const bregOpenApiSchema = {
+  base: 'reference/apis/breg',
+  schema: './openapi/registry-breg.openapi.json',
+  sidebar: { group: bregOpenApiSidebarGroup, label: 'API operations (facility template)', collapsed: true },
+};
 const apiSchemaFactory = new Function(
+  'isArchivedBuild',
   'hasCasework',
   'hasScheduling',
   'hasMessaging',
@@ -106,9 +119,11 @@ const apiSchemaFactory = new Function(
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
   'coordinatorOpenApiSchema',
+  'bregOpenApiSchema',
   `return ${apiConfigSource};`,
 );
 const apiSchemas = apiSchemaFactory(
+  false,
   true,
   true,
   true,
@@ -117,8 +132,11 @@ const apiSchemas = apiSchemaFactory(
   schedulingOpenApiSchema,
   messagingOpenApiSchema,
   coordinatorOpenApiSchema,
+  bregOpenApiSchema,
 );
-const generatedAPI = apiSchemas.map((schema) => ({
+assert.ok(apiSchemas.includes(bregOpenApiSchema), 'the current docset registers the BReg OpenAPI schema');
+// Schemas without their own group stand in for the openAPISidebarGroups slices.
+const generatedAPI = apiSchemas.filter((schema) => !schema.sidebar.group).map((schema) => ({
   ...schema.sidebar,
   items: [{ label: 'Generated tag', items: [] }],
 }));
@@ -136,6 +154,8 @@ const sidebarFactory = new Function(
   'hasBregServices',
   'hasCoordinator',
   'selectedDocset',
+  'isArchivedBuild',
+  'bregOpenApiSidebarGroup',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -160,7 +180,8 @@ const everyProductDocset = {
     'registry-coordinator': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset);
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset,
+  false, bregOpenApiSidebarGroup);
 
 const messagingPageRoutes = [
   '/start/messaging/',
@@ -338,6 +359,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasBregServices,
       context.hasCoordinator,
       context.selectedDocset,
+      context.isArchivedBuild,
+      bregOpenApiSidebarGroup,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
@@ -349,7 +372,10 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const docsetBreg = docsetSidebar.find((item) => item.label === 'Base Registry Engine');
     assert.ok(docsetBreg, id);
     assert.equal(docsetBreg.items.some((item) => item.label === 'Citizen chat assistant'), hasBregServices, id);
+    // Only the current docset publishes the BReg facility API.
+    assert.equal(docsetBreg.items.includes(bregOpenApiSidebarGroup), id === 'latest', id);
     const docsetSchemas = apiSchemaFactory(
+      context.isArchivedBuild,
       context.hasCasework,
       context.hasScheduling,
       context.hasMessaging,
@@ -358,15 +384,17 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       schedulingOpenApiSchema,
       messagingOpenApiSchema,
       coordinatorOpenApiSchema,
+      bregOpenApiSchema,
     );
     assert.equal(
       docsetSchemas.length,
-      1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging) + Number(hasCoordinator),
+      1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging) + Number(hasCoordinator) +
+        Number(id === 'latest'),
       id,
     );
     // Each product group seats the operations of its own schema, whichever
     // products come before it in this docset.
-    const docsetAPI = docsetSchemas.map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
+    const docsetAPI = docsetSchemas.filter((schema) => !schema.sidebar.group).map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
     const docsetAPISidebar = sidebarFactory(
       cliReferenceSidebar,
       sidebarArguments[1],
@@ -381,6 +409,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasBregServices,
       context.hasCoordinator,
       context.selectedDocset,
+      context.isArchivedBuild,
+      bregOpenApiSidebarGroup,
     );
     const docsetMessaging = docsetAPISidebar.find((item) => item.label === 'Registry Messaging');
     if (hasMessaging) {
@@ -527,7 +557,7 @@ test('starts with only Start expanded and all secondary groups collapsed', () =>
 test('requires at most two groups to reach a hand-authored page', () => {
   function walk(items, parents = []) {
     for (const item of items) {
-      if (generatedAPI.includes(item)) continue;
+      if (generatedAPI.includes(item) || item === bregOpenApiSidebarGroup) continue;
       if (!item.items) continue;
       const path = [...parents, item.label];
       assert.ok(path.length <= 2, `sidebar adds a third group: ${path.join(' / ')}`);

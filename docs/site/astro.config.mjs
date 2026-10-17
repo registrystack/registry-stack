@@ -4,7 +4,7 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
-import starlightOpenAPI, { openAPISidebarGroups } from 'starlight-openapi';
+import starlightOpenAPI, { createOpenAPISidebarGroup, openAPISidebarGroups } from 'starlight-openapi';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
@@ -206,6 +206,22 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
     ];
   }));
 }
+// A registry's API is compiled from its project, so the site renders the
+// facility template's compiled document as an example. scripts/fetch-openapi.mjs
+// fetches it for the current docset only; sealed archives predate it.
+// Its operations fill their own placeholder group: openAPISidebarGroups is a
+// single placeholder that receives every schema without a group.
+const bregOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const bregOpenApiSchema = {
+  base: 'reference/apis/breg',
+  schema: './openapi/registry-breg.render.openapi.json',
+  sidebar: {
+    group: bregOpenApiSidebarGroup,
+    label: 'API operations (facility template)',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
 const coordinatorOpenApiSchema = {
   base: 'reference/apis/coordinator',
   schema: './openapi/registry-coordinator.render.openapi.json',
@@ -406,6 +422,7 @@ export default defineConfig({
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
           ...[coordinatorOpenApiSchema].filter(() => hasCoordinator),
+          ...[bregOpenApiSchema].filter(() => !isArchivedBuild),
         ]),
       ],
       defaultLocale: 'root',
@@ -604,6 +621,7 @@ export default defineConfig({
             }] : []),
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
             { label: 'API reference', slug: 'reference/breg-api' },
+            ...(isArchivedBuild ? [] : [bregOpenApiSidebarGroup]),
             { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },
           ],
         },

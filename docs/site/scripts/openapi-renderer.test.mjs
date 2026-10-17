@@ -100,6 +100,7 @@ test('installed renderer generates examples from every maintained product schema
     ['messaging', 'products/messaging/generated/registry-messaging.openapi.json'],
     ['coordinator', 'products/coordinator/generated/openapi/coordinator.openapi.json'],
     ['evidence', 'products/evidence/generated/registry-evidence.openapi.json'],
+    ['breg', 'products/breg/generated/facility/generated/openapi.json'],
   ];
   for (const [product, path] of sources) {
     const original = JSON.parse(readFileSync(resolve(site, '../..', path), 'utf8'));
@@ -110,7 +111,20 @@ test('installed renderer generates examples from every maintained product schema
         /Invalid value used in weak set/);
     }
     const document = await dereference(projected);
-    for (const [name, schema] of Object.entries(document.components?.schemas ?? {})) {
+    const schemas = Object.entries(document.components?.schemas ?? {});
+    // BReg inlines most request and response schemas in its operations.
+    for (const [route, item] of Object.entries(document.paths ?? {})) {
+      for (const [method, operation] of Object.entries(item)) {
+        const bodies = [['request', operation?.requestBody],
+          ...Object.entries(operation?.responses ?? {})];
+        for (const [status, body] of bodies) {
+          for (const [media, entry] of Object.entries(body?.content ?? {})) {
+            if (entry.schema) schemas.push([`${method} ${route} ${status} ${media}`, entry.schema]);
+          }
+        }
+      }
+    }
+    for (const [name, schema] of schemas) {
       assert.doesNotThrow(() => {
         getSchemaAuthoredExampleValue(schema);
         createSchemaExampleValue(schema);
