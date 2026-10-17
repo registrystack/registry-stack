@@ -31,7 +31,7 @@ pub struct AttachmentVerificationWorker {
 
 /// The audit schema of the attachment-verification attempt and outcome
 /// entries.
-pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v1";
+pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v2";
 
 #[derive(Debug, thiserror::Error)]
 #[error("attachment verification work is unavailable")]
@@ -349,7 +349,7 @@ impl AttachmentVerificationWorker {
             .map_err(unavailable)?;
         let record = json!({
             "kind": "attachmentVerification", "phase": phase, "outcome": outcome,
-            "packageRevision": self.expected.activation_id,
+            "activationId": self.expected.activation_id,
             "actor": "breg:attachment-verifier", "verificationReference": reference,
         });
         Ok((reference, record))

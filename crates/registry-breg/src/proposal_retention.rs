@@ -37,7 +37,7 @@ use crate::runtime_config::load_runtime_config;
 
 const MAX_RETAINED_HISTORY_PAGE_SIZE: u16 = 50;
 /// The audit schema of the attachment-cleanup attempt and outcome entries.
-pub const ATTACHMENT_CLEANUP_AUDIT_SCHEMA: &str = "breg-attachment-cleanup-audit/v1";
+pub const ATTACHMENT_CLEANUP_AUDIT_SCHEMA: &str = "breg-attachment-cleanup-audit/v2";
 // Reserve the other half of the client's 2 MiB request-extension budget for
 // current actions and the remaining request metadata.
 const MAX_RETAINED_HISTORY_BYTES: usize = 1_048_576;
@@ -639,7 +639,7 @@ impl ProposalRetentionOperatorService {
         let record = |phase: &str, outcome: &str| {
             serde_json::json!({
                 "kind":"attachmentCleanup", "phase":phase, "outcome":outcome,
-                "packageRevision":self.expected.activation_id,
+                "activationId":self.expected.activation_id,
                 "actor":"breg:proposal-retention-operator", "correlation":correlation,
             })
         };
@@ -1517,7 +1517,7 @@ fn retention_request_entry(
             "actionId": scope.action_id,
             "requestId": correlation.request_id().to_string(),
             "traceId": correlation.trace_id().as_str(),
-            "packageRevision": expected.activation_id,
+            "activationId": expected.activation_id,
             "selectedAccessProfile": "operator",
             "purposePresent": false,
             "principalReference": null,

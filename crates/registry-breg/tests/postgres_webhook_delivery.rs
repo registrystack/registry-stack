@@ -241,6 +241,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "expired-before-egress",
     )
     .await;
+    let expired_sibling_id = "case.created.expired-sibling";
+    add_sibling_delivery(&database, &pending_expired, expired_sibling_id).await;
     database
         .admin
         .execute(
@@ -254,11 +256,34 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let egress_before_expiry = receiver.count().await;
     assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
     assert_eq!(receiver.count().await, egress_before_expiry);
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
     assert_eq!(
         delivery_state(&database, &pending_expired).await,
         (1, "expired".to_owned(), 0)
     );
     assert!(!outbox_payload_available(&database, &pending_expired).await);
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    let expired_sibling = CapturedEvent {
+        event_id: pending_expired.event_id,
+        compiled_delivery_id: expired_sibling_id.to_owned(),
+        ..pending_expired.clone()
+    };
+    assert_eq!(
+        delivery_state(&database, &expired_sibling).await,
+        (1, "expired".to_owned(), 0),
+        "each sibling must expire after shared payload erasure"
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &expired_sibling,
+        1,
+        0,
+        "terminal",
+        "payload-expired",
+    )
+    .await;
+
     assert_exact_audit_outcome(
         &database,
         &audit_profile,
@@ -2557,6 +2582,14 @@ async fn audit_outcomes(
             &event.event_id.to_string(),
         )
         .expect("test can derive the keyed event reference");
+    let delivery_reference = profile
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-webhook-delivery-v1",
+            &event.package_revision,
+            &event.compiled_delivery_id,
+        )
+        .expect("test can derive the keyed delivery reference");
     database
         .audit_entries()
         .into_iter()
@@ -2564,6 +2597,8 @@ async fn audit_outcomes(
         .filter_map(|entry| entry.get("record").cloned())
         .filter(|record| {
             record.get("eventReference").and_then(Value::as_str) == Some(event_reference.as_str())
+                && record.get("deliveryReference").and_then(Value::as_str)
+                    == Some(delivery_reference.as_str())
                 && record.get("generation").and_then(Value::as_i64) == Some(generation)
                 && record.get("attempt").and_then(Value::as_i64) == Some(attempt)
                 && record.get("phase").and_then(Value::as_str) == Some(phase)

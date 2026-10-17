@@ -188,11 +188,11 @@ pub(crate) async fn record_reads(
         let _attempt = audit
             .begin(
                 AuditEntry::request(
-                    "breg-access-log/v1",
+                    "breg-access-log/v2",
                     &correlation_id,
                     json!({"operation":"visibility-delay", "entityId":entity.id,
                         "authorityEntity":authority_entity,
-                        "packageRevision":identity.activation_id,
+                        "activationId":identity.activation_id,
                         "selectedAccessProfile":context.selected_profile(),
                         "exemptionReference":reference,"delayDays":delay}),
                 ),
@@ -202,7 +202,7 @@ pub(crate) async fn record_reads(
             .map_err(|_| ReadServiceError::Unavailable)?;
         audit
             .append(AuditEntry::response(
-                "breg-access-log/v1",
+                "breg-access-log/v2",
                 correlation_id,
                 json!({"outcome":"authorized"}),
             ))

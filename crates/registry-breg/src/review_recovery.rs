@@ -219,7 +219,7 @@ impl ReviewRecoveryOperatorService {
         let correlation = Uuid::new_v4().to_string();
         let request = serde_json::json!({
             "kind":"reviewRecovery", "operation":operation.as_str(),
-            "packageRevision":package_revision,
+            "activationId":package_revision,
             "actor":"breg:review-recovery-operator",
             "correlation":correlation,
             "actionId":scope.action_id, "recordReference":record_reference,

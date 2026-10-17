@@ -28,7 +28,7 @@ use crate::runtime_config::load_runtime_config;
 
 /// Schema of the request and response entries of one idempotency receipt
 /// sweep.
-pub const IDEMPOTENCY_RETENTION_AUDIT_SCHEMA: &str = "breg-idempotency-retention-audit/v1";
+pub const IDEMPOTENCY_RETENTION_AUDIT_SCHEMA: &str = "breg-idempotency-retention-audit/v2";
 
 /// Package-bound authority for dropping held idempotency responses past their
 /// receipt horizon. The migration identity, actual target catalog and registry
@@ -132,7 +132,7 @@ impl IdempotencyRetentionOperatorService {
                 "kind": "idempotencyRetention",
                 "phase": phase,
                 "outcome": outcome,
-                "packageRevision": self.expected.activation_id,
+                "activationId": self.expected.activation_id,
                 "actor": "breg:idempotency-retention-operator",
                 "before": before.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 "correlation": correlation,

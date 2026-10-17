@@ -172,8 +172,8 @@ delay, so an unrelated profile with the same ID cannot inherit the exemption.
 An exempt read is still written. Its row retains the policy reason and an exact
 `visibleAfter` time, and the operational audit records that the governed exemption
 was applied without copying the subject, purpose, or other access-log values.
-That audit entry uses the `breg-access-log/v1` schema and includes only a
-policy-keyed reference, delay, profile, entity, and package binding. It does not
+That audit entry uses the `breg-access-log/v2` schema and includes only a
+policy-keyed reference, delay, profile, entity, and activation binding (`activationId`). It does not
 copy the policy reason. The subject route withholds the row until `visibleAfter`; an exemption never
 silently omits a read. A package upgrade does not retroactively hide a visible
 entry, reveal a delayed entry early, or rewrite its reason.

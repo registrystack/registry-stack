@@ -1060,7 +1060,7 @@ async fn a_refusal_after_the_ingestion_request_is_answered_in_the_ingestion_sche
                 entry["phase"].as_str().expect("phase")
             ))
             .collect::<Vec<_>>(),
-        [("breg-audit/v2", "request"), ("breg-audit/v2", "response")],
+        [("breg-audit/v3", "request"), ("breg-audit/v3", "response")],
         "{entries:?}"
     );
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);

@@ -1,0 +1,37 @@
+{
+  "breg-audit/v3": [
+    "activationId"
+  ],
+  "breg-history-erasure-audit/v3": [
+    "activationId"
+  ],
+  "breg-history-rebaseline-audit/v3": [
+    "activationId"
+  ],
+  "breg-field-encryption-audit/v3": [
+    "activationId"
+  ],
+  "breg-evidence-retention-audit/v2": [
+    "activationId"
+  ],
+  "breg-attachment-verification-audit/v2": [
+    "activationId"
+  ],
+  "breg-attachment-cleanup-audit/v2": [
+    "activationId"
+  ],
+  "breg-idempotency-retention-audit/v2": [
+    "activationId"
+  ],
+  "breg-import-authority-audit/v2": [
+    "activationId",
+    "authorityActivationId"
+  ],
+  "breg-webhook-audit/v3": [
+    "activationId"
+  ],
+  "breg-access-log/v2/request": [
+    "activationId"
+  ],
+  "breg-access-log/v2/response": []
+}
