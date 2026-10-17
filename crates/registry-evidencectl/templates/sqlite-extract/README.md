@@ -26,7 +26,7 @@ Review the project, Functions, query, fixtures, target, and authority together. 
 
 ## Documentation
 
-- Author a project: <https://docs.registrystack.org/configure/evidence/>
+- Author a project from a SQLite extract: <https://docs.registrystack.org/tutorials/connect-a-sqlite-extract/>
 - Build and deploy a project: <https://docs.registrystack.org/tutorials/build-and-deploy-evidence-project/>
 - Every configuration key: <https://docs.registrystack.org/reference/evidence-configuration/>
-- `evidencectl` commands: <https://docs.registrystack.org/reference/evidencectl/>
+- `evidencectl` commands: <https://docs.registrystack.org/reference/cli/evidencectl/>

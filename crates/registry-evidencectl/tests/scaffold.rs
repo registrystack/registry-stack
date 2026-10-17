@@ -834,6 +834,7 @@ fn the_starter_links_only_documentation_pages_that_ship() {
 
     let documentation =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/site/src/content/docs");
+    let cli_reference = cli_reference_binaries();
     let mut checked = 0usize;
     for root in [&project, &retained] {
         for relative in generated_files(root) {
@@ -847,6 +848,20 @@ fn the_starter_links_only_documentation_pages_that_ship() {
                     None => (link.as_str(), None),
                 };
                 let route = route.trim_matches('/');
+                if let Some(binary) = route.strip_prefix("reference/cli/") {
+                    // The CLI reference pages are generated from the command
+                    // catalog when the site builds and are not tracked, so the
+                    // catalog stands in for them.
+                    assert!(
+                        cli_reference.contains(&binary.to_owned()),
+                        "{relative} links {link}, which names no catalogued binary"
+                    );
+                    assert!(
+                        anchor.is_none(),
+                        "{relative} links {link}; anchors on generated CLI pages are not checked"
+                    );
+                    continue;
+                }
                 let page = [
                     documentation.join(format!("{route}.mdx")),
                     documentation.join(format!("{route}.md")),
@@ -877,6 +892,25 @@ fn the_starter_links_only_documentation_pages_that_ship() {
         }
     }
     assert!(checked > 0, "the starter links the documentation");
+}
+
+/// The binaries the CLI reference catalog documents, one generated page each.
+fn cli_reference_binaries() -> Vec<String> {
+    let catalog = Path::new(env!("CARGO_MANIFEST_DIR")).join("../registry-cli-docs/catalog.json");
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(catalog).expect("CLI catalog reads"))
+            .expect("CLI catalog is JSON");
+    catalog["binaries"]
+        .as_array()
+        .expect("CLI catalog lists binaries")
+        .iter()
+        .map(|binary| {
+            binary["name"]
+                .as_str()
+                .expect("catalogued binary has a name")
+                .to_owned()
+        })
+        .collect()
 }
 
 /// Every ordinary file a scaffolded project holds, relative to its root.
