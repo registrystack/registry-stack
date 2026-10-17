@@ -24,9 +24,11 @@ pub(crate) enum ToolErrorCode {
     NotFound,
     ApplicationNotEditable,
     StaleApplication,
+    ChangeRefused,
     IdempotencyConflict,
     NotPermitted,
     AuthorizationFailed,
+    AuthorizationRefused,
     RegistryUnavailable,
     ServiceUnavailable,
     UnexpectedResponse,
@@ -40,9 +42,11 @@ impl ToolErrorCode {
             Self::NotFound => "not-found",
             Self::ApplicationNotEditable => "application-not-editable",
             Self::StaleApplication => "stale-application",
+            Self::ChangeRefused => "change-refused",
             Self::IdempotencyConflict => "idempotency-conflict",
             Self::NotPermitted => "not-permitted",
             Self::AuthorizationFailed => "authorization-failed",
+            Self::AuthorizationRefused => "authorization-refused",
             Self::RegistryUnavailable => "registry-unavailable",
             Self::ServiceUnavailable => "service-unavailable",
             Self::UnexpectedResponse => "unexpected-response",
@@ -58,6 +62,10 @@ impl ToolErrorCode {
             Self::NotFound => "No application with that identifier is available to you.",
             Self::ApplicationNotEditable => "The application can no longer be changed here.",
             Self::StaleApplication => {
+                "The application or its action definition has changed. \
+                 Review the current application before trying again."
+            }
+            Self::ChangeRefused => {
                 "The registry refused this change because a required condition was not met. \
                  Review the request and any existing application; try again only after \
                  correcting the request or permissions."
@@ -69,8 +77,12 @@ impl ToolErrorCode {
             Self::AuthorizationFailed => {
                 "The registry did not accept the delegated authorization. Sign in again."
             }
+            Self::AuthorizationRefused => {
+                "Delegated access was refused. Check whether this service is permitted \
+                 to act for you before trying again."
+            }
             Self::RegistryUnavailable => {
-                "The registry is temporarily unavailable. Try again later."
+                "The registry or its authorization service is temporarily unavailable. Try again later."
             }
             Self::ServiceUnavailable => "This service is not available right now.",
             Self::UnexpectedResponse => "The registry returned a response this service cannot use.",
@@ -193,12 +205,12 @@ impl From<BaseRegistryClientError> for ToolError {
 fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
     match code {
         BRegProblemCode::IdempotencyConflict => ToolErrorCode::IdempotencyConflict,
-        // An identical update repeated past the receipt horizon: an earlier
-        // call committed it, so the application changed since it was read.
+        // These value-free refusals do not establish a stale revision or a
+        // withdrawn grant. Only a local revision comparison can name staleness.
         BRegProblemCode::IdempotencyExpired
         | BRegProblemCode::PreconditionFailed
         | BRegProblemCode::PreconditionRequired
-        | BRegProblemCode::MutationConflict => ToolErrorCode::StaleApplication,
+        | BRegProblemCode::MutationConflict => ToolErrorCode::ChangeRefused,
         BRegProblemCode::ResourceNotFound | BRegProblemCode::LookupUnresolved => {
             ToolErrorCode::NotFound
         }
@@ -223,10 +235,10 @@ fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
 
 fn token_code(error: &TokenError) -> ToolErrorCode {
     match error {
-        TokenError::Refused { .. }
-        | TokenError::Invalid { .. }
-        | TokenError::ScopeNarrowed
-        | TokenError::Unavailable => ToolErrorCode::AuthorizationFailed,
+        TokenError::Refused { .. } | TokenError::ScopeNarrowed => {
+            ToolErrorCode::AuthorizationRefused
+        }
+        TokenError::Invalid { .. } | TokenError::Unavailable => ToolErrorCode::AuthorizationFailed,
         TokenError::Transport { .. } | TokenError::Protocol { .. } => {
             ToolErrorCode::RegistryUnavailable
         }
@@ -273,9 +285,11 @@ mod tests {
             ToolErrorCode::NotFound,
             ToolErrorCode::ApplicationNotEditable,
             ToolErrorCode::StaleApplication,
+            ToolErrorCode::ChangeRefused,
             ToolErrorCode::IdempotencyConflict,
             ToolErrorCode::NotPermitted,
             ToolErrorCode::AuthorizationFailed,
+            ToolErrorCode::AuthorizationRefused,
             ToolErrorCode::RegistryUnavailable,
             ToolErrorCode::ServiceUnavailable,
             ToolErrorCode::UnexpectedResponse,
@@ -289,9 +303,11 @@ mod tests {
                 "not-found",
                 "application-not-editable",
                 "stale-application",
+                "change-refused",
                 "idempotency-conflict",
                 "not-permitted",
                 "authorization-failed",
+                "authorization-refused",
                 "registry-unavailable",
                 "service-unavailable",
                 "unexpected-response",
@@ -303,10 +319,10 @@ mod tests {
     fn every_registry_problem_has_one_stable_tool_code() {
         let expected = [
             (BRegProblemCode::IdempotencyConflict, "idempotency-conflict"),
-            (BRegProblemCode::IdempotencyExpired, "stale-application"),
-            (BRegProblemCode::PreconditionFailed, "stale-application"),
-            (BRegProblemCode::PreconditionRequired, "stale-application"),
-            (BRegProblemCode::MutationConflict, "stale-application"),
+            (BRegProblemCode::IdempotencyExpired, "change-refused"),
+            (BRegProblemCode::PreconditionFailed, "change-refused"),
+            (BRegProblemCode::PreconditionRequired, "change-refused"),
+            (BRegProblemCode::MutationConflict, "change-refused"),
             (BRegProblemCode::ResourceNotFound, "not-found"),
             (BRegProblemCode::LookupUnresolved, "not-found"),
             (
@@ -345,16 +361,93 @@ mod tests {
             error.keys().map(String::as_str).collect::<Vec<_>>(),
             ["code", "message", "traceId"]
         );
-        assert_eq!(error["code"], "stale-application");
+        assert_eq!(error["code"], "change-refused");
     }
 
     #[test]
-    fn credential_failures_are_authorization_failures_without_detail() {
-        let refused = ToolError::from(BaseRegistryClientError::Token(TokenError::ScopeNarrowed));
-        assert_eq!(refused.code, ToolErrorCode::AuthorizationFailed);
-        assert_eq!(refused.trace_id, None);
-        let unavailable = ToolError::from(BaseRegistryClientError::Token(TokenError::Unavailable));
-        assert_eq!(unavailable.code, ToolErrorCode::AuthorizationFailed);
+    fn explicit_exchange_refusals_do_not_prescribe_sign_in_or_disclose_provider_codes() {
+        use registry_platform_httputil::client::OAuthErrorCode;
+
+        for code in [
+            OAuthErrorCode::InvalidRequest,
+            OAuthErrorCode::InvalidClient,
+            OAuthErrorCode::InvalidGrant,
+            OAuthErrorCode::UnauthorizedClient,
+            OAuthErrorCode::UnsupportedGrantType,
+            OAuthErrorCode::InvalidScope,
+            OAuthErrorCode::InvalidTarget,
+            OAuthErrorCode::Other,
+        ] {
+            let error = ToolError::from(TokenError::Refused { code });
+            assert_eq!(error.code.as_str(), "authorization-refused");
+            assert_eq!(
+                error.to_value(),
+                json!({"error": {
+                    "code": "authorization-refused",
+                    "message": "Delegated access was refused. Check whether this service is permitted to act for you before trying again."
+                }})
+            );
+            assert!(!error.effect_unknown);
+            assert_eq!(
+                ToolError::from(BaseRegistryClientError::Token(TokenError::Refused { code })),
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn credential_and_exchange_failures_keep_bounded_distinct_recovery() {
+        use registry_platform_httputil::client::TransportKind;
+
+        for (token, expected) in [
+            (TokenError::Unavailable, "authorization-failed"),
+            (
+                TokenError::Invalid {
+                    reason: "canary-invalid-credential",
+                },
+                "authorization-failed",
+            ),
+            (TokenError::ScopeNarrowed, "authorization-refused"),
+            (
+                TokenError::Transport {
+                    kind: TransportKind::Timeout,
+                },
+                "registry-unavailable",
+            ),
+            (TokenError::Protocol { status: 503 }, "registry-unavailable"),
+            (
+                TokenError::Configuration {
+                    reason: "canary-provider-configuration",
+                },
+                "unexpected-response",
+            ),
+        ] {
+            let error = ToolError::from(token);
+            assert_eq!(error.code.as_str(), expected);
+            assert_eq!(error.trace_id, None);
+            assert!(!error.effect_unknown);
+            let value = error.to_value();
+            assert_eq!(value["error"].as_object().unwrap().len(), 2);
+            assert!(!value.to_string().contains("canary"));
+            assert_eq!(
+                ToolError::from(BaseRegistryClientError::Token(token)),
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_conditions_do_not_claim_a_stale_revision_or_withdrawn_authority() {
+        let refused = problem(BRegProblemCode::PreconditionFailed);
+        assert_eq!(refused.code.as_str(), "change-refused");
+        assert_ne!(refused.code, ToolErrorCode::StaleApplication);
+        assert_eq!(refused.to_value()["error"]["message"],
+            "The registry refused this change because a required condition was not met. Review the request and any existing application; try again only after correcting the request or permissions.");
+        assert!(!refused.after_mutation().effect_unknown);
+        assert_eq!(
+            problem(BRegProblemCode::ResourceNotFound).to_value(),
+            problem(BRegProblemCode::LookupUnresolved).to_value()
+        );
     }
 
     #[test]
