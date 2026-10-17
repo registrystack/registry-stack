@@ -342,8 +342,10 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     ));
 
     // Receipt, cursor and owner retention have separate clocks. Claim rows,
-    // history, reminder intents and the audit journal remain intact.
+    // history and the audit journal remain intact; terminal dispatch metadata
+    // uses the receipt period and preserves active/replayable work.
     let claim_owner_retention_days = config.retention.claim_owner_retention_days;
+    let receipt_retention_days = config.retention.receipt_retention_days;
     let retention_store = store.clone();
     workers.push(supervise("retention", worker_stopped, async move {
         let mut interval = worker_timer();
@@ -363,6 +365,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 .await
             {
                 tracing::warn!(error = %error, "Scheduling claim owner retention pass did not complete");
+            }
+            if let Err(error) = retention_store.erase_terminal_dispatch(now, receipt_retention_days).await {
+                tracing::warn!(error = %error, "Scheduling terminal dispatch retention pass did not complete");
             }
             if let Err(error) = retention_store.erase_expired_attempts(now).await {
                 tracing::warn!(

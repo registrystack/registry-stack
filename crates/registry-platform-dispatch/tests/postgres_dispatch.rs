@@ -3308,3 +3308,106 @@ async fn refused_direct_intents_prevent_every_protected_operator_and_claim_path_
     assert!(intent_trail(&quarantine, &quarantine_key).await.is_empty());
     assert!(intent_trail(&cancel, &cancel_key).await.is_empty());
 }
+
+#[tokio::test]
+async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction() {
+    use registry_platform_dispatch::postgres::{prune_terminal, MAX_PRUNE_BATCH};
+
+    let harness = harness().await;
+    let cutoff = SystemTime::now() - Duration::from_secs(60);
+    let later = cutoff + Duration::from_secs(1);
+    let mut keys = Vec::new();
+    let mut expected = BTreeSet::new();
+    for (state, updated, expired, remove) in [
+        ("pending", cutoff, false, false),
+        ("leased", cutoff, false, false),
+        ("unknown", cutoff, false, false),
+        ("dead-lettered", cutoff, false, false),
+        ("dead-lettered", cutoff, true, true),
+        ("expired", cutoff, true, true),
+        ("cancelled", cutoff, false, true),
+        ("delivered", cutoff, false, true),
+        ("delivered", later, false, false),
+    ] {
+        let key = enqueue_message(&harness, &Message::default()).await;
+        harness.admin.execute(&format!(
+            "UPDATE {}.{JOB_TABLE} SET state=$2,attempt=1,updated_at=$3,
+             next_attempt_at=CASE WHEN $2='pending' THEN $3::timestamptz ELSE NULL END,
+             attempt_started_at=CASE WHEN $2='leased' THEN $3::timestamptz ELSE NULL END,
+             lease_expires_at=CASE WHEN $2='leased' THEN $3::timestamptz + interval '1 minute' ELSE NULL END,
+             lease_token=CASE WHEN $2='leased' THEN $4::uuid ELSE NULL END,
+             delivered_at=CASE WHEN $2='delivered' THEN $3::timestamptz ELSE NULL END,
+             dead_lettered_at=CASE WHEN $2='dead-lettered' THEN $3::timestamptz ELSE NULL END,
+             expired_at=CASE WHEN $5 THEN $3::timestamptz ELSE NULL END
+             WHERE message_id=$1", harness.schema),
+            &[&key.id(), &state, &updated, &Uuid::new_v4(), &expired],
+        ).await.unwrap();
+        if remove {
+            expected.insert(key.id());
+        }
+        keys.push(key);
+    }
+    let mut client = connect(&harness.url).await;
+    let transaction = client.transaction().await.unwrap();
+    assert_eq!(
+        prune_terminal(
+            &transaction,
+            &harness.table,
+            &vec![keys[7].clone(); MAX_PRUNE_BATCH + 1],
+            cutoff
+        )
+        .await,
+        Err(DispatchError::Unavailable),
+    );
+    let deleted = prune_terminal(&transaction, &harness.table, &keys, cutoff)
+        .await
+        .unwrap();
+    assert_eq!(
+        deleted.iter().map(JobKey::id).collect::<BTreeSet<_>>(),
+        expected
+    );
+    transaction.rollback().await.unwrap();
+    let count: i64 = harness
+        .admin
+        .query_one(
+            &format!("SELECT count(*) FROM {}.{JOB_TABLE}", harness.schema),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        count,
+        keys.len() as i64,
+        "the caller can roll back the whole prune"
+    );
+    let transaction = client.transaction().await.unwrap();
+    assert_eq!(
+        prune_terminal(&transaction, &harness.table, &keys, cutoff)
+            .await
+            .unwrap()
+            .len(),
+        expected.len()
+    );
+    transaction.commit().await.unwrap();
+    let transaction = client.transaction().await.unwrap();
+    assert!(prune_terminal(&transaction, &harness.table, &keys, cutoff)
+        .await
+        .unwrap()
+        .is_empty());
+    transaction.commit().await.unwrap();
+    let messages: i64 = harness
+        .admin
+        .query_one(
+            &format!("SELECT count(*) FROM {}.test_messages", harness.schema),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        messages,
+        keys.len() as i64,
+        "the product owns parent-record retention"
+    );
+}

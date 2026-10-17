@@ -235,6 +235,8 @@ pub enum StoreError {
         "the candidate policy cannot deliver every retained hook event under the destination binding it was captured for, or the retained deliveries could not be read; keep those destinations declared and unchanged until their deliveries drain"
     )]
     RetainedHookBindings,
+    #[error("the Scheduling dispatch retention pass could not complete")]
+    DispatchRetention,
     /// The environment records would retire or reduce supply that live
     /// appointments or holds still occupy. The swap is refused whole, so the
     /// operator either keeps the supply or closes what stands on it first.
@@ -2418,6 +2420,45 @@ impl PostgresStore {
                   ELSE LEAST(hold_expires_at, closed_at) END <= $2",
             &[&now, &cutoff],
         ).await?)
+    }
+
+    /// Prune at most 256 delivered reminder intents and 256 terminal hook
+    /// deliveries per tick, using the configured receipt metadata horizon.
+    /// Active, local, failed and suppressed intents remain retained;
+    /// hooks also preserve replay until payload expiry has completed.
+    pub async fn erase_terminal_dispatch(
+        &self,
+        now: DateTime<Utc>,
+        receipt_retention_days: u32,
+    ) -> Result<u64, StoreError> {
+        if !(1..=crate::config::MAX_RECEIPT_RETENTION_DAYS).contains(&receipt_retention_days) {
+            return Err(StoreError::Configuration);
+        }
+        let cutoff = now
+            .checked_sub_signed(TimeDelta::days(i64::from(receipt_retention_days)))
+            .ok_or(StoreError::Configuration)?;
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let schema = current_schema_in(&*transaction).await?;
+        let reminders = transaction
+            .execute(
+                "DELETE FROM scheduling_outbox WHERE outbox_id IN (
+                SELECT outbox_id FROM scheduling_outbox
+                WHERE delivery_state='delivered' AND delivered_at <= $1
+                ORDER BY delivered_at, outbox_id LIMIT 256 FOR UPDATE SKIP LOCKED
+             )",
+                &[&cutoff],
+            )
+            .await?;
+        let hooks = registry_platform_hooks::delivery::prune_terminal_deliveries(
+            &transaction,
+            &schema,
+            cutoff.into(),
+        )
+        .await
+        .map_err(|_| StoreError::DispatchRetention)?;
+        transaction.commit().await?;
+        Ok(reminders + hooks)
     }
 
     /// Erase idempotency receipts past their retention period. The answer and
