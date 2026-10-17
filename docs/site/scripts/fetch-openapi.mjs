@@ -19,6 +19,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { access } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
 import {
@@ -55,12 +56,32 @@ const SPEC_SOURCES = {
 
 // The Base Registry Engine pages are hand-authored, so repo-docs.yaml carries
 // no registry-breg entry. Its document is sourced from the monorepo at the
-// docset's registry-stack ref unless repo-docs.yaml declares an entry, and is
-// published by the current docset only: sealed archives predate it.
+// docset's registry-stack ref unless repo-docs.yaml declares an entry.
 function bregRepo(docset) {
   const ref = docset.products['registry-stack']?.ref;
   if (!ref) fail(`registry-breg: docset ${docset.id} pins no registry-stack ref for the OpenAPI spec`);
   return { remote: 'https://github.com/registrystack/registry-stack', ref, local: '../..' };
+}
+
+// The v0.39.0 to v0.41.0 sources carry a facility document this renderer
+// refuses (it holds `false` schemas), so release docsets from v0.42.0 onward
+// publish it and older ones do not. astro.config.mjs uses the same test to
+// decide whether to render it.
+const bregOpenApiFloor = [0, 42, 0];
+
+/**
+ * @param {{ id: string }} docset
+ * @param {string} currentId
+ */
+export function docsetPublishesBregOpenApi(docset, currentId) {
+  if (docset.id === currentId) return true;
+  const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(docset.id);
+  if (!match) throw new Error(`registry-breg: docset id ${docset.id} is not a release version`);
+  const version = match.slice(1).map(Number);
+  for (let index = 0; index < version.length; index += 1) {
+    if (version[index] !== bregOpenApiFloor[index]) return version[index] > bregOpenApiFloor[index];
+  }
+  return true;
 }
 
 function fail(message) {
@@ -142,8 +163,8 @@ async function main() {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
-    if (repoId === 'registry-breg' && docset.id !== docsets.current) {
-      console.log(`Skipped ${repoId} OpenAPI spec: only the current docset publishes it, not ${docset.id}.`);
+    if (repoId === 'registry-breg' && !docsetPublishesBregOpenApi(docset, docsets.current)) {
+      console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
     const repo = manifest.repos[repoId] ?? (repoId === 'registry-breg' ? bregRepo(docset) : undefined);
@@ -160,7 +181,12 @@ async function main() {
     }
 
     const localPath = repo.local ? resolve(root, repo.local) : null;
-    const checkedOutCandidate = usesCheckedOutCandidate(docset, docset.products[repoId]);
+    // The BReg document comes from the monorepo, so it follows the
+    // registry-stack product's candidate source.
+    const sourceProduct = repoId === 'registry-breg' && !docset.products[repoId]
+      ? docset.products['registry-stack']
+      : docset.products[repoId];
+    const checkedOutCandidate = usesCheckedOutCandidate(docset, sourceProduct);
     const localRef = checkedOutCandidate ? 'HEAD' : repo.ref;
     let raw = null;
     let mode = null;
@@ -205,4 +231,6 @@ async function main() {
   console.log(`Fetched ${written} OpenAPI spec(s) at pinned refs.`);
 }
 
-await main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  await main();
+}

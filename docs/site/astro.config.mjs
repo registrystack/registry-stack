@@ -15,6 +15,7 @@ import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayRetirementRedirects } from './src/lib/relay-retirement-redirects.mjs';
+import { docsetPublishesBregOpenApi } from './scripts/fetch-openapi.mjs';
 import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
@@ -107,7 +108,6 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
 const docsetsManifest = loadDocsetsManifest();
 const {
   base,
-  isArchivedBuild,
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   hasCasework,
@@ -122,6 +122,7 @@ const {
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
+const hasBregOpenApi = docsetPublishesBregOpenApi(selectedDocset, docsetsManifest.current);
 const productSidebar = loadProductSidebar();
 
 // Lift a generated per-product group to the top level of the sidebar.
@@ -208,7 +209,8 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
 }
 // A registry's API is compiled from its project, so the site renders the
 // facility template's compiled document as an example. scripts/fetch-openapi.mjs
-// fetches it for the current docset only; sealed archives predate it.
+// fetches it for the current docset and release docsets from v0.42.0, and the
+// same test decides whether this build renders it.
 // Its operations fill their own placeholder group: openAPISidebarGroups is a
 // single placeholder that receives every schema without a group.
 const bregOpenApiSidebarGroup = createOpenAPISidebarGroup();
@@ -274,6 +276,37 @@ export function caseworkRedirects(hasCasework, currentDocsetRedirect) {
   ]));
 }
 
+// The Base Registry Engine docs rewrite moved or folded these pages into the
+// pages that now carry their content. The Actions page is named after what it
+// declares, and field encryption is a thing an author does to a project, so
+// both sit in the Author group.
+const bregRewriteMoves = [
+  ['/configure/breg-change-control/', '/configure/breg-actions/'],
+  ['/explanation/breg-field-encryption/', '/configure/breg-field-encryption/'],
+  ['/tutorials/review-registry-changes/', '/tutorials/change-a-registry-with-an-action/'],
+  ['/tutorials/build-a-breg-production-candidate/', '/operate/breg/'],
+  ['/tutorials/first-citizen-mcp/', '/configure/breg-mcp/'],
+  ['/tutorials/deploy-evidence-from-breg/', '/tutorials/evidence-from-breg/'],
+  ['/explanation/governed-registry-actions/', '/configure/breg-actions/'],
+  ['/explanation/native-field-patterns/', '/explanation/registry-modeling-patterns/'],
+  ['/explanation/breg-statistical-datasets/', '/configure/breg-statistics/'],
+  ['/explanation/membership-read-boundaries/', '/configure/breg-access/'],
+  ['/explanation/deriving-a-registry-from-a-model/', '/tutorials/derive-a-registry-from-publicschema/'],
+  ['/explanation/openfn-adaptors/', '/explanation/integration-patterns/'],
+  ['/operate/breg-requirements/', '/operate/breg/'],
+  ['/operate/breg-mcp/', '/configure/breg-mcp/'],
+];
+
+/**
+ * @param {(path: string) => string} internalRedirect
+ */
+export function bregRewriteRedirects(internalRedirect) {
+  return Object.fromEntries(bregRewriteMoves.flatMap(([route, target]) => [
+    [route, internalRedirect(target)],
+    [`${route.slice(0, -1)}.md`, internalRedirect(target)],
+  ]));
+}
+
 export default defineConfig({
   site: 'https://docs.registrystack.org',
   base,
@@ -306,30 +339,13 @@ export default defineConfig({
     // Webhook binding is an operator task with its own page; history reads
     // and the event reference are sections of the API reference page.
     '/configure/breg-webhooks/': internalRedirect('/operate/breg-webhooks/'),
-    // The Actions page is named after what it declares, and field encryption
-    // is a thing an author does to a project, so both sit in the Author group.
-    '/configure/breg-change-control/': internalRedirect('/configure/breg-actions/'),
-    '/explanation/breg-field-encryption/': internalRedirect('/configure/breg-field-encryption/'),
     '/reference/breg-history/': internalRedirect('/reference/breg-api/'),
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
     // The operating-requirements pages moved from Start into each product's
     // Deploy group; a first visit chooses a product before it plans a deployment.
     '/start/evaluate-evidence/': internalRedirect('/operate/evidence-requirements/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
-    // The Base Registry Engine docs rewrite folded these pages into the pages
-    // that now carry their content.
-    '/tutorials/review-registry-changes/': internalRedirect('/tutorials/change-a-registry-with-an-action/'),
-    '/tutorials/build-a-breg-production-candidate/': internalRedirect('/operate/breg/'),
-    '/tutorials/first-citizen-mcp/': internalRedirect('/configure/breg-mcp/'),
-    '/tutorials/deploy-evidence-from-breg/': internalRedirect('/tutorials/evidence-from-breg/'),
-    '/explanation/governed-registry-actions/': internalRedirect('/configure/breg-actions/'),
-    '/explanation/native-field-patterns/': internalRedirect('/explanation/registry-modeling-patterns/'),
-    '/explanation/breg-statistical-datasets/': internalRedirect('/configure/breg-statistics/'),
-    '/explanation/membership-read-boundaries/': internalRedirect('/configure/breg-access/'),
-    '/explanation/deriving-a-registry-from-a-model/': internalRedirect('/tutorials/derive-a-registry-from-publicschema/'),
-    '/explanation/openfn-adaptors/': internalRedirect('/explanation/integration-patterns/'),
-    '/operate/breg-requirements/': internalRedirect('/operate/breg/'),
-    '/operate/breg-mcp/': internalRedirect('/configure/breg-mcp/'),
+    ...bregRewriteRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
     '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // The deprecation rules are a section of the one stability promise page.
@@ -440,7 +456,7 @@ export default defineConfig({
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
           ...[coordinatorOpenApiSchema].filter(() => hasCoordinator),
-          ...[bregOpenApiSchema].filter(() => !isArchivedBuild),
+          ...[bregOpenApiSchema].filter(() => hasBregOpenApi),
         ]),
       ],
       defaultLocale: 'root',
@@ -632,7 +648,7 @@ export default defineConfig({
               ],
             }] : []),
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
-            ...(isArchivedBuild ? [] : [bregOpenApiSidebarGroup]),
+            ...(hasBregOpenApi ? [bregOpenApiSidebarGroup] : []),
           ],
         },
         ...(hasCasework ? [{

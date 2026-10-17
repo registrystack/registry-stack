@@ -94,7 +94,7 @@ test('Casework OpenAPI follows current HEAD, excludes v0.29, and pins v0.30 arch
 
     await fetch('latest', 'v0.29.0', 'candidate');
     assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'current');
-    // The BReg facility document is published by the current docset only.
+    // The current docset publishes the BReg facility document; v0.29 predates it.
     assert.equal(JSON.parse(await readFile(bregOutput, 'utf8')).info.version, 'breg');
     assert.deepEqual(JSON.parse(await readFile(bregRenderedOutput, 'utf8')).components.schemas.Row,
       { properties: { any: {} } });
@@ -152,6 +152,82 @@ test('BReg OpenAPI defaults to the checked-out monorepo at the registry-stack re
     assert.equal(JSON.parse(await readFile(join(root, 'openapi/registry-breg.openapi.json'), 'utf8')).info.version,
       'facility');
     assert.ok(await readFile(join(root, 'openapi/registry-breg.render.openapi.json'), 'utf8'));
+  } finally {
+    await rm(source, { recursive: true, force: true });
+  }
+});
+
+test('BReg OpenAPI is published by the current docset and by release docsets from v0.42.0', async () => {
+  const source = await mkdtemp(join(tmpdir(), 'breg-openapi-floor-'));
+  const root = join(source, 'docs/site');
+  const data = join(root, 'src/data');
+  const output = join(root, 'openapi/registry-breg.openapi.json');
+  const renderedOutput = join(root, 'openapi/registry-breg.render.openapi.json');
+  try {
+    await mkdir(join(source, 'products/breg/generated/facility/generated'), { recursive: true });
+    await mkdir(join(source, 'products/evidence/generated'), { recursive: true });
+    await mkdir(data, { recursive: true });
+    await run('git', ['init', '--quiet', source]);
+    await writeFile(join(source, bregPath), '{"info":{"version":"released"}}\n');
+    await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
+    await run('git', ['-C', source, 'add', '.']);
+    await run('git', ['-C', source, '-c', 'user.name=Docs Test',
+      '-c', 'user.email=docs-test@example.invalid', 'commit', '--quiet', '-m', 'release']);
+    const { stdout } = await run('git', ['-C', source, 'rev-parse', 'HEAD']);
+    const releasedRef = stdout.trim();
+    // The checked-out tree moves on from the released commit, so a docset that
+    // pins the commit reads it while the current and candidate docsets read
+    // the checkout.
+    await writeFile(join(source, bregPath), '{"info":{"version":"checkout"}}\n');
+    await writeFile(join(data, 'repo-docs.yaml'), YAML.stringify({ repos: {
+      'registry-evidence': { ref: 'HEAD', local: '../..', remote: source, openapi: evidencePath,
+        docs: [{ src: 'README.md' }] },
+    } }));
+    function withStack(entry, ref) {
+      return { ...entry, products: { ...entry.products,
+        'registry-stack': { version: entry.id === 'latest' ? 'main source' : entry.id, ref } } };
+    }
+    const candidate = withStack(docset('v0.43.0', 'candidate', 'v0.43.0'), 'v0.43.0');
+    await writeFile(join(data, 'docsets.yaml'), YAML.stringify({
+      current: 'latest',
+      released: 'v0.42.0',
+      published_archive_limit: 3,
+      docsets: [
+        withStack(docset('latest', 'unreleased', 'HEAD'), 'HEAD'),
+        { ...candidate, repo_docs_source: 'monorepo' },
+        withStack(docset('v0.42.0', 'released', releasedRef), releasedRef),
+        withStack(docset('v0.41.0', 'released', releasedRef), releasedRef),
+      ],
+    }));
+
+    async function fetch(selected) {
+      await rm(output, { force: true });
+      await rm(renderedOutput, { force: true });
+      const { stdout: log } = await run(process.execPath, [fetchOpenapi], {
+        cwd: root,
+        env: { ...process.env, DOCS_DOCSET: selected },
+      });
+      return log;
+    }
+
+    await fetch('latest');
+    assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'checkout');
+
+    // A release candidate is built from its checked-out source before its tag exists.
+    await fetch('v0.43.0');
+    assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'checkout');
+    assert.ok(await readFile(renderedOutput, 'utf8'));
+
+    // An archived docset at the floor reads its pinned source.
+    await fetch('v0.42.0');
+    assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'released');
+    assert.ok(await readFile(renderedOutput, 'utf8'));
+
+    // A docset older than the floor does not publish the facility document.
+    const log = await fetch('v0.41.0');
+    assert.match(log, /Skipped registry-breg OpenAPI spec absent from docset v0\.41\.0\./);
+    await assert.rejects(readFile(output, 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(renderedOutput, 'utf8'), { code: 'ENOENT' });
   } finally {
     await rm(source, { recursive: true, force: true });
   }
