@@ -160,7 +160,9 @@ evidence-oid4vci openapi --output evidence-oid4vci.openapi.json
 The command prints nothing and writes a document byte-identical to the tracked
 [`registry-evidence-oid4vci.openapi.json`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/generated/registry-evidence-oid4vci.openapi.json).
 Your own front end creates a credential offer at `/offers` with an access token the `offers` block
-admits; the wallet calls the two `/.well-known` metadata routes, `/token`, `/nonce`, and `/credential`. See [`evidence-oid4vci openapi`](/reference/cli/evidence-oid4vci/openapi/).
+admits; the wallet calls the two `/.well-known` metadata routes, `/token`, `/nonce`, and `/credential`. The
+[wallet delivery API reference](../../reference/apis/evidence-oid4vci/) renders the same document. See
+[`evidence-oid4vci openapi`](/reference/cli/evidence-oid4vci/openapi/).
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, openapi;
     crates/registry-evidence-oid4vci/src/authorizer.rs;

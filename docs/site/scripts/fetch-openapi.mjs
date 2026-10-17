@@ -48,6 +48,9 @@ const SPEC_SOURCES = {
   'registry-messaging': 'products/messaging/generated/registry-messaging.openapi.json',
   'registry-coordinator': 'products/coordinator/generated/openapi/coordinator.openapi.json',
   'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
+  // The wallet-facing OID4VCI supporting service beside Evidence publishes its
+  // own document, sourced from the same repository entry as Evidence.
+  'registry-evidence-oid4vci': 'products/evidence/generated/registry-evidence-oid4vci.openapi.json',
   // A registry's OpenAPI document is compiled from its project, so the site
   // renders the facility template's compiled document as an example of what a
   // registry serves.
@@ -68,22 +71,44 @@ function bregRepo(docset) {
 // publish it and older ones do not. astro.config.mjs uses the same test to
 // decide whether to render it.
 const bregOpenApiFloor = [0, 42, 0];
+// The OID4VCI supporting service first shipped its document in v0.20.0.
+const evidenceOid4vciOpenApiFloor = [0, 20, 0];
+
+/**
+ * The current docset publishes every document; a release docset publishes a
+ * document from the release that first carried it.
+ * @param {string} repoId
+ * @param {number[]} floor
+ * @param {{ id: string }} docset
+ * @param {string} currentId
+ */
+function docsetPublishesFrom(repoId, floor, docset, currentId) {
+  if (docset.id === currentId) return true;
+  // The beta archives predate release version ids and every floor.
+  if (/^beta-/.test(docset.id)) return false;
+  const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(docset.id);
+  if (!match) throw new Error(`${repoId}: docset id ${docset.id} is not a release version`);
+  const version = match.slice(1).map(Number);
+  for (let index = 0; index < version.length; index += 1) {
+    if (version[index] !== floor[index]) return version[index] > floor[index];
+  }
+  return true;
+}
 
 /**
  * @param {{ id: string }} docset
  * @param {string} currentId
  */
 export function docsetPublishesBregOpenApi(docset, currentId) {
-  if (docset.id === currentId) return true;
-  // The beta archives predate release version ids and the floor.
-  if (/^beta-/.test(docset.id)) return false;
-  const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(docset.id);
-  if (!match) throw new Error(`registry-breg: docset id ${docset.id} is not a release version`);
-  const version = match.slice(1).map(Number);
-  for (let index = 0; index < version.length; index += 1) {
-    if (version[index] !== bregOpenApiFloor[index]) return version[index] > bregOpenApiFloor[index];
-  }
-  return true;
+  return docsetPublishesFrom('registry-breg', bregOpenApiFloor, docset, currentId);
+}
+
+/**
+ * @param {{ id: string }} docset
+ * @param {string} currentId
+ */
+export function docsetPublishesEvidenceOid4vciOpenApi(docset, currentId) {
+  return docsetPublishesFrom('registry-evidence-oid4vci', evidenceOid4vciOpenApiFloor, docset, currentId);
 }
 
 function fail(message) {
@@ -169,11 +194,18 @@ async function main() {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
-    const repo = manifest.repos[repoId] ?? (repoId === 'registry-breg' ? bregRepo(docset) : undefined);
+    if (repoId === 'registry-evidence-oid4vci' && !docsetPublishesEvidenceOid4vciOpenApi(docset, docsets.current)) {
+      console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
+      continue;
+    }
+    // The OID4VCI document lives beside the Evidence document, so it follows
+    // the registry-evidence entry's ref and source, never its `openapi` path.
+    const sourceRepoId = repoId === 'registry-evidence-oid4vci' ? 'registry-evidence' : repoId;
+    const repo = manifest.repos[sourceRepoId] ?? (repoId === 'registry-breg' ? bregRepo(docset) : undefined);
     if (!repo) {
       fail(`${repoId}: no entry in repo-docs.yaml to source the OpenAPI spec ref from`);
     }
-    const resolvedSpecPath = repo.openapi || specPath;
+    const resolvedSpecPath = sourceRepoId === repoId && repo.openapi ? repo.openapi : specPath;
     if (!repo.ref) {
       fail(`${repoId}: no pinned ref in repo-docs.yaml for the OpenAPI spec`);
     }
@@ -187,7 +219,7 @@ async function main() {
     // registry-stack product's candidate source.
     const sourceProduct = repoId === 'registry-breg' && !docset.products[repoId]
       ? docset.products['registry-stack']
-      : docset.products[repoId];
+      : docset.products[sourceRepoId];
     const checkedOutCandidate = usesCheckedOutCandidate(docset, sourceProduct);
     const localRef = checkedOutCandidate ? 'HEAD' : repo.ref;
     let raw = null;

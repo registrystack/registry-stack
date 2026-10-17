@@ -1240,6 +1240,9 @@ def classify(
             # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
             "products/evidence/generated/registry-evidence.openapi.json",
+            # The wallet delivery API reference is generated from the
+            # supporting service's own description.
+            "products/evidence/generated/registry-evidence-oid4vci.openapi.json",
             "crates/registry-evidencectl/schemas/authoring/*",
             # The same generator publishes the evidence-oid4vci runtime grammar
             # for the supporting service's configure page.

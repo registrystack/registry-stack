@@ -4,7 +4,7 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
-import starlightOpenAPI, { createOpenAPISidebarGroup, openAPISidebarGroups } from 'starlight-openapi';
+import starlightOpenAPI, { createOpenAPISidebarGroup } from 'starlight-openapi';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
@@ -15,7 +15,7 @@ import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayRetirementRedirects } from './src/lib/relay-retirement-redirects.mjs';
-import { docsetPublishesBregOpenApi } from './scripts/fetch-openapi.mjs';
+import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } from './scripts/fetch-openapi.mjs';
 import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
@@ -123,6 +123,7 @@ const {
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
 const hasBregOpenApi = docsetPublishesBregOpenApi(selectedDocset, docsetsManifest.current);
+const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(selectedDocset, docsetsManifest.current);
 const productSidebar = loadProductSidebar();
 
 // Lift a generated per-product group to the top level of the sidebar.
@@ -145,19 +146,52 @@ const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
 };
-const caseworkOpenApiSchema = {
-  base: 'reference/apis/casework',
-  schema: './openapi/registry-casework.render.openapi.json',
+// Each product's operations fill their own createOpenAPISidebarGroup()
+// placeholder, seated in that product's group. The plugin's shared
+// openAPISidebarGroups placeholder receives every schema without a group, so
+// a seat for it would show every product's operations under one product.
+const evidenceOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const evidenceOpenApiSchema = {
+  base: 'reference/apis/evidence',
+  schema: './openapi/registry-evidence.render.openapi.json',
   sidebar: {
+    group: evidenceOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
+// The wallet-facing OID4VCI supporting service publishes its own document.
+// scripts/fetch-openapi.mjs fetches it for the current docset and release
+// docsets from v0.20.0, and the same test decides whether this build renders it.
+const evidenceOid4vciOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const evidenceOid4vciOpenApiSchema = {
+  base: 'reference/apis/evidence-oid4vci',
+  schema: './openapi/registry-evidence-oid4vci.render.openapi.json',
+  sidebar: {
+    group: evidenceOid4vciOpenApiSidebarGroup,
+    label: 'API operations (wallet delivery)',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const caseworkOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const caseworkOpenApiSchema = {
+  base: 'reference/apis/casework',
+  schema: './openapi/registry-casework.render.openapi.json',
+  sidebar: {
+    group: caseworkOpenApiSidebarGroup,
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const schedulingOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const schedulingOpenApiSchema = {
   base: 'reference/apis/scheduling',
   schema: './openapi/registry-scheduling.render.openapi.json',
   sidebar: {
+    group: schedulingOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -177,10 +211,12 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
     [route, currentDocsetRedirect(route)],
   ]));
 }
+const messagingOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const messagingOpenApiSchema = {
   base: 'reference/apis/messaging',
   schema: './openapi/registry-messaging.render.openapi.json',
   sidebar: {
+    group: messagingOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -211,8 +247,6 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
 // facility template's compiled document as an example. scripts/fetch-openapi.mjs
 // fetches it for the current docset and release docsets from v0.42.0, and the
 // same test decides whether this build renders it.
-// Its operations fill their own placeholder group: openAPISidebarGroups is a
-// single placeholder that receives every schema without a group.
 const bregOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const bregOpenApiSchema = {
   base: 'reference/apis/breg',
@@ -224,10 +258,12 @@ const bregOpenApiSchema = {
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
+const coordinatorOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const coordinatorOpenApiSchema = {
   base: 'reference/apis/coordinator',
   schema: './openapi/registry-coordinator.render.openapi.json',
   sidebar: {
+    group: coordinatorOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -457,15 +493,8 @@ export default defineConfig({
         // hand-authored narrative pages (reference/apis/registry-*), which link
         // into them; old /api/*.html links are preserved by redirects above.
         starlightOpenAPI([
-          {
-            base: 'reference/apis/evidence',
-            schema: './openapi/registry-evidence.render.openapi.json',
-            sidebar: {
-              label: 'API operations',
-              collapsed: true,
-              operations: { labels: 'path', badges: true },
-            },
-          },
+          evidenceOpenApiSchema,
+          ...[evidenceOid4vciOpenApiSchema].filter(() => hasEvidenceOid4vciOpenApi),
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
@@ -578,7 +607,8 @@ export default defineConfig({
             { label: 'API overview', slug: 'reference/apis/registry-evidence' },
             // The API plugin supplies its own operation groups. An extra HTTP
             // API wrapper would add a disclosure without helping navigation.
-            ...openAPISidebarGroups.slice(0, 1),
+            evidenceOpenApiSidebarGroup,
+            ...(hasEvidenceOid4vciOpenApi ? [evidenceOid4vciOpenApiSidebarGroup] : []),
             { label: 'Security model', slug: 'security/evidence' },
           ],
         },
@@ -669,7 +699,7 @@ export default defineConfig({
             { label: 'Deploy Casework', slug: 'operate/casework' },
             { label: 'Retention and audit', slug: 'operate/casework-retention' },
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
-            ...openAPISidebarGroups.slice(1, 2),
+            caseworkOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
@@ -680,7 +710,7 @@ export default defineConfig({
             { label: 'Configuration reference', slug: 'reference/scheduling-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
             { label: 'Audit upgrades and retention', slug: 'operate/retention-and-persistent-state' },
-            ...openAPISidebarGroups.slice(2, 3),
+            schedulingOpenApiSidebarGroup,
           ],
         }] : []),
         ...(hasRender ? [{
@@ -702,13 +732,7 @@ export default defineConfig({
             { label: 'Author a package', slug: 'configure/messaging' },
             { label: 'Deploy Messaging', slug: 'operate/messaging' },
             { label: 'API contract', slug: 'reference/apis/registry-messaging' },
-            // The Messaging operations follow Evidence, Casework, and
-            // Scheduling in the OpenAPI plugin list, and only the products this
-            // docset carries are registered there.
-            ...openAPISidebarGroups.slice(
-              1 + Number(hasCasework) + Number(hasScheduling),
-              2 + Number(hasCasework) + Number(hasScheduling),
-            ),
+            messagingOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
@@ -722,13 +746,7 @@ export default defineConfig({
             { label: 'Deploy Coordinator', slug: 'operate/coordinator' },
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-coordinator' },
-            // The Coordinator operations follow Evidence, Casework, Scheduling,
-            // and Messaging in the OpenAPI plugin list, and only the products
-            // this docset carries are registered there.
-            ...openAPISidebarGroups.slice(
-              1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging),
-              2 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging),
-            ),
+            coordinatorOpenApiSidebarGroup,
           ],
         }] : []),
         {
