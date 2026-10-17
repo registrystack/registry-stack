@@ -122,6 +122,7 @@ a product-owned cutoff inside the caller's transaction. It rechecks state and
 timestamps, preserving pending, leased, unknown, and unexpired dead-letter jobs.
 It returns only deleted keys, leaving dependent cleanup, parent-record retention,
 replay policy, and audit retention with the consumer. The caller must roll back
-on any error. Hooks uses this primitive after locking eligible deliveries and
+on any error. A failure is a `RetentionError` naming a value-free cause: the
+refused bound or the server's SQLSTATE, never a row value or server message. Hooks uses this primitive after locking eligible deliveries and
 shared events; Messaging retains its existing parent-record cascade so reads
 and spent-key guarantees remain intact.

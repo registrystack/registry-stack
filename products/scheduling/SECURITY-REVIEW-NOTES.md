@@ -1244,14 +1244,15 @@ the out-of-range cases in `config.rs` pin the name and the bound.
 
 ## Terminal dispatch metadata retention
 
-The retention tick uses the existing receipt period for delivered reminder
-intents and terminal hook metadata. `PostgresStore::erase_terminal_dispatch`
+The retention tick uses the existing receipt period for every delivered
+outbox intent (confirmation, change, cancellation, reminder) and terminal hook
+metadata. `PostgresStore::erase_terminal_dispatch`
 bounds each table family to 256 rows and commits dependent deletions together.
 Shared Dispatch rechecks terminal state and cutoff; Hooks requires completed
 payload expiry for dead letters, locks state and shared events with SKIP LOCKED,
 and deletes state, delivery metadata, then unreferenced events. Pending, leased,
-retryable and uncertain work remains. Reminder local, failed and suppressed
-states stay readable. No migration credential or grant change is introduced.
+retryable and uncertain work remains. Outbox local, failed and suppressed
+states stay readable, whatever the intent's purpose. No migration credential or grant change is introduced.
 
 The tests in the `terminal_retention` module in `tests/postgres_commitments.rs` cover cutoff boundaries,
 protected row snapshots, shared siblings, receipt tombstones and repeated

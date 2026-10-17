@@ -9781,7 +9781,8 @@ mod terminal_retention {
     }
 
     #[tokio::test]
-    async fn reminder_retention_uses_receipt_cutoff_and_preserves_actionable_work_and_tombstones() {
+    async fn outbox_retention_uses_receipt_cutoff_for_every_purpose_and_preserves_actionable_work_and_tombstones(
+    ) {
         let fx = fixture().await;
         let (appointment, booking) = book(&fx, 0).await;
         let claim = Uuid::parse_str(&appointment).unwrap();
@@ -9792,16 +9793,26 @@ mod terminal_retention {
         let mut cases = Vec::new();
         // Suppressed work may have an uncertain in-flight send. Local and failed
         // intents remain operator-visible rather than being presumed disposable.
-        for (state, attempts, terminal_at, remove) in [
-            ("delivered", 1_i32, old, true),
-            ("delivered", 1, cutoff, true),
-            ("delivered", 1, recent, false),
-            ("pending", 0, old, false),
-            ("pending", 1, old, false),
-            ("pending", 1, now + TimeDelta::minutes(1), false),
-            ("local", 1, old, false),
-            ("failed", 1, old, false),
-            ("suppressed", 1, old, false),
+        // Every purpose is terminal dispatch metadata once delivered, so the
+        // receipt cutoff applies to confirmations, changes and cancellations
+        // exactly as it does to reminders.
+        for (purpose, state, attempts, terminal_at, remove) in [
+            ("reminder", "delivered", 1_i32, old, true),
+            ("reminder", "delivered", 1, cutoff, true),
+            ("reminder", "delivered", 1, recent, false),
+            ("confirmation", "delivered", 1, old, true),
+            ("confirmation", "delivered", 1, recent, false),
+            ("change", "delivered", 1, cutoff, true),
+            ("change", "delivered", 1, recent, false),
+            ("cancellation", "delivered", 1, old, true),
+            ("cancellation", "delivered", 1, recent, false),
+            ("cancellation", "pending", 1, old, false),
+            ("reminder", "pending", 0, old, false),
+            ("reminder", "pending", 1, old, false),
+            ("reminder", "pending", 1, now + TimeDelta::minutes(1), false),
+            ("reminder", "local", 1, old, false),
+            ("reminder", "failed", 1, old, false),
+            ("reminder", "suppressed", 1, old, false),
         ] {
             let id = Uuid::new_v4();
             fx.admin
@@ -9809,13 +9820,13 @@ mod terminal_retention {
                     "INSERT INTO scheduling_outbox
              (outbox_id,purpose,claim_id,appointment_revision,due_at,delivery_state,
               attempts,next_attempt_at,payload,created_at,delivered_at)
-             VALUES ($1,'reminder',$2,1,$3,$4,$5,$6,'{}'::jsonb,$3,
+             VALUES ($1,$7,$2,1,$3,$4,$5,$6,'{}'::jsonb,$3,
                      CASE WHEN $4='delivered' THEN $6::timestamptz ELSE NULL END)",
-                    &[&id, &claim, &old, &state, &attempts, &terminal_at],
+                    &[&id, &claim, &old, &state, &attempts, &terminal_at, &purpose],
                 )
                 .await
                 .unwrap();
-            cases.push((id, remove));
+            cases.push((id, purpose, remove));
         }
         let claims = rows(&fx, "scheduling_claims").await;
         let history = rows(&fx, "scheduling_history").await;
@@ -9831,8 +9842,8 @@ mod terminal_retention {
         assert_eq!(problem["code"], "idempotency.expired");
         // Check protected rows first so the baseline failure names missing
         // terminal cleanup only after the independent preservation checks pass.
-        cases.sort_by_key(|(_, remove)| *remove);
-        for (id, remove) in cases {
+        cases.sort_by_key(|(_, _, remove)| *remove);
+        for (id, purpose, remove) in cases {
             let exists = fx
                 .admin
                 .query_opt("SELECT 1 FROM scheduling_outbox WHERE outbox_id=$1", &[&id])
@@ -9841,7 +9852,7 @@ mod terminal_retention {
                 .is_some();
             assert_eq!(
                 exists, !remove,
-                "reminder {id}: only delivered rows at or before receipt cutoff are disposable"
+                "{purpose} intent {id}: only delivered rows at or before receipt cutoff are disposable"
             );
         }
         let after = rows(&fx, "scheduling_outbox").await;
@@ -10096,7 +10107,18 @@ mod terminal_retention {
         let reminders = rows(&fx, "scheduling_outbox").await;
         let states = rows(&fx, "registry_webhook_delivery_state").await;
         let deliveries = rows(&fx, "registry_webhook_deliveries").await;
-        assert!(fx.store.erase_terminal_dispatch(now, 7).await.is_err());
+        // The refusal names its value-free cause, so an operator can tell a
+        // pass that fails on every tick from a transient failure.
+        let refused = fx.store.erase_terminal_dispatch(now, 7).await.unwrap_err();
+        let reported = refused.to_string();
+        assert!(
+            reported.ends_with("SQLSTATE 23503"),
+            "the retention failure names the foreign-key SQLSTATE: {reported}"
+        );
+        assert!(
+            !reported.contains("canary"),
+            "the retention failure carries no row or object values: {reported}"
+        );
         assert_eq!(rows(&fx, "scheduling_outbox").await, reminders);
         assert_eq!(rows(&fx, "registry_webhook_delivery_state").await, states);
         assert_eq!(rows(&fx, "registry_webhook_deliveries").await, deliveries);

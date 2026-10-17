@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Prune delivered reminder intents and terminal observer delivery metadata in
-  bounded batches using `retention.receiptRetentionDays`. Preserve active and
+- Prune every delivered outbox intent (confirmation, change, cancellation,
+  reminder) and terminal observer delivery metadata in bounded batches using `retention.receiptRetentionDays`. Preserve active and
   uncertain work, dead letters through payload expiry, shared-event siblings,
   audit evidence, and spent idempotency keys.
 

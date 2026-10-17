@@ -40,6 +40,7 @@ mod service;
 mod store;
 
 pub use insert::{insert_delivery, DeliveryCapture};
+pub use registry_platform_dispatch::postgres::RetentionError;
 pub use retention::prune_terminal_deliveries;
 pub use seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,

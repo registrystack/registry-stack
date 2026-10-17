@@ -235,8 +235,10 @@ pub enum StoreError {
         "the candidate policy cannot deliver every retained hook event under the destination binding it was captured for, or the retained deliveries could not be read; keep those destinations declared and unchanged until their deliveries drain"
     )]
     RetainedHookBindings,
-    #[error("the Scheduling dispatch retention pass could not complete")]
-    DispatchRetention,
+    /// The hook half of the terminal dispatch retention pass failed. The
+    /// cause is value-free: a refused bound or the server's SQLSTATE.
+    #[error("the Scheduling dispatch retention pass could not complete: {0}")]
+    DispatchRetention(#[source] registry_platform_hooks::delivery::RetentionError),
     /// The environment records would retire or reduce supply that live
     /// appointments or holds still occupy. The swap is refused whole, so the
     /// operator either keeps the supply or closes what stands on it first.
@@ -2422,7 +2424,8 @@ impl PostgresStore {
         ).await?)
     }
 
-    /// Prune at most 256 delivered reminder intents and 256 terminal hook
+    /// Prune at most 256 delivered outbox intents of any purpose
+    /// (confirmation, change, cancellation, reminder) and 256 terminal hook
     /// deliveries per tick, using the configured receipt metadata horizon.
     /// Active, local, failed and suppressed intents remain retained;
     /// hooks also preserve replay until payload expiry has completed.
@@ -2456,7 +2459,7 @@ impl PostgresStore {
             cutoff.into(),
         )
         .await
-        .map_err(|_| StoreError::DispatchRetention)?;
+        .map_err(StoreError::DispatchRetention)?;
         transaction.commit().await?;
         Ok(reminders + hooks)
     }
