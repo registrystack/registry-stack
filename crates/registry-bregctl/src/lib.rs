@@ -626,12 +626,6 @@ struct PackageArgs {
     /// One printable line recorded in the published package as REVISION.
     #[arg(long, value_name = "TEXT")]
     revision: Option<String>,
-
-    /// `bregctl dev` packages for its own loopback session, which serves a
-    /// freshly initialized project's placeholder identity unchanged, so the
-    /// deployment identity refusals do not apply.
-    #[arg(long, hide = true)]
-    local_development: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2467,7 +2461,7 @@ where
             };
         }
         Command::Package(args) => {
-            return match package(&args) {
+            return match package(&args, true) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
@@ -4915,7 +4909,11 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     })
 }
 
-fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
+/// Build a package from a schema-tested candidate. A `deployment` package
+/// also applies the refusals for identity a deployable package must not
+/// carry; only `bregctl dev`, packaging for its own loopback session, passes
+/// `false`, and no command-line spelling reaches it.
+fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
     let schema_fingerprint = match &args.schema_fingerprint {
@@ -4923,12 +4921,7 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
             .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
-    let prepared = prepare_candidate(
-        &args.candidate,
-        schema_fingerprint,
-        "package",
-        !args.local_development,
-    )?;
+    let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package", deployment)?;
     let receipt = package_lifecycle::validate_test_receipt(
         &args.test_receipt,
         &prepared,
