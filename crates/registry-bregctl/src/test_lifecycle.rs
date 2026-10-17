@@ -26,7 +26,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
+use crate::safe_path::{symlink_detail, EntryStat, SafeDir, SafeEntry};
 use crate::CapturedPackageCandidate;
 
 pub(crate) const CREDENTIALS_API_VERSION: &str =
@@ -99,7 +99,7 @@ pub(crate) enum TestLifecycleError {
     FieldPatternSyntax { entity_id: String, field_id: String },
     Execution,
     RuntimeSetup(SchemaTestRuntimeSetupError),
-    OutputPreflight,
+    OutputPreflight { message: String },
     OutputCommit,
     Runtime,
 }
@@ -144,29 +144,28 @@ enum CredentialDocumentMode {
 tagged_union!(CredentialDocumentMode);
 
 pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycleError> {
+    let refused = || TestLifecycleError::OutputPreflight {
+        message: symlink_detail(path)
+            .unwrap_or_else(|| "the schema-test receipt output was refused".to_owned()),
+    };
     if !path.is_absolute()
         || path.as_os_str().is_empty()
         || super::has_parent_component(path)
         || path.file_name().is_none()
     {
-        return Err(TestLifecycleError::OutputPreflight);
+        return Err(refused());
     }
     // Resolving once yields the parent directory descriptor that the receipt
     // publication reuses, so replacing a component of `path` after this
     // preflight cannot redirect the write.
-    let destination = SafeEntry::resolve(path).map_err(|_| TestLifecycleError::OutputPreflight)?;
-    if destination
-        .exists()
-        .map_err(|_| TestLifecycleError::OutputPreflight)?
-    {
-        return Err(TestLifecycleError::OutputPreflight);
+    let destination = SafeEntry::resolve(path).map_err(|_| refused())?;
+    if destination.exists().map_err(|_| refused())? {
+        return Err(refused());
     }
 
     // Prove the destination can be created and removed before a long schema
     // test runs, rather than discovering an unwritable output afterwards.
-    let file = destination
-        .create_new(0o666)
-        .map_err(|_| TestLifecycleError::OutputPreflight)?;
+    let file = destination.create_new(0o666).map_err(|_| refused())?;
     let opened = match preflight_metadata(&file) {
         Ok(metadata) => metadata,
         Err(_) => {
@@ -175,20 +174,17 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
             // is available here; leave the created file rather than unlink
             // whatever the name currently resolves to.
             drop(file);
-            return Err(TestLifecycleError::OutputPreflight);
+            return Err(refused());
         }
     };
     let synced = file.sync_all();
     drop(file);
     if synced.is_err() {
         cleanup_exact_file(&destination, &opened);
-        return Err(TestLifecycleError::OutputPreflight);
+        return Err(refused());
     }
-    remove_exact_file(&destination, &opened).map_err(|_| TestLifecycleError::OutputPreflight)?;
-    destination
-        .parent()
-        .sync()
-        .map_err(|_| TestLifecycleError::OutputPreflight)?;
+    remove_exact_file(&destination, &opened).map_err(|_| refused())?;
+    destination.parent().sync().map_err(|_| refused())?;
     Ok(OutputTarget { destination })
 }
 
@@ -945,7 +941,7 @@ bindings:
         let _fault = install_preflight_metadata_fault();
         let error = preflight_output(&output).expect_err("an unidentifiable receipt is refused");
 
-        assert!(matches!(error, TestLifecycleError::OutputPreflight));
+        assert!(matches!(error, TestLifecycleError::OutputPreflight { .. }));
         assert!(
             output.exists(),
             "the receipt whose identity the preflight never learned is left in place"
@@ -1030,13 +1026,15 @@ bindings:
     }
 
     #[test]
-    fn failed_step_reports_location_and_http_status_without_payload_or_database_advice() {
+    fn failed_step_reports_location_status_and_bounded_problem_without_database_advice() {
         let error = execution_error(FixtureError::StepFailed {
             journey_index: 1,
             step_index: 25,
             error: Box::new(FixtureError::ResponseStatusMismatch {
                 expected: 409,
                 actual: 412,
+                problem_code: Some("precondition.failed".to_owned()),
+                problem_detail: Some("The mutation precondition failed.".to_owned()),
             }),
         });
         let report = serde_json::to_value(crate::test_lifecycle_failure(error))
@@ -1045,7 +1043,7 @@ bindings:
         assert_eq!(report["diagnostics"][0]["path"], "journeys[1].steps[25]");
         assert_eq!(
             report["diagnostics"][0]["message"],
-            "expected HTTP 409, received HTTP 412"
+            "expected HTTP 409, received HTTP 412; problem precondition.failed: The mutation precondition failed."
         );
         assert!(!report.to_string().contains("recreate"));
     }

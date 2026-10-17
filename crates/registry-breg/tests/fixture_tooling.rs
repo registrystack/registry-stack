@@ -740,7 +740,11 @@ fn compiled_fixture_with_project(
     let project_source = edit(
         String::from_utf8(PROJECT_TEMPLATE.to_vec())
             .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module)),
+            .replace("MODULE_DIGEST", &module_digest(&module))
+            .replace(
+                "canonicalBaseIri: https://fixture.invalid",
+                "canonicalBaseIri: https://fixture.example.test",
+            ),
     )
     .into_bytes();
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
@@ -753,6 +757,10 @@ fn compiled_fixture_without_writable_note() -> registry_breg::CompiledRegistry {
     let project_source = String::from_utf8(PROJECT_TEMPLATE.to_vec())
         .expect("project fixture is UTF-8")
         .replace("MODULE_DIGEST", &module_digest(&module))
+        .replace(
+            "canonicalBaseIri: https://fixture.invalid",
+            "canonicalBaseIri: https://fixture.example.test",
+        )
         .replace(
             "writableFields: [jurisdiction, label, note, quantity]",
             "writableFields: [jurisdiction, label, quantity]",

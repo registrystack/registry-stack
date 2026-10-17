@@ -367,6 +367,10 @@ impl FixtureSources {
             .join(name);
         let project_bytes = fs::read(root.join("registry.yaml"))
             .expect("committed pilot registry source is readable");
+        let project_bytes = String::from_utf8(project_bytes)
+            .expect("committed pilot registry source is UTF-8")
+            .replace(".example.invalid", ".example.test")
+            .into_bytes();
         let project = parse_project_yaml(&project_bytes)
             .expect("committed pilot registry follows the strict authoring contract");
         let mut modules = Vec::new();

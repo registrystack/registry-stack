@@ -5743,10 +5743,10 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestExecution,
             SuggestedAction::RecreateDisposableDatabase,
         ),
-        TestLifecycleError::OutputPreflight => (
+        TestLifecycleError::OutputPreflight { ref message } => (
             "test.output.refused",
             "output",
-            "the schema-test receipt output was refused",
+            message.as_str(),
             DiagnosticArtifact::SchemaTestOutput,
             SuggestedAction::ChooseSchemaTestOutput,
         ),
@@ -8562,6 +8562,13 @@ pub(crate) fn retained_native_fixture_files() -> BTreeMap<String, Vec<u8>> {
         }],
     )
     .expect("retained native module lock renders");
+    let project = String::from_utf8(project)
+        .expect("retained native project is UTF-8")
+        .replace(
+            "canonicalBaseIri: https://generic-registry.example.invalid",
+            "canonicalBaseIri: https://generic-registry.example.test",
+        )
+        .into_bytes();
     BTreeMap::from([
         ("registry.yaml".to_owned(), project),
         (
@@ -9713,7 +9720,6 @@ fn write_files_with_before_publish(
             "a generated artifact could not be written",
         )
     };
-    // The caller selects the parent directory, so resolve its aliases once.
     // The leaf is never canonicalized: every stage, write, cleanup, and
     // publication uses the strict parent descriptor below.
     let parent_path = output
@@ -9745,11 +9751,11 @@ fn write_files_with_before_publish(
             "the output destination could not be inspected",
         )
     })? {
-        return Err(diagnostic(
-            "output.destination.invalid",
-            "output",
-            "the output directory must be a new path with a directory name",
-        ));
+        let message = safe_path::symlink_detail(&selected_output).map_or_else(
+            || "the output directory must be a new path with a directory name".to_owned(),
+            |detail| format!("the output destination was refused; {detail}"),
+        );
+        return Err(diagnostic("output.destination.invalid", "output", &message));
     }
 
     let staged = create_staging_directory(parent)?;
