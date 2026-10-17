@@ -17,7 +17,7 @@ bregctl explain model .
 bregctl dev start .
 bregctl examples list .
 bregctl examples run contact .
-bregctl examples run update-contact-email . --from-attempt <contact attempt>
+bregctl examples run update-contact-email .
 bregctl examples run register-contact .
 bregctl dev stop .
 ```
@@ -25,8 +25,8 @@ bregctl dev stop .
 `dev start` checks and packages the project, starts a local issuer and disposable
 PostgreSQL, and verifies the journeys before serving requests. Restarting it
 retains the records. `bregctl dev stop --remove .` removes this project's local
-session and its data. `update-contact-email` acts on the contact the `contact`
-example created, so pass the attempt ID that run printed. Automatic application
+session and its data. `update-contact-email` creates its own contact and then
+changes that contact's email through the Action. Automatic application
 of a submitted Proposal runs after the response, so `register-contact` waits up
 to 10 seconds for it; if it still reports a differing Proposal state, rerun the
 `next command` it prints.
