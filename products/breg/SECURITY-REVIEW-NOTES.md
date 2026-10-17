@@ -10,8 +10,8 @@ and the residuals the matrix rows do not state.
 
 ## Linear Immediate Action policies and target locking
 
-Immediate Action authorization now groups compatible effects into one policy
-per action, entity, access profile, and command. The grouped policy requires
+Immediate Action authorization groups compatible effects into one policy per
+action, entity, access profile, and command. The grouped policy requires
 the same action context, effect membership, target record, row boundaries,
 field set, and field values that the individual policies required. Execution
 and replay authorization load each distinct target record once and apply every
@@ -21,10 +21,14 @@ rows or fields an action can use.
 
 Schema reconciliation records a digest of each compiled policy definition in
 the policy comment and preserves the PostgreSQL policy object when the digest
-matches. Exact managed-catalog verification remains the activation boundary:
-an altered policy with a retained comment is repaired before activation or the
-activation is refused. The optimization does not treat the comment alone as
-proof that the enforced expression is correct.
+matches. Exact managed-catalog verification remains the activation boundary.
+Reconciliation keeps a policy whose comment matches, so a policy whose
+expression was altered while it kept that comment is not repaired: catalog
+verification refuses it as drift and activation fails closed. Recovery is an
+operator step: a database administrator clears that policy's comment and
+applies the exact target package again, and reconciliation then replaces the
+policy with its compiled definition. The optimization does not treat the comment
+alone as proof that the enforced expression is correct.
 
 The 128-effect regression compares grouped policy count and text size with the
 effect count, exercises successful execution and replay, and retains refused
