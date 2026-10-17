@@ -3459,6 +3459,40 @@ fn decimal_bound_diagnostic_names_the_record_field_and_scale_rule() {
 }
 
 #[test]
+fn decimal_bound_diagnostic_names_the_scale_and_ordering_rules() {
+    for (precision, scale, minimum, maximum, rule) in [
+        (2, 3, None, None, "scale must not exceed precision"),
+        (
+            6,
+            2,
+            Some("50.00"),
+            Some("10.00"),
+            "minimum must not exceed maximum",
+        ),
+    ] {
+        let mut project = multi_dataset_project();
+        let field = project.entities[0]
+            .fields
+            .iter_mut()
+            .find(|field| field.id == "name")
+            .unwrap();
+        field.field_type = registry_breg::contract::FieldTypeSource::Decimal {
+            precision,
+            scale,
+            minimum: minimum.map(str::to_owned),
+            maximum: maximum.map(str::to_owned),
+        };
+        let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+            .unwrap();
+        assert!(diagnostic.message.contains(rule), "{}", diagnostic.message);
+    }
+}
+
+#[test]
 fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_defined() {
     for field in [
         r#"{"id":"location","type":"crs84-point","precision":4,"classification":"internal"}"#,
