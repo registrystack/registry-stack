@@ -25,7 +25,7 @@ rolling upgrade that mixes releases is not supported:
 
 - **Casework pins the BReg context contract.** The read-only provider checks the exact registry
   revision, context contract, and Proposal identity. A changed contract requires re-pairing; see
-  [Change the active Casework package](../../casework/#change-the-active-package).
+  [plan, apply, and serve](../../casework/#plan-apply-and-serve).
 - **Adopter tooling is checked.** `evidencectl` refuses an `evidence` or `bregctl` binary of
   another version.
 - **Clients are not checked.** Clients send no version, and runtimes accept any caller. Pre-1.0

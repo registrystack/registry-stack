@@ -1122,7 +1122,7 @@ membership, or current-source visibility changes can invalidate them. After
 scan the complete candidate set before sorting or paging, including unfiltered reads. Exhausted
 candidate or source-read budgets return `422 review.query-too-broad`, with no partial page;
 narrow the queue or exact subject selectors before retrying. A smaller page size or a visible
-reference filter does not reduce that scan. See the [queue sizing limits](../../operate/casework/#size-the-review-queue-reads).
+reference filter does not reduce that scan. See the `inbox` keys of the [runtime configuration](../../operate/casework/#casework-runtime-configuration).
 An unavailable required provider is a failure, not an empty reviewer inbox.
 
 {/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete, ReviewResultResponse;
