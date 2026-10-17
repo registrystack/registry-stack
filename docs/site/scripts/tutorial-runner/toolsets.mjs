@@ -6,8 +6,10 @@
 // product-specific code in the runner.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { accessSync, closeSync, constants, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, readdir, stat, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -170,9 +172,194 @@ function productToolset({
   };
 }
 
+// The unified client packages a reader installs from npm and PyPI at the
+// registry's exact version, assembled from this checkout instead and served
+// under their published names, so the page's own install commands run
+// unchanged:
+//
+// - npm resolves the packages' scopes from serveNpmPackages, a registry on a
+//   loopback port that serves only the packed tarballs, through the
+//   npm_config_<scope>:registry variable, with an npm cache of the journey's
+//   own. Every other package still comes from the reader's registry.
+// - pip installs from the same directory instead of an index, through
+//   PIP_NO_INDEX and PIP_FIND_LINKS.
+//
+// REGISTRY_CLIENT_PACKAGES_DIR names a directory a previous
+// release/scripts/assemble-registry-client-packages.py run filled. Without
+// it, assembleClientPackages builds the six Node bindings and the Python
+// wheel the way that script's prerequisites describe, once per run of the
+// runner. On macOS the assembly bundles the AWS-LC FIPS dylib the bindings
+// load into each package, so an installed package needs no library path, as
+// a released one needs none.
+const ASSEMBLE = 'release/scripts/assemble-registry-client-packages.py';
+const CLIENT_PRODUCTS = ['discovery', 'evidence', 'breg', 'casework', 'messaging', 'scheduling'];
+
+// Serve every npm package packed in dir, as an npm registry on a loopback
+// port: each package document lists the versions found, and a tarball is
+// served at the address its document names. Resolves to { url, scopes,
+// close }.
+export async function serveNpmPackages(dir) {
+  const tarballs = readdirSync(dir).filter((name) => name.endsWith('.tgz')).sort();
+  if (tarballs.length === 0) throw new ToolsetError(`no npm package in ${dir}; assemble one with ${ASSEMBLE}`);
+  const documents = new Map();
+  const server = createServer((request, response) => {
+    const path = decodeURIComponent(new URL(request.url, 'http://registry').pathname).slice(1);
+    const tarball = path.startsWith('-/') ? path.slice(2) : undefined;
+    if (tarball !== undefined && tarballs.includes(tarball)) {
+      response.writeHead(200, { 'content-type': 'application/octet-stream' });
+      response.end(readFileSync(join(dir, tarball)));
+    } else if (documents.has(path)) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(documents.get(path)));
+    } else {
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end('{"error":"not found"}');
+    }
+  });
+  await new Promise((resolvePromise, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolvePromise);
+  });
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const close = () => new Promise((resolvePromise) => server.close(() => resolvePromise()));
+  try {
+    for (const tarball of tarballs) {
+      const read = spawnSync('tar', ['-xzOf', join(dir, tarball), 'package/package.json'], { encoding: 'utf8' });
+      if (read.status !== 0) throw new ToolsetError(`could not read the manifest of ${join(dir, tarball)}:\n${read.stderr}`);
+      const manifest = JSON.parse(read.stdout);
+      const bytes = readFileSync(join(dir, tarball));
+      const document = documents.get(manifest.name) ?? { name: manifest.name, 'dist-tags': {}, versions: {} };
+      document.versions[manifest.version] = {
+        ...manifest,
+        dist: {
+          tarball: `${url}-/${tarball}`,
+          integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+          shasum: createHash('sha1').update(bytes).digest('hex'),
+        },
+      };
+      document['dist-tags'].latest = manifest.version;
+      documents.set(manifest.name, document);
+    }
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  const scopes = [...new Set([...documents.keys()].filter((name) => name.startsWith('@')).map((name) => name.split('/')[0]))];
+  return { url, scopes, close };
+}
+
+// The variables that send npm to a served registry for its scopes, with a
+// cache of the journey's own. A page's npm install neither audits nor asks
+// for funding, so the gate calls no public npm endpoint for either.
+export function npmEnvironment(registry, cache) {
+  const env = { npm_config_cache: cache, npm_config_audit: 'false', npm_config_fund: 'false' };
+  for (const scope of registry.scopes) env[`npm_config_${scope}:registry`] = registry.url;
+  return env;
+}
+
+function runStep(description, command, args, options) {
+  console.log(`# ${description}`);
+  const result = spawnSync(command, args, { stdio: ['ignore', 'inherit', 'inherit'], ...options });
+  if (result.error) throw new ToolsetError(`building the client packages failed: ${description}: ${result.error.message}`);
+  if (result.status !== 0) throw new ToolsetError(`building the client packages failed: ${description}`);
+}
+
+// Build and assemble the client packages from this checkout into a directory
+// removed when the runner exits. The Node bindings and the Python wheels
+// build in separate Cargo target directories, because the macOS assembly
+// takes the one AWS-LC FIPS dylib each target directory holds, and the two
+// profiles build it differently.
+let assembled;
+function assembleClientPackages(repoRoot) {
+  if (assembled !== undefined) return assembled;
+  const targetRoot = join(repoRoot, 'target', 'breg-tutorial-client');
+  const nodeTarget = join(targetRoot, 'node');
+  const pythonTarget = join(targetRoot, 'python');
+  const maturinEnv = join(targetRoot, 'maturin');
+  const maturinPython = join(maturinEnv, 'bin', 'python');
+  const output = mkdtempSync(join(tmpdir(), 'tutorial-client-packages-'));
+  process.once('exit', () => rmSync(output, { recursive: true, force: true }));
+  // The macOS packages are built for the deployment floor the release
+  // assembly checks.
+  const env = { ...process.env, MACOSX_DEPLOYMENT_TARGET: '11.0' };
+  const darwin = process.platform === 'darwin';
+  for (const product of CLIENT_PRODUCTS) {
+    const binding = join(repoRoot, 'crates', `registry-${product}-client-node`);
+    runStep(`install the ${product} Node binding's build tools`, 'npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: binding, env });
+    runStep(`build the ${product} Node binding`, 'npm', ['run', 'build:debug'], { cwd: binding, env: { ...env, CARGO_TARGET_DIR: nodeTarget } });
+  }
+  runStep('make the maturin environment', 'uv', ['venv', '--allow-existing', '--quiet', maturinEnv], { cwd: repoRoot, env });
+  runStep(
+    'install the pinned maturin',
+    'uv',
+    ['pip', 'install', '--quiet', '--python', maturinPython, '--require-hashes', '--requirement', join(repoRoot, 'release', 'requirements', 'maturin-1.9.6.txt')],
+    { cwd: repoRoot, env },
+  );
+  const assemble = (artifacts, target, args) => [
+    join(repoRoot, ASSEMBLE),
+    '--artifacts',
+    artifacts,
+    '--include-casework',
+    '--include-messaging',
+    '--include-scheduling',
+    '--output-dir',
+    output,
+    '--work-dir',
+    join(output, `staging-${artifacts}`),
+    ...(darwin ? ['--macos-library-root', target] : []),
+    ...args,
+  ];
+  runStep('assemble the Node packages', 'python3', assemble('node', nodeTarget, []), { cwd: repoRoot, env });
+  runStep(
+    'build and assemble the Python wheel',
+    'python3',
+    assemble('python', pythonTarget, [
+      '--python-profile',
+      'ci',
+      '--maturin',
+      join(maturinEnv, 'bin', 'maturin'),
+      ...(darwin ? [] : ['--zig-python', maturinPython]),
+    ]),
+    { cwd: repoRoot, env: { ...env, CARGO_TARGET_DIR: pythonTarget } },
+  );
+  assembled = output;
+  return assembled;
+}
+
+function clientPackages(repoRoot) {
+  const given = process.env.REGISTRY_CLIENT_PACKAGES_DIR || undefined;
+  if (given === undefined) return assembleClientPackages(repoRoot);
+  if (!isAbsolute(given)) throw new ToolsetError(`REGISTRY_CLIENT_PACKAGES_DIR must be an absolute path: ${given}`);
+  if (!existsSync(given) || !statSync(given).isDirectory()) {
+    throw new ToolsetError(`REGISTRY_CLIENT_PACKAGES_DIR is not a directory: ${given}; assemble one with ${ASSEMBLE}`);
+  }
+  return given;
+}
+
+// A fence that installs the unified client packages.
+const CLIENT_INSTALLS = /registry-stack-client[=@\s"']|@registrystack\/client[@\s"']/u;
+
+// The environment that serves the client packages to a journey whose steps
+// install them, and the function that stops serving them. A journey that
+// installs none needs no packages and gets no variables.
+export async function clientEnvironment(steps, repoRoot, workRoot) {
+  const installsClients = steps.some((step) => step.kind === 'run' && CLIENT_INSTALLS.test(step.code));
+  if (!installsClients) return { env: {}, close: async () => {} };
+  const packages = clientPackages(repoRoot);
+  const registry = await serveNpmPackages(packages);
+  return {
+    env: {
+      ...npmEnvironment(registry, join(workRoot, 'npm-cache')),
+      PIP_NO_INDEX: '1',
+      PIP_FIND_LINKS: packages,
+    },
+    close: registry.close,
+  };
+}
+
 // Base Registry Engine: breg and bregctl. `bregctl dev` resolves `breg` from
 // PATH, so both are served by name.
-const breg = productToolset({
+const bregProduct = productToolset({
   label: 'breg and bregctl',
   // A page whose sh fences match this runs the toolset, so its gate must
   // cover it (tutorial-runner/gate.mjs). A path such as .breg/dev or
@@ -188,6 +375,28 @@ const breg = productToolset({
   targetName: 'breg-tutorial-source',
   sessions: [['bregctl', '.breg/dev/state.json']],
 });
+
+let closeClients = async () => {};
+const breg = {
+  ...bregProduct,
+
+  // A journey whose fences match this installs the unified client packages.
+  clients: CLIENT_INSTALLS,
+
+  async prepare(context) {
+    await bregProduct.prepare(context);
+    const { env, close } = await clientEnvironment(context.steps ?? [], context.repoRoot, context.workRoot);
+    closeClients = close;
+    return env;
+  },
+
+  async teardown(context) {
+    const stoppedAll = await bregProduct.teardown(context);
+    await closeClients();
+    closeClients = async () => {};
+    return stoppedAll;
+  },
+};
 
 // Registry Casework: casework and caseworkctl, with breg and bregctl because
 // a Casework journey may review work a local registry holds. `caseworkctl dev`

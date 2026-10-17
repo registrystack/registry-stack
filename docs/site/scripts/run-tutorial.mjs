@@ -330,7 +330,7 @@ async function replay(pages, toolset, checkout, keepFailed = false) {
   let prepared = false;
   let inherited = new Map();
   try {
-    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot });
+    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot, steps });
     prepared = true;
     if (checkout) {
       await copyCheckout(REPO_ROOT, readerDir);
