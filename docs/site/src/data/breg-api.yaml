@@ -103,9 +103,9 @@
   rows:
     - ['`get`, `lookup`, or `access-log` of a record outside the row, membership, or consent boundary', '404 `resource.not_found`, or 404 `lookup.unresolved` for a lookup, identical to an absent record.']
     - ['Collection, `:snapshot`, `$count`, or `$skiptoken` continuation over such records', '200 with those records left out and the count taken over the visible records only. A cursor replay re-evaluates the boundary.']
-    - ['Revisions of such a record', '404, or 200 with no items. Both mean no access.']
+    - ['Revisions of such a record', '404 `resource.not_found`, identical to an absent record.']
     - ['`GET /v1/records/{route}/{record_id}/{read_path}` for a path the selected profile holds no read-path grant for', '404 `resource.not_found`, identical to an unknown path.']
-    - ['A read path rooted at a record outside the boundary', '404, or 200 with no items. No related record is disclosed.']
+    - ['A read path rooted at a record outside the boundary', '200 with no items, identical to an absent root record. No related record is disclosed.']
     - ['`$select`, `$filter`, or `$orderby` naming a field outside the read-path grant', '400 `query.invalid`; the field is not named.']
 - id: proposal-transitions
   title: Promoted Proposal transitions
