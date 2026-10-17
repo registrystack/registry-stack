@@ -62,6 +62,17 @@ export function cargoBuild({ repoRoot, args, env = process.env, platform = proce
   }
 }
 
+// The tag a numbered release of this checkout's workspace version is built
+// under, `v` and the [workspace.package] version of the root Cargo.toml. A
+// binary built with it as REGISTRY_RELEASE_TAG reports that bare version
+// (crates/registry-platform-buildinfo).
+export function workspaceReleaseTag(repoRoot) {
+  const manifest = readFileSync(join(repoRoot, 'Cargo.toml'), 'utf8');
+  const version = /^\[workspace\.package\]$[^[]*?^version = "([^"]+)"$/mu.exec(manifest)?.[1];
+  if (version === undefined) throw new ToolsetError(`${join(repoRoot, 'Cargo.toml')} has no [workspace.package] version`);
+  return `v${version}`;
+}
+
 const quote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 // Serves each [name, path] binary by name from binDir. With a runtime library
@@ -97,11 +108,13 @@ function productToolset({
   targetName,
   sessions,
   stopArgs = (project) => ['dev', 'stop', project, '--remove'],
+  buildEnv = () => ({}),
   ...rest
 }) {
   const variables = binaries.map(([, variable]) => variable);
   return {
     ...rest,
+    buildEnv,
 
     // Returns the variables the journey's environment adds, if any.
     async prepare({ repoRoot, binDir }) {
@@ -123,7 +136,7 @@ function productToolset({
           libraryDir = cargoBuild({
             repoRoot,
             args: ['build', '--locked', '--profile', profile, ...cargoArgs, '--bins'],
-            env: { ...process.env, CARGO_TARGET_DIR: targetDir },
+            env: { ...process.env, ...buildEnv(repoRoot), CARGO_TARGET_DIR: targetDir },
           });
         } catch (error) {
           if (error instanceof ToolsetError) throw new ToolsetError(`building ${label} failed: ${error.message}`);
@@ -374,6 +387,10 @@ const bregProduct = productToolset({
   profileVariable: 'BREG_TUTORIAL_CARGO_PROFILE',
   targetName: 'breg-tutorial-source',
   sessions: [['bregctl', '.breg/dev/state.json']],
+  // A reader installs the client packages at the version `breg --version`
+  // reports, and the journey's packages are assembled at the workspace
+  // version, so the binaries report it as a release of it would.
+  buildEnv: (repoRoot) => ({ REGISTRY_RELEASE_TAG: workspaceReleaseTag(repoRoot) }),
 });
 
 let closeClients = async () => {};

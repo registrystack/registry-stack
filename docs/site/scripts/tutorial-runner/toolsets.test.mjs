@@ -8,7 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { TOOLSETS, cargoBuild, clientEnvironment, npmEnvironment, serveBinaries, serveNpmPackages } from './toolsets.mjs';
+import { TOOLSETS, cargoBuild, clientEnvironment, npmEnvironment, serveBinaries, serveNpmPackages, workspaceReleaseTag } from './toolsets.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -123,6 +123,28 @@ test('a binary served without a library directory is the binary itself', async (
   const binDir = await mkdtemp(join(tmpdir(), 'toolset-bin-'));
   await serveBinaries(binDir, [['tool', process.execPath]]);
   assert.equal(realpathSync(join(binDir, 'tool')), realpathSync(process.execPath));
+});
+
+test('the release tag names the workspace version, not a member crate version', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'toolset-workspace-'));
+  await writeFile(
+    join(root, 'Cargo.toml'),
+    '[workspace]\nmembers = ["a"]\n\n[workspace.dependencies]\nserde = { version = "1.0.0" }\n\n[workspace.package]\nedition = "2024"\nversion = "1.2.3"\n',
+  );
+  assert.equal(workspaceReleaseTag(root), 'v1.2.3');
+});
+
+test('a workspace without a package version has no release tag', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'toolset-workspace-'));
+  await writeFile(join(root, 'Cargo.toml'), '[workspace]\nmembers = ["a"]\n');
+  assert.throws(() => workspaceReleaseTag(root), /no \[workspace\.package\] version/u);
+});
+
+// The client packages a breg journey installs are assembled at the workspace
+// version, so the binaries it builds must report that version too.
+test('the breg toolset builds its binaries marked with the workspace release tag', () => {
+  const version = /\[workspace\.package\][^[]*?\nversion = "([^"]+)"/u.exec(readFileSync(join(REPO_ROOT, 'Cargo.toml'), 'utf8'))[1];
+  assert.deepEqual(TOOLSETS.breg.buildEnv(REPO_ROOT), { REGISTRY_RELEASE_TAG: `v${version}` });
 });
 
 test('the breg toolset installs the client packages only for a journey that runs their install commands', () => {
