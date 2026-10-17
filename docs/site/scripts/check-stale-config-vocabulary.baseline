@@ -1,0 +1,44 @@
+# Pending-rewrite baseline for check-stale-config-vocabulary.sh.
+#
+# Each line names one page, relative to docs/site, that still carries retired
+# Base Registry Engine vocabulary. The check counts and reports its lines
+# instead of refusing them. The comment names the BReg docs rewrite PR that
+# removes the vocabulary; that PR deletes the line. A page not listed here
+# fails the check on its first retired spelling.
+#
+# Not scanned: the field descriptions the generated configuration reference
+# renders from products/breg/generated/*/*.schema.json. Several still say
+# "entity"; they are Rust doc comments, fixed in the product (PF-18 in the
+# rewrite's findings register), not on a page.
+
+# PR 2: tutorials and entry pages
+src/content/docs/tutorials/derive-a-registry-from-publicschema.mdx # PR 2
+
+# PR 3: Author
+src/content/docs/configure/breg.mdx # PR 3
+src/content/docs/configure/breg-statistics.mdx # PR 3
+src/content/docs/explanation/breg-field-encryption.mdx # PR 3
+src/content/docs/explanation/breg-statistical-datasets.mdx # PR 3
+src/content/docs/explanation/deriving-a-registry-from-a-model.mdx # PR 3
+src/content/docs/explanation/native-field-patterns.mdx # PR 3
+
+# PR 4: Operate
+src/content/docs/operate/breg.mdx # PR 4
+src/content/docs/operate/breg-changes.mdx # PR 4
+src/content/docs/operate/breg-data.mdx # PR 4
+src/content/docs/operate/breg-retention.mdx # PR 4
+src/content/docs/operate/breg-webhooks.mdx # PR 4
+src/content/docs/tutorials/build-a-breg-production-candidate.mdx # PR 4
+
+# PR 5: Reference and src/data
+src/content/docs/reference/breg-api.mdx # PR 5
+src/content/docs/reference/breg-client-capabilities.mdx # PR 5
+src/content/docs/reference/breg-configuration.mdx # PR 5
+src/content/docs/reference/bregctl-publicschema-wizard.mdx # PR 5
+src/content/docs/reference/client-api.mdx # PR 5
+src/content/docs/reference/glossary.mdx # PR 5
+src/data/breg-api.yaml # PR 5
+
+# PR 6: Compose and citizen
+src/content/docs/configure/breg-mcp.mdx # PR 6
+src/content/docs/explanation/openfn-adaptors.mdx # PR 6

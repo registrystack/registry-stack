@@ -192,6 +192,41 @@ The generated `registry.yaml` tables include every nested dataset member. Compil
     crates/registry-breg/src/compiler/statistics.rs;
     docs/site/scripts/generate-breg-configuration.mjs. */}
 
+## Migration descriptor
+
+A reviewed migration's `descriptor.json` declares the steps and assertions that carry stored Records
+from the active package to its successor. [Change an active registry](../../operate/breg-changes/#reviewed-migration-files)
+explains when a package needs one and what `bregctl test` rehearses.
+
+{/* Generated from products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json,
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'migration-descriptor')} prefix="breg-tool" compact />
+
+## Backup binding
+
+A backup binding is the JSON document you write beside a database backup and pass to `bregctl plan`
+and `bregctl apply` with `--backup` for a destructive migration. It stays outside the package,
+because each environment backs up its own database.
+
+{/* Generated from products/breg/generated/tools/backup-binding.v1alpha1.schema.json,
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'backup-binding')} prefix="breg-tool" compact />
+
+## Development clients
+
+`dev-clients.yaml` declares the local clients `bregctl dev start` binds for evaluation. A client
+requests an access profile; declaring it creates no profile grant.
+
+{/* Generated from products/breg/generated/tools/dev-clients.v1alpha1.schema.json,
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'dev-clients')} prefix="breg-tool" compact />
+
 ## Check commands
 
 Every file Base Registry Engine reads has a command that checks it offline, with no service running. Each prints

@@ -26,6 +26,7 @@ config:
       - StandardsTable
       - ApiReferenceTable
       - BRegClientCapabilities
+      - BRegProposalQueryKeys
       - RelaySupportRoster
       - SpecRegister
       - LegendList

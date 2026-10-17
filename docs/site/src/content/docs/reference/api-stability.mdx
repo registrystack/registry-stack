@@ -237,8 +237,8 @@ and the WASM handler SDK are outside the promise.
 ## Upgrades and state
 
 The native Base Registry Engine (BReg) Record type, Action, and Proposal replacement is a fresh-install
-boundary. It provides no conversion of retired ChangeRequest state. Normal
-package evolution applies within the native model.
+boundary. It provides no conversion of state recorded by earlier Base Registry Engine
+releases. Normal package evolution applies within the native model.
 
 For retained state contracts, each release reads the state its immediate
 predecessor wrote, except for the fresh baselines described in this section and

@@ -13,6 +13,9 @@ standards_referenced:
   - json-schema
 ---
 
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/breg-configuration.json';
+
 If you are verifying a Base Registry Engine (BReg) project, compile it offline,
 inspect the derived contract, and run its journeys against an isolated database
 with real credentials before packaging it.
@@ -110,6 +113,17 @@ compiler checks and database journeys remain separate proof levels.
 {/* Evidence: crates/registry-bregctl/src/lib.rs; crates/registry-bregctl/src/check.rs;
     crates/registry-breg/src/fixtures.rs; crates/registry-bregctl/src/dev/examples.rs;
     products/breg/examples/minimal/tests/journeys.yaml. */}
+
+## Journey file keys
+
+Every key `tests/journeys.yaml` accepts, with its type, accepted values, and bounds. A step names
+a Record type or an Action, and `bregctl check` adds the rules a schema cannot state.
+
+{/* Generated from products/breg/generated/tools/journeys.v1.schema.json,
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'journeys')} prefix="breg-tool" compact />
 
 ## Next
 
