@@ -286,9 +286,9 @@
   `startup.database.secret-refused`, replacing `startup.database.connection-refused`.
   Missing or extra managed tables, views, sequences, functions, and indexes, and a
   removed unique constraint or required-column marker, report
-  `startup.database.catalog-drift` and name each object instead of
-  `startup.database.unready`. Automation that matches the earlier codes must
-  match these.
+  `startup.database.catalog-drift` and name up to 64 affected identifiers instead
+  of `startup.database.unready`. After each repair, rerun `doctor` to find any
+  remaining drift. Automation that matches the earlier codes must match these.
 
 ## 0.41.0 - 2026-10-13
 
