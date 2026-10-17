@@ -44,17 +44,15 @@ DOCKER_LOGIN_ACTION = (
 
 
 class DockerHubPullAuthenticationTest(unittest.TestCase):
-    SERVICE_USERNAME = (
+    SERVICE_CREDENTIALS = (
         "${{ github.event_name != 'pull_request' && "
         "(github.event_name != 'workflow_dispatch' || "
         "github.ref == 'refs/heads/main') && "
-        "secrets.DOCKERHUB_USERNAME || '' }}"
-    )
-    SERVICE_PASSWORD = (
-        "${{ github.event_name != 'pull_request' && "
-        "(github.event_name != 'workflow_dispatch' || "
-        "github.ref == 'refs/heads/main') && "
-        "secrets.DOCKERHUB_READ_TOKEN || '' }}"
+        "secrets.DOCKERHUB_USERNAME != '' && "
+        "secrets.DOCKERHUB_READ_TOKEN != '' && "
+        "fromJSON(format('{{\"username\":{0},\"password\":{1}}}', "
+        "toJSON(secrets.DOCKERHUB_USERNAME), "
+        "toJSON(secrets.DOCKERHUB_READ_TOKEN))) || null }}"
     )
 
     def test_manual_ci_run_title_distinguishes_full_and_partial_sweeps(self) -> None:
@@ -70,7 +68,10 @@ class DockerHubPullAuthenticationTest(unittest.TestCase):
             for job_name, job in document["jobs"].items():
                 for service_name, service in job.get("services", {}).items():
                     image = service.get("image", "")
-                    if "postgres" not in image:
+                    if not (
+                        image.startswith("docker.io/")
+                        or image.startswith("postgis/")
+                    ):
                         continue
                     with self.subTest(
                         workflow=filename,
@@ -78,11 +79,7 @@ class DockerHubPullAuthenticationTest(unittest.TestCase):
                         service=service_name,
                     ):
                         self.assertEqual(
-                            service.get("credentials"),
-                            {
-                                "username": self.SERVICE_USERNAME,
-                                "password": self.SERVICE_PASSWORD,
-                            },
+                            service.get("credentials"), self.SERVICE_CREDENTIALS
                         )
 
     def test_docker_hub_build_pulls_authenticate_when_secrets_are_available(self) -> None:

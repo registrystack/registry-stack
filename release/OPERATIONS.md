@@ -340,14 +340,14 @@ Hub-backed build. Keep the token read-only and do not reuse a publish
 credential.
 
 Pull requests and branch-controlled manual runs do not receive these values.
-Fork pull requests therefore resolve both service credential expressions to
-empty strings and continue with anonymous Docker Hub access. Branch rehearsals
-and local release builds also stay anonymous unless the caller's existing
-Docker configuration supplies credentials. Protected build jobs record that
-credentials are unavailable and skip login when both secrets are absent. A
-protected build job fails when only one value is present so a partially
-configured credential does not silently become the expected authenticated
-path.
+Their service credential expression resolves to `null`, so the runner omits
+the credential object and continues with anonymous Docker Hub access. This
+also preserves fork pull requests. Branch rehearsals and local release builds
+stay anonymous unless the caller's existing Docker configuration supplies
+credentials. Protected build jobs record that credentials are unavailable and
+skip login when both secrets are absent. A protected build job fails when only
+one value is present so a partially configured credential does not silently
+become the expected authenticated path.
 
 [Debian's Docker Official Image](https://hub.docker.com/_/debian),
 [PostgreSQL's Docker Official Image](https://hub.docker.com/_/postgres), and

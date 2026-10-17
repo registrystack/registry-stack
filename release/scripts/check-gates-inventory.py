@@ -25,6 +25,16 @@ SCHEDULING_CHECKPOINT_RUNNER = (
 MESSAGING_CHECKPOINT_RUNNER = (
     ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
 )
+DOCKER_HUB_SERVICE_CREDENTIALS = (
+    "credentials: ${{ github.event_name != 'pull_request' && "
+    "(github.event_name != 'workflow_dispatch' || "
+    "github.ref == 'refs/heads/main') && "
+    "secrets.DOCKERHUB_USERNAME != '' && "
+    "secrets.DOCKERHUB_READ_TOKEN != '' && "
+    "fromJSON(format('{{\"username\":{0},\"password\":{1}}}', "
+    "toJSON(secrets.DOCKERHUB_USERNAME), "
+    "toJSON(secrets.DOCKERHUB_READ_TOKEN))) || null }}"
+)
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -277,9 +287,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         # the other product's copy and would stop reporting its own removal.
         "Casework PostgreSQL 17 image pin",
         "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-        "        credentials:\n"
-        "          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}\n"
-        "          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}\n"
+        f"        {DOCKER_HUB_SERVICE_CREDENTIALS}\n"
         "        env:\n"
         "          POSTGRES_DB: casework",
     ),
@@ -422,9 +430,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling PostgreSQL 17 image pin",
         "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-        "        credentials:\n"
-        "          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}\n"
-        "          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}\n"
+        f"        {DOCKER_HUB_SERVICE_CREDENTIALS}\n"
         "        env:\n"
         "          POSTGRES_DB: scheduling",
     ),
@@ -491,9 +497,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Messaging PostgreSQL 17 image pin",
         "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
-        "        credentials:\n"
-        "          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}\n"
-        "          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}\n"
+        f"        {DOCKER_HUB_SERVICE_CREDENTIALS}\n"
         "        env:\n"
         "          POSTGRES_DB: messaging",
     ),
