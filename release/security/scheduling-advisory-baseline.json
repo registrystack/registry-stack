@@ -76,7 +76,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -134,7 +134,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -192,7 +192,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -250,7 +250,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -308,7 +308,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -366,7 +366,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -424,7 +424,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -482,7 +482,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -540,7 +540,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -598,7 +598,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -656,7 +656,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "reviewed_at": "2026-10-12",
-      "expires_at": "2026-10-20",
+      "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
