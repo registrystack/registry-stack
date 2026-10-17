@@ -31,7 +31,7 @@ use crate::model::{CompiledRecipients, CompiledRegistry};
 const MAX_CLAIM_NAME_BYTES: usize = 128;
 const MAX_SCOPE_VALUES: usize = 128;
 const MAX_SCOPE_VALUE_BYTES: usize = 512;
-const KEY_REFUSAL_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+const REFUSAL_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 
 const REGISTERED_CLAIMS: &[&str] = &[
     "iss",
@@ -144,6 +144,7 @@ pub enum AuthenticationError {
 pub struct RegistryAuthenticator {
     verifier: TokenVerifier,
     last_key_refusal_warning: Mutex<Option<Instant>>,
+    last_actor_kind_warning: Mutex<Option<Instant>>,
     issuer: String,
     audience: String,
     scope_claim: String,
@@ -174,6 +175,7 @@ impl RegistryAuthenticator {
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
             last_key_refusal_warning: Mutex::new(None),
+            last_actor_kind_warning: Mutex::new(None),
             issuer,
             audience,
             scope_claim,
@@ -198,7 +200,7 @@ impl RegistryAuthenticator {
             // UnknownKid precedes signature verification and also covers denied
             // keys. It cannot establish rotation, regardless of the key source.
             if matches!(error, OidcError::UnknownKid)
-                && admit_key_refusal_warning(&self.last_key_refusal_warning, Instant::now())
+                && admit_refusal_warning(&self.last_key_refusal_warning, Instant::now())
             {
                 tracing::warn!(
                     target: "registry_breg::auth",
@@ -353,15 +355,15 @@ impl RegistryAuthenticator {
     }
 }
 
-fn admit_key_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
+fn admit_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
     // One timestamp per authenticator bounds both memory and warning volume,
     // including concurrent requests with distinct caller-controlled key IDs.
     let Ok(mut last) = last_warning.lock() else {
         return false;
     };
-    if last.is_some_and(|previous| {
-        now.saturating_duration_since(previous) < KEY_REFUSAL_WARNING_INTERVAL
-    }) {
+    if last
+        .is_some_and(|previous| now.saturating_duration_since(previous) < REFUSAL_WARNING_INTERVAL)
+    {
         return false;
     }
     *last = Some(now);
@@ -402,10 +404,14 @@ pub(crate) async fn authenticate_request(
     let claims = match authenticator.authenticate(token).await {
         Ok(claims) => claims,
         Err(AuthenticationError::MissingActorKind) => {
-            tracing::warn!(
-                target: "registry_breg::auth",
-                message = "verified credential is missing the configured actor-kind claim"
-            );
+            // A caller can replay such a credential, so the warning is bounded
+            // the same way as an unknown key identifier.
+            if admit_refusal_warning(&authenticator.last_actor_kind_warning, Instant::now()) {
+                tracing::warn!(
+                    target: "registry_breg::auth",
+                    message = "verified credential is missing the configured actor-kind claim"
+                );
+            }
             return authentication_refused();
         }
         Err(_) => return authentication_refused(),
@@ -853,7 +859,7 @@ mod tests {
         let now = Instant::now();
         std::thread::scope(|scope| {
             let handles = (0..16)
-                .map(|_| scope.spawn(|| admit_key_refusal_warning(&last_warning, now)))
+                .map(|_| scope.spawn(|| admit_refusal_warning(&last_warning, now)))
                 .collect::<Vec<_>>();
             let admitted = handles
                 .into_iter()
@@ -862,13 +868,13 @@ mod tests {
                 .count();
             assert_eq!(admitted, 1);
         });
-        assert!(!admit_key_refusal_warning(
+        assert!(!admit_refusal_warning(
             &last_warning,
-            now + KEY_REFUSAL_WARNING_INTERVAL - Duration::from_nanos(1)
+            now + REFUSAL_WARNING_INTERVAL - Duration::from_nanos(1)
         ));
-        assert!(admit_key_refusal_warning(
+        assert!(admit_refusal_warning(
             &last_warning,
-            now + KEY_REFUSAL_WARNING_INTERVAL
+            now + REFUSAL_WARNING_INTERVAL
         ));
     }
 }
