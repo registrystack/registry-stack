@@ -1,6 +1,6 @@
 ---
 title: Author a registry project
-description: Declare native Record types, typed Actions, Proposals, and explicit grants, then inspect the compiled project offline.
+description: Start a Base Registry Engine project from a template or a reference model, read its layout, and find where each part of the registry is declared.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,122 +12,132 @@ standards_referenced:
   - openapi
   - json-schema
   - geojson
+tutorial_test:
+  toolset: breg
 ---
 
-If you are authoring a Base Registry Engine (BReg) project, declare your Record
-types, typed Actions, access profiles, and events in one governed model. Compile
-that model offline before provisioning a database.
+If you are describing your own registry to the Base Registry Engine (BReg), you write a
+[project](../../reference/glossary/#registry-project): a directory of files that declares what the
+registry stores, who may read and change it, and how it changes. You can start a project three
+ways, then check it offline, with no database.
 
-## Start from a complete project
+## Choose a starting point
+
+- `bregctl init <directory>` writes the default `minimal-directory` starter: one `contact` Record
+  type, the project the tutorials use.
+- `bregctl init --template facility-registry <directory>` writes facilities, operators,
+  assignments, and a directory, with immediate and Proposal Actions and a Rhai plan.
+- `bregctl init --from publicschema <directory>` derives a project from the PublicSchema concepts
+  you select. [Derive a registry from PublicSchema](../../tutorials/derive-a-registry-from-publicschema/)
+  walks through it.
+
+Each writes into a new directory and refuses one that exists.
+
+## Start from the facility template
 
 ```sh
-bregctl init ./my-registry
-bregctl check ./my-registry
+bregctl init --template facility-registry facility
 ```
 
-The destination must be new. The default `minimal-directory` includes a `contact`
-Record type, a jurisdiction-bound editor profile, explicit local clients, journey
-fixtures, a resumable scenario, and a runtime example. Read its generated README
-before changing identities or grants.
+```text test-excerpt
+Initialized a registry project. 10 artifacts written.
+  revision  sha256:<digest>
 
-For atomic writes and durable work, use a separate destination:
+  README.md
+  dev-clients.yaml
+  examples/inputs/correction.json
+  examples/inputs/deactivation.json
+  examples/inputs/empty.json
+  examples/inputs/facility.json
+  examples/scenarios.json
+  plans/correct-address.rhai
+  registry.yaml
+  tests/journeys.yaml
+```
+
+`registry.yaml` is the registry itself. `dev-clients.yaml` names the local test callers and the
+access profile each one requests. `tests/journeys.yaml` holds the permitted and refused requests
+the project must keep passing. `examples/` holds ready-made requests for a local run, and
+`plans/correct-address.rhai` is the plan code one Action calls.
 
 ```sh
-bregctl init ./facility-registry --template facility-registry
-bregctl check ./facility-registry
+bregctl check facility
 ```
 
-This project includes facilities, operators, assignments, directory entries,
-reusable value types, a named Rhai Function, and immediate and Proposal Actions.
-Its operator setup grant is authored in the project. Tooling adds no seed authority.
+```text test-excerpt
+Authoring check passed; registry revision sha256:<digest>.
+```
+
+Check compiles all three YAML files together. It also prints one warning about a related-records
+read, which [Control access and reads](../breg-access/) explains.
 
 {/* Evidence: crates/registry-bregctl/src/starters.rs;
-    products/breg/examples/minimal/registry.yaml;
     products/breg/examples/facility/registry.yaml. */}
 
-## Declare Record types and fields
+## Read the top of registry.yaml
 
-`registry.yaml` starts with `apiVersion:
-id.registrystack.org/formats/breg/project/v1alpha1` and `kind: BRegProject`.
-`project` supplies identity, version, language, and canonical base IRI. `datasets`
-supplies the datasets each Record type references through `primaryDataset`.
+```yaml title="facility/registry.yaml" test-excerpt="facility/registry.yaml"
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: facility-registry
+  canonicalBaseIri: https://facility-registry.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Facility Registry
+    description: Facilities, operators, assignments, and an administrative directory.
+```
 
-Use `recordTypes` for stored records:
+`project` gives the registry its identity. The rest of the file follows in this order:
+`package` (the source revision a production package records), `datasets`, `reviewAuthorities`,
+`recordTypes`, `valueTypes`, `functions`, `actions`, `accessProfiles`, and `vocabularies`. A
+project may also declare `modules`, `statisticalDatasets`, `recipients`, and
+`evidenceProviders`. The [configuration reference](../../reference/breg-configuration/) lists
+every key with its type and bounds.
 
-```yaml
-recordTypes:
-  - id: contact
-    route: contacts
-    primaryDataset: directory
+## Declare Record types
+
+```yaml title="facility/registry.yaml" test-excerpt="facility/registry.yaml"
+  - id: facility
+    route: facilities
+    primaryDataset: facility-registry
     mutationMode: mutable
-    fields:
-      - id: name
-        type: string
-        required: true
-        minimumLength: 1
-        maximumLength: 160
-        classification: internal
+    readPaths:
+      - {id: operators, through: facility-assignment, to: operator, route: operators}
+    mutationPolicy:
+      patch: proposal-required
 ```
 
-Keep the complete generated project around this fragment. Every field declares
-its type, bounds, requiredness, and classification. Reference fields name another
-Record type. Use `apiName` for a deliberate public property name and `typeRef`
-for a reusable project-local value type. Stable IDs carry identity; `display`
-labels, descriptions, and safe titles carry presentation.
+Each [Record type](../../reference/glossary/#record-type) names its route, its dataset, and its
+fields. Every field declares its type, bounds, requiredness, and classification; `typeRef` reuses
+a type from `valueTypes`, and `apiName` sets the public property name. `mutationPolicy` here means
+a facility changes only through a [Proposal](../../reference/glossary/#proposal), even for a
+caller whose profile grants `patch`.
 
-A Record type's `mutationPolicy` can require a Proposal for an operation. An
-Action cannot bypass that requirement merely because a profile grants writes.
-[Actions and Proposals](../breg-actions/) supplies the durable write model.
+## Grant access
 
-## Grant authority explicitly
+An [access profile](../../reference/glossary/#access-profile) binds required scopes, purposes, and
+row boundaries to four separate kinds of grant: `permissions.records`, `permissions.actions`,
+`permissions.proposals`, and `permissions.datasets` for statistical datasets. A local client in
+`dev-clients.yaml` only requests a profile; declaring it grants nothing.
 
-`accessProfiles` binds verified scopes, purpose, principal, operations, fields,
-and row boundaries. `permissions.records`, `permissions.actions`, and
-`permissions.proposals` grant separate powers. A local client merely requests a
-profile; declaring it in `dev-clients.yaml` creates no profile grant.
+## Declare Actions and plan code
 
-Start with the generated jurisdiction boundary. Keep a boundary field writable
-for Create so a caller can supply the exact value its claim permits. Review any
-Patch grant with an `in` boundary that can move a record between allowed values. Filters never replace row
-authorization. [Control access per profile](../breg-access/) owns the grant model.
+An [Action](../../reference/glossary/#action) is a named change with typed inputs. A
+[Function](../../reference/glossary/#function) declares its runtime, source, entrypoint, ABI,
+capabilities, and limits, and the Action that calls it fixes what it may write. Record hooks
+announce committed changes; [Bind webhook receivers](../../operate/breg-webhooks/) covers
+delivery.
 
-## Reuse and compose
-
-Modules reuse governed project assets. Named `valueTypes` and `functions` keep
-local types and plan code in one place. A Function's declared runtime, source,
-entrypoint, ABI, capabilities, and limits remain part of the compiled contract.
-Its write ceiling and refusals belong to the Action that calls it.
-
-Record hooks describe committed events. Bind outbound destinations and secrets
-in deployment configuration. [Bind webhook receivers](../../operate/breg-webhooks/) for outbound delivery.
-External consumers receive no registry authority
-from a delivery. Registry Manifest remains a one-way portable metadata projection;
-its independently versioned entity vocabulary is separate from BReg authoring.
-
-## Inspect the contract
-
-```sh
-bregctl --format json explain model ./my-registry
-bregctl --format json explain access ./my-registry
-bregctl --format json explain actions ./my-registry
-bregctl --format json explain proposals ./my-registry
-```
-
-These commands need no database. Diagnostics identify the document and member
-that needs repair. Use `bregctl check --help` for production and warning policy;
-review warnings rather than treating them as extra grants. For a function, use
-`project action-test --help` to test bounded synthetic inputs offline.
-
-Database journeys prove current authorization, concurrency, and transactional
-behavior beyond what compilation can establish. Test the exact candidate before
-packaging it, and keep migration credentials with the operator.
-
-{/* Evidence: crates/registry-breg/src/contract.rs; crates/registry-breg/src/compiler.rs;
-    crates/registry-bregctl/src/lib.rs; products/breg/examples/facility/plans/correct-address.rhai. */}
+{/* Evidence: crates/registry-breg/src/contract.rs (RegistryProject, PermissionsSource);
+    products/breg/generated/authoring/registry-project.schema.json. */}
 
 ## Next
 
-- [Control access per profile](../breg-access/)
-- [Declare Actions and Proposals](../breg-actions/)
+- [Modeling patterns](../../explanation/registry-modeling-patterns/)
+- [Control access and reads](../breg-access/)
+- [Actions and Proposals](../breg-actions/)
+- [Encrypt a field](../breg-field-encryption/)
+- [Publish statistics](../breg-statistics/)
 - [Test with journeys](../breg-journeys/)
-- [Deploy a registry](../../operate/breg/)

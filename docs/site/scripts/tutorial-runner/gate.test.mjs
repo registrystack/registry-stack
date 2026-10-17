@@ -52,6 +52,30 @@ test('a page that runs the toolset without declaring how it is tested fails by n
   });
 });
 
+test('a page outside start/ and tutorials/ joins the gate only when it declares tutorial_test', async () => {
+  const pages = {
+    'tutorials/first': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: runsBreg },
+    'tutorials/new': { body: runsBreg },
+    'configure/declared': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: runsBreg },
+    'configure/undeclared': { body: runsBreg },
+    'operate/advanced/declared': { frontmatter: 'tutorial_test:\n  toolset: breg\n  after: tutorials/first\n', body: runsBreg },
+    'reference/other-toolset': { frontmatter: 'tutorial_test:\n  toolset: casework\n', body: '```sh\ncaseworkctl init work\n```\n' },
+  };
+  await withDocs(pages, async (root) => {
+    const plan = await planGate(root, 'breg', TOOLSETS);
+    assert.deepEqual(plan.errors, [
+      'tutorials/new.mdx runs breg commands but declares no tutorial_test; add tutorial_test with toolset breg, and a skip reason if it cannot be replayed',
+    ]);
+  });
+  delete pages['tutorials/new'];
+  await withDocs(pages, async (root) => {
+    const plan = await planGate(root, 'breg', TOOLSETS);
+    assert.deepEqual(plan.errors, []);
+    assert.deepEqual(plan.journeys, [['configure/declared'], ['tutorials/first', 'operate/advanced/declared']]);
+    assert.deepEqual(plan.skipped, []);
+  });
+});
+
 test('declarations that cannot hold are refused', async () => {
   const pages = {
     'tutorials/quiet': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: '```sh\necho hi\n```\n' },
@@ -70,7 +94,7 @@ test('declarations that cannot hold are refused', async () => {
       'tutorials/loop-a.mdx: tutorial_test.after leads back to itself',
       'tutorials/loop-b.mdx: tutorial_test.after leads back to itself',
       'tutorials/no-toolset.mdx: tutorial_test needs a toolset',
-      'tutorials/orphan.mdx: tutorial_test.after names tutorials/missing, which no page under start/ or tutorials/ replays with breg',
+      'tutorials/orphan.mdx: tutorial_test.after names tutorials/missing, which no page in the gate replays with breg',
       'tutorials/quiet.mdx declares toolset breg but runs no breg commands; remove its tutorial_test',
       'tutorials/typo.mdx: unknown tutorial_test key aftr (expected toolset, after, skip, or checkout)',
     ]);
