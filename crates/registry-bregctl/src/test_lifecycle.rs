@@ -26,7 +26,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::safe_path::{symlink_detail, EntryStat, SafeDir, SafeEntry};
+use crate::safe_path::{symlink_detail, EntryStat, SafeDir, SafeEntry, SafePathError};
 use crate::CapturedPackageCandidate;
 
 pub(crate) const CREDENTIALS_API_VERSION: &str =
@@ -145,8 +145,7 @@ tagged_union!(CredentialDocumentMode);
 
 pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycleError> {
     let refused = || TestLifecycleError::OutputPreflight {
-        message: symlink_detail(path)
-            .unwrap_or_else(|| "the schema-test receipt output was refused".to_owned()),
+        message: "the schema-test receipt output was refused".to_owned(),
     };
     if !path.is_absolute()
         || path.as_os_str().is_empty()
@@ -158,7 +157,17 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
     // Resolving once yields the parent directory descriptor that the receipt
     // publication reuses, so replacing a component of `path` after this
     // preflight cannot redirect the write.
-    let destination = SafeEntry::resolve(path).map_err(|_| refused())?;
+    // Only a symbolic-link refusal names the linked component and its target;
+    // every other refusal would blame an alias that did not cause it.
+    let destination = SafeEntry::resolve(path).map_err(|error| match error {
+        SafePathError::Symlink => TestLifecycleError::OutputPreflight {
+            message: symlink_detail(path).map_or_else(
+                || "the schema-test receipt output was refused".to_owned(),
+                |detail| format!("the schema-test receipt output was refused; {detail}"),
+            ),
+        },
+        _ => refused(),
+    })?;
     if destination.exists().map_err(|_| refused())? {
         return Err(refused());
     }
@@ -945,6 +954,37 @@ bindings:
         assert!(
             output.exists(),
             "the receipt whose identity the preflight never learned is left in place"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_names_a_symbolic_link_only_when_the_link_is_refused() {
+        let directory = TestDirectory::create();
+        let real = directory.path.join("real");
+        let linked = directory.path.join("linked");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        let message = |path: &Path| match preflight_output(path) {
+            Err(TestLifecycleError::OutputPreflight { message }) => message,
+            _ => panic!("the output is refused"),
+        };
+
+        // A parent component is refused before any link is followed, so the
+        // link it passes through is not the cause.
+        let parent_component = message(&linked.join("..").join("receipt.json"));
+        assert_eq!(
+            parent_component,
+            "the schema-test receipt output was refused"
+        );
+        let relative = message(Path::new("receipt.json"));
+        assert_eq!(relative, "the schema-test receipt output was refused");
+
+        let through_link = message(&linked.join("receipt.json"));
+        assert!(
+            through_link.contains(&linked.display().to_string())
+                && through_link.contains(&real.display().to_string()),
+            "{through_link}"
         );
     }
 
