@@ -2035,7 +2035,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --locked \
+          # The client tutorial installs the client packages at the version
+          # `breg --version` reports, and the runner assembles them at the
+          # workspace version, so the binaries are built marked with its
+          # release tag. GITHUB_ENV keeps the marker for every later step, so
+          # no later cargo command rebuilds them unmarked.
+          tag="$(node --input-type=module -e "import { workspaceReleaseTag } from './docs/site/scripts/tutorial-runner/toolsets.mjs'; console.log(workspaceReleaseTag('.'))")"
+          printf 'REGISTRY_RELEASE_TAG=%s\n' "${tag}" >> "${GITHUB_ENV}"
+          REGISTRY_RELEASE_TAG="${tag}" cargo build --locked \
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl --bins
 
