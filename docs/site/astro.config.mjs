@@ -372,6 +372,8 @@ export default defineConfig({
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
     '/tutorials/query-a-spatial-registry-from-qgis/': internalRedirect('/start/breg-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/connect-an-institution-source/'),
+    // The FHIR credential tutorial became the worked example of connecting an institution API.
+    '/tutorials/issue-fhir-evidence-as-vcs/': internalRedirect('/tutorials/connect-an-institution-source/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
@@ -519,8 +521,8 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Request an assertion', slug: 'tutorials/request-evidence-from-an-application' },
-                { label: 'Configure token acquisition', slug: 'configure/request-an-access-token' },
-                { label: 'Verify and retain assertions', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+                { label: 'Request an access token', slug: 'configure/request-an-access-token' },
+                { label: 'Verify an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },
@@ -538,17 +540,10 @@ export default defineConfig({
               label: 'Connect a source',
               collapsed: true,
               items: [
-                { label: 'Connect with OpenAPI', slug: 'tutorials/connect-an-institution-source' },
+                { label: 'Connect an institution API', slug: 'tutorials/connect-an-institution-source' },
                 { label: 'Connect a SQLite extract', slug: 'tutorials/connect-a-sqlite-extract' },
-                { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
-              ],
-            },
-            {
-              label: 'Source examples',
-              collapsed: true,
-              items: [
                 { label: 'Compose a BReg lookup', slug: 'tutorials/evidence-from-breg' },
-                { label: 'FHIR R4: patient coverage', slug: 'tutorials/issue-fhir-evidence-as-vcs' },
+                { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
               ],
             },
             {

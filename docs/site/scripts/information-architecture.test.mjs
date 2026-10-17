@@ -902,7 +902,6 @@ test('organizes Registry Evidence tasks without publishing the obsolete Relay co
       "label: 'Use from applications'",
       "label: 'Tutorials'",
       "label: 'Connect a source'",
-      "label: 'Source examples'",
       "label: 'Deploy'",
       "label: 'Wallet delivery'",
       // Reference a reader opens with the deployment in front of them, so it
