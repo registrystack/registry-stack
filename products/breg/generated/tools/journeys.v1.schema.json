@@ -568,13 +568,15 @@
           "type": "string"
         },
         "capture": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "Local capture alias for this step's result. Capture aliases must be unique\nthroughout the journey, including aliases in captureResults; the reader\nchecks this semantic rule."
         },
         "captureResults": {
           "additionalProperties": {
             "$ref": "#/$defs/LocalId"
           },
           "default": {},
+          "description": "Maps disclosed Action result aliases to distinct local capture aliases.\nCapture aliases must be unique throughout the journey, including earlier\ncaptures; the reader checks this semantic rule.",
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
           },
